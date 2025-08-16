@@ -21,21 +21,23 @@ OBJS = \
   $(BUILD)/isr.o          \
   $(BUILD)/idt.o          \
   $(BUILD)/keyboard.o     \
+  $(BUILD)/vga.o          \
   $(BUILD)/kernel.o       \
   $(BUILD)/debug.o
+
 
 all: $(BOOT_BIN) $(KERNEL_ELF)
 
 # Bootloader em binário cru
-$(BOOT_BIN): $(BOOT_DIR)/boot.s | $(BUILD)
+$(BOOT_BIN): $(BOOT_DIR)/boot.s
 	$(AS) -f bin $< -o $@
-
-$(BUILD):
-	mkdir -p $(BUILD)
 
 # Kernel objects
 $(BUILD)/kernel_entry.o: $(SRC_DIR)/kernel_entry.s | $(BUILD)
 	$(AS) -f elf32 $< -o $@
+
+$(BUILD)/vga.o: $(SRC_DIR)/vga.c include/vga.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/interrupts.o: $(SRC_DIR)/interrupts.s | $(BUILD)
 	$(AS) -f elf32 $< -o $@
