@@ -1,0 +1,16 @@
+#ifndef VGA_H
+#define VGA_H
+#include <stdint.h>
+
+#define VGA_WIDTH  80
+#define VGA_HEIGHT 25
+
+void vga_init(void);
+void vga_clear(void);
+void vga_set_color(uint8_t fg, uint8_t bg);
+void vga_putc(char c);
+void vga_write(const char *s);
+void vga_newline(void);
+void vga_backspace(void);
+
+#endif

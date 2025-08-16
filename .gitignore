@@ -1,0 +1,5 @@
+*.py
+QEMU.sh
+*.txt
+*.log
+/build/
