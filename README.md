@@ -1,6 +1,3 @@
----
-
-```md
 # 🌌 NoirOS
 
 > **NoirOS** é um sistema operacional hobby desenvolvido do zero por **Henrique Schwarz Souza Farisco**.  
