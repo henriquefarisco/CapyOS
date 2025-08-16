@@ -1,0 +1,37 @@
+; kernel_entry.s — Entrada do kernel com cabeçalho Multiboot (NASM, 32-bit)
+; Montar com: nasm -f elf32 src/kernel_entry.s -o build/kernel_entry.o
+
+[BITS 32]
+SECTION .multiboot
+align 4
+MULTIBOOT_MAGIC  equ 0x1BADB002
+MULTIBOOT_FLAGS  equ 0x00000000        ; sem memória/grub mods especiais
+MULTIBOOT_CHECK  equ -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
+
+; Header Multiboot (precisa ficar nos primeiros ~8KB do binário)
+dd MULTIBOOT_MAGIC
+dd MULTIBOOT_FLAGS
+dd MULTIBOOT_CHECK
+
+SECTION .text
+global _start
+extern kernel_main
+
+_start:
+    ; zera os registradores “essenciais” e sobe uma pilha simples
+    cli
+    mov esp, stack_top
+
+    ; chama o kernel em C
+    call kernel_main
+
+.hang:
+    cli
+    hlt
+    jmp .hang
+
+SECTION .bss
+align 16
+stack_bottom:
+    resb 4096
+stack_top:
