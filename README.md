@@ -104,8 +104,8 @@ make run
 Saída esperada (modo texto):
 
 ```
-8OS kernel up!
-Hello! Type something and I’ll echo it back.
+NoirOS 1 - Versao Singularity esta rodando!
+Ola Mundo!
 >
 ```
 
@@ -144,7 +144,7 @@ As versões do NoirOS seguem a **linha do tempo cosmológica**:
 
 - 🌐 Futuro criador do NoirOS
 - 🚀 Dev de OS hobby & system hacker
-- 📚 Apaixonado por programação low-level e cosmologia
+- 📚 Apaixonado por programação low-level
 
 ---
 
