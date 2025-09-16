@@ -25,38 +25,61 @@ Boot via **Multiboot**, configura sua própria **IDT + PIC**, trata **interrupç
 
 ---
 
-## 📂 Estrutura do Projeto
+## ✨ Estado Atual
 
-```text
-NoirOS/
-├── boot/              # (boot sector opcional, não requerido para Multiboot)
-├── build/             # artefatos de build (kernel.bin, .o)
-├── include/           # headers do kernel (io.h, isr.h, idt.h, keyboard.h, vga.h)
-├── src/               # código-fonte do kernel
-│   ├── kernel_entry.s # Multiboot header + entry point
-│   ├── interrupts.s   # ISRs + IRQ stubs
-│   ├── linker.ld      # script do linker
-│   ├── kernel.c       # kernel principal (init + loop)
-│   ├── isr.c / .h     # dispatch ISR/IRQ + PIC remap/mask
-│   ├── idt.c / .h     # configuração da IDT
-│   ├── keyboard.c/.h  # driver de teclado
-│   ├── vga.c / .h     # driver VGA texto
-│   ├── io.h           # funções inline de I/O de porta
-│   └── debug.c        # utilitários de debug (se houver)
-└── Makefile           # sistema de build
+- **Boot:** Multiboot v1 (GRUB/QEMU) via `kernel_entry.s`
+- **GDT:** tabela própria mínima (null, code=0x9A, data=0x92)
+- **IDT:** 256 entradas, exceções 0..31 com mensagens na tela, IRQs 32..47
+- **PIC:** remapeado para 0x20/0x28; IRQ0 (PIT) + IRQ1 (teclado) habilitados
+- **PIT (timer):** programado em 100 Hz, contador de ticks (`pit_ticks()`)
+- **Drivers:**
+  - **VGA texto** (80×25): escrita, scroll, backspace, newline, cursor de hardware
+  - **Teclado (IRQ1):** scancodes set 1, shift/backspace/enter
+- **Loop principal:** `sti(); for(;;) hlt();`
+
+Saída esperada no boot:
+```
+NoirOS 1 - Versao Singularity esta rodando!
+Ola Mundo!
+>
+```
+Se ocorrer exceção (ex.: #PF Page Fault), mensagem clara é exibida antes do travamento.
+
+---
+
+## 📂 Estrutura
+
+```
+boot/boot.s           ← boot sector opcional (não buildado)
+include/              ← headers (gdt.h, idt.h, isr.h, io.h, vga.h, keyboard.h, pit.h, debug.h …)
+src/
+├── kernel_entry.s   ← Multiboot header + _start
+├── linker.ld        ← script de link (ELF i386, base 1MiB)
+├── kernel.c         ← kernel_main (init VGA, GDT, IDT, PIC, PIT, loop)
+├── gdt.c/.h + gdt_flush.s  ← GDT mínima
+├── idt.c/.h, isr.c, interrupts.s  ← IDT + ISRs/IRQs
+├── keyboard.c/.h
+├── vga.c/.h         ← texto + cursor HW
+├── pit.c/.h         ← temporizador (IRQ0)
+├── debug.c/.h       ← saída porta 0xE9 (QEMU -debugcon)
+└── ports.c/.h, io.h ← inb/outb/cli/sti/hlt
+Makefile
+README.md
 ```
 
 ---
 
 ## ⚡ Funcionalidades (v0.1 — *Singularity*)
 
-- [x] **Kernel ELF bootável** via Multiboot
-- [x] **GDT básica** (via entrada do bootloader)
-- [x] **Configuração da IDT** (256 entradas)
-- [x] **PIC remapeado + masking**
-- [x] **Handler de teclado** (IRQ1)
-- [x] **Driver VGA texto** (print, scroll, backspace, newlines)
-- [x] **Main loop** com `hlt` (baixo uso de CPU)
+- [x] Kernel ELF bootável via Multiboot
+- [x] GDT própria instalada
+- [x] Configuração da IDT (256 entradas)
+- [x] PIC remapeado + masking
+- [x] Handler de teclado (IRQ1)
+- [x] Driver VGA texto (print, scroll, backspace, newlines, cursor HW)
+- [x] PIT 100Hz + IRQ0 habilitado
+- [x] Mensagens de exceção (#PF mostra CR2)
+- [x] Main loop com `sti(); for(;;) hlt();`
 - [ ] Gerenciamento de memória (paging, allocators)
 - [ ] System calls (user ↔ kernel)
 - [ ] Suporte a filesystem
@@ -69,99 +92,50 @@ NoirOS/
 
 ---
 
-## 🚀 Build & Execução
-
-### 🔧 Requisitos
-
-- `nasm`
-- `i686-elf-gcc` + `i686-elf-ld` (cross-compiler)
-- `qemu-system-i386`
-
-Instalação no Ubuntu/Debian:
-```bash
-sudo apt update
-sudo apt install nasm qemu-system-i386
-# Para cross-compiler:
-sudo apt install gcc-12-i686-linux-gnu binutils-i686-linux-gnu
-```
-
-### 🏗️ Build
+## ⚙️ Build & Execução
 
 ```bash
-make clean && make
+make clean && make        # compila kernel ELF
+make run                  # roda QEMU: -kernel build/kernel.bin -m 64
 ```
 
-Gera:
+### Debug no QEMU
 
-- `build/kernel.bin` → kernel ELF compatível com Multiboot
+* Porta 0xE9 (debugcon):
 
-### ▶️ Rodando no QEMU
+  ```bash
+  qemu-system-i386 -kernel build/kernel.bin -m 64 -debugcon stdio -serial none
+  ```
+* Ver traps/interrupções:
 
-```bash
-make run
-```
-
-Saída esperada (modo texto):
-
-```
-NoirOS 1 - Versao Singularity esta rodando!
-Ola Mundo!
->
-```
+  ```bash
+  qemu-system-i386 -kernel build/kernel.bin -d int,cpu_reset -no-reboot -no-shutdown
+  ```
 
 ---
 
-## 🌌 Versionamento — *Evolução Cósmica*
+## 🚧 Roadmap Próximo (v0.2 “Inflaton”)
 
-As versões do NoirOS seguem a **linha do tempo cosmológica**:
-
-1. **Singularity** → *NoirOS 1* (antes do tempo)
-2. **Inflaton** → *NoirOS 2* (inflação cósmica)
-3. **Plasma** → *NoirOS 3* (universo quente e denso)
-4. **Recombination** → *NoirOS 4* (luz se liberta)
-5. **Galaxy** → *NoirOS 5*
-6. **Star** → *NoirOS 6*
-7. **System** → *NoirOS 7*
-8. **Abiogenesis** → *NoirOS 8*
-9. **Evolution** → *NoirOS 9*
-10. **Consciousness** → *NoirOS 10*
+* [x] GDT mínima instalada (já feito ✅)
+* [x] Mensagens de exceções (#PF mostra CR2) ✅
+* [x] Cursor VGA de hardware ✅
+* [x] PIT 100Hz + IRQ0 habilitado ✅
+* [ ] Allocator inicial (bump + kalloc/kfree)
+* [ ] Paging (ativar CR0.PG, mapear 0..4MiB identidade)
+* [ ] Scheduler rudimentar (usar ticks do PIT)
+* [ ] Melhorar tratamento de exceções (#PF: decodificar err_code)
+* [ ] API de impressão numérica (print_hex, print_dec)
 
 ---
 
-## 📖 Roadmap
+## 📝 Notas
 
-- **v0.1 (Singularity)** → Bootável, interrupções, teclado, VGA ✅
-- **v0.2 (Inflaton)** → Paging + memory manager
-- **v0.3 (Plasma)** → Processos + context switching
-- **v0.4 (Recombination)** → Userland básico + system calls
-- **v0.5+ (Galaxy …)** → Multitarefa, FS, rede, GUI
+* `boot/boot.s` é apenas demonstração de boot sector real mode.
+  Não é buildado nem necessário quando usamos GRUB/QEMU (`-kernel`).
+* O kernel é freestanding (`-ffreestanding -nostdlib`), não usa libc.
 
 ---
 
-## 🧑‍💻 Autor
+## 📜 Licença
 
-**Henrique Schwarz Souza Farisco**
-
-- 🌐 Futuro criador do NoirOS
-- 🚀 Dev de OS hobby & system hacker
-- 📚 Apaixonado por programação low-level
-
----
-
-## 🤝 Contribuindo
-
-NoirOS é um **projeto pessoal/hobby**, mas ideias, recursos de aprendizado e contribuições são sempre bem-vindos.
-
-- Fork 🍴
-- Experimente ⚡
-- Compartilhe conhecimento 📖
-- Abra PRs 🛠️
-
----
-
-## ⚠️ Disclaimer
-
-Este é um projeto de aprendizado — **não** é um sistema operacional pronto para produção. Espere crashes, comportamento indefinido e explosões cósmicas 💥.
-
----
----
+MIT (livre uso/estudo).

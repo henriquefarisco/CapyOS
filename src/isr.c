@@ -1,12 +1,23 @@
 #include <stdint.h>
 #include "io.h"
 #include "isr.h"
+#include "vga.h"   // (saída em texto VGA)
 
 #define PIC1_CMD  0x20
 #define PIC1_DATA 0x21
 #define PIC2_CMD  0xA0
 #define PIC2_DATA 0xA1
 #define PIC_EOI   0x20
+
+static const char* exc_name[32] = {
+  "#DE Divide Error", "#DB Debug", "NMI", "#BP Breakpoint", "#OF Overflow",
+  "#BR BOUND", "#UD Invalid Opcode", "#NM Device Not Avail", "#DF Double Fault",
+  "Coprocessor Segment", "#TS TSS", "#NP Segment Not Present", "#SS Stack Fault",
+  "#GP General Protection", "#PF Page Fault", "Reserved", "#MF x87 FP",
+  "#AC Alignment Check", "#MC Machine Check", "#XM SIMD FP", "#VE Virtualization",
+  "Reserved","Reserved","Reserved","Reserved","Reserved","Reserved","Reserved",
+  "Reserved","#SX Security","Reserved","Reserved"
+};
 
 static irq_handler_t irq_routines[16] = {0};
 
@@ -39,6 +50,33 @@ void pic_set_mask(uint8_t master_mask, uint8_t slave_mask) {
     outb(PIC2_DATA, slave_mask);
 }
 
+/* imprime 32-bit em hex (sem stdlib) */
+static void put_hex32(uint32_t x){
+    const char* d="0123456789ABCDEF";
+    vga_write("0x");
+    for (int i=7;i>=0;i--){
+        uint8_t nyb = (x >> (i*4)) & 0xF;
+        vga_putc(d[nyb]);
+    }
+}
+
+static void report_exception(uint32_t int_no, uint32_t err_code){
+    vga_write("\n=== EXCEPTION ===\n");
+    vga_write("tipo: ");
+    if (int_no < 32) vga_write(exc_name[int_no]); else vga_write("Unknown");
+    vga_write("\nint_no: "); put_hex32(int_no);
+    vga_write("\nerr_cd: "); put_hex32(err_code);
+
+    if (int_no == 14){ // (#PF page fault)
+        uint32_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        vga_write("\ncr2:    "); put_hex32(cr2);
+    }
+    vga_write("\n=================\n");
+    __asm__ volatile("cli");
+    for(;;) __asm__ volatile("hlt");
+}
+
 // Despachante comum: trata exceções e IRQs.
 // Mantemos simples: em exceções, travamos com CLI+HLT; em IRQs, chamamos handler e damos EOI.
 void isr_dispatch(uint32_t int_no, uint32_t err_code) {
@@ -56,8 +94,6 @@ void isr_dispatch(uint32_t int_no, uint32_t err_code) {
         return;
     }
 
-    // Exceção: para debug inicial, só congela de forma segura
-    cli();
-    for (;;)
-        hlt();
+    // Exceção: relato detalhado e trava
+    report_exception(int_no, err_code);
 }
