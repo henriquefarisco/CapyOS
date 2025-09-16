@@ -1,11 +1,24 @@
-# Toolchain (use i686-elf-*; se não tiver, podemos adaptar para gcc -m32)
-AS       = nasm
-CC       = i686-elf-gcc
-LD       = i686-elf-ld
-OBJCOPY  = i686-elf-objcopy
+# --- Toolchain (i686-elf é o oficial; fallback = gcc -m32) ---
+AS      := nasm
+CROSS   ?= i686-elf
 
-CFLAGS   = -ffreestanding -m32 -O2 -Wall -Wextra -Iinclude
-LDFLAGS  = -nostdlib -m elf_i386
+ifeq ($(shell which $(CROSS)-gcc 2>/dev/null),)
+  # Fallback (usa compilador do host em 32-bit) — menos isolado
+  CC      := gcc
+  LD      := ld
+  OBJCOPY := objcopy
+  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Iinclude
+  LDFLAGS := -nostdlib -m elf_i386
+else
+  # Oficial (cross bare-metal)
+  CC      := $(CROSS)-gcc
+  LD      := $(CROSS)-ld
+  OBJCOPY := $(CROSS)-objcopy
+  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Iinclude
+  LDFLAGS := -nostdlib
+endif
+
+# toolchain = conjunto compilador/ligador; freestanding = sem libc/ambiente do SO; -m elf_i386 força ld a gerar ELF 32-bit; ELF = Executable and Linkable Format
 
 BUILD    = build
 SRC_DIR  = src
@@ -23,14 +36,21 @@ OBJS = \
   $(BUILD)/keyboard.o     \
   $(BUILD)/vga.o          \
   $(BUILD)/kernel.o       \
-  $(BUILD)/debug.o
+  $(BUILD)/debug.o        \
+  $(BUILD)/gdt.o          \
+  $(BUILD)/gdt_flush.o    \
+  $(BUILD)/pit.o
 
 
 all: $(BOOT_BIN) $(KERNEL_ELF)
 
-# Bootloader em binário cru
-$(BOOT_BIN): $(BOOT_DIR)/boot.s
+# Bootloader
+$(BOOT_BIN): $(BOOT_DIR)/boot.s | $(BUILD)
 	$(AS) -f bin $< -o $@
+
+# Create build directory if it doesn't exist
+$(BUILD):
+	mkdir -p $(BUILD)
 
 # Kernel objects
 $(BUILD)/kernel_entry.o: $(SRC_DIR)/kernel_entry.s | $(BUILD)
@@ -63,12 +83,16 @@ $(BUILD)/debug.o: $(SRC_DIR)/debug.c | $(BUILD)
 $(KERNEL_ELF): $(OBJS) $(SRC_DIR)/linker.ld
 	$(LD) -T $(SRC_DIR)/linker.ld $(LDFLAGS) -o $@ $(OBJS)
 
+# Regras genéricas para objetos
+$(BUILD)/%.o: $(SRC_DIR)/%.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: $(SRC_DIR)/%.s | $(BUILD)
+	$(AS) -f elf32 $< -o $@
+
 run: all
 	@echo "Iniciando QEMU (Multiboot direto no ELF)..."
 	qemu-system-i386 -kernel $(KERNEL_ELF) -m 64
-
-$(BUILD):
-	mkdir -p $(BUILD)
 
 clean:
 	rm -rf $(BUILD)

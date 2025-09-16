@@ -12,5 +12,6 @@ void vga_putc(char c);
 void vga_write(const char *s);
 void vga_newline(void);
 void vga_backspace(void);
+void vga_update_hw_cursor(void);  // move o cursor de hardware para (cur_row,cur_col)
 
 #endif
