@@ -39,7 +39,8 @@ OBJS = \
   $(BUILD)/debug.o        \
   $(BUILD)/gdt.o          \
   $(BUILD)/gdt_flush.o    \
-  $(BUILD)/pit.o
+  $(BUILD)/pit.o          \
+  $(BUILD)/kmem.o
 
 
 all: $(BOOT_BIN) $(KERNEL_ELF)
