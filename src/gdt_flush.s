@@ -16,3 +16,5 @@ gdt_flush:
     jmp     0x08:.flush_cs   ; (far jump recarrega CS com seletor 0x08)
 .flush_cs:
     ret
+
+SECTION .note.GNU-stack noalloc

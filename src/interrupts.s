@@ -97,3 +97,5 @@ IRQ 12, 44
 IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
+
+SECTION .note.GNU-stack noalloc
