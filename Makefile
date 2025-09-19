@@ -7,14 +7,14 @@ ifeq ($(shell which $(CROSS)-gcc 2>/dev/null),)
   CC      := gcc
   LD      := ld
   OBJCOPY := objcopy
-  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Iinclude
+  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude
   LDFLAGS := -nostdlib -m elf_i386
 else
   # Oficial (cross bare-metal)
   CC      := $(CROSS)-gcc
   LD      := $(CROSS)-ld
   OBJCOPY := $(CROSS)-objcopy
-  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Iinclude
+  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude
   LDFLAGS := -nostdlib
 endif
 
@@ -34,13 +34,20 @@ OBJS = \
   $(BUILD)/isr.o          \
   $(BUILD)/idt.o          \
   $(BUILD)/keyboard.o     \
+  $(BUILD)/tty.o          \
   $(BUILD)/vga.o          \
   $(BUILD)/kernel.o       \
   $(BUILD)/debug.o        \
   $(BUILD)/gdt.o          \
   $(BUILD)/gdt_flush.o    \
   $(BUILD)/pit.o          \
-  $(BUILD)/kmem.o
+  $(BUILD)/kmem.o         \
+  $(BUILD)/block.o        \
+  $(BUILD)/buffer.o       \
+  $(BUILD)/ramdisk.o      \
+  $(BUILD)/vfs.o          \
+  $(BUILD)/noirfs.o       \
+  $(BUILD)/crypt.o
 
 
 all: $(BOOT_BIN) $(KERNEL_ELF)
