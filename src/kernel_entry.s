@@ -35,3 +35,5 @@ align 16
 stack_bottom:
     resb 4096
 stack_top:
+
+SECTION .note.GNU-stack noalloc

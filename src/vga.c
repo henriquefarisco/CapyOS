@@ -62,6 +62,11 @@ void vga_putc(char c) {
         vga_update_hw_cursor();
         return;
     }
+    if (c == '\r') {
+        cur_col = 0;
+        vga_update_hw_cursor();
+        return;
+    }
     vga_put_at(c, cur_row, cur_col);
     cur_col++;
     if (cur_col >= VGA_WIDTH) {
@@ -103,4 +108,19 @@ void vga_update_hw_cursor(void){
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+void vga_get_cursor(int *row, int *col) {
+    if (row) *row = cur_row;
+    if (col) *col = cur_col;
+}
+
+void vga_set_cursor(int row, int col) {
+    if (row < 0) row = 0;
+    if (row >= VGA_HEIGHT) row = VGA_HEIGHT - 1;
+    if (col < 0) col = 0;
+    if (col >= VGA_WIDTH) col = VGA_WIDTH - 1;
+    cur_row = row;
+    cur_col = col;
+    vga_update_hw_cursor();
 }
