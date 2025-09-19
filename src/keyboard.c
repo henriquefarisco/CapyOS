@@ -2,7 +2,7 @@
 #include "io.h"
 #include "isr.h"
 #include "keyboard.h"
-#include "vga.h"
+#include "tty.h"
 
 /* Tabela de scancodes (set 1) -> ASCII (sem dead keys)
    Só mapeamos o essencial por simplicidade. */
@@ -40,12 +40,12 @@ static void keyboard_irq(void) {
     if (sc & 0x80) return;
 
     // Backspace
-    if (sc == 0x0E) { vga_backspace(); return; }
+    if (sc == 0x0E) { tty_handle_backspace(); return; }
     // Enter
-    if (sc == 0x1C) { vga_newline(); return; }
+    if (sc == 0x1C) { tty_handle_enter(); return; }
 
     char ch = shift_on ? keymap_shift[sc] : keymap[sc];
-    if (ch) vga_putc(ch);
+    if (ch) tty_handle_char(ch);
 }
 
 void keyboard_init(void) {
