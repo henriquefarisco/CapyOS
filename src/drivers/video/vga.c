@@ -48,6 +48,13 @@ void vga_backspace(void) {
     vga_update_hw_cursor();
 }
 
+static char vga_map_latin1_to_cp437(char c){
+    unsigned char u = (unsigned char)c;
+    if (u == 0xC7) return (char)0x80; // Ç
+    if (u == 0xE7) return (char)0x87; // ç
+    return c; // fallback
+}
+
 void vga_putc(char c) {
     if (c == '\n') { vga_newline(); return; }
     if (c == '\b') {
@@ -67,6 +74,7 @@ void vga_putc(char c) {
         vga_update_hw_cursor();
         return;
     }
+    c = vga_map_latin1_to_cp437(c);
     vga_put_at(c, cur_row, cur_col);
     cur_col++;
     if (cur_col >= VGA_WIDTH) {

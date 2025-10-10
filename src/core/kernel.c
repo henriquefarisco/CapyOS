@@ -247,13 +247,25 @@ void kernel_main(void) {
     buffer_cache_init();
     vfs_init();
     ramdisk_init(256);
+    // Initialize ATA if present
+    extern void ata_init(void);
+    extern struct block_device *ata_primary_device(void);
+    ata_init();
 
     tty_init();
     keyboard_init();
 
     sti();
 
-    struct block_device *root_dev = ramdisk_device();
+    struct block_device *root_dev = NULL;
+    struct block_device *ata = ata_primary_device();
+    if (ata) {
+        struct block_device *chunked = block_chunked_wrap(ata, 4096);
+        root_dev = chunked ? chunked : ata;
+    }
+    if (!root_dev) {
+        root_dev = ramdisk_device();
+    }
     if (!root_dev) {
         vga_write("RAMDISK indisponivel\n");
     } else {

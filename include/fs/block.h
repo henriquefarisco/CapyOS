@@ -23,4 +23,8 @@ struct block_device {
 int block_device_read(struct block_device *dev, uint32_t block_no, void *buffer);
 int block_device_write(struct block_device *dev, uint32_t block_no, const void *buffer);
 
+// Creates a logical device that exposes larger blocks by chunking lower devices.
+// Returns a new heap-allocated device or NULL on failure.
+struct block_device *block_chunked_wrap(struct block_device *lower, uint32_t chunk_size);
+
 #endif

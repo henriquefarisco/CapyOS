@@ -70,6 +70,34 @@ run: all
 	@echo "Iniciando QEMU (Multiboot direto no ELF)..."
 	qemu-system-i386 -kernel $(KERNEL_ELF) -m 64
 
+# Disk image (raw) for persistent tests (default 64 MiB)
+DISK_IMG ?= build/disk.img
+DISK_SIZE ?= 64M
+
+disk-img: $(BUILD)
+	@echo "Criando imagem de disco em $(DISK_IMG) (tamanho $(DISK_SIZE))"
+	truncate -s $(DISK_SIZE) $(DISK_IMG)
+
+run-disk: all disk-img
+	@echo "Iniciando QEMU com disco IDE persistente..."
+	qemu-system-i386 -kernel $(KERNEL_ELF) -m 64 -drive file=$(DISK_IMG),if=ide,format=raw
+
+# ISO (requer grub-mkrescue e xorriso instalados)
+ISO_DIR := build/iso-root
+ISO_IMG := build/NoirOS.iso
+
+$(ISO_DIR): $(BUILD)
+	mkdir -p $(ISO_DIR)/boot/grub
+	cp $(KERNEL_ELF) $(ISO_DIR)/boot/kernel.bin
+	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'menuentry "NoirOS" { multiboot /boot/kernel.bin; boot }' >> $(ISO_DIR)/boot/grub/grub.cfg
+
+iso: all $(ISO_DIR)
+	@which grub-mkrescue >/dev/null 2>&1 || { echo 'grub-mkrescue nao encontrado'; exit 1; }
+	grub-mkrescue -o $(ISO_IMG) $(ISO_DIR)
+	@echo "ISO gerada em $(ISO_IMG)"
+
 clean:
 	rm -rf $(BUILD)
 .PHONY: all run clean
