@@ -2,6 +2,7 @@
 
 static uint8_t storage[RAMDISK_MAX_BLOCKS * RAMDISK_BLOCK_SIZE];
 static uint32_t storage_blocks = 0;
+static int ramdisk_initialized = 0;
 
 static int ramdisk_read(void *ctx, uint32_t block_no, void *buffer) {
     (void)ctx;
@@ -43,13 +44,22 @@ static struct block_device ramdisk_dev = {
 };
 
 void ramdisk_init(uint32_t block_count) {
+    uint32_t previous_blocks = storage_blocks;
     if (block_count > RAMDISK_MAX_BLOCKS) {
         block_count = RAMDISK_MAX_BLOCKS;
     }
     storage_blocks = block_count;
     ramdisk_dev.block_count = block_count;
-    for (uint32_t i = 0; i < block_count * RAMDISK_BLOCK_SIZE; ++i) {
-        storage[i] = 0;
+    if (!ramdisk_initialized) {
+        for (uint32_t i = 0; i < block_count * RAMDISK_BLOCK_SIZE; ++i) {
+            storage[i] = 0;
+        }
+        ramdisk_initialized = 1;
+    } else if (block_count > previous_blocks) {
+        for (uint32_t i = previous_blocks * RAMDISK_BLOCK_SIZE;
+             i < block_count * RAMDISK_BLOCK_SIZE; ++i) {
+            storage[i] = 0;
+        }
     }
 }
 
@@ -65,6 +75,7 @@ void ramdisk_fill(const void *data, size_t size) {
     if (!data || size == 0 || bytes == 0) {
         return;
     }
+    ramdisk_initialized = 1;
     if (size > bytes) {
         size = bytes;
     }

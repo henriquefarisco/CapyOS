@@ -1,14 +1,22 @@
 meta:
-  generated: 2024-05-26
+  generated: 2025-10-10
   maintainer: Henrique
   description: "Canalização oficial de versões do NoirOS segundo o fluxo gitflow"
 channels:
   alpha:
-    current: 0.7.0-alpha.1
-    extended: 0.7.0-alpha.1+20240526
+    current: 0.7.1-alpha.1
+    extended: 0.7.1-alpha.1+20251010
     stability: experimental
-    summary: "Refatoração massiva do shell, modularização de drivers e preparação de árvore reorganizada"
+    summary: "Hotfix: reforça autenticação NoirFS e valida acesso ao banco de usuários antes do login"
     history:
+      - version: 0.7.1-alpha.1
+        date: 2025-10-10
+        commit: f2e06f4
+        changes:
+          - "Bloqueia login de usuário quando senha do NoirFS está incorreta (loop de autenticação)"
+          - "Impede reformatar volume existente; formata somente em mídia vazia"
+          - "Fluxo de primeiro uso: criação e confirmação de senha do volume"
+          - "Validação do acesso a /etc/users.db antes do prompt de login (telemetria de saúde)"
       - version: 0.7.0-alpha.1
         date: 2024-05-26
         commit: 048b96f
