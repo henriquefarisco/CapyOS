@@ -22,12 +22,12 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 | `print-file-begin` | `print-file-begin <arquivo> [-n <linhas>]` | Mostra inicio do arquivo. |
 | `print-file-end` | `print-file-end <arquivo> [-n <linhas>]` | Mostra final do arquivo. |
 | `print-echo` | `print-echo [texto...]` | Replica texto na tela. |
-| `print-version` | `print-version` | Informa versao do NoirOS. |
+| `print-version` | `print-version` | Informa versao e canal do NoirOS conforme manifesto (`VERSION.yaml`). |
 | `print-time` | `print-time` | Horario simulado desde o boot (hh:mm:ss). |
 | `print-host` | `print-host` | Exibe hostname carregado. |
 | `print-me` | `print-me` | Exibe usuario autenticado. |
 | `print-id` | `print-id` | Exibe UID/GID do usuario. |
-| `print-envs` | `print-envs` | Mostra variaveis basicas (USER, HOME, HOST etc.). |
+| `print-envs` | `print-envs` | Mostra variaveis basicas (USER, HOME, HOST etc.) e expõe CHANNEL/VERSION correntes. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (hh:mm:ss). |
 | `type` | `type <caminho>` | Informa tipo basico (arquivo ou diretorio). |
