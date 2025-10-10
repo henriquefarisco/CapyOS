@@ -8,7 +8,7 @@
 #include "vfs.h"
 
 #define NOIRFS_MAGIC 0x4E524653u /* 'NRFS' */
-#define NOIRFS_VERSION 1
+#define NOIRFS_VERSION 2
 #define NOIRFS_BLOCK_SIZE 4096
 #define NOIRFS_NAME_MAX 32
 
@@ -28,6 +28,10 @@ struct noir_inode_disk {
     uint16_t mode;
     uint16_t links;
     uint32_t size;
+    uint32_t uid;
+    uint32_t gid;
+    uint16_t perm;
+    uint16_t reserved;
     uint32_t direct[12];
     uint32_t indirect;
 } __attribute__((packed));

@@ -1,141 +1,97 @@
 # 🌌 NoirOS
 
 > **NoirOS** é um sistema operacional hobby desenvolvido do zero por **Henrique Schwarz Souza Farisco**.  
-> Inspirado pela cosmologia 🌠, evolui passo a passo — como o próprio universo, da **Singularidade** à **Consciência**.
+> A jornada parte da primeira centelha (**Singularity**) rumo a um ambiente multiusuário cifrado, guiado por uma CLI batizada de **NoirCLI**.
 
 ---
 
 ## ✨ Visão Geral
 
-NoirOS é um kernel **x86 32-bit** construído com uma **toolchain customizada** (`i686-elf-gcc`) e projetado para rodar em **QEMU** ou hardware real.  
-Boot via **Multiboot**, configura sua própria **IDT + PIC**, trata **interrupções de teclado** e oferece um terminal VGA em modo texto para interação.
+NoirOS é um kernel **x86 de 32 bits**, freestanding, que inicializa via **Multiboot**, configura GDT/IDT próprias, remapeia o PIC e habilita IRQs essenciais (PIT + teclado).  
+A partir desta base o projeto já entrega:
+
+- **NoirFS** — filesystem cifrado (XTS-AES) com montagem em RAMDisk e derivação de chaves via PBKDF2.
+- **Assistente de Primeira Execução** — cria estrutura de diretórios, configura hostname/tema/splash e registra o usuário administrador.
+- **Multiusuários** — base de credenciais em `/etc/users.db` com salt + hash PBKDF2.
+- **NoirCLI** — shell interativo com comandos nomeados para o universo Noir (`list`, `go`, `mypath`, `print-file` etc.).
+- **Temas & Splash** — personalização de cores VGA e animação textual opcional durante o boot.
+
+---
+
+## 🛰️ Estado Atual
+
+- **Boot & Núcleo**
+  - Multiboot v1 (`kernel_entry.s`) + GDT mínima (null/code/data) e IDT com handlers para exceções/IRQs.
+  - PIC remapeado (0x20/0x28), PIT operando a 100 Hz (`pit_ticks()` disponível) e teclado (IRQ1) com eco/mascara.
+- **Memória & Discos**
+  - RAMDisk virtual inicializado em 256 blocos de 4 KiB.
+  - NoirFS (blocos 4096 B) com inodes, diretórios e bitmaps.
+  - Camada de criptografia XTS-AES alimentada por PBKDF2 (16k iterações) a partir da senha digitada no boot.
+- **Primeira Execução (wizard)**
+  - Cria `/bin`, `/etc`, `/home`, `/tmp`, `/var/log`, `/system`, `/docs`.
+  - Pergunta hostname, tema (`noir`, `ocean`, `forest`), splash (on/off) e credenciais do administrador.
+  - Gera `/system/config.ini` e `/system/first-run.done` para detectar inicializações futuras.
+- **Autenticação + Sessão**
+  - Login via terminal (`Usuario:` / `Senha:`) com mascaramento, validação PBKDF2 e abertura da sessão (`SESSION_PATH_MAX = 128`).
+  - Sessão mantém `USER`, `ROLE`, `UID`, `GID`, `HOME`, `PWD` e resolve caminhos relativos (`..`, `.`).
+- **NoirCLI**
+  - Prompt `usuario@hostname>` com temas aplicados.
+  - Comandos implementados: `list`, `go`, `mypath`, `print-file`, `page`, `print-file-begin`, `print-file-end`, `mk-file`, `mk-dir`, `print-echo`, `help-any`, `mess`, `bye`, `print-me`, `print-id`, `print-host`, `print-version`, `print-time`, `print-insomnia`, `print-envs`, `do-sync`.
+- `help-any`/`help-docs` oferecem consulta rápida dentro do NoirFS.
+- **Visual**
+  - `system_apply_theme()` configura cores VGA (Noir, Ocean, Forest).
+  - `system_show_splash()` apresenta animação textual progressiva quando habilitada.
 
 ---
 
 ## 🛠️ Stack Tecnológico
 
-- **Linguagem:** C + Assembly (NASM, ELF32)
-- **Compilador:** `i686-elf-gcc` (cross-compiler, freestanding)
-- **Linker:** `i686-elf-ld` com `linker.ld` customizado
-- **Boot:** Multiboot v1 (suporte GRUB/QEMU)
-- **Modo CPU:** Protected Mode (x86, 32-bit)
-- **Drivers:** 
-  - Teclado (IRQ1, scancode set 1, com Shift/Backspace)
-  - VGA modo texto (framebuffer em `0xB8000`)
+- **Linguagens:** C + Assembly (NASM, ELF32 freestanding)
+- **Toolchain:** `i686-elf-gcc`/`ld` (`Makefile` inclui fallback `gcc -m32`)
+- **Bootloader:** Multiboot (GRUB/QEMU) com `kernel_entry.s`
+- **Hardware alvo:** x86 32-bit (Protected Mode)
+- **Drivers atuais:** VGA texto, teclado PS/2 (set 1), PIT, RAMDisk + camada de blocos
+- **Criptografia:** SHA-256 + PBKDF2 + AES-XTS (software puro, sem aceleração HW)
 
 ---
 
-## ✨ Estado Atual
-
-- **Boot:** Multiboot v1 (GRUB/QEMU) via `kernel_entry.s`
-- **GDT:** tabela própria mínima (null, code=0x9A, data=0x92)
-- **IDT:** 256 entradas, exceções 0..31 com mensagens na tela, IRQs 32..47
-- **PIC:** remapeado para 0x20/0x28; IRQ0 (PIT) + IRQ1 (teclado) habilitados
-- **PIT (timer):** programado em 100 Hz, contador de ticks (`pit_ticks()`)
-- **Drivers:**
-  - **VGA texto** (80×25): escrita, scroll, backspace, newline, cursor de hardware
-  - **Teclado (IRQ1):** scancodes set 1, shift/backspace/enter
-- **Loop principal:** `sti(); for(;;) hlt();`
-
-Saída esperada no boot:
-```
-NoirOS 1 - Versao Singularity esta rodando!
-Ola Mundo!
->
-```
-Se ocorrer exceção (ex.: #PF Page Fault), mensagem clara é exibida antes do travamento.
-
----
-
-## 📂 Estrutura
-
-```
-boot/boot.s           ← boot sector opcional (não buildado)
-include/              ← headers (gdt.h, idt.h, isr.h, io.h, vga.h, keyboard.h, pit.h, debug.h …)
-src/
-├── kernel_entry.s   ← Multiboot header + _start
-├── linker.ld        ← script de link (ELF i386, base 1MiB)
-├── kernel.c         ← kernel_main (init VGA, GDT, IDT, PIC, PIT, loop)
-├── gdt.c/.h + gdt_flush.s  ← GDT mínima
-├── idt.c/.h, isr.c, interrupts.s  ← IDT + ISRs/IRQs
-├── keyboard.c/.h
-├── vga.c/.h         ← texto + cursor HW
-├── pit.c/.h         ← temporizador (IRQ0)
-├── debug.c/.h       ← saída porta 0xE9 (QEMU -debugcon)
-└── ports.c/.h, io.h ← inb/outb/cli/sti/hlt
-Makefile
-README.md
-```
-
----
-
-## ⚡ Funcionalidades (v0.1 — *Singularity*)
-
-- [x] Kernel ELF bootável via Multiboot
-- [x] GDT própria instalada
-- [x] Configuração da IDT (256 entradas)
-- [x] PIC remapeado + masking
-- [x] Handler de teclado (IRQ1)
-- [x] Driver VGA texto (print, scroll, backspace, newlines, cursor HW)
-- [x] PIT 100Hz + IRQ0 habilitado
-- [x] Mensagens de exceção (#PF mostra CR2)
-- [x] Main loop com `sti(); for(;;) hlt();`
-- [ ] Gerenciamento de memória (paging, allocators)
-- [ ] System calls (user ↔ kernel)
-- [ ] Suporte a filesystem
-- [ ] Escalonador de processos
-- [ ] Multitarefa
-- [ ] Programas userland
-- [ ] Shell / interpretador de comandos
-- [ ] Stack de rede
-- [ ] Interface gráfica
-
----
-
-## ⚙️ Build & Execução
+## ⚙️ Build, Execução e Fluxo de Uso
 
 ```bash
-make clean && make        # compila kernel ELF
-make run                  # roda QEMU: -kernel build/kernel.bin -m 64
+make clean && make      # compila bootloader + kernel
+make run                # QEMU (-kernel build/kernel.bin -m 64)
 ```
 
-### Debug no QEMU
+1. **Senha do volume cifrado** — ao iniciar, digite a senha ou pressione Enter para usar `noiros-passphrase`.
+2. **Primeira Execução** — se NoirFS não estiver configurado, o assistente perguntará:
+   - Hostname, tema e animação de splash.
+   - Senha do `super-admin` (conta raiz). O diretório `/home/super-admin` é criado automaticamente.
+   - Opcionalmente, um segundo administrador personalizado.
+3. **Login** — sempre requisitado após o boot.
+4. **NoirCLI** — prompt `user@host>`; use `help-any`/`help-docs` para consultar a lista de comandos.
 
-* Porta 0xE9 (debugcon):
-
-  ```bash
-  qemu-system-i386 -kernel build/kernel.bin -m 64 -debugcon stdio -serial none
-  ```
-* Ver traps/interrupções:
-
-  ```bash
-  qemu-system-i386 -kernel build/kernel.bin -d int,cpu_reset -no-reboot -no-shutdown
-  ```
+> **Dica**: Primeiro entre como `super-admin`. Depois, `list`, `mypath`, `hunt-any <padrao>`, `stats-file <alvo>` e `clone <src> <dst>` dão uma boa visão do novo fluxo.
 
 ---
 
-## 🚧 Roadmap Próximo (v0.2 “Inflaton”)
+## 📚 Documentação Complementar
 
-* [x] GDT mínima instalada (já feito ✅)
-* [x] Mensagens de exceções (#PF mostra CR2) ✅
-* [x] Cursor VGA de hardware ✅
-* [x] PIT 100Hz + IRQ0 habilitado ✅
-* [ ] Allocator inicial (bump + kalloc/kfree)
-* [ ] Paging (ativar CR0.PG, mapear 0..4MiB identidade)
-* [ ] Scheduler rudimentar (usar ticks do PIT)
-* [ ] Melhorar tratamento de exceções (#PF: decodificar err_code)
-* [ ] API de impressão numérica (print_hex, print_dec)
+- `docs/noiros-cli-reference.md` — detalha cada comando NoirCLI.
+- `include/` — headers comentados com contratos de API (VGA, TTY, VFS, NoirFS etc.).
 
 ---
 
-## 📝 Notas
+## 🚀 Roadmap Próximo (v0.2 “Inflaton”)
 
-* `boot/boot.s` é apenas demonstração de boot sector real mode.
-  Não é buildado nem necessário quando usamos GRUB/QEMU (`-kernel`).
-* O kernel é freestanding (`-ffreestanding -nostdlib`), não usa libc.
+1. **Scheduler & Jobs** — base para `print-ps`, `watch`, `run-bg/fg` com tarefas cooperativas.
+2. **Pipelines & Redirecionamento** — ampliar o NoirCLI com operadores `|` e `>`, incluindo histórico persistente.
+3. **Rede inicial** — abstrações de link + comandos `print-ip`, `tickle`, `print-ports`, `ask-dns`.
+4. **Permissões avançadas** — suporte a grupos extras/ACLs e utilitários `config-*` completos.
+5. **Splash aprimorado** — frames ASCII externos carregados de `/system/splash/`.
+6. **Tests automáticos** — harness mínimo para validar NoirFS/VFS em modo host.
 
 ---
 
 ## 📜 Licença
 
-MIT (livre uso/estudo).
+MIT — use, estude, evolua.

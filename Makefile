@@ -47,7 +47,11 @@ OBJS = \
   $(BUILD)/ramdisk.o      \
   $(BUILD)/vfs.o          \
   $(BUILD)/noirfs.o       \
-  $(BUILD)/crypt.o
+  $(BUILD)/crypt.o       \
+  $(BUILD)/system_init.o \
+  $(BUILD)/user.o        \
+  $(BUILD)/session.o     \
+  $(BUILD)/shell.o
 
 
 all: $(BOOT_BIN) $(KERNEL_ELF)
