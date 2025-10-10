@@ -35,6 +35,7 @@ static void keyboard_irq(void)
 
     if (sc == 0x0E) { tty_handle_backspace(); return; }
     if (sc == 0x1C) { tty_handle_enter(); return; }
+    if (sc == 0x56) { tty_handle_char(shift_on ? '>' : '<'); return; }
 
     if (!current_layout || sc >= 128) {
         return;
