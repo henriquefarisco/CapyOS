@@ -1,6 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
+#include "core/version.h"
 #include "drivers/timer/pit.h"
 
 static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
@@ -57,7 +58,11 @@ static int cmd_print_version(struct shell_context *ctx, int argc, char **argv) {
     (void)ctx;
     (void)argc;
     (void)argv;
-    shell_print("NoirOS 1 - Versao Singularity\n");
+    shell_print("NoirOS ");
+    shell_print(NOIR_VERSION_EXTENDED);
+    shell_print(" [");
+    shell_print(NOIR_VERSION_CHANNEL);
+    shell_print("]\n");
     return 0;
 }
 
@@ -151,6 +156,15 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     shell_newline();
     shell_print("HOST=");
     shell_print(ctx->settings ? ctx->settings->hostname : "noiros");
+    shell_newline();
+    shell_print("CHANNEL=");
+    shell_print(NOIR_VERSION_CHANNEL);
+    shell_newline();
+    shell_print("VERSION=");
+    shell_print(NOIR_VERSION_EXTENDED);
+    shell_newline();
+    shell_print("VERSION_FULL=");
+    shell_print(NOIR_VERSION_FULL);
     shell_newline();
     shell_print("PATH=/bin:/system\n");
     return 0;
