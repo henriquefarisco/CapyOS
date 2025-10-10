@@ -13,7 +13,7 @@ A partir desta base o projeto já entrega:
 - **NoirFS** — filesystem cifrado (XTS-AES) com montagem em RAMDisk e derivação de chaves via PBKDF2.
 - **Assistente de Primeira Execução** — cria estrutura de diretórios, configura hostname/tema/splash e registra o usuário administrador.
 - **Multiusuários** — base de credenciais em `/etc/users.db` com salt + hash PBKDF2.
-- **NoirCLI** — shell interativo com comandos nomeados para o universo Noir (`list`, `go`, `mypath`, `print-file` etc.).
+- **NoirCLI** — shell interativo com comandos nomeados para o universo Noir (`list`, `go`, `mypath`, `print-file` etc.) e relatório de versão/canal em `print-version` / `print-envs`.
 - **Temas & Splash** — personalização de cores VGA e animação textual opcional durante o boot.
 
 ---
@@ -77,6 +77,8 @@ make run                # QEMU (-kernel build/kernel.bin -m 64)
 ## 📚 Documentação Complementar
 
 - `docs/noiros-cli-reference.md` — detalha cada comando NoirCLI.
+- `docs/releases/` — changelog por build (ex.: `0.7.0-alpha.1`).
+- `VERSION.yaml` — manifesto oficial de canais (`alpha`, `beta`, `stable`) com histórico resumido.
 - `include/` — headers comentados com contratos de API (VGA, TTY, VFS, NoirFS etc.).
 
 ---

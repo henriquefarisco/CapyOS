@@ -1,0 +1,46 @@
+meta:
+  generated: 2024-05-26
+  maintainer: Henrique
+  description: "Canalização oficial de versões do NoirOS segundo o fluxo gitflow"
+channels:
+  alpha:
+    current: 0.7.0-alpha.1
+    extended: 0.7.0-alpha.1+20240526
+    stability: experimental
+    summary: "Refatoração massiva do shell, modularização de drivers e preparação de árvore reorganizada"
+    history:
+      - version: 0.7.0-alpha.1
+        date: 2024-05-26
+        commit: 048b96f
+        changes:
+          - "Shell segmentado por categorias com registro dinâmico de comandos"
+          - "Drivers de teclado com layouts desacoplados (US, BR-ABNT2)"
+          - "Reorganização completa das pastas em arquitetura modular"
+      - version: 0.6.9-alpha.5
+        date: 2024-04-30
+        summary: "Melhorias no sistema de arquivos NoirFS e testes iniciais de sessão"
+      - version: 0.6.4-alpha.2
+        date: 2024-03-12
+        summary: "Introdução do NoirCLI com comandos básicos de usuário"
+  beta:
+    current: 0.6.2-beta.3
+    extended: 0.6.2-beta.3+20240401
+    stability: preview
+    history:
+      - version: 0.6.2-beta.3
+        date: 2024-04-01
+        summary: "Melhorias de estabilidade no NoirFS e sincronização de buffers"
+      - version: 0.6.0-beta.1
+        date: 2024-02-18
+        summary: "Primeira build beta com suporte a múltiplos usuários"
+  stable:
+    current: 0.5.4
+    extended: 0.5.4+20240110
+    stability: production
+    history:
+      - version: 0.5.4
+        date: 2024-01-10
+        summary: "Fixes no bootloader e melhorias de console"
+      - version: 0.5.0
+        date: 2023-12-05
+        summary: "Release inicial estável com shell simples"
