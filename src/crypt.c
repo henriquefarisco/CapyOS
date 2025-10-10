@@ -237,6 +237,19 @@ static void pbkdf2_hmac_sha256(const uint8_t *password, size_t password_len,
     secure_clear(salt_block, sizeof(salt_block));
 }
 
+void crypt_pbkdf2_sha256(const uint8_t *password,
+                           size_t password_len,
+                           const uint8_t *salt,
+                           size_t salt_len,
+                           uint32_t iterations,
+                           uint8_t *out,
+                           size_t out_len) {
+    if (!password || !salt || !out || out_len == 0 || iterations == 0) {
+        return;
+    }
+    pbkdf2_hmac_sha256(password, password_len, salt, salt_len, iterations, out, out_len);
+}
+
 void crypt_derive_xts_keys(const char *password,
                            const uint8_t *salt,
                            size_t salt_len,

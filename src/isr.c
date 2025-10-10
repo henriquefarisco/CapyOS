@@ -60,12 +60,60 @@ static void put_hex32(uint32_t x){
     }
 }
 
-static void report_exception(uint32_t int_no, uint32_t err_code){
+static int exception_has_errcode(uint32_t int_no) {
+    switch (int_no) {
+        case 8:  // #DF
+        case 10: // #TS
+        case 11: // #NP
+        case 12: // #SS
+        case 13: // #GP
+        case 14: // #PF
+        case 17: // #AC
+        case 30: // #SX
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static void report_exception(uint32_t int_no, uint32_t err_code, struct isr_stack_state *stack){
+    uint32_t *raw = (uint32_t *)stack;
+    uint32_t eip_index = 8;
+    if (exception_has_errcode(int_no)) {
+        eip_index = 9;
+    }
+    uint32_t eip = raw[eip_index];
+    uint32_t cs = raw[eip_index + 1];
+    uint32_t eflags = raw[eip_index + 2];
+    uint32_t useresp = 0;
+    uint32_t ss = 0;
+    int from_user = (cs & 0x3) != 0;
+    if (from_user) {
+        useresp = raw[eip_index + 3];
+        ss = raw[eip_index + 4];
+    }
+
     vga_write("\n=== EXCEPTION ===\n");
     vga_write("tipo: ");
     if (int_no < 32) vga_write(exc_name[int_no]); else vga_write("Unknown");
     vga_write("\nint_no: "); put_hex32(int_no);
     vga_write("\nerr_cd: "); put_hex32(err_code);
+    vga_write("\neip:    "); put_hex32(eip);
+    vga_write("\ncs:     "); put_hex32(cs);
+    vga_write("\neflags: "); put_hex32(eflags);
+    if (from_user) {
+        vga_write("\nuseresp:"); put_hex32(useresp);
+        vga_write("\nss:     "); put_hex32(ss);
+    }
+    vga_write("\nregs:   ");
+    vga_write("EAX="); put_hex32(stack->eax); vga_write(" ");
+    vga_write("ECX="); put_hex32(stack->ecx); vga_write(" ");
+    vga_write("EDX="); put_hex32(stack->edx); vga_write(" ");
+    vga_write("EBX="); put_hex32(stack->ebx); vga_write(" ");
+    vga_write("ESP0="); put_hex32(stack->esp0); vga_write(" ");
+    vga_write("EBP="); put_hex32(stack->ebp); vga_write(" ");
+    vga_write("ESI="); put_hex32(stack->esi); vga_write(" ");
+    vga_write("EDI="); put_hex32(stack->edi);
 
     if (int_no == 14){ // (#PF page fault)
         uint32_t cr2;
@@ -79,8 +127,7 @@ static void report_exception(uint32_t int_no, uint32_t err_code){
 
 // Despachante comum: trata exceções e IRQs.
 // Mantemos simples: em exceções, travamos com CLI+HLT; em IRQs, chamamos handler e damos EOI.
-void isr_dispatch(uint32_t int_no, uint32_t err_code) {
-    (void)err_code; // use se quiser logar
+void isr_dispatch(uint32_t int_no, uint32_t err_code, struct isr_stack_state *stack) {
 
     if (int_no >= 32 && int_no <= 47) {
         int irq = (int)int_no - 32;
@@ -95,5 +142,5 @@ void isr_dispatch(uint32_t int_no, uint32_t err_code) {
     }
 
     // Exceção: relato detalhado e trava
-    report_exception(int_no, err_code);
+    report_exception(int_no, err_code, stack);
 }

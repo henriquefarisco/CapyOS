@@ -1,8 +1,63 @@
 #include "vfs.h"
 
 #include "kmem.h"
+#include "session.h"
 
 static struct super_block *root_sb = NULL;
+
+static void dentry_free_tree(struct dentry *d) {
+    if (!d) {
+        return;
+    }
+    struct dentry *child = d->first_child;
+    while (child) {
+        struct dentry *next = child->next_sibling;
+        dentry_free_tree(child);
+        child = next;
+    }
+    kfree(d);
+}
+
+static void fill_default_metadata(uint16_t mode, struct vfs_metadata *meta) {
+    struct session_context *sess = session_active();
+    const struct user_record *user = sess ? session_user(sess) : NULL;
+    if (user) {
+        meta->uid = user->uid;
+        meta->gid = user->gid;
+    } else {
+        meta->uid = 0;
+        meta->gid = 0;
+    }
+    meta->perm = (mode & VFS_MODE_DIR) ? 0755 : 0644;
+}
+
+static int inode_has_permission(struct inode *inode, uint16_t needed) {
+    if (!inode) {
+        return 0;
+    }
+    struct session_context *sess = session_active();
+    if (!sess) {
+        return 1; // sistema (root)
+    }
+    const struct user_record *user = session_user(sess);
+    if (!user) {
+        return 1;
+    }
+    if (user->uid == 0) {
+        return 1;
+    }
+
+    uint16_t perm = inode->perm;
+    uint16_t bits;
+    if (user->uid == inode->uid) {
+        bits = (perm >> 6) & 0x7;
+    } else if (user->gid == inode->gid) {
+        bits = (perm >> 3) & 0x7;
+    } else {
+        bits = perm & 0x7;
+    }
+    return ((bits & needed) == needed);
+}
 
 static void copy_name(char dest[VFS_NAME_MAX], const char *src) {
     size_t i = 0;
@@ -47,6 +102,28 @@ static void dentry_attach_child(struct dentry *parent, struct dentry *child) {
     }
     child->next_sibling = parent->first_child;
     parent->first_child = child;
+}
+
+static struct dentry *dentry_detach_child(struct dentry *parent, const char *name) {
+    if (!parent || !name) {
+        return NULL;
+    }
+    struct dentry *prev = NULL;
+    struct dentry *cur = parent->first_child;
+    while (cur) {
+        if (name_equal(cur->name, name)) {
+            if (prev) {
+                prev->next_sibling = cur->next_sibling;
+            } else {
+                parent->first_child = cur->next_sibling;
+            }
+            cur->next_sibling = NULL;
+            return cur;
+        }
+        prev = cur;
+        cur = cur->next_sibling;
+    }
+    return NULL;
 }
 
 static struct dentry *dentry_lookup_child(struct dentry *parent, const char *name) {
@@ -165,7 +242,7 @@ int vfs_lookup(const char *path, struct dentry **out) {
     return 0;
 }
 
-int vfs_create(const char *path, uint16_t mode) {
+int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta) {
     char name[VFS_NAME_MAX];
     struct dentry *parent = vfs_resolve(path, 1, name);
     if (!parent) {
@@ -177,8 +254,17 @@ int vfs_create(const char *path, uint16_t mode) {
     if (!parent->inode || !parent->inode->ops || !parent->inode->ops->create) {
         return -1;
     }
+    if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
+        return -1;
+    }
+    struct vfs_metadata local_meta;
+    if (meta) {
+        local_meta = *meta;
+    } else {
+        fill_default_metadata(mode, &local_meta);
+    }
     struct inode *inode = NULL;
-    if (parent->inode->ops->create(parent->inode, name, mode, &inode) != 0 || !inode) {
+    if (parent->inode->ops->create(parent->inode, name, mode, &local_meta, &inode) != 0 || !inode) {
         return -1;
     }
     struct dentry *child = dentry_alloc(name, inode, parent);
@@ -190,9 +276,15 @@ int vfs_create(const char *path, uint16_t mode) {
 }
 
 struct file *vfs_open(const char *path, uint32_t flags) {
-    (void)flags;
     struct dentry *d = vfs_resolve(path, 0, NULL);
     if (!d || !d->inode) {
+        return NULL;
+    }
+    uint32_t open_flags = flags ? flags : VFS_OPEN_READ;
+    if ((open_flags & VFS_OPEN_READ) && !inode_has_permission(d->inode, VFS_PERM_READ)) {
+        return NULL;
+    }
+    if ((open_flags & VFS_OPEN_WRITE) && !inode_has_permission(d->inode, VFS_PERM_WRITE)) {
         return NULL;
     }
     struct file *f = (struct file *)kalloc(sizeof(struct file));
@@ -200,7 +292,7 @@ struct file *vfs_open(const char *path, uint32_t flags) {
         return NULL;
     }
     f->dentry = d;
-    f->flags = flags;
+    f->flags = open_flags;
     f->position = 0;
     if (d->inode->ops && d->inode->ops->open) {
         if (d->inode->ops->open(d->inode, f) != 0) {
@@ -241,9 +333,149 @@ long vfs_write(struct file *file, const void *buffer, size_t size) {
     if (!file || !file->dentry || !file->dentry->inode || !file->dentry->inode->ops || !file->dentry->inode->ops->write) {
         return -1;
     }
+    if (!(file->flags & VFS_OPEN_WRITE)) {
+        return -1;
+    }
     long bytes = file->dentry->inode->ops->write(file, buffer, size);
     if (bytes > 0) {
         file->position += (uint32_t)bytes;
     }
     return bytes;
+}
+
+int vfs_listdir(const char *path, vfs_iter_cb cb, void *ctx) {
+    if (!path || !cb) {
+        return -1;
+    }
+    struct dentry *d = vfs_resolve(path, 0, NULL);
+    if (!d || !d->inode) {
+        return -1;
+    }
+    if ((d->inode->mode & VFS_MODE_DIR) == 0) {
+        return -1;
+    }
+    if (!inode_has_permission(d->inode, VFS_PERM_READ | VFS_PERM_EXEC)) {
+        return -1;
+    }
+    if (!d->inode->ops || !d->inode->ops->iterate) {
+        return -1;
+    }
+    return d->inode->ops->iterate(d->inode, cb, ctx);
+}
+
+int vfs_unlink(const char *path) {
+    char name[VFS_NAME_MAX];
+    struct dentry *parent = vfs_resolve(path, 1, name);
+    if (!parent || name[0] == '\0') {
+        return -1;
+    }
+    if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
+        return -1;
+    }
+    if (!parent->inode->ops || !parent->inode->ops->remove) {
+        return -1;
+    }
+    if (parent->inode->ops->remove(parent->inode, name, 0) != 0) {
+        return -1;
+    }
+    struct dentry *removed = dentry_detach_child(parent, name);
+    dentry_free_tree(removed);
+    return 0;
+}
+
+int vfs_rmdir(const char *path) {
+    char name[VFS_NAME_MAX];
+    struct dentry *parent = vfs_resolve(path, 1, name);
+    if (!parent || name[0] == '\0') {
+        return -1;
+    }
+    if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
+        return -1;
+    }
+    if (!parent->inode->ops || !parent->inode->ops->remove) {
+        return -1;
+    }
+    if (parent->inode->ops->remove(parent->inode, name, 1) != 0) {
+        return -1;
+    }
+    struct dentry *removed = dentry_detach_child(parent, name);
+    dentry_free_tree(removed);
+    return 0;
+}
+
+int vfs_rename(const char *src_path, const char *dst_path) {
+    if (!src_path || !dst_path) {
+        return -1;
+    }
+    char src_name[VFS_NAME_MAX];
+    char dst_name[VFS_NAME_MAX];
+    struct dentry *src_parent = vfs_resolve(src_path, 1, src_name);
+    struct dentry *dst_parent = vfs_resolve(dst_path, 1, dst_name);
+    if (!src_parent || !dst_parent || src_name[0] == '\0' || dst_name[0] == '\0') {
+        return -1;
+    }
+    if (!inode_has_permission(src_parent->inode, VFS_PERM_WRITE) ||
+        !inode_has_permission(dst_parent->inode, VFS_PERM_WRITE)) {
+        return -1;
+    }
+    if (!src_parent->inode->ops || !src_parent->inode->ops->rename) {
+        return -1;
+    }
+    if (src_parent->inode->ops->rename(src_parent->inode, src_name, dst_parent->inode, dst_name) != 0) {
+        return -1;
+    }
+
+    struct dentry *child = dentry_detach_child(src_parent, src_name);
+    if (child) {
+        copy_name(child->name, dst_name);
+        child->parent = dst_parent;
+        dentry_attach_child(dst_parent, child);
+    }
+    return 0;
+}
+
+int vfs_stat_path(const char *path, struct vfs_stat *out) {
+    if (!out) {
+        return -1;
+    }
+    struct dentry *d = vfs_resolve(path, 0, NULL);
+    if (!d || !d->inode) {
+        return -1;
+    }
+    if (!inode_has_permission(d->inode, VFS_PERM_READ)) {
+        return -1;
+    }
+    if (d->inode->ops && d->inode->ops->stat) {
+        return d->inode->ops->stat(d->inode, out);
+    }
+    out->ino = d->inode->ino;
+    out->size = d->inode->size;
+    out->uid = d->inode->uid;
+    out->gid = d->inode->gid;
+    out->mode = d->inode->mode;
+    out->perm = d->inode->perm;
+    return 0;
+}
+
+int vfs_set_metadata(const char *path, const struct vfs_metadata *meta) {
+    if (!path || !meta) {
+        return -1;
+    }
+    struct dentry *d = vfs_resolve(path, 0, NULL);
+    if (!d || !d->inode || !d->inode->ops || !d->inode->ops->set_metadata) {
+        if (d && d->refcount) {
+            d->refcount--;
+        }
+        return -1;
+    }
+    if (d->inode->ops->set_metadata(d->inode, meta) != 0) {
+        if (d->refcount) {
+            d->refcount--;
+        }
+        return -1;
+    }
+    if (d->refcount) {
+        d->refcount--;
+    }
+    return 0;
 }
