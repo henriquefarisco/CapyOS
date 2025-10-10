@@ -8,6 +8,7 @@
 #include "drivers/video/vga.h"
 #include "drivers/timer/pit.h"
 #include "memory/kmem.h"
+#include "fs/block.h"
 #include "fs/buffer.h"
 #include "fs/ramdisk.h"
 #include "security/crypt.h"
@@ -15,6 +16,7 @@
 #include "fs/noirfs.h"
 #include "drivers/console/tty.h"
 #include "core/system_init.h"
+#include "core/user.h"
 #include "shell/shell.h"
 
 static struct super_block root_sb;
@@ -181,6 +183,30 @@ static void kernel_log_process_error(const char *name, const char *reason) {
     vga_newline();
 }
 
+static int device_is_blank(struct block_device *dev) {
+    if (!dev || dev->block_count == 0 || dev->block_size == 0) {
+        return 1;
+    }
+    size_t block_size = dev->block_size;
+    uint8_t *buffer = (uint8_t *)kalloc(block_size);
+    if (!buffer) {
+        return 0;
+    }
+    int blank = 1;
+    if (block_device_read(dev, 0, buffer) != 0) {
+        blank = 0;
+    } else {
+        for (size_t i = 0; i < block_size; ++i) {
+            if (buffer[i] != 0) {
+                blank = 0;
+                break;
+            }
+        }
+    }
+    kfree(buffer);
+    return blank;
+}
+
 static int format_and_mount(struct block_device *crypt_dev) {
     vga_write("NoirFS indisponivel. Iniciando formatacao...\n");
     format_progress_complete = 0;
@@ -225,56 +251,93 @@ void kernel_main(void) {
     tty_init();
     keyboard_init();
 
-    vga_write("Digite a senha para montar NoirFS (Enter para usar o padrao).\n");
-    tty_set_prompt("Senha: ");
-    tty_set_echo_mask('*');
-    tty_show_prompt();
-
     sti();
-
-    size_t pass_len = tty_readline(line, sizeof(line));
-    tty_set_echo(1);
-    tty_set_echo_mask('\0');
-
-    const char *passphrase = line;
-    if (pass_len == 0) {
-        passphrase = g_default_passphrase;
-        vga_write("Senha vazia: utilizando senha padrao.\n");
-    } else {
-        vga_write("Senha recebida.\n");
-    }
-
-    crypt_derive_xts_keys(passphrase, g_disk_salt, sizeof(g_disk_salt),
-                          g_kdf_iterations, key1, key2);
-    memzero(line, sizeof(line));
 
     struct block_device *root_dev = ramdisk_device();
     if (!root_dev) {
         vga_write("RAMDISK indisponivel\n");
     } else {
-        struct block_device *crypt_dev = crypt_init(root_dev, key1, key2);
-        memzero(key1, sizeof(key1));
-        memzero(key2, sizeof(key2));
-
-        if (!crypt_dev) {
-            vga_write("Falha ao inicializar camada criptografica\n");
-        } else {
-            if (mount_noirfs_root(crypt_dev) == 0) {
-                fs_ready = 1;
-            } else if (format_and_mount(crypt_dev) == 0) {
-                fs_ready = 1;
-                formatted_now = 1;
-            }
-
-            if (fs_ready && formatted_now) {
-                if (vfs_create("/hello.txt", VFS_MODE_FILE, NULL) == 0) {
-                    struct file *hello = vfs_open("/hello.txt", VFS_OPEN_WRITE);
-                    if (hello) {
-                        const char msg[] = "NoirFS rodando\n";
-                        vfs_write(hello, msg, sizeof(msg) - 1);
-                        vfs_close(hello);
-                    }
+        int blank_device = device_is_blank(root_dev);
+        if (blank_device) {
+            // Fluxo de primeiro uso: criar senha nova e confirmar antes de formatar
+            while (!fs_ready) {
+                vga_write("Volume vazio detectado. Defina uma senha para o NoirFS.\n");
+                tty_set_prompt("Nova senha: ");
+                tty_set_echo_mask('*');
+                tty_show_prompt();
+                size_t len1 = tty_readline(line, sizeof(line));
+                tty_set_echo(1);
+                tty_set_echo_mask('\0');
+                if (len1 == 0) {
+                    vga_write("Senha vazia nao permitida.\n");
+                    continue;
                 }
+                char confirm[TTY_BUFFER_MAX];
+                tty_set_prompt("Confirmar senha: ");
+                tty_set_echo_mask('*');
+                tty_show_prompt();
+                size_t len2 = tty_readline(confirm, sizeof(confirm));
+                tty_set_echo(1);
+                tty_set_echo_mask('\0');
+                if (len2 != len1) {
+                    vga_write("As senhas nao coincidem.\n");
+                    continue;
+                }
+                int match = 1;
+                for (size_t i = 0; i < len1; ++i) {
+                    if (confirm[i] != line[i]) { match = 0; break; }
+                }
+                if (!match) {
+                    vga_write("As senhas nao coincidem.\n");
+                    continue;
+                }
+                crypt_derive_xts_keys(line, g_disk_salt, sizeof(g_disk_salt),
+                                      g_kdf_iterations, key1, key2);
+                memzero(confirm, sizeof(confirm));
+                memzero(line, sizeof(line));
+                struct block_device *crypt_dev = crypt_init(root_dev, key1, key2);
+                if (!crypt_dev) {
+                    vga_write("Falha ao iniciar camada criptografica.\n");
+                    break;
+                }
+                if (format_and_mount(crypt_dev) == 0) {
+                    fs_ready = 1;
+                    formatted_now = 1;
+                } else {
+                    vga_write("Falha ao formatar/montar NoirFS.\n");
+                }
+                memzero(key1, sizeof(key1));
+                memzero(key2, sizeof(key2));
+            }
+        } else {
+            // Fluxo de volume cifrado existente: obrigatorio autenticar, sem formatar
+            vga_write("Volume cifrado detectado. Informe a senha do NoirFS.\n");
+            while (!fs_ready) {
+                tty_set_prompt("Senha: ");
+                tty_set_echo_mask('*');
+                tty_show_prompt();
+                size_t pass_len = tty_readline(line, sizeof(line));
+                tty_set_echo(1);
+                tty_set_echo_mask('\0');
+                if (pass_len == 0) {
+                    vga_write("Senha obrigatoria.\n");
+                    continue;
+                }
+                crypt_derive_xts_keys(line, g_disk_salt, sizeof(g_disk_salt),
+                                      g_kdf_iterations, key1, key2);
+                memzero(line, sizeof(line));
+                struct block_device *crypt_dev = crypt_init(root_dev, key1, key2);
+                if (!crypt_dev) {
+                    vga_write("Falha ao iniciar camada criptografica.\n");
+                    continue;
+                }
+                if (mount_noirfs_root(crypt_dev) == 0) {
+                    fs_ready = 1;
+                } else {
+                    vga_write("Senha incorreta. Tente novamente.\n");
+                }
+                memzero(key1, sizeof(key1));
+                memzero(key2, sizeof(key2));
             }
         }
     }
@@ -403,6 +466,14 @@ void kernel_main(void) {
         kernel_log_process_finalize_success(proc_splash);
 
         const char *proc_login = "autenticacao de usuario";
+        // Verificacao de acesso ao banco de usuarios antes do prompt
+        struct file *dbtest = vfs_open(USER_DB_PATH, VFS_OPEN_READ);
+        if (dbtest) {
+            vga_write("[db] USER_DB acessivel.\n");
+            vfs_close(dbtest);
+        } else {
+            vga_write("[db] USER_DB indisponivel (\"/etc/users.db\").\n");
+        }
         int keep_auth = 1;
         while (keep_auth) {
             kernel_log_dependency_wait(proc_splash, proc_login);
