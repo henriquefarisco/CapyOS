@@ -108,12 +108,14 @@ ISO_DIR := build/iso-root
 ISO_IMG := build/NoirOS-Installer.iso
 
 
-$(ISO_DIR): $(BUILD) $(NGIS_ELF)
+$(ISO_DIR): $(BUILD) $(NGIS_ELF) $(NOIROS_ELF)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(NGIS_ELF) $(ISO_DIR)/boot/installer.bin
+	cp $(NOIROS_ELF) $(ISO_DIR)/boot/noiros.bin
 	echo 'set timeout=1' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'menuentry "Noir Guided Installation System" { multiboot /boot/installer.bin; boot }' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'menuentry "NoirOS (boot via ISO + disco instalado)" { multiboot /boot/noiros.bin; boot }' >> $(ISO_DIR)/boot/grub/grub.cfg
 
 iso: $(NGIS_ELF) $(ISO_DIR)
 	@which grub-mkrescue >/dev/null 2>&1 || { echo 'grub-mkrescue nao encontrado'; exit 1; }
@@ -181,8 +183,9 @@ install-grub-device:
 HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/stub_kmem.c \
-               src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/stub_kmem.c \
+               src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
+               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c
 
 test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
