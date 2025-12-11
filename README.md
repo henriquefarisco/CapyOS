@@ -47,11 +47,17 @@ A partir desta base o projeto já entrega:
 ## 🛠️ Stack Tecnológico
 
 - **Linguagens:** C + Assembly (NASM, ELF32 freestanding)
-- **Toolchain:** `i686-elf-gcc`/`ld` (`Makefile` inclui fallback `gcc -m32`)
+- **Toolchain:** `i686-elf-gcc`/`ld` (`Makefile` inclui fallback `gcc -m32`) — roda em hosts x86_64/hypervisores sem exigir extensões especiais.
 - **Bootloader:** Multiboot (GRUB/QEMU) com `kernel_entry.s`
 - **Hardware alvo:** x86 32-bit (Protected Mode)
 - **Drivers atuais:** VGA texto, teclado PS/2 (set 1), PIT, RAMDisk + camada de blocos
 - **Criptografia:** SHA-256 + PBKDF2 + AES-XTS (software puro, sem aceleração HW)
+
+### Compatibilidade x64 / Recursos
+- Kernel 32-bit protegido: executa em CPUs x86_64 via modo legado ou VMs BIOS/MBR (UEFI não suportado).
+- Memória: heap interno de 2 MiB; validado em VMs até 256 MiB de RAM (ajuste `KHEAP_SIZE` se precisar mais).
+- Disco: blocos lógicos de 4096B via wrapper; cabe até ~2 TiB (limite de 32 bits do contador de blocos).
+- Boot: requer BIOS/MBR. Sem bootloader no disco, use a entrada da ISO para carregar o kernel.
 
 ---
 
@@ -68,6 +74,7 @@ make run-disk               # NoirOS + -drive file=build/disk.img,if=ide
 # ISO SOMENTE DO INSTALADOR (NGIS) — requer grub-mkrescue/xorriso
 make iso                    # gera build/NoirOS-Installer.iso (NGIS)
 make run-installer-iso      # QEMU com a ISO do instalador e o disco em build/disk.img
+# A ISO inclui menu "NoirOS (boot via ISO + disco instalado)" para usar o kernel direto da ISO como bootloader
 
 # (Opcional) deixar o disco bootável (GRUB no MBR) e iniciar sem -kernel
 sudo make disk-bootable     # particiona build/disk.img (sda1 ext2/GRUB + sda2 NoirFS) e instala o GRUB
@@ -85,6 +92,7 @@ Fluxo recomendado:
 2. **Primeiro boot do NoirOS** — inicie o kernel do NoirOS apontando para o mesmo disco:
    - Informe a senha do NoirFS para montagem do volume.
    - Vai direto ao login (sem assistente, pois a configuração foi feita no instalador).
+   - Sem GRUB no disco, mantenha a ISO anexada e escolha o menu "NoirOS (boot via ISO + disco instalado)".
 3. **NoirCLI** — prompt `user@host>`; use `help-any`/`help-docs` para consultar a lista de comandos.
 
 Saude do build:
