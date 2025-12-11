@@ -14,19 +14,18 @@
 #include "security/crypt.h"
 #include "fs/vfs.h"
 #include "fs/noirfs.h"
+#include "fs/storage/partition.h"
 #include "drivers/console/tty.h"
 #include "core/system_init.h"
 #include "core/user.h"
 #include "shell/shell.h"
 
 static struct super_block root_sb;
-static const char *g_default_passphrase = "noiros-passphrase";
 static const uint8_t g_disk_salt[16] = {
     0x4e, 0x6f, 0x69, 0x72, 0x4f, 0x53, 0x2d, 0x46,
     0x53, 0x2d, 0x53, 0x61, 0x6c, 0x74, 0x21, 0x00
 };
 static const uint32_t g_kdf_iterations = 16000;
-static int format_progress_complete = 0;
 
 static void memzero(void *ptr, size_t len) {
     volatile uint8_t *p = (volatile uint8_t *)ptr;
@@ -35,79 +34,6 @@ static void memzero(void *ptr, size_t len) {
     }
 }
 
-static size_t utoa10(uint32_t value, char *dst) {
-    char tmp[10];
-    size_t len = 0;
-    if (value == 0) {
-        dst[0] = '0';
-        return 1;
-    }
-    while (value && len < sizeof(tmp)) {
-        tmp[len++] = (char)('0' + (value % 10));
-        value /= 10;
-    }
-    for (size_t i = 0; i < len; ++i) {
-        dst[i] = tmp[len - 1 - i];
-    }
-    return len;
-}
-
-static void format_progress(const char *stage, uint32_t percent) {
-    static uint32_t last_percent = 0xFFFFFFFFu;
-    static char last_stage[32] = {0};
-
-    if (!stage) {
-        stage = "";
-    }
-    if (percent > 100) {
-        percent = 100;
-    }
-
-    int same_stage = 1;
-    for (size_t i = 0; i < sizeof(last_stage) - 1; ++i) {
-        char a = last_stage[i];
-        char b = stage[i];
-        if (a != b) { same_stage = 0; break; }
-        if (a == '\0') { break; }
-    }
-    if (same_stage) {
-        size_t i = 0;
-        while (i < sizeof(last_stage) - 1 && last_stage[i] && stage[i]) { ++i; }
-        if (i < sizeof(last_stage) - 1 && (last_stage[i] != stage[i])) {
-            same_stage = 0;
-        }
-    }
-
-    if (same_stage && percent == last_percent) {
-        return;
-    }
-
-    char numbuf[10];
-    size_t numlen = utoa10(percent, numbuf);
-    numbuf[numlen] = '\0';
-
-    vga_write("Formatacao: ");
-    vga_write(numbuf);
-    vga_write("% ");
-    vga_write(stage);
-    vga_newline();
-    for (volatile uint32_t spin = 0; spin < 200000; ++spin) {
-        __asm__ volatile("");
-    }
-
-    last_percent = percent;
-    size_t copy_len = 0;
-    for (; copy_len < sizeof(last_stage) - 1 && stage[copy_len]; ++copy_len) {
-        last_stage[copy_len] = stage[copy_len];
-    }
-    last_stage[copy_len] = '\0';
-
-    if (percent >= 100) {
-        format_progress_complete = 1;
-        last_percent = 0xFFFFFFFFu;
-        last_stage[0] = '\0';
-    }
-}
 
 static int mount_noirfs_root(struct block_device *crypt_dev) {
     if (mount_noirfs(crypt_dev, &root_sb) != 0) {
@@ -183,55 +109,90 @@ static void kernel_log_process_error(const char *name, const char *reason) {
     vga_newline();
 }
 
-static int device_is_blank(struct block_device *dev) {
-    if (!dev || dev->block_count == 0 || dev->block_size == 0) {
-        return 1;
-    }
-    size_t block_size = dev->block_size;
-    uint8_t *buffer = (uint8_t *)kalloc(block_size);
-    if (!buffer) {
-        return 0;
-    }
-    int blank = 1;
-    if (block_device_read(dev, 0, buffer) != 0) {
-        blank = 0;
+static int probe_block_zeroed(struct block_device *dev, uint32_t lba) {
+    if (lba >= dev->block_count) return 1; // fora do range: não conclui nada
+    size_t bs = dev->block_size;
+    uint8_t *buf = (uint8_t *)kalloc(bs);
+    if (!buf) return 0; // conservador: tratar como não-zero
+    int all_zero = 1;
+    if (block_device_read(dev, lba, buf) != 0) {
+        all_zero = 0; // falha de leitura: considerar não-zero (para evitar falso "em branco")
     } else {
-        for (size_t i = 0; i < block_size; ++i) {
-            if (buffer[i] != 0) {
-                blank = 0;
-                break;
-            }
+        for (size_t i = 0; i < bs; ++i) { if (buf[i] != 0) { all_zero = 0; break; } }
+    }
+    kfree(buf);
+    return all_zero;
+}
+
+static int device_is_blank(struct block_device *dev) {
+    if (!dev || dev->block_count == 0 || dev->block_size == 0) return 1;
+    // Verifica múltiplos LBAs, incluindo região após o offset de formatação (128)
+    uint32_t samples[9];
+    size_t n = 0;
+    samples[n++] = 0;
+    if (dev->block_count > 1) samples[n++] = 1;
+    if (dev->block_count > 2) samples[n++] = 2;
+    if (dev->block_count > 128) {
+        samples[n++] = 127;
+        samples[n++] = 128;
+        samples[n++] = 129;
+    }
+    if (dev->block_count > 256) samples[n++] = 256;
+    if (dev->block_count > 4) samples[n++] = dev->block_count/2;
+    if (dev->block_count > 0) samples[n++] = dev->block_count-1;
+
+    for (size_t i = 0; i < n; ++i) {
+        if (!probe_block_zeroed(dev, samples[i])) {
+            return 0; // encontrou dado não-zero
         }
     }
-    kfree(buffer);
-    return blank;
+    return 1; // todas as amostras zero
 }
 
-static int format_and_mount(struct block_device *crypt_dev) {
-    vga_write("NoirFS indisponivel. Iniciando formatacao...\n");
-    format_progress_complete = 0;
-    int fmt = noirfs_format(crypt_dev, 128, crypt_dev->block_count, format_progress);
-    if (!format_progress_complete) {
-        vga_write("\n");
+// Seleciona o backend correto: lê a MBR no disco cru (512B) e expõe a partição 2.
+// Em seguida, envolve em blocos de 4096B para alinhar com o NoirFS.
+static struct block_device *pick_root_device(struct block_device *raw_ata) {
+    if (!raw_ata) {
+        return NULL;
     }
-    if (fmt != 0) {
-        vga_write("Falha ao formatar NoirFS\n");
-        return -1;
+
+    struct block_device *slice = NULL;
+    struct mbr_partition data_part;
+    if (mbr_read_partition(raw_ata, 1, &data_part) == 0) {
+        vga_write("[boot] particao 2 detectada via MBR; usando como volume NoirFS.\n");
+        slice = block_offset_wrap(raw_ata, data_part.lba_start, data_part.sector_count);
+    } else {
+        vga_write("[boot] MBR ou particao 2 indisponivel; usando disco inteiro.\n");
+        slice = raw_ata;
     }
-    if (mount_noirfs_root(crypt_dev) != 0) {
-        vga_write("Falha ao montar NoirFS apos formatacao\n");
-        return -1;
+    if (!slice) {
+        return NULL;
     }
-    return 0;
+    struct block_device *chunked = block_chunked_wrap(slice, NOIRFS_BLOCK_SIZE);
+    if (chunked) {
+        return chunked;
+    }
+    return slice;
 }
 
-void kernel_main(void) {
+/* format_and_mount removido: formatação agora é tarefa do instalador (NGIS). */
+
+struct multiboot_info {
+    uint32_t flags;
+    uint32_t mem_lower;
+    uint32_t mem_upper;
+    uint32_t boot_device;
+    uint32_t cmdline; // char* (physical addr)
+};
+
+/* Sem modo de instalacao embutido. */
+
+void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
+    (void)mb_magic; (void)mb_info_ptr;
     char line[TTY_BUFFER_MAX];
     uint8_t key1[CRYPT_KEY_SIZE];
     uint8_t key2[CRYPT_KEY_SIZE];
     int fs_ready = 0;
-    int formatted_now = 0;
-    int first_boot = 0;
 
     vga_init();
     vga_write("NoirOS 1 - Versao Singularity esta rodando!\n\n");
@@ -255,13 +216,14 @@ void kernel_main(void) {
     tty_init();
     keyboard_init();
 
+    /* Instalacao separada: sem suporte a mode=install no kernel principal. */
+
     sti();
 
     struct block_device *root_dev = NULL;
     struct block_device *ata = ata_primary_device();
     if (ata) {
-        struct block_device *chunked = block_chunked_wrap(ata, 4096);
-        root_dev = chunked ? chunked : ata;
+        root_dev = pick_root_device(ata);
     }
     if (!root_dev) {
         root_dev = ramdisk_device();
@@ -271,56 +233,8 @@ void kernel_main(void) {
     } else {
         int blank_device = device_is_blank(root_dev);
         if (blank_device) {
-            // Fluxo de primeiro uso: criar senha nova e confirmar antes de formatar
-            while (!fs_ready) {
-                vga_write("Volume vazio detectado. Defina uma senha para o NoirFS.\n");
-                tty_set_prompt("Nova senha: ");
-                tty_set_echo_mask('*');
-                tty_show_prompt();
-                size_t len1 = tty_readline(line, sizeof(line));
-                tty_set_echo(1);
-                tty_set_echo_mask('\0');
-                if (len1 == 0) {
-                    vga_write("Senha vazia nao permitida.\n");
-                    continue;
-                }
-                char confirm[TTY_BUFFER_MAX];
-                tty_set_prompt("Confirmar senha: ");
-                tty_set_echo_mask('*');
-                tty_show_prompt();
-                size_t len2 = tty_readline(confirm, sizeof(confirm));
-                tty_set_echo(1);
-                tty_set_echo_mask('\0');
-                if (len2 != len1) {
-                    vga_write("As senhas nao coincidem.\n");
-                    continue;
-                }
-                int match = 1;
-                for (size_t i = 0; i < len1; ++i) {
-                    if (confirm[i] != line[i]) { match = 0; break; }
-                }
-                if (!match) {
-                    vga_write("As senhas nao coincidem.\n");
-                    continue;
-                }
-                crypt_derive_xts_keys(line, g_disk_salt, sizeof(g_disk_salt),
-                                      g_kdf_iterations, key1, key2);
-                memzero(confirm, sizeof(confirm));
-                memzero(line, sizeof(line));
-                struct block_device *crypt_dev = crypt_init(root_dev, key1, key2);
-                if (!crypt_dev) {
-                    vga_write("Falha ao iniciar camada criptografica.\n");
-                    break;
-                }
-                if (format_and_mount(crypt_dev) == 0) {
-                    fs_ready = 1;
-                    formatted_now = 1;
-                } else {
-                    vga_write("Falha ao formatar/montar NoirFS.\n");
-                }
-                memzero(key1, sizeof(key1));
-                memzero(key2, sizeof(key2));
-            }
+            vga_write("Dispositivo vazio detectado.\n");
+            vga_write("Inicie pelo instalador (ISO) para formatar e instalar.\n");
         } else {
             // Fluxo de volume cifrado existente: obrigatorio autenticar, sem formatar
             vga_write("Volume cifrado detectado. Informe a senha do NoirFS.\n");
@@ -393,82 +307,10 @@ void kernel_main(void) {
     kernel_log_process_finalize_success(proc_session);
 
     if (fs_ready) {
-        const char *proc_first_boot_check = "avaliacao de primeiro boot";
-        kernel_log_dependency_wait(proc_session, proc_first_boot_check);
-        kernel_log_process_begin(proc_first_boot_check);
-        kernel_log_process_begin_success(proc_first_boot_check);
-        if (formatted_now) {
-            kernel_log_process_progress(proc_first_boot_check);
-            first_boot = 1;
-            kernel_log_process_conclude(proc_first_boot_check);
-            kernel_log_process_finalize(proc_first_boot_check);
-            kernel_log_process_finalize_success(proc_first_boot_check);
-            vga_write("Formatacao recente detectada: tratando como primeiro boot.\n");
-        } else {
-            kernel_log_process_progress(proc_first_boot_check);
-            first_boot = system_detect_first_boot();
-            if (first_boot) {
-                vga_write("Primeiro boot identificado.\n");
-            } else {
-                vga_write("Primeiro boot ja executado anteriormente.\n");
-            }
-            kernel_log_process_conclude(proc_first_boot_check);
-            kernel_log_process_finalize(proc_first_boot_check);
-            kernel_log_process_finalize_success(proc_first_boot_check);
-        }
-
-        const char *proc_setup = "assistente de configuracao inicial";
-        kernel_log_dependency_wait(proc_first_boot_check, proc_setup);
-        if (first_boot) {
-            kernel_log_process_begin(proc_setup);
-            kernel_log_process_begin_success(proc_setup);
-            if (system_run_first_boot_setup() != 0) {
-                kernel_log_process_error(proc_setup, "falha ao executar assistente.");
-                kernel_log_process_finalize(proc_setup);
-            } else {
-                kernel_log_process_progress(proc_setup);
-                kernel_log_process_conclude(proc_setup);
-                kernel_log_process_finalize(proc_setup);
-                kernel_log_process_finalize_success(proc_setup);
-            }
-        } else {
-            kernel_log_process_begin(proc_setup);
-            kernel_log_process_begin_success(proc_setup);
-            vga_write("Processo assistente de configuracao inicial dispensado (ja concluido).\n");
-            kernel_log_process_progress(proc_setup);
-            kernel_log_process_conclude(proc_setup);
-            kernel_log_process_finalize(proc_setup);
-            kernel_log_process_finalize_success(proc_setup);
-        }
-
         vga_write("Sistema pronto.\n");
 
-        const char *proc_reload_settings = "recarregamento das configuracoes";
-        kernel_log_dependency_wait(proc_setup, proc_reload_settings);
-        kernel_log_process_begin(proc_reload_settings);
-        kernel_log_process_begin_success(proc_reload_settings);
-        if (system_load_settings(&settings) == 0) {
-            kernel_log_process_progress(proc_reload_settings);
-            kernel_log_process_conclude(proc_reload_settings);
-            kernel_log_process_finalize(proc_reload_settings);
-            kernel_log_process_finalize_success(proc_reload_settings);
-        } else {
-            kernel_log_process_error(proc_reload_settings, "config.ini indisponivel apos setup.");
-            kernel_log_process_finalize(proc_reload_settings);
-        }
-
-        const char *proc_theme_after = "aplicacao do tema apos setup";
-        kernel_log_dependency_wait(proc_reload_settings, proc_theme_after);
-        kernel_log_process_begin(proc_theme_after);
-        kernel_log_process_begin_success(proc_theme_after);
-        system_apply_theme(&settings);
-        kernel_log_process_progress(proc_theme_after);
-        kernel_log_process_conclude(proc_theme_after);
-        kernel_log_process_finalize(proc_theme_after);
-        kernel_log_process_finalize_success(proc_theme_after);
-
         const char *proc_splash = "exibicao do splash";
-        kernel_log_dependency_wait(proc_theme_after, proc_splash);
+        kernel_log_dependency_wait(proc_session, proc_splash);
         kernel_log_process_begin(proc_splash);
         kernel_log_process_begin_success(proc_splash);
         system_show_splash(&settings);

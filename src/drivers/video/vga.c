@@ -52,6 +52,28 @@ static char vga_map_latin1_to_cp437(char c){
     unsigned char u = (unsigned char)c;
     if (u == 0xC7) return (char)0x80; // Ç
     if (u == 0xE7) return (char)0x87; // ç
+    // Common PT-BR accents (best-effort mapping to CP437)
+    if (u == 0xE1) return (char)0xA0; // á
+    if (u == 0xE9) return (char)0x82; // é
+    if (u == 0xED) return (char)0xA1; // í
+    if (u == 0xF3) return (char)0xA2; // ó
+    if (u == 0xFA) return (char)0xA3; // ú
+    if (u == 0xC1) return (char)0xB5; // Á
+    if (u == 0xC9) return (char)0x90; // É
+    if (u == 0xCD) return (char)0xD6; // Í
+    if (u == 0xD3) return (char)0xE0; // Ó
+    if (u == 0xDA) return (char)0xE9; // Ú
+    if (u == 0xE2) return (char)0x83; // â
+    if (u == 0xEA) return (char)0x88; // ê
+    if (u == 0xEE) return (char)0x8C; // î
+    if (u == 0xF4) return (char)0x93; // ô
+    if (u == 0xFB) return (char)0x96; // û
+    if (u == 0xE3) return (char)0xC6; // ã
+    if (u == 0xF5) return (char)0xE5; // õ
+    if (u == 0xC3) return (char)0xC7; // Ã
+    if (u == 0xD5) return (char)0xE4; // Õ
+    if (u == 0xE0) return (char)0x85; // à
+    if (u == 0xC0) return (char)0xB7; // À
     return c; // fallback
 }
 
@@ -85,6 +107,20 @@ void vga_putc(char c) {
     vga_update_hw_cursor();
 }
 
+// Also send characters to COM1 (0x3F8) so text is available on QEMU -serial
+static inline void serial_putc(char c) {
+    // Write byte to COM1 data port. Best-effort; no polling for TX ready to keep code simple.
+    outb(0x3F8, (uint8_t)c);
+}
+
+void vga_write(const char *s) {
+    while (*s) {
+        vga_putc(*s);
+        serial_putc(*s);
+        ++s;
+    }
+}
+
 static void vga_scroll_if_needed(void) {
     if (cur_row < VGA_HEIGHT)
         return;
@@ -101,9 +137,7 @@ static void vga_scroll_if_needed(void) {
     vga_update_hw_cursor();
 }
 
-void vga_write(const char *s) {
-    while (*s) vga_putc(*s++);
-}
+/* vga_write implemented above to also mirror output to serial */
 
 void vga_init(void) {
     vga_set_color(7, 0); // cinza claro em preto

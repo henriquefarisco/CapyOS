@@ -14,6 +14,7 @@
 #define SETUP_LOG_CAPACITY 8192
 
 static int ensure_directory(const char *path);
+static int g_setup_debug = 0; /* pode ser ativado em tempo de execucao se precisar */
 
 static char g_setup_log[SETUP_LOG_CAPACITY];
 static size_t g_setup_log_len = 0;
@@ -466,6 +467,30 @@ static const char *g_cli_reference_text =
     "\n"
     "Observacao: caminhos relativos respeitam o diretorio ativo.\n";
 
+static void dbg_print(const char *a, const char *b){ if (!g_setup_debug) return; if (a) vga_write(a); if (b) vga_write(b); vga_newline(); }
+
+static void dbg_print_heap(const char *prefix, const char *path) {
+    if (!g_setup_debug) {
+        return;
+    }
+    char used[16];
+    char total[16];
+    u32_to_string((uint32_t)kheap_used(), used, sizeof(used));
+    u32_to_string((uint32_t)kheap_size(), total, sizeof(total));
+    if (prefix) {
+        vga_write(prefix);
+    }
+    if (path) {
+        vga_write(path);
+    }
+    vga_write(" [heap ");
+    vga_write(used);
+    vga_write("/");
+    vga_write(total);
+    vga_write("]");
+    vga_newline();
+}
+
 static int ensure_directory(const char *path) {
     if (!path || path[0] != '/') {
         return -1;
@@ -480,6 +505,7 @@ static int ensure_directory(const char *path) {
         ++p;
     }
 
+    int guard = 0;
     while (*p) {
         const char *start = p;
         size_t len = 0;
@@ -489,11 +515,13 @@ static int ensure_directory(const char *path) {
         if (len > 0) {
             if (build_len > 1) {
                 if (build_len + 1 >= sizeof(build)) {
+                    dbg_print("[setup] ensure: path too long (add /) ", build);
                     return -1;
                 }
                 build[build_len++] = '/';
             }
             if (build_len + len >= sizeof(build)) {
+                dbg_print("[setup] ensure: path too long (segment) ", NULL);
                 return -1;
             }
             for (size_t i = 0; i < len; ++i) {
@@ -502,20 +530,26 @@ static int ensure_directory(const char *path) {
             build[build_len] = '\0';
 
             struct dentry *d = NULL;
-            if (vfs_lookup(build, &d) != 0) {
-                if (vfs_create(build, VFS_MODE_DIR, NULL) != 0) {
+            int lrc = vfs_lookup(build, &d);
+            if (lrc != 0) {
+                dbg_print_heap("[setup] mkdir: ", build);
+                int crc = vfs_create(build, VFS_MODE_DIR, NULL);
+                if (crc != 0) {
+                    dbg_print("[setup] mkdir failed: ", build);
                     return -1;
                 }
             } else {
                 if (d && d->refcount) {
                     d->refcount--;
                 }
+                dbg_print_heap("[setup] dir exists: ", build);
             }
         }
         p += len;
         while (*p == '/') {
             ++p;
         }
+        if (++guard > 128) { dbg_print("[setup] ensure guard tripped for: ", path); return -1; }
     }
     return 0;
 }
@@ -593,6 +627,8 @@ int system_run_first_boot_setup(void) {
     print_line("Este assistente prepara usuarios, configuracao e estrutura basica.");
     vga_newline();
 
+    g_setup_debug = 1; // habilita logs detalhados durante a preparacao inicial
+
     const char *directories[] = {
         "/bin",
         "/etc",
@@ -608,6 +644,7 @@ int system_run_first_boot_setup(void) {
     log_process_begin(proc_dirs);
     log_process_begin_success(proc_dirs);
     for (size_t i = 0; i < sizeof(directories)/sizeof(directories[0]); ++i) {
+        dbg_print_heap("[setup] ensure path: ", directories[i]);
         if (ensure_directory(directories[i]) != 0) {
             print_line("Falha ao preparar estrutura de diretorios.");
             return -1;

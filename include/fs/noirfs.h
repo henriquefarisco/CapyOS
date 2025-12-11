@@ -49,4 +49,14 @@ int noirfs_format(struct block_device *dev,
                   uint32_t block_count,
                   noirfs_progress_cb progress_cb);
 
+// Retorna o conjunto de operacoes de arquivo do NoirFS
+const struct file_ops *noirfs_file_ops(void);
+
+// Criação direta (entry point público) para o FS nativo
+int noirfs_create_pub(struct inode *dir,
+                      const char *name,
+                      uint16_t mode,
+                      const struct vfs_metadata *meta,
+                      struct inode **out_inode);
+
 #endif

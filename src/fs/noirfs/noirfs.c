@@ -1,7 +1,39 @@
 #include "fs/noirfs.h"
+#include "drivers/video/vga.h"
 
 #include "fs/buffer.h"
 #include "memory/kmem.h"
+
+#define NOIRFS_DEBUG_CREATE 1
+
+static void noirfs_dbg_puts(const char *msg) {
+#if NOIRFS_DEBUG_CREATE
+    if (msg) {
+        vga_write(msg);
+        vga_newline();
+    }
+#else
+    (void)msg;
+#endif
+}
+
+static void noirfs_dbg_hex32(const char *label, uint32_t value) {
+#if NOIRFS_DEBUG_CREATE
+    static const char hex[] = "0123456789ABCDEF";
+    char buf[11]; buf[0] = '0'; buf[1] = 'x';
+    for (int i = 0; i < 8; ++i) {
+        buf[2 + i] = hex[(value >> (28 - i * 4)) & 0xF];
+    }
+    buf[10] = '\0';
+    if (label) {
+        vga_write(label);
+    }
+    vga_write(buf);
+    vga_newline();
+#else
+    (void)label; (void)value;
+#endif
+}
 
 struct noirfs_inode {
     struct noirfs_mount *mount;
@@ -39,6 +71,10 @@ static const struct file_ops noirfs_ops = {
     .stat = noirfs_stat_inode,
     .set_metadata = noirfs_set_metadata,
 };
+
+const struct file_ops *noirfs_file_ops(void) {
+    return &noirfs_ops;
+}
 
 static struct noirfs_mount *inode_mount(struct inode *inode) {
     if (!inode || !inode->private_data) {
@@ -171,6 +207,7 @@ int noirfs_format(struct block_device *dev,
 
     struct buffer_head *bh;
     uint32_t meta_blocks = (data_start > bmap_start) ? (data_start - bmap_start) : 0;
+    noirfs_dbg_puts("[noirfs] limpando metadados begin");
     for (uint32_t i = bmap_start; i < data_start; ++i) {
         bh = buffer_get(dev, i);
         if (!bh) {
@@ -192,6 +229,7 @@ int noirfs_format(struct block_device *dev,
     }
 
     uint32_t used_blocks = data_start;
+    noirfs_dbg_puts("[noirfs] reservando blocos begin");
     if (progress) {
         progress("Reservando blocos", 72);
     }
@@ -475,6 +513,11 @@ static long noirfs_write(struct file *file, const void *buffer, size_t size) {
 }
 
 static int noirfs_lookup(struct inode *dir, const char *name, struct inode **out_inode) {
+    noirfs_dbg_puts("[noirfs] lookup begin");
+    if (dir) {
+        noirfs_dbg_hex32("   dir ino=", dir->ino);
+    }
+    if (name) { vga_write("   name: "); vga_write(name); vga_newline(); }
     if (!dir || !out_inode || !name) {
         return -1;
     }
@@ -512,6 +555,9 @@ static int noirfs_lookup(struct inode *dir, const char *name, struct inode **out
 
 static int noirfs_create(struct inode *dir, const char *name, uint16_t mode,
                          const struct vfs_metadata *meta, struct inode **out_inode) {
+    noirfs_dbg_puts("[noirfs] create begin");
+    if (name) { vga_write("   target: "); vga_write(name); vga_newline(); }
+    noirfs_dbg_hex32("   dir ptr=", (uint32_t)(uintptr_t)dir);
     if (!dir || !name || !out_inode) {
         return -1;
     }
@@ -530,18 +576,23 @@ static int noirfs_create(struct inode *dir, const char *name, uint16_t mode,
 
     struct noir_inode_disk dir_disk;
     if (noirfs_read_inode_disk(mnt, dir->ino, &dir_disk) != 0) {
+        noirfs_dbg_puts("[noirfs] create: read dir inode failed");
         return -1;
     }
+    noirfs_dbg_hex32("   dir size=", dir_disk.size);
 
     struct noir_dirent_disk existing;
     if (noirfs_dir_find_entry(mnt, &dir_disk, name, &existing, NULL, NULL) == 0) {
+        noirfs_dbg_puts("[noirfs] create: entry already exists");
         return -1;
     }
 
     uint32_t new_ino;
     if (noirfs_alloc_inode(mnt, &new_ino) != 0) {
+        noirfs_dbg_puts("[noirfs] create: alloc inode failed");
         return -1;
     }
+    noirfs_dbg_hex32("   new ino=", new_ino);
 
     struct noir_inode_disk new_disk;
     new_disk.mode = mode;
@@ -563,11 +614,13 @@ static int noirfs_create(struct inode *dir, const char *name, uint16_t mode,
     new_disk.indirect = 0;
 
     if (noirfs_write_inode_disk(mnt, new_ino, &new_disk) != 0) {
+        noirfs_dbg_puts("[noirfs] create: write new inode failed");
         noirfs_free_inode_bit(mnt, new_ino);
         return -1;
     }
 
     if (noirfs_dir_add_entry(mnt, &dir_disk, dir->ino, new_ino, name) != 0) {
+        noirfs_dbg_puts("[noirfs] create: add entry failed");
         noirfs_free_inode_bit(mnt, new_ino);
         return -1;
     }
@@ -575,11 +628,21 @@ static int noirfs_create(struct inode *dir, const char *name, uint16_t mode,
 
     struct inode *child = noirfs_create_vfs_inode(dir->sb, mnt, new_ino, &new_disk);
     if (!child) {
+        noirfs_dbg_puts("[noirfs] create: vfs inode alloc failed");
         noirfs_free_inode_bit(mnt, new_ino);
         return -1;
     }
+    noirfs_dbg_puts("[noirfs] create: success");
     *out_inode = child;
     return 0;
+}
+
+int noirfs_create_pub(struct inode *dir,
+                      const char *name,
+                      uint16_t mode,
+                      const struct vfs_metadata *meta,
+                      struct inode **out_inode) {
+    return noirfs_create(dir, name, mode, meta, out_inode);
 }
 
 static int noirfs_remove(struct inode *dir, const char *name, int is_dir) {
@@ -828,6 +891,7 @@ static int noirfs_write_inode_disk(struct noirfs_mount *mnt, uint32_t ino, const
     base[index] = *src;
     buffer_mark_dirty(bh);
     buffer_release(bh);
+    buffer_cache_sync(mnt->dev);
     return 0;
 }
 
@@ -1034,6 +1098,9 @@ static int noirfs_dir_add_entry(struct noirfs_mount *mnt, struct noir_inode_disk
     if (!mnt || !dir_inode || !name) {
         return -1;
     }
+    noirfs_dbg_puts("[noirfs] dir_add begin");
+    noirfs_dbg_hex32("   dir_ino=", dir_ino);
+    noirfs_dbg_hex32("   child_ino=", child_ino);
     size_t name_len = cstring_length(name);
     if (name_len == 0 || name_len >= NOIRFS_NAME_MAX) {
         return -1;
@@ -1041,6 +1108,11 @@ static int noirfs_dir_add_entry(struct noirfs_mount *mnt, struct noir_inode_disk
 
     const uint32_t entry_size = sizeof(struct noir_dirent_disk);
     const uint32_t entries_per_block = NOIRFS_BLOCK_SIZE / entry_size;
+
+    if (noirfs_read_inode_disk(mnt, dir_ino, dir_inode) != 0) {
+        noirfs_dbg_puts("[noirfs] dir_add: failed to refresh dir_inode");
+        return -1;
+    }
 
     uint32_t entry_count = dir_inode->size / entry_size;
 
@@ -1050,6 +1122,7 @@ static int noirfs_dir_add_entry(struct noirfs_mount *mnt, struct noir_inode_disk
         uint32_t block_no;
         int dirty = 0;
         if (noirfs_get_data_block(mnt, dir_inode, logical_block, 0, &block_no, &dirty) != 0) {
+            noirfs_dbg_puts("[noirfs] dir_add: get_data_block existing failed");
             return -1;
         }
         if (block_no == 0) {
@@ -1057,6 +1130,7 @@ static int noirfs_dir_add_entry(struct noirfs_mount *mnt, struct noir_inode_disk
         }
         struct buffer_head *bh = buffer_get(mnt->dev, block_no);
         if (!bh) {
+            noirfs_dbg_puts("[noirfs] dir_add: buffer_get existing failed");
             return -1;
         }
         struct noir_dirent_disk *entries = (struct noir_dirent_disk *)bh->data;
@@ -1077,10 +1151,12 @@ static int noirfs_dir_add_entry(struct noirfs_mount *mnt, struct noir_inode_disk
     uint32_t block_no;
     int inode_dirty = 0;
     if (noirfs_get_data_block(mnt, dir_inode, logical_block, 1, &block_no, &inode_dirty) != 0) {
+        noirfs_dbg_puts("[noirfs] dir_add: get_data_block alloc failed");
         return -1;
     }
     struct buffer_head *bh = buffer_get(mnt->dev, block_no);
     if (!bh) {
+        noirfs_dbg_puts("[noirfs] dir_add: buffer_get alloc failed");
         return -1;
     }
     struct noir_dirent_disk *entries = (struct noir_dirent_disk *)bh->data;
@@ -1091,6 +1167,7 @@ static int noirfs_dir_add_entry(struct noirfs_mount *mnt, struct noir_inode_disk
 
     dir_inode->size = (new_index + 1) * entry_size;
     noirfs_write_inode_disk(mnt, dir_ino, dir_inode);
+    noirfs_dbg_puts("[noirfs] dir_add end");
     return 0;
 }
 

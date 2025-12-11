@@ -33,14 +33,21 @@ static struct block_device_ops chunk_ops = {
 
 struct block_device *block_chunked_wrap(struct block_device *lower, uint32_t chunk_size){
     if (!lower || chunk_size == 0 || (chunk_size % lower->block_size) != 0) return NULL;
+    uint32_t ratio = chunk_size / lower->block_size;
+    if (ratio == 0 || lower->block_count < ratio) return NULL;
     struct block_device *dev = (struct block_device *)kalloc(sizeof(struct block_device));
     struct chunk_ctx *ctx = (struct chunk_ctx *)kalloc(sizeof(struct chunk_ctx));
     if (!dev || !ctx){ if (dev) kfree(dev); if (ctx) kfree(ctx); return NULL; }
     ctx->lower = lower;
-    ctx->ratio = chunk_size / lower->block_size;
+    ctx->ratio = ratio;
     dev->name = "chunked";
     dev->block_size = chunk_size;
     dev->block_count = lower->block_count / ctx->ratio;
+    if (dev->block_count == 0){
+        kfree(ctx);
+        kfree(dev);
+        return NULL;
+    }
     dev->ctx = ctx;
     dev->ops = &chunk_ops;
     return dev;
