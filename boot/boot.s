@@ -12,7 +12,8 @@ start:
     jmp .print
 
 boot_grub:
-    jmp 0x0000:0x7C00   ; transfere controle para GRUB (caso esteja em cadeia)
+    cli
+    hlt                 ; encerra execução caso este bootsector seja invocado diretamente
 
 halt:
     cli

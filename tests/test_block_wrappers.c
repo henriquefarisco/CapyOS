@@ -167,11 +167,27 @@ static int test_chunk_offset_combo(void) {
     return 0;
 }
 
+static int test_offset_invalid_range(void) {
+    struct mem_backend mem;
+    mem_backend_init(&mem, 512, 16);
+    struct block_device base = { .name = "mem", .block_size = 512, .block_count = 16, .ctx = &mem, .ops = &g_mem_ops };
+    struct block_device *bad = block_offset_wrap(&base, 20, 4);
+    mem_backend_free(&mem);
+    if (bad) {
+        printf("[offset] aceitou faixa fora do disco\n");
+        kfree(bad->ctx);
+        kfree(bad);
+        return 1;
+    }
+    return 0;
+}
+
 int run_block_wrapper_tests(void) {
     int fails = 0;
     fails += test_offset_wrap_basic();
     fails += test_chunk_wrap_rw();
     fails += test_chunk_offset_combo();
+    fails += test_offset_invalid_range();
     if (fails == 0) {
         printf("[tests] block_wrappers OK\n");
     }

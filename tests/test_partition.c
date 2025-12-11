@@ -82,7 +82,7 @@ static int test_mbr_parse_success(void) {
 static int test_mbr_invalid_signature(void) {
     struct mem_backend_p mem;
     mem.block_size = 512;
-    mem.block_count = 64;
+    mem.block_count = 2048;
     mem.data = (uint8_t *)calloc(mem.block_count, mem.block_size);
 
     uint8_t mbr[512];
@@ -103,7 +103,7 @@ static int test_mbr_invalid_signature(void) {
 static int test_mbr_zero_sectors(void) {
     struct mem_backend_p mem;
     mem.block_size = 512;
-    mem.block_count = 64;
+    mem.block_count = 2048;
     mem.data = (uint8_t *)calloc(mem.block_count, mem.block_size);
 
     uint8_t mbr[512];
@@ -121,11 +121,34 @@ static int test_mbr_zero_sectors(void) {
     return 0;
 }
 
+static int test_mbr_out_of_range(void) {
+    struct mem_backend_p mem;
+    mem.block_size = 512;
+    mem.block_count = 4096;
+    mem.data = (uint8_t *)calloc(mem.block_count, mem.block_size);
+
+    uint8_t mbr[512];
+    // LBA inicial fora do disco (>= block_count)
+    fill_mbr(mbr, 5000, 100, 0x83);
+    memcpy(mem.data, mbr, 512);
+
+    struct block_device dev = { .name = "mem", .block_size = 512, .block_count = mem.block_count, .ctx = &mem, .ops = &g_mem_ops_p };
+    struct mbr_partition part;
+    int rc = mbr_read_partition(&dev, 1, &part);
+    free(mem.data);
+    if (rc == 0) {
+        printf("[mbr] aceitou lba fora do range\n");
+        return 1;
+    }
+    return 0;
+}
+
 int run_partition_tests(void) {
     int fails = 0;
     fails += test_mbr_parse_success();
     fails += test_mbr_invalid_signature();
     fails += test_mbr_zero_sectors();
+    fails += test_mbr_out_of_range();
     if (fails == 0) {
         printf("[tests] partition helpers OK\n");
     }

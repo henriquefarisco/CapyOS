@@ -21,6 +21,7 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 | `print-file` | `print-file <arquivo>` | Exibe conteudo completo. |
 | `print-file-begin` | `print-file-begin <arquivo> [-n <linhas>]` | Mostra inicio do arquivo. |
 | `print-file-end` | `print-file-end <arquivo> [-n <linhas>]` | Mostra final do arquivo. |
+| `open` | `open <arquivo>` | Abre para edicao linha-a-linha; finalize com `.wq` para salvar. |
 | `print-echo` | `print-echo [texto...]` | Replica texto na tela. |
 | `print-version` | `print-version` | Informa versao e canal do NoirOS conforme manifesto (`VERSION.yaml`). |
 | `print-time` | `print-time` | Horario simulado desde o boot (hh:mm:ss). |
