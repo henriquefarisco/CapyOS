@@ -1,4 +1,6 @@
 #include "fs/vfs.h"
+#include "drivers/video/vga.h"
+#include "fs/noirfs.h"
 
 #include "memory/kmem.h"
 #include "core/session.h"
@@ -243,12 +245,15 @@ int vfs_lookup(const char *path, struct dentry **out) {
 }
 
 int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta) {
+    vga_write("[vfs] create enter: "); vga_write(path); vga_newline();
     char name[VFS_NAME_MAX];
     struct dentry *parent = vfs_resolve(path, 1, name);
     if (!parent) {
+        vga_write("[vfs] create: parent resolve failed\n");
         return -1;
     }
     if (name[0] == '\0') {
+        vga_write("[vfs] create: empty last component\n");
         return -1;
     }
 
@@ -256,10 +261,17 @@ int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta)
         return -1; // Já existe
     }
 
+    // Para o FS nativo atual (NoirFS), garantimos que o conjunto de ops
+    // a ser usado é o oficial, evitando qualquer salto indevido por corrupcao.
+    if (parent->inode) {
+        parent->inode->ops = noirfs_file_ops();
+    }
     if (!parent->inode || !parent->inode->ops || !parent->inode->ops->create) {
+        vga_write("[vfs] create: ops indisponiveis\n");
         return -1;
     }
     if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
+        vga_write("[vfs] create: no write perm on parent\n");
         return -1;
     }
     struct vfs_metadata local_meta;
@@ -269,9 +281,13 @@ int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta)
         fill_default_metadata(mode, &local_meta);
     }
     struct inode *inode = NULL;
-    if (parent->inode->ops->create(parent->inode, name, mode, &local_meta, &inode) != 0 || !inode) {
+    vga_write("[vfs] calling fs->create for: "); vga_write(name); vga_newline();
+    // Chamada direta ao NoirFS para evitar dependencia de ponteiros corrompidos
+    if (noirfs_create_pub(parent->inode, name, mode, &local_meta, &inode) != 0 || !inode) {
+        vga_write("[vfs] create: noirfs_create returned error\n");
         return -1;
     }
+    vga_write("[vfs] create: noirfs_create ok\n");
     struct dentry *child = dentry_alloc(name, inode, parent);
     if (!child) {
         return -1;

@@ -27,4 +27,9 @@ int block_device_write(struct block_device *dev, uint32_t block_no, const void *
 // Returns a new heap-allocated device or NULL on failure.
 struct block_device *block_chunked_wrap(struct block_device *lower, uint32_t chunk_size);
 
+// Creates a logical view over a sub-range of a lower device, starting at
+// LBA 'start_lba' and exposing 'lba_count' blocks with the SAME block_size
+// as the lower device.
+struct block_device *block_offset_wrap(struct block_device *lower, uint32_t start_lba, uint32_t lba_count);
+
 #endif

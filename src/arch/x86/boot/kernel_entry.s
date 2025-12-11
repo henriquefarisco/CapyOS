@@ -5,7 +5,7 @@
 SECTION .multiboot
 align 4
 MULTIBOOT_MAGIC  equ 0x1BADB002
-MULTIBOOT_FLAGS  equ 0x00000000        ; sem memória/grub mods especiais
+MULTIBOOT_FLAGS  equ 0x00000000        ; flags mínimas
 MULTIBOOT_CHECK  equ -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
 
 ; Header Multiboot (precisa ficar nos primeiros ~8KB do binário)
@@ -22,8 +22,12 @@ _start:
     cli
     mov esp, stack_top
 
-    ; chama o kernel em C
+    ; GRUB/Multiboot passam: EAX = magic, EBX = pointer para multiboot_info
+    ; Passa como argumentos (cdecl): kernel_main(uint32_t magic, uint32_t info_ptr)
+    push ebx
+    push eax
     call kernel_main
+    add esp, 8
 
 .hang:
     cli
@@ -33,7 +37,7 @@ _start:
 SECTION .bss
 align 16
 stack_bottom:
-    resb 4096
+    resb 16384
 stack_top:
 
 SECTION .note.GNU-stack noalloc

@@ -58,17 +58,42 @@ A partir desta base o projeto já entrega:
 ## ⚙️ Build, Execução e Fluxo de Uso
 
 ```bash
-make clean && make      # compila bootloader + kernel
-make run                # QEMU (-kernel build/kernel.bin -m 64)
+make clean && make          # compila bootloader + 2 kernels (NoirOS e Instalador)
+make run                    # executa o kernel do NoirOS diretamente no QEMU
+
+# Disco persistente (IDE emulado)
+make disk-img               # cria build/disk.img (128 MiB por padrão; ajuste via DISK_SIZE=256M)
+make run-disk               # NoirOS + -drive file=build/disk.img,if=ide
+
+# ISO SOMENTE DO INSTALADOR (NGIS) — requer grub-mkrescue/xorriso
+make iso                    # gera build/NoirOS-Installer.iso (NGIS)
+make run-installer-iso      # QEMU com a ISO do instalador e o disco em build/disk.img
+
+# (Opcional) deixar o disco bootável (GRUB no MBR) e iniciar sem -kernel
+sudo make disk-bootable     # particiona build/disk.img (sda1 ext2/GRUB + sda2 NoirFS) e instala o GRUB
+make run-disk-boot          # inicia o QEMU em -boot c (GRUB -> NoirOS)
 ```
 
-1. **Senha do volume cifrado** — ao iniciar, digite a senha ou pressione Enter para usar `noiros-passphrase`.
-2. **Primeira Execução** — se NoirFS não estiver configurado, o assistente perguntará:
-   - Hostname, tema e animação de splash.
-   - Senha do `super-admin` (conta raiz). O diretório `/home/super-admin` é criado automaticamente.
-   - Opcionalmente, um segundo administrador personalizado.
-3. **Login** — sempre requisitado após o boot.
-4. **NoirCLI** — prompt `user@host>`; use `help-any`/`help-docs` para consultar a lista de comandos.
+Fluxo recomendado:
+
+1. **Instalação (NGIS)** — inicialize com a ISO do instalador:
+   - Lista discos detectados (ex.: `ata0-master`) e permite escolher o alvo.
+   - Cria tabela MBR com 2 partições: `sda1` BOOT (16–100 MiB, padrão 64 MiB) e `sda2` dados (NoirFS cifrado).
+   - Define a senha do NoirFS e formata a partição de dados.
+   - Executa o assistente para hostname, tema (`noir`, `ocean`, `forest`), splash (on/off) e cria usuários.
+   - Escreve `/system/config.ini` e o marcador `/system/first-run.done` no NoirFS.
+2. **Primeiro boot do NoirOS** — inicie o kernel do NoirOS apontando para o mesmo disco:
+   - Informe a senha do NoirFS para montagem do volume.
+   - Vai direto ao login (sem assistente, pois a configuração foi feita no instalador).
+3. **NoirCLI** — prompt `user@host>`; use `help-any`/`help-docs` para consultar a lista de comandos.
+
+Saude do build:
+- `make test` executa testes unitários em modo host para validar wrappers de bloco e parsing do MBR.
+
+Notas sobre boot pelo disco:
+- O instalador cria a tabela MBR e reserva `sda1` para BOOT. Para tornar o disco bootável sem ISO, é necessário instalar um bootloader (ex.: GRUB) no MBR/BOOT.
+- Use `sudo make disk-bootable` no host (Linux) para instalar GRUB no `build/disk.img` já particionado, ou replique os passos com seu disco/VDI via loop device.
+- O NGIS detecta automaticamente a `sda2` (partição 2) e formata/monta o NoirFS lá.
 
 > **Dica**: Primeiro entre como `super-admin`. Depois, `list`, `mypath`, `hunt-any <padrao>`, `stats-file <alvo>` e `clone <src> <dst>` dão uma boa visão do novo fluxo.
 
@@ -77,7 +102,7 @@ make run                # QEMU (-kernel build/kernel.bin -m 64)
 ## 📚 Documentação Complementar
 
 - `docs/noiros-cli-reference.md` — detalha cada comando NoirCLI.
-- `docs/releases/` — changelog por build (ex.: `0.7.0-alpha.1`).
+- `docs/releases/` — changelog por build (ex.: `0.7.1-alpha.1`).
 - `VERSION.yaml` — manifesto oficial de canais (`alpha`, `beta`, `stable`) com histórico resumido.
 - `include/` — headers comentados com contratos de API (VGA, TTY, VFS, NoirFS etc.).
 

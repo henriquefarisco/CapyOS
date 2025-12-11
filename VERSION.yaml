@@ -1,14 +1,23 @@
 meta:
-  generated: 2025-10-10
+  generated: 2025-12-11
   maintainer: Henrique
   description: "Canalização oficial de versões do NoirOS segundo o fluxo gitflow"
 channels:
   alpha:
-    current: 0.7.1-alpha.1
-    extended: 0.7.1-alpha.1+20251010
+    current: 0.7.2-alpha.0
+    extended: 0.7.2-alpha.0+20251211
     stability: experimental
-    summary: "Hotfix: reforça autenticação NoirFS e valida acesso ao banco de usuários antes do login"
+    summary: "Separação instalador/OS corrigida com validação MBR, blocos 4KiB e testes host; pilha ampliada para estabilidade"
     history:
+      - version: 0.7.2-alpha.0
+        date: 2025-12-11
+        commit: 5f08d60
+        changes:
+          - "Kernel principal monta a partição 2 (MBR) com blocos de 4096B e remove qualquer tentativa de formatação interna."
+          - "Instalador NGIS valida tamanho mínimo, tipos de partição e faixa LBA; cria particionamento BOOT/DADOS com padrão seguro (BOOT 32MiB por padrão, disco 128MiB sugerido)."
+          - "Wrapper de offset e parser MBR recusam ranges inválidos, evitando corrupção ao montar a partição 2."
+          - "Pilha do kernel/instalador ampliada para 16 KiB, mitigando overflow em operações de instalação."
+          - "Alvo 'make test' com testes unitários para wrappers de bloco e parsing do MBR (host)."
       - version: 0.7.1-alpha.1
         date: 2025-10-10
         commit: f2e06f4
