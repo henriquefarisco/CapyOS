@@ -11,7 +11,7 @@ channels:
     history:
       - version: 0.7.3-alpha.0
         date: 2025-12-15
-        commit: pending
+        commit: 6a9c3c2
         changes:
           - "Correção do layout BR-ABNT2 (dead keys, tecla /? e keypad decimal), com testes adicionais de scancode."
           - "Hotkey F1 injeta help-docs no CLI; instalador pergunta layout antes de senhas."
