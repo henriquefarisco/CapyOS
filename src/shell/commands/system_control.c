@@ -3,6 +3,8 @@
 
 #include "drivers/input/keyboard.h"
 #include "fs/buffer.h"
+#include "fs/vfs.h"
+#include "arch/x86/hw/io.h"
 
 static int cmd_config_keyboard(struct shell_context *ctx, int argc, char **argv) {
     (void)ctx;
@@ -35,6 +37,52 @@ static int cmd_config_keyboard(struct shell_context *ctx, int argc, char **argv)
     return 0;
 }
 
+static void sync_and_flush(void) {
+    struct super_block *root = vfs_root();
+    if (root && root->bdev) {
+        buffer_cache_sync(root->bdev);
+    }
+}
+
+static void do_hard_reboot(void) {
+    sync_and_flush();
+    shell_print("Reiniciando...\n");
+    __asm__ volatile("cli");
+    outb(0x64, 0xFE); // comando de reset via controlador de teclado
+    while (1) { __asm__ volatile("hlt"); }
+}
+
+static void do_power_off(void) {
+    sync_and_flush();
+    shell_print("Desligando...\n");
+    __asm__ volatile("cli");
+    while (1) { __asm__ volatile("hlt"); }
+}
+
+static int cmd_shutdown_reboot(struct shell_context *ctx, int argc, char **argv) {
+    (void)ctx;
+    (void)argv;
+    if (shell_help_requested(argc, argv)) {
+        shell_print("Uso: shutdown-reboot\nReinicia o sistema de forma controlada (sincroniza buffers).");
+        shell_newline();
+        return 0;
+    }
+    do_hard_reboot();
+    return 0;
+}
+
+static int cmd_shutdown_off(struct shell_context *ctx, int argc, char **argv) {
+    (void)ctx;
+    (void)argv;
+    if (shell_help_requested(argc, argv)) {
+        shell_print("Uso: shutdown-off\nDesliga o sistema (halt) apos sincronizar buffers.");
+        shell_newline();
+        return 0;
+    }
+    do_power_off();
+    return 0;
+}
+
 static int cmd_do_sync(struct shell_context *ctx, int argc, char **argv) {
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -56,6 +104,8 @@ static int cmd_do_sync(struct shell_context *ctx, int argc, char **argv) {
 
 static const struct shell_command g_system_control_commands[] = {
     { "config-keyboard", cmd_config_keyboard },
+    { "shutdown-reboot", cmd_shutdown_reboot },
+    { "shutdown-off", cmd_shutdown_off },
     { "do-sync", cmd_do_sync },
 };
 

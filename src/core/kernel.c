@@ -253,8 +253,8 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
                                       g_kdf_iterations, key1, key2);
                 memzero(line, sizeof(line));
                 struct block_device *crypt_dev = crypt_init(root_dev, key1, key2);
-                if (!crypt_dev) {
-                    vga_write("Falha ao iniciar camada criptografica.\n");
+                if (!crypt_dev || crypt_dev == root_dev) {
+                    vga_write("Falha ao iniciar camada criptografica (volume inseguro).\n");
                     continue;
                 }
                 if (mount_noirfs_root(crypt_dev) == 0) {
@@ -370,23 +370,9 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
             }
         }
     } else {
-        vga_write("Sistema inicializado sem NoirFS.\n");
-        tty_set_echo(1);
-        tty_set_prompt("> ");
-        while (1) {
-            tty_set_echo(1);
-            tty_set_echo_mask('\0');
-            tty_show_prompt();
-            size_t cmd_len = tty_readline(line, sizeof(line));
-            tty_set_echo(1);
-            tty_set_echo_mask('\0');
-            if (cmd_len > 0) {
-                vga_write("Comando recebido: ");
-                vga_write(line);
-                vga_write("\n");
-                memzero(line, cmd_len);
-            }
-        }
+        vga_write("Falha ao localizar ou montar volume NoirFS.\n");
+        vga_write("Reinicie e inicialize a partir da ISO do instalador para preparar o disco.\n");
+        while (1) { __asm__ volatile("hlt"); }
     }
 
     while (1) {

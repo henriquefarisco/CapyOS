@@ -15,12 +15,27 @@ static const struct keyboard_layout *g_layouts[] = {
 static const struct keyboard_layout *current_layout = NULL;
 static int shift_on = 0;
 static char g_dead_accent = 0; // '\'', '`', '^', '~', '"' for diaeresis
+static keyboard_hotkey_callback g_help_hotkey = NULL;
 
 static void keyboard_apply_layout(const struct keyboard_layout *layout)
 {
     if (layout) {
         current_layout = layout;
+        g_dead_accent = 0;
     }
+}
+
+static int is_dead_key(uint8_t sc, char ch, int shift_active)
+{
+    if (!current_layout) {
+        return 0;
+    }
+    uint8_t flags = current_layout->dead[sc];
+    int dead = shift_active ? (flags & 0x2) : (flags & 0x1);
+    if (!dead) {
+        return 0;
+    }
+    return ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"';
 }
 
 static void keyboard_irq(void)
@@ -34,9 +49,15 @@ static void keyboard_irq(void)
         return;
     }
 
+    if (sc == 0x3B) { // F1 - help
+        if (g_help_hotkey) {
+            g_help_hotkey();
+        }
+        return;
+    }
+
     if (sc == 0x0E) { tty_handle_backspace(); return; }
     if (sc == 0x1C) { tty_handle_enter(); return; }
-    if (sc == 0x56) { tty_handle_char(shift_on ? '>' : '<'); return; }
 
     if (!current_layout || sc >= 128) {
         return;
@@ -45,6 +66,11 @@ static void keyboard_irq(void)
     const char *mapping = shift_on ? current_layout->shift : current_layout->base;
     char ch = mapping[sc];
     if (!ch) return;
+
+    if (is_dead_key(sc, ch, shift_on)) {
+        g_dead_accent = ch;
+        return;
+    }
 
     // Handle dead keys for accents
     if (ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"') {
@@ -106,6 +132,11 @@ void keyboard_init(void)
 {
     keyboard_apply_layout(g_layouts[0]);
     irq_install_handler(1, keyboard_irq);
+}
+
+void keyboard_set_help_callback(keyboard_hotkey_callback cb)
+{
+    g_help_hotkey = cb;
 }
 
 size_t keyboard_layout_count(void)

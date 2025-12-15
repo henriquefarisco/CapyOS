@@ -4,11 +4,19 @@ meta:
   description: "Canalização oficial de versões do NoirOS segundo o fluxo gitflow"
 channels:
   alpha:
-    current: 0.7.2-alpha.0
-    extended: 0.7.2-alpha.0+20251211
+    current: 0.7.3-alpha.0
+    extended: 0.7.3-alpha.0+20251215
     stability: experimental
-    summary: "Separação instalador/OS corrigida com validação MBR, blocos 4KiB e testes host; pilha ampliada para estabilidade"
+    summary: "Hotkey de help, comandos de energia, escolha de layout na instalação e correções do ABNT2 / boot seguro"
     history:
+      - version: 0.7.3-alpha.0
+        date: 2025-12-15
+        commit: pending
+        changes:
+          - "Correção do layout BR-ABNT2 (dead keys, tecla /? e keypad decimal), com testes adicionais de scancode."
+          - "Hotkey F1 injeta help-docs no CLI; instalador pergunta layout antes de senhas."
+          - "Comandos shutdown-reboot e shutdown-off com sync de buffers."
+          - "Boot principal exige NoirFS montado de forma cifrada; remove prompt inseguro."
       - version: 0.7.2-alpha.0
         date: 2025-12-11
         commit: 5f08d60
