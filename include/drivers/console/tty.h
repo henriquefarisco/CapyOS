@@ -13,6 +13,7 @@ void tty_set_echo(int enabled);
 void tty_set_echo_mask(char mask);
 size_t tty_readline(char *out, size_t max_len);
 char tty_getc(void);
+void tty_inject_line(const char *line, int echo_line);
 
 void tty_handle_char(char ch);
 void tty_handle_backspace(void);

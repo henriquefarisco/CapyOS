@@ -139,3 +139,28 @@ void tty_handle_enter(void) {
     // Garante que o cursor esteja sempre visível em coluna 0 da próxima linha
     vga_update_hw_cursor();
 }
+
+void tty_inject_line(const char *line, int echo_line) {
+    if (!line || line_ready) {
+        return;
+    }
+
+    size_t len = 0;
+    while (line[len] && len < TTY_BUFFER_MAX - 1) {
+        ++len;
+    }
+
+    if (echo_line && echo_enabled && input_len > 0) {
+        vga_newline();
+    }
+
+    input_len = 0;
+    for (size_t i = 0; i < len; ++i) {
+        input_buffer[input_len++] = line[i];
+        if (echo_line && echo_enabled) {
+            vga_putc(line[i]);
+        }
+    }
+
+    tty_handle_enter();
+}

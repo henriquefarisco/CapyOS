@@ -4,6 +4,7 @@
 
 #include "memory/kmem.h"
 #include "drivers/console/tty.h"
+#include "drivers/input/keyboard.h"
 #include "core/user.h"
 #include "fs/vfs.h"
 #include "drivers/video/vga.h"
@@ -14,6 +15,10 @@
 static struct shell_command_set g_command_sets[8];
 static size_t g_command_set_count = 0;
 static int g_command_sets_initialized = 0;
+static void shell_hotkey_help_docs(void)
+{
+    tty_inject_line("help-docs", 1);
+}
 
 static void shell_init_command_sets(void)
 {
@@ -739,6 +744,8 @@ enum shell_result shell_run(struct session_context *session, const struct system
         return SHELL_RESULT_EXIT;
     }
 
+    keyboard_set_help_callback(shell_hotkey_help_docs);
+
     struct shell_context ctx;
     shell_context_init(&ctx, session, settings);
 
@@ -749,6 +756,7 @@ enum shell_result shell_run(struct session_context *session, const struct system
 
     if (shell_self_test(&ctx) != 0) {
         session_set_active(NULL);
+        keyboard_set_help_callback(NULL);
         return SHELL_RESULT_EXIT;
     }
 
@@ -786,6 +794,6 @@ enum shell_result shell_run(struct session_context *session, const struct system
 
     enum shell_result result = shell_context_should_logout(&ctx) ? SHELL_RESULT_LOGOUT : SHELL_RESULT_EXIT;
     session_set_active(NULL);
+    keyboard_set_help_callback(NULL);
     return result;
 }
-

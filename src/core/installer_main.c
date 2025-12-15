@@ -176,6 +176,35 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     kinit(); buffer_cache_init(); vfs_init(); ramdisk_init(256);
     extern void ata_init(void); ata_init(); tty_init(); keyboard_init();
 
+    // Escolha de layout antes de qualquer prompt (senhas, tamanhos, etc.)
+    {
+        vga_write("Layouts disponiveis:\n");
+        for (size_t i = 0; i < keyboard_layout_count(); ++i) {
+            vga_write(" - ");
+            vga_write(keyboard_layout_name(i));
+            vga_write(" : ");
+            vga_write(keyboard_layout_description(i));
+            vga_newline();
+        }
+        char buf[32];
+        while (1) {
+            tty_set_prompt("Layout do teclado [us]: ");
+            tty_set_echo(1);
+            tty_set_echo_mask('\0');
+            tty_show_prompt();
+            size_t l = tty_readline(buf, sizeof(buf));
+            if (l == 0) {
+                keyboard_set_layout_by_name("us");
+                break;
+            }
+            if (keyboard_set_layout_by_name(buf) == 0) {
+                vga_write("Layout aplicado.\n");
+                break;
+            }
+            vga_write("Layout desconhecido. Use um dos listados acima.\n");
+        }
+    }
+
     // Detecta discos
     struct dev_choice choices[4]; size_t ndev=0; extern int ata_devices_count(void); extern struct block_device* ata_device_by_index(int);
     int ac=ata_devices_count(); for(int i=0;i<ac && ndev<4;i++){ struct block_device *d=ata_device_by_index(i); if(d){ choices[ndev].dev=d; choices[ndev].name=d->name; choices[ndev].bytes=(uint64_t)d->block_size*(uint64_t)d->block_count; ndev++; }}
@@ -215,7 +244,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     char pass1[128], pass2[128];
     while(1){ vga_write("Defina a senha do volume cifrado NoirFS.\n"); tty_set_prompt("Nova senha: "); tty_set_echo_mask('*'); tty_show_prompt(); size_t l1=tty_readline(pass1,sizeof(pass1)); tty_set_echo(1); tty_set_echo_mask('\0'); if(l1==0){ vga_write("Senha vazia nao permitida.\n"); continue; } tty_set_prompt("Confirmar senha: "); tty_set_echo_mask('*'); tty_show_prompt(); size_t l2=tty_readline(pass2,sizeof(pass2)); tty_set_echo(1); tty_set_echo_mask('\0'); if(l2!=l1){ vga_write("Senhas nao conferem.\n"); continue;} int same=1; for(size_t i=0;i<l1;i++){ if(pass1[i]!=pass2[i]){ same=0; break; } } if(!same){ vga_write("Senhas nao conferem.\n"); continue; } break; }
     uint8_t key1[32], key2[32]; crypt_derive_xts_keys(pass1,g_disk_salt,sizeof(g_disk_salt),g_kdf_iterations,key1,key2); memzero(pass1,sizeof(pass1)); memzero(pass2,sizeof(pass2));
-    struct block_device *crypt_dev = crypt_init(dev4096,key1,key2); memzero(key1,sizeof(key1)); memzero(key2,sizeof(key2)); if(!crypt_dev){ vga_write("Falha ao iniciar camada criptografica.\n"); goto hang; }
+    struct block_device *crypt_dev = crypt_init(dev4096,key1,key2); memzero(key1,sizeof(key1)); memzero(key2,sizeof(key2)); if(!crypt_dev || crypt_dev==dev4096){ vga_write("Falha ao iniciar camada criptografica (volume inseguro).\n"); goto hang; }
     if(format_and_mount(crypt_dev)!=0) goto hang;
 
     // Wizard de configuracao inicial

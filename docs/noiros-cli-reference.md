@@ -3,6 +3,7 @@
 Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implementado possui ajuda integrada (`<comando> -help`).
 
 ## Como obter ajuda rapidamente
+- Pressione `F1` para abrir imediatamente a documentacao interativa (`help-docs`) a partir do prompt.
 - Qualquer comando aceita o sufixo `-help`, ex.: `list -help` ou `mk-file -help`.
 - Em caso de erro de uso, o shell sugere o comando `-help` correspondente.
 
@@ -31,6 +32,8 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 | `print-envs` | `print-envs` | Mostra variaveis basicas (USER, HOME, HOST etc.) e expõe CHANNEL/VERSION correntes. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (hh:mm:ss). |
+| `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |
+| `shutdown-off` | `shutdown-off` | Desliga (halt) apos sincronizar buffers. |
 | `type` | `type <caminho>` | Informa tipo basico (arquivo ou diretorio). |
 | `stats-file` | `stats-file <caminho>` | Mostra tamanho, UID/GID e permissoes. |
 | `hunt-file` | `hunt-file <padrao> [onde]` | Busca apenas arquivos. |
@@ -47,6 +50,8 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 - `config-keyboard list` apresenta os layouts disponiveis.
 - `config-keyboard br-abnt2` ativa o layout brasileiro.
 - `config-keyboard us` volta ao padrao americano.
+- No layout `br-abnt2`, a tecla extra proxima ao Shift direito gera `/` ou `?` e o teclado numerico usa `,` como separador decimal.
+- Durante a instalacao, escolha o layout antes de definir senhas para garantir que acentos e simbolos estejam corretos.
 
 ### Regras de sintaxe uteis
 - Caminhos com espacos devem ser escritos entre aspas, ex.: `mk-file "notas pessoais.txt"`.
