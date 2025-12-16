@@ -1,9 +1,20 @@
+# Diretórios básicos
+BUILD    = build
+BUILD_GEN := $(BUILD)/generated
+SRC_DIR  = src
+BOOT_DIR = boot
+
 # --- Toolchain (i686-elf é o oficial; fallback = gcc -m32) ---
 AS      := nasm
 CROSS   ?= i686-elf
 
+HOST_32_OK := $(shell echo "int x;" | gcc -m32 -xc - -c -o /tmp/noiros-m32-check.$$ 2>/dev/null && echo yes || echo no)
+
 ifeq ($(shell which $(CROSS)-gcc 2>/dev/null),)
   # Fallback (usa compilador do host em 32-bit) — menos isolado
+  ifeq ($(HOST_32_OK),no)
+    $(error Toolchain 32-bit ausente. Instale i686-elf-gcc ou habilite gcc-multilib (pacote gcc-multilib).)
+  endif
   CC      := gcc
   LD      := ld
   OBJCOPY := objcopy
@@ -19,13 +30,6 @@ else
 endif
 
 # toolchain = conjunto compilador/ligador; freestanding = sem libc/ambiente do SO; -m elf_i386 força ld a gerar ELF 32-bit; ELF = Executable and Linkable Format
-
-BUILD    = build
-SRC_DIR  = src
-BOOT_DIR = boot
-
-# Diretório para gerados auxiliares
-BUILD_GEN := $(BUILD)/generated
 
 # Saídas separadas: kernel do SO e kernel do instalador (NGIS)
 NOIROS_ELF  = $(BUILD)/noiros.bin
@@ -97,7 +101,7 @@ $(NGIS_ELF): $(NGIS_OBJS) $(LINKER_SCRIPT)
 
 # Regras genéricas para objetos
 
-$(BUILD)/%.o: $(SRC_DIR)/%.c | $(BUILD)
+$(BUILD)/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
