@@ -103,6 +103,12 @@ Notas sobre boot pelo disco:
 - Use `sudo make disk-bootable` no host (Linux) para instalar GRUB no `build/disk.img` já particionado, ou replique os passos com seu disco/VDI via loop device.
 - O NGIS detecta automaticamente a `sda2` (partição 2) e formata/monta o NoirFS lá.
 
+Notas Hyper-V:
+- A ISO gera um `grub.cfg` em modo texto com fallback serial para evitar o erro `no suitable video mode found` em VMs sem VESA (ex.: Hyper-V).
+- Prefira VMs Generation 1 (BIOS/MBR). O kernel atual é Multiboot v1 e não suporta UEFI/Generation 2.
+- Para depuração, capture a porta COM1: todo output do VGA é espelhado no serial durante o boot.
+- O `build/grub.iso.cfg` (gerado pelo `make iso`) mostra o conteúdo efetivo usado pelo GRUB.
+
 > **Dica**: Primeiro entre como `super-admin`. Depois, `list`, `mypath`, `hunt-any <padrao>`, `stats-file <alvo>` e `clone <src> <dst>` dão uma boa visão do novo fluxo.
 
 ---

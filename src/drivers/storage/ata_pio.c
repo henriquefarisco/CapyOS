@@ -17,6 +17,13 @@
 
 #define ATA_POLL_MAX 1000000u
 
+enum ata_identify_result {
+    ATA_IDENTIFY_OK = 0,
+    ATA_IDENTIFY_NO_DEVICE = 1,
+    ATA_IDENTIFY_ATAPI = 2,
+    ATA_IDENTIFY_FAILED = -1
+};
+
 struct ata_ctx {
     uint16_t io_base;   // e.g., 0x1F0 or 0x170
     uint8_t drive_sel;  // 0xE0 master, 0xF0 slave (with LBA bits)
@@ -69,6 +76,9 @@ static int ata_wait_ready(uint16_t io){
     // Wait for BSY=0. Some controllers don't assert DRDY reliably; do not fail on DRDY=0.
     for (uint32_t i = 0; i < ATA_POLL_MAX; ++i){
         uint8_t st = inb(REG_STATUS(io));
+        if (st == 0xFF){
+            return -1; // floating bus: nenhum dispositivo
+        }
         if (!(st & ATA_STATUS_BSY)){
             return 0;
         }
@@ -80,6 +90,9 @@ static int ata_wait_ready(uint16_t io){
 static int ata_wait_drq(uint16_t io){
     for (uint32_t i = 0; i < ATA_POLL_MAX; ++i){
         uint8_t st = inb(REG_STATUS(io));
+        if (st == 0xFF){
+            return -1;
+        }
         if (st & ATA_STATUS_ERR){
             ata_log_status("erro aguardando DRQ", io, st);
             return -1;
@@ -104,9 +117,13 @@ static void ata_soft_reset(uint16_t io){
     ata_wait_ready(io);
 }
 
-static int ata_identify(uint16_t io, uint8_t drive_sel, uint16_t *buf){
+static enum ata_identify_result ata_identify(uint16_t io, uint8_t drive_sel, uint16_t *buf){
     if (ata_wait_ready(io) != 0) return -1;
-    outb(REG_DRIVE(io), drive_sel);
+    /* IDENTIFY responde melhor com bit LBA desativado; forçamos drive_sel em modo CHS. */
+    uint8_t sel_ident = (uint8_t)(drive_sel & (uint8_t)~0x40u);
+    outb(REG_DRIVE(io), sel_ident);
+    ata_io_delay(io);
+    if (ata_wait_ready(io) != 0) return -1;
     outb(REG_SECCNT(io), 0);
     outb(REG_LBA0(io), 0);
     outb(REG_LBA1(io), 0);
@@ -114,10 +131,30 @@ static int ata_identify(uint16_t io, uint8_t drive_sel, uint16_t *buf){
     outb(REG_CMD(io), ATA_CMD_IDENTIFY);
     ata_io_delay(io);
     uint8_t st = inb(REG_STATUS(io));
-    if (st == 0 || st == 0xFF) return -1;
+    if (st == 0 || st == 0xFF) return ATA_IDENTIFY_NO_DEVICE;
+    // Detecta dispositivos ATAPI (ex.: CD-ROM) para evitar log de erro.
+    uint8_t sig_l1 = inb(REG_LBA1(io));
+    uint8_t sig_l2 = inb(REG_LBA2(io));
+    if (sig_l1 == 0x14 && sig_l2 == 0xEB) {
+        return ATA_IDENTIFY_ATAPI;
+    }
+    if (st & ATA_STATUS_ERR) {
+        return ATA_IDENTIFY_FAILED;
+    }
     if (ata_wait_drq(io) != 0) return -1;
     for (int i = 0; i < 256; ++i) buf[i] = inw(REG_DATA(io));
-    return 0;
+    return ATA_IDENTIFY_OK;
+}
+
+static enum ata_identify_result ata_identify_retry(uint16_t io, uint8_t drive_sel, uint16_t *buf){
+    for (int attempt = 0; attempt < 2; ++attempt){
+        enum ata_identify_result r = ata_identify(io, drive_sel, buf);
+        if (r == ATA_IDENTIFY_OK || r == ATA_IDENTIFY_NO_DEVICE || r == ATA_IDENTIFY_ATAPI){
+            return r;
+        }
+        ata_soft_reset(io);
+    }
+    return ATA_IDENTIFY_FAILED;
 }
 
 static int ata_pio_read_sector_ctx(const struct ata_ctx *ctx, uint32_t lba, void *buffer){
@@ -177,6 +214,23 @@ static const uint16_t g_channels[2] = { 0x1F0, 0x170 };
 static const uint8_t g_drives[2] = { 0xE0, 0xF0 }; // master, slave (LBA)
 static const char *g_names[MAX_ATA_DEV] = { "ata0-master", "ata0-slave", "ata1-master", "ata1-slave" };
 
+static int ata_drive_present(uint16_t io, uint8_t drive_sel) {
+    outb(REG_DRIVE(io), drive_sel);
+    ata_io_delay(io);
+    uint8_t st = inb(REG_STATUS(io));
+    if (st == 0xFF || st == 0x00) {
+        return 0; // barramento flutuando ou sem dispositivo
+    }
+    outb(REG_SECCNT(io), 0);
+    outb(REG_LBA0(io), 0);
+    uint8_t sig_l1 = inb(REG_LBA1(io));
+    uint8_t sig_l2 = inb(REG_LBA2(io));
+    if (sig_l1 == 0xFF && sig_l2 == 0xFF) {
+        return 0;
+    }
+    return 1;
+}
+
 void ata_init(void){
     g_ata_count = 0;
     for (int ch = 0; ch < 2 && g_ata_count < MAX_ATA_DEV; ++ch){
@@ -188,8 +242,18 @@ void ata_init(void){
         ata_soft_reset(io);
         for (int dr = 0; dr < 2 && g_ata_count < MAX_ATA_DEV; ++dr){
             uint8_t sel = g_drives[dr];
+            if (!ata_drive_present(io, sel)) {
+                continue; // nao loga erro para canais ausentes
+            }
             uint16_t id[256];
-            if (ata_identify(io, sel, id) != 0) continue;
+            enum ata_identify_result r = ata_identify_retry(io, sel, id);
+            if (r == ATA_IDENTIFY_NO_DEVICE || r == ATA_IDENTIFY_ATAPI) {
+                continue;
+            }
+            if (r != ATA_IDENTIFY_OK) {
+                ata_log_status("IDENTIFY falhou", io, inb(REG_STATUS(io)));
+                continue;
+            }
             uint32_t lba_sectors = ((uint32_t)id[61] << 16) | (uint32_t)id[60];
             if (lba_sectors == 0) continue;
             struct ata_ctx *ctx = &g_ata_ctx[g_ata_count];
@@ -201,6 +265,9 @@ void ata_init(void){
             dev->ctx = ctx;
             dev->ops = &ata_ops;
             g_ata_count++;
+            vga_write("[ata] detectado: ");
+            vga_write(dev->name);
+            vga_write("\n");
         }
     }
 }
