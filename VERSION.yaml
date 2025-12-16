@@ -1,14 +1,23 @@
 meta:
-  generated: 2025-12-11
+  generated: 2025-12-16
   maintainer: Henrique
   description: "Canalização oficial de versões do NoirOS segundo o fluxo gitflow"
 channels:
   alpha:
-    current: 0.7.3-alpha.0
-    extended: 0.7.3-alpha.0+20251215
+    current: 0.7.3-alpha.1
+    extended: 0.7.3-alpha.1+20251216
     stability: experimental
-    summary: "Hotkey de help, comandos de energia, escolha de layout na instalação e correções do ABNT2 / boot seguro"
+    summary: "Boot Hyper-V em modo texto/serial, gerador de grub.cfg unificado e detecção ATA mais criteriosa"
     history:
+      - version: 0.7.3-alpha.1
+        date: 2025-12-16
+        commit: hotfix/hyperv-text-console
+        changes:
+          - "GRUB forçado a texto + serial por padrão, resolvendo 'no suitable video mode found' em Hyper-V."
+          - "Ferramenta gen_grub_cfg gera arquivos consistentes para ISO e disco, com modo texto e serial."
+          - "Detecção ATA ignora canais vazios/ATAPI antes de IDENTIFY, reduzindo logs de erro."
+          - "Instalador passa a orientar sobre necessidade de bootloader no disco ou uso da ISO para boot."
+          - "Notas Hyper-V incluídas no README; novos testes de host para o gerador de grub.cfg."
       - version: 0.7.3-alpha.0
         date: 2025-12-15
         commit: 6a9c3c2

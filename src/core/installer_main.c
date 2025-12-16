@@ -111,6 +111,18 @@ static void human_size(uint64_t bytes, char *buf, size_t buflen){
     buf[i] = '\0';
 }
 
+static void copy_string(char *dst, size_t dst_len, const char *src){
+    if (!dst || dst_len == 0) return;
+    size_t i = 0;
+    if (src) {
+        while (src[i] && i < dst_len - 1) {
+            dst[i] = src[i];
+            ++i;
+        }
+    }
+    dst[i] = '\0';
+}
+
 static int wizard_prompt_number(const char *label, uint32_t *out_val, uint32_t min, uint32_t max, uint32_t def){
     char buf[128];
     while(1){ tty_set_prompt(label); tty_set_echo(1); tty_show_prompt(); size_t l=tty_readline(buf,sizeof(buf)); if(l==0){ *out_val=def; return 0;} uint32_t v=0; int ok=1; for(size_t i=0;i<l;i++){ char c=buf[i]; if(c<'0'||c>'9'){ ok=0; break;} v=v*10+(uint32_t)(c-'0'); } if(!ok){ *out_val=def; return 0;} if(v<min||v>max){ vga_write("Valor fora do intervalo.\n"); continue;} *out_val=v; return 0; }
@@ -180,7 +192,9 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     {
         vga_write("Layouts disponiveis:\n");
         for (size_t i = 0; i < keyboard_layout_count(); ++i) {
-            vga_write(" - ");
+            vga_write("  [");
+            char idxbuf[4]; idxbuf[0] = '0' + (char)i; idxbuf[1] = ']'; idxbuf[2] = ' '; idxbuf[3] = '\0';
+            vga_write(idxbuf);
             vga_write(keyboard_layout_name(i));
             vga_write(" : ");
             vga_write(keyboard_layout_description(i));
@@ -188,13 +202,19 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
         }
         char buf[32];
         while (1) {
-            tty_set_prompt("Layout do teclado [us]: ");
+            tty_set_prompt("Layout do teclado [0-us]: ");
             tty_set_echo(1);
             tty_set_echo_mask('\0');
             tty_show_prompt();
             size_t l = tty_readline(buf, sizeof(buf));
             if (l == 0) {
                 keyboard_set_layout_by_name("us");
+                break;
+            }
+            if (l == 1 && buf[0] >= '0' && buf[0] < '0' + (char)keyboard_layout_count()) {
+                size_t pick = (size_t)(buf[0] - '0');
+                keyboard_set_layout_by_name(keyboard_layout_name(pick));
+                vga_write("Layout aplicado.\n");
                 break;
             }
             if (keyboard_set_layout_by_name(buf) == 0) {
@@ -249,8 +269,47 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
 
     // Wizard de configuracao inicial
     if(system_run_first_boot_setup()!=0){ vga_write("Falha no assistente de configuracao inicial.\n"); goto hang; }
-    system_mark_first_boot_complete();
+    vga_write("\nSelecione o layout final do teclado (sera salvo em /system/config.ini):\n");
+    for (size_t i = 0; i < keyboard_layout_count(); ++i) {
+        vga_write("  [");
+        char idxbuf[4]; idxbuf[0] = '0' + (char)i; idxbuf[1] = ']'; idxbuf[2] = ' '; idxbuf[3] = '\0';
+        vga_write(idxbuf);
+        vga_write(keyboard_layout_name(i));
+        vga_write(" : ");
+        vga_write(keyboard_layout_description(i));
+        vga_newline();
+    }
+    char layout_choice[32];
+    const char *current_layout = keyboard_current_layout();
+    if (!current_layout) current_layout = "us";
+    copy_string(layout_choice, sizeof(layout_choice), current_layout);
+    vga_write("Layout atual: ");
+    vga_write(current_layout);
+    vga_newline();
+    while (1) {
+        tty_set_prompt("Layout final [atual]: ");
+        tty_set_echo(1);
+        tty_set_echo_mask('\0');
+        tty_show_prompt();
+        size_t l = tty_readline(layout_choice, sizeof(layout_choice));
+        if (l == 0) {
+            copy_string(layout_choice, sizeof(layout_choice), current_layout);
+        } else if (l == 1 && layout_choice[0] >= '0' && layout_choice[0] < '0' + (char)keyboard_layout_count()) {
+            size_t idx = (size_t)(layout_choice[0] - '0');
+            copy_string(layout_choice, sizeof(layout_choice), keyboard_layout_name(idx));
+        }
+        if (keyboard_set_layout_by_name(layout_choice) == 0) {
+            vga_write("Layout aplicado para uso e persistencia.\n");
+            break;
+        }
+        vga_write("Layout desconhecido. Escolha pelos indices ou nomes listados.\n");
+    }
+    if (system_save_keyboard_layout(layout_choice) != 0) {
+        vga_write("Aviso: nao foi possivel salvar layout em /system/config.ini.\n");
+    }
+    if (system_mark_first_boot_complete()!=0){ vga_write("Nao foi possivel registrar conclusao da instalacao.\n"); goto hang; }
     struct super_block *rsb=vfs_root(); if(rsb&&rsb->bdev) buffer_cache_sync(rsb->bdev);
-    vga_write("Instalacao concluida. Remova a ISO e reinicie.\n");
+    vga_write("Instalacao concluida. Para boot direto do disco, instale um bootloader (ex.: GRUB via host).\n");
+    vga_write("Caso contrario, mantenha a ISO anexada e use a entrada \"NoirOS\" do GRUB da ISO.\n");
 hang: while(1){ __asm__ volatile("hlt"); }
 }

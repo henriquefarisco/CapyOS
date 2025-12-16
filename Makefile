@@ -106,16 +106,16 @@ run-disk: $(NOIROS_ELF) disk-img
 # ISO (requer grub-mkrescue e xorriso instalados)
 ISO_DIR := build/iso-root
 ISO_IMG := build/NoirOS-Installer.iso
+GRUB_CFG_GEN := $(BUILD)/tools/gen_grub_cfg
+GRUB_CFG_ISO := $(BUILD)/grub.iso.cfg
+GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
 
 
-$(ISO_DIR): $(BUILD) $(NGIS_ELF) $(NOIROS_ELF)
+$(ISO_DIR): $(BUILD) $(NGIS_ELF) $(NOIROS_ELF) $(GRUB_CFG_ISO)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(NGIS_ELF) $(ISO_DIR)/boot/installer.bin
 	cp $(NOIROS_ELF) $(ISO_DIR)/boot/noiros.bin
-	echo 'set timeout=1' > $(ISO_DIR)/boot/grub/grub.cfg
-	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
-	echo 'menuentry "Noir Guided Installation System" { multiboot /boot/installer.bin; boot }' >> $(ISO_DIR)/boot/grub/grub.cfg
-	echo 'menuentry "NoirOS (boot via ISO + disco instalado)" { multiboot /boot/noiros.bin; boot }' >> $(ISO_DIR)/boot/grub/grub.cfg
+	cp $(GRUB_CFG_ISO) $(ISO_DIR)/boot/grub/grub.cfg
 
 iso: $(NGIS_ELF) $(ISO_DIR)
 	@which grub-mkrescue >/dev/null 2>&1 || { echo 'grub-mkrescue nao encontrado'; exit 1; }
@@ -129,7 +129,7 @@ run-installer-iso: iso disk-img
 
 # Torna o disco bootável com GRUB (requer sudo e pacotes: grub-pc-bin, parted, dosfstools/e2fsprogs)
 # Cria duas partições: sda1=ext2 (BOOT, ~32MiB) + sda2=resto (NoirFS cifrado)
-disk-bootable: $(NOIROS_ELF) disk-img
+disk-bootable: $(NOIROS_ELF) disk-img $(GRUB_CFG_DISK)
 	@echo "[root] Particionando $(DISK_IMG) em BOOT(ext2)+DATA(NoirFS)..."
 	sudo parted -s $(DISK_IMG) mklabel msdos || true
 	sudo parted -s $(DISK_IMG) unit MiB mkpart primary ext2 1 33
@@ -144,9 +144,7 @@ disk-bootable: $(NOIROS_ELF) disk-img
 	 sudo mount $$LOOPp1 build/bootfs; \
 	 sudo mkdir -p build/bootfs/boot/grub; \
 	 sudo cp $(NOIROS_ELF) build/bootfs/boot/noiros.bin; \
-	echo 'set timeout=3' | sudo tee build/bootfs/boot/grub/grub.cfg >/dev/null; \
-	 echo 'set default=0' | sudo tee -a build/bootfs/boot/grub/grub.cfg >/dev/null; \
-	 echo 'menuentry "NoirOS" { multiboot /boot/noiros.bin; boot }' | sudo tee -a build/bootfs/boot/grub/grub.cfg >/dev/null; \
+	 sudo cp $(GRUB_CFG_DISK) build/bootfs/boot/grub/grub.cfg; \
 	 echo "[root] Instalando GRUB em $$LOOP (i386-pc)..."; \
 	 sudo grub-install --target=i386-pc --boot-directory=build/bootfs/boot $$LOOP; \
 	 sync; \
@@ -161,7 +159,7 @@ run-disk-boot: disk-bootable
 
 # Instala GRUB em um dispositivo existente (já particionado com sda1=ext2 de BOOT)
 # Uso: sudo make install-grub-device DEV=/dev/loopX BOOTDEV=/dev/loopXp1
-install-grub-device:
+install-grub-device: $(NOIROS_ELF) $(GRUB_CFG_DISK)
 	@if [ -z "$(DEV)" ] || [ -z "$(BOOTDEV)" ]; then \
 	  echo "Uso: sudo make install-grub-device DEV=/dev/loopX BOOTDEV=/dev/loopXp1"; exit 1; \
 	fi
@@ -170,9 +168,7 @@ install-grub-device:
 	sudo mount $(BOOTDEV) build/bootfs
 	sudo mkdir -p build/bootfs/boot/grub
 	sudo cp $(NOIROS_ELF) build/bootfs/boot/noiros.bin
-	echo 'set timeout=3' | sudo tee build/bootfs/boot/grub/grub.cfg >/dev/null
-	echo 'set default=0' | sudo tee -a build/bootfs/boot/grub/grub.cfg >/dev/null
-	echo 'menuentry "NoirOS" { multiboot /boot/noiros.bin; boot }' | sudo tee -a build/bootfs/boot/grub/grub.cfg >/dev/null
+	sudo cp $(GRUB_CFG_DISK) build/bootfs/boot/grub/grub.cfg
 	@echo "[root] Instalando GRUB em $(DEV) (i386-pc)..."
 	sudo grub-install --target=i386-pc --boot-directory=build/bootfs/boot $(DEV)
 	sync
@@ -182,10 +178,21 @@ install-grub-device:
 # --- Host-side unit tests (gcc) ---
 HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -DUNIT_TEST
+HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/stub_kmem.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/stub_kmem.c \
                src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
-               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c
+               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/grub_cfg_builder.c
+
+$(GRUB_CFG_GEN): tools/gen_grub_cfg.c tools/grub_cfg_builder.c | $(BUILD)
+	@mkdir -p $(BUILD)/tools
+	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ tools/gen_grub_cfg.c tools/grub_cfg_builder.c
+
+$(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
+	$(GRUB_CFG_GEN) $@ iso
+
+$(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
+	$(GRUB_CFG_GEN) $@ disk
 
 test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
