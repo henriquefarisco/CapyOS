@@ -21,6 +21,8 @@
 
 #include "security/crypt.h"
 
+#include "boot/boot_writer.h"
+
 #include "core/system_init.h"
 
 // Noir Guided Installation System — instalador dedicado
@@ -236,6 +238,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
 
     // Particiona (sda1 BOOT, sda2 dados)
     struct mbr_partition data_part;
+    struct mbr_partition boot_part;
     int has_data_part = (mbr_read_partition(target, 1, &data_part) == 0);
     if(!has_data_part){
         uint32_t boot_mb=32;
@@ -245,17 +248,36 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
             vga_write("[mbr] Falha ao criar tabela MBR.\n");
             goto hang;
         }
+        boot_part.bootable = 0x00;
+        boot_part.type = 0xDA;
+        boot_part.lba_start = bl;
+        boot_part.sector_count = bs;
         if (mbr_read_partition(target, 1, &data_part) != 0){
             vga_write("[mbr] Falha ao ler particao de dados apos criacao.\n");
             goto hang;
         }
     } else {
         vga_write("MBR existente detectado; reutilizando particao 2 como volume NoirFS.\n");
+        if (mbr_read_partition(target, 0, &boot_part) != 0){
+            vga_write("[mbr] Falha ao ler particao de BOOT existente.\n");
+            goto hang;
+        }
     }
     if (data_part.sector_count < NOIRFS_DATA_MIN_SECTORS){
         vga_write("Particao de dados menor que o minimo suportado.\n");
         goto hang;
     }
+    /* Instala bootloader na particao de BOOT (stage1/2 + manifest + kernels) */
+    {
+        struct boot_payload_set payloads = boot_embedded_payloads();
+        if (bootwriter_write_payloads(target, &boot_part, &payloads) != 0) {
+            vga_write("[boot] Falha ao instalar bootloader na particao BOOT.\n");
+            goto hang;
+        } else {
+            vga_write("[boot] Bootloader gravado na particao BOOT.\n");
+        }
+    }
+
     struct block_device *part = block_offset_wrap(target,data_part.lba_start,data_part.sector_count);
     if (!part){ vga_write("Falha ao mapear a particao de dados.\n"); goto hang; }
     struct block_device *chunked = block_chunked_wrap(part,NOIRFS_BLOCK_SIZE); struct block_device *dev4096 = chunked?chunked:part;

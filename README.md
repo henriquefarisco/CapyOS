@@ -102,6 +102,7 @@ Notas sobre boot pelo disco:
 - O instalador cria a tabela MBR e reserva `sda1` para BOOT. Para tornar o disco bootável sem ISO, é necessário instalar um bootloader (ex.: GRUB) no MBR/BOOT.
 - Use `sudo make disk-bootable` no host (Linux) para instalar GRUB no `build/disk.img` já particionado, ou replique os passos com seu disco/VDI via loop device.
 - O NGIS detecta automaticamente a `sda2` (partição 2) e formata/monta o NoirFS lá.
+- Branch `feature/iso-auto-bootloader` em andamento: o instalador grava automaticamente uma partição BOOT com stage1/stage2, manifesto e kernels embarcados, preparando o disco para boot direto sem passos extras. Ainda em fase inicial (recovery usa o kernel principal como fallback).
 
 Notas Hyper-V:
 - A ISO gera um `grub.cfg` em modo texto com fallback serial para evitar o erro `no suitable video mode found` em VMs sem VESA (ex.: Hyper-V).

@@ -7,14 +7,14 @@ ifeq ($(shell which $(CROSS)-gcc 2>/dev/null),)
   CC      := gcc
   LD      := ld
   OBJCOPY := objcopy
-  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude
+  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude -I$(BUILD_GEN)
   LDFLAGS := -nostdlib -m elf_i386
 else
   # Oficial (cross bare-metal)
   CC      := $(CROSS)-gcc
   LD      := $(CROSS)-ld
   OBJCOPY := $(CROSS)-objcopy
-  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude
+  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude -I$(BUILD_GEN)
   LDFLAGS := -nostdlib
 endif
 
@@ -24,10 +24,18 @@ BUILD    = build
 SRC_DIR  = src
 BOOT_DIR = boot
 
+# Diretório para gerados auxiliares
+BUILD_GEN := $(BUILD)/generated
+
 # Saídas separadas: kernel do SO e kernel do instalador (NGIS)
 NOIROS_ELF  = $(BUILD)/noiros.bin
 NGIS_ELF    = $(BUILD)/installer.bin
 BOOT_BIN    = $(BUILD)/bootloader.bin
+
+# Boot artifacts (stage1/2 + payloads)
+STAGE1_BIN := $(BUILD)/boot/stage1.bin
+STAGE2_BIN := $(BUILD)/boot/stage2.bin
+BOOT_PAYLOAD_HDR := $(BUILD_GEN)/boot_payloads.h
 
 LINKER_SCRIPT = $(SRC_DIR)/arch/x86/linker.ld
 
@@ -40,7 +48,7 @@ COMMON_S_OBJS   = $(patsubst $(SRC_DIR)/%.s,$(BUILD)/%.o,$(ALL_S_SRCS))
 COMMON_ASM_OBJS = $(patsubst $(SRC_DIR)/%.asm,$(BUILD)/%.o,$(ALL_ASM_SRCS))
 
 # Fontes C: separar por sabor removendo a unidade de entrada principal do outro
-MAIN_EXCLUDE       = $(SRC_DIR)/core/installer_main.c
+MAIN_EXCLUDE       = $(SRC_DIR)/core/installer_main.c $(SRC_DIR)/boot/embedded_payloads.c
 INSTALLER_EXCLUDE  = $(SRC_DIR)/core/kernel.c $(SRC_DIR)/system/kernel_main.c
 
 MAIN_C_SRCS      = $(filter-out $(MAIN_EXCLUDE),$(ALL_C_SRCS))
@@ -59,9 +67,27 @@ all: $(BOOT_BIN) $(NOIROS_ELF) $(NGIS_ELF)
 $(BOOT_BIN): $(BOOT_DIR)/boot.s | $(BUILD)
 	$(AS) -f bin $< -o $@
 
+$(BUILD)/boot:
+	mkdir -p $(BUILD)/boot
+
+$(STAGE1_BIN): $(BOOT_DIR)/stage1.s | $(BUILD)/boot
+	$(AS) -f bin $< -o $@
+
+$(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD)/boot
+	$(AS) -f bin $< -o $@
+
+$(BOOT_PAYLOAD_HDR): $(STAGE1_BIN) $(STAGE2_BIN) $(NOIROS_ELF) | $(BUILD_GEN)
+	@echo "Gerando payloads de boot (stage1, stage2, kernels)..."
+	@echo "/* Gerado automaticamente. Contem imagens binarias para instalacao automatica do bootloader. */" > $@
+	xxd -i -n stage1_image $(STAGE1_BIN) >> $@
+	xxd -i -n stage2_image $(STAGE2_BIN) >> $@
+	xxd -i -n noiros_image $(NOIROS_ELF) >> $@
+
 # Create build directory if it doesn't exist
 $(BUILD):
 	mkdir -p $(BUILD)
+$(BUILD_GEN):
+	mkdir -p $(BUILD_GEN)
 
 $(NOIROS_ELF): $(NOIROS_OBJS) $(LINKER_SCRIPT)
 	$(LD) -T $(LINKER_SCRIPT) $(LDFLAGS) -o $@ $(NOIROS_OBJS)
@@ -74,6 +100,8 @@ $(NGIS_ELF): $(NGIS_OBJS) $(LINKER_SCRIPT)
 $(BUILD)/%.o: $(SRC_DIR)/%.c | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/boot/embedded_payloads.o: $(BOOT_PAYLOAD_HDR)
 
 $(BUILD)/%.o: $(SRC_DIR)/%.s | $(BUILD)
 	@mkdir -p $(dir $@)
@@ -180,8 +208,9 @@ HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -DUNIT_TEST
 HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/stub_kmem.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c \
                src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
+               src/boot/boot_manifest.c src/boot/boot_writer.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/grub_cfg_builder.c
 
 $(GRUB_CFG_GEN): tools/gen_grub_cfg.c tools/grub_cfg_builder.c | $(BUILD)
