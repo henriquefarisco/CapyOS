@@ -183,6 +183,43 @@ static int create_boot_and_data_partitions(struct block_device *dev,
     return 0;
 }
 
+/* Cria apenas a partição BOOT preservando uma partição de dados já existente.
+   Não mexe na localização da partição de dados; falha se não houver espaço contíguo anterior. */
+static int ensure_boot_partition_before_data(struct block_device *dev,
+                                             const struct mbr_partition *data_part,
+                                             uint32_t boot_mb,
+                                             struct mbr_partition *out_boot) {
+    if (!dev || !data_part || dev->block_size != 512) {
+        return -1;
+    }
+    const uint32_t align = 2048;
+    uint32_t boot_start = align;
+    if (data_part->lba_start <= boot_start + align) {
+        vga_write("[mbr] Espaco insuficiente para criar particao BOOT antes da de dados.\n");
+        return -1;
+    }
+    uint32_t max_boot_secs = data_part->lba_start - boot_start;
+    uint32_t boot_secs = (boot_mb * 1024u * 1024u) / 512u;
+    if (boot_secs < 16384) boot_secs = 16384;
+    if (boot_secs > max_boot_secs) boot_secs = max_boot_secs;
+    /* Reescreve a MBR com entrada BOOT + entrada DATA preservada */
+    if (write_mbr_with_partitions(dev,
+                                  boot_start,
+                                  boot_secs,
+                                  data_part->lba_start,
+                                  data_part->sector_count) != 0) {
+        vga_write("[mbr] Falha ao reescrever MBR com particao BOOT.\n");
+        return -1;
+    }
+    if (out_boot) {
+        out_boot->bootable = 0x00;
+        out_boot->type = 0xDA;
+        out_boot->lba_start = boot_start;
+        out_boot->sector_count = boot_secs;
+    }
+    return 0;
+}
+
 void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     (void)mb_magic; (void)mb_info_ptr;
     vga_init(); vga_write("Noir Guided Installation System\n\n");
@@ -259,8 +296,10 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     } else {
         vga_write("MBR existente detectado; reutilizando particao 2 como volume NoirFS.\n");
         if (mbr_read_partition(target, 0, &boot_part) != 0){
-            vga_write("[mbr] Falha ao ler particao de BOOT existente.\n");
-            goto hang;
+            vga_write("[mbr] Particao de BOOT ausente; criando uma antes da particao de dados.\n");
+            if (ensure_boot_partition_before_data(target, &data_part, 32, &boot_part) != 0) {
+                goto hang;
+            }
         }
     }
     if (data_part.sector_count < NOIRFS_DATA_MIN_SECTORS){

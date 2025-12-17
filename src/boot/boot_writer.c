@@ -117,9 +117,15 @@ int bootwriter_write_payloads(struct block_device *disk,
     uint32_t stage2_lba = boot_part->lba_start;
     uint32_t stage2_sectors = sectors_for_size(payloads->stage2.size);
     uint32_t manifest_lba = stage2_lba + stage2_sectors;
-    uint32_t kernel_main_lba = manifest_lba + 1;
     uint32_t kernel_main_sectors = sectors_for_size(payloads->kernel_main.size);
+    uint32_t kernel_main_lba = manifest_lba + 1;
+    uint32_t kernel_recovery_sectors = sectors_for_size(payloads->kernel_recovery.size);
     uint32_t kernel_recovery_lba = kernel_main_lba + kernel_main_sectors;
+
+    uint32_t total_needed = stage2_sectors + 1 + kernel_main_sectors + kernel_recovery_sectors;
+    if (total_needed > boot_part->sector_count) {
+        return -1;
+    }
 
     struct boot_manifest manifest;
     boot_manifest_init(&manifest);
