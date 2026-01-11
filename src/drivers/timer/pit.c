@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "arch/x86/cpu/isr.h"     // registro de IRQ handler
 #include "drivers/timer/pit.h"
+#include "security/csprng.h"
 #include "arch/x86/hw/io.h"      // garante protótipos de outb/inb (I/O ports)
 
 #define PIT_CH0   0x40
@@ -11,6 +12,7 @@ static volatile uint64_t _ticks = 0;
 
 static void pit_irq0_handler(/* seus params: int_no, err_code ou regs* */) {
     _ticks++;
+    csprng_feed_entropy((uint32_t)_ticks);
     /* nada além disso por enquanto; EOI já deve ser enviado no dispatcher (PIC) */
 }
 

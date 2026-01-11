@@ -13,6 +13,8 @@ ORG 0x8000
 %define PM_STACK         0x9FC00
 %define GDT_BASE         gdt
 %define GDT_LIMIT        (gdt_end - gdt - 1)
+%define CODE_SEL         0x08
+%define DATA_SEL         0x10
 
 %define ENTRY_TYPE_NORMAL    1
 %define ENTRY_TYPE_RECOVERY  2
@@ -25,43 +27,75 @@ start:
     mov ss, ax
     mov sp, STACK_REAL
     sti
+    
+    ; Debug: Print '2' for Stage2 started
+    mov ah, 0x0E
+    mov al, '2'
+    int 0x10
+    
     mov [boot_drive], dl
 
-    ; manifest LBA = stage2_lba + stage2_sectors
-    mov eax, [stage2_lba_low]
-    mov edx, [stage2_lba_high]
-    mov [manifest_lba_high], edx
-    add eax, [stage2_sectors]        ; sectors is 32-bit placeholder
-    adc dword [manifest_lba_high], 0
-    mov [manifest_lba_low], eax
+    ; Direct Kernel Boot (Embedded Info)
+    ; Validate we have patched values (check for placeholders)
+    cmp dword [kernel_sectors], 0xBADC0FFE
+    je .not_patched
+    cmp dword [kernel_sectors], 0
+    je .not_patched
+    
+    ; Debug: Print 'K' for Kernel Start
+    mov ah, 0x0E
+    mov al, 'K'
+    int 0x10
 
-    ; read manifest (1 sector)
-    mov bx, MANIFEST_BUF
-    mov eax, [manifest_lba_low]
-    mov edx, [manifest_lba_high]
-    call read_sector_lba
+    ; Setup for read_file_chunked
+    mov ecx, [kernel_sectors]
+    mov eax, [kernel_lba_low]
+    mov edx, [kernel_lba_high]
+    mov edi, KERNEL_BUF            ; unused by read_file_chunked? calls sets it internally
+    
+    ; Sanity check: max 512KB (1024 sectors) to avoid EBDA collision
+    cmp ecx, 1024
+    ja .too_big
+    
+    call read_file_chunked
     jc boot_halt
+    
+    ; success
+    jmp .boot
 
-    ; validate magic "NIBT"
-    mov si, MANIFEST_BUF
-    mov eax, [si]
-    cmp eax, 0x5442494E
-    jne boot_halt
-    mov ecx, [si+8]                  ; entry_count
-    cmp ecx, 4
-    jbe .store_count
-    mov ecx, 4
-.store_count:
-    mov byte [entry_max], cl
-    mov si, MANIFEST_BUF + 16        ; first entry
-    call try_entries
-    jc boot_halt                     ; failure
+.too_big:
+    ; Debug: 'B' for Big
+    mov ah, 0x0E
+    mov al, 'B'
+    int 0x10
+    jmp boot_halt
 
-    ; success path: kernel staged at KERNEL_BUF, length in kernel_bytes
+.not_patched:
+    ; Debug: 'N' for Not Patched
+    mov ah, 0x0E
+    mov al, 'N'
+    int 0x10
+    cli
+    hlt
+
+.boot:
+
+    ; Debug: Print 'K' for Kernel Loaded
+    mov ah, 0x0E
+    mov al, 'K'
+    int 0x10
+
+    ; success path: kernel staged at KERNEL_BUF
     ; enable A20
     call enable_a20
     ; load GDT
     lgdt [gdt_descriptor]
+    
+    ; Debug: Print 'P' for Protected Mode switch
+    mov ah, 0x0E
+    mov al, 'P'
+    int 0x10
+
     ; enter protected mode
     mov eax, cr0
     or eax, 0x1
@@ -69,6 +103,10 @@ start:
     jmp CODE_SEL:pm_entry
 
 boot_halt:
+    ; Debug: Print 'E' for Error
+    mov ah, 0x0E
+    mov al, 'E'
+    int 0x10
     cli
     hlt
     jmp boot_halt
@@ -89,8 +127,8 @@ read_sector_lba:
     mov word [si+2], 1               ; 1 sector
     mov word [si+4], bx              ; offset
     mov word [si+6], es              ; segment
-    mov [si+8], eax                  ; lba low
-    mov [si+12], edx                 ; lba high
+    mov dword [si+8], eax            ; lba low
+    mov dword [si+12], edx           ; lba high
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
@@ -121,17 +159,18 @@ read_multiple_lba:
     mov word [si+2], ax
     mov word [si+4], di
     mov word [si+6], 0x0000
-    mov [si+8], eax          ; lba low
-    mov [si+12], edx         ; lba high
+    mov dword [si+8], eax    ; lba low
+    mov dword [si+12], edx   ; lba high
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
     jc .error
     ; advance pointers
-    add di, ax
-    shl ax, 9                ; ax * 512 -> bytes
-    add di, 0                ; offset already advanced
-    add eax, ax              ; advance lba by chunk
+    mov bx, ax               ; chunk count
+    shl bx, 9                ; chunk * 512 -> bytes
+    add di, bx
+    mov bx, ax               ; chunk count again
+    add eax, ebx             ; advance lba by chunk sectors
     adc edx, 0
     sub cx, ax               ; consumed sectors (ax holds chunk)
     jmp .next_chunk
@@ -152,89 +191,143 @@ read_multiple_lba:
     stc
     ret
 
-; try_entries:
-; si -> first entry, entry_max holds count
-; returns CF set on failure, cleared on success
-try_entries:
-    xor bx, bx
-    mov cl, [entry_max]
-    cmp cl, 0
-    je .fail
-    mov di, MANIFEST_BUF + 16
-.loop_entries:
-    mov eax, [di]            ; type
-    cmp eax, ENTRY_TYPE_NORMAL
-    je .try
-    cmp eax, ENTRY_TYPE_RECOVERY
-    jne .next
-.try:
-    push di
-    mov eax, [di+4]          ; lba
-    mov edx, [di+8]          ; lba high (unused)
-    mov ecx, [di+12]         ; sectors
-    mov [kernel_sectors], ecx
-    mov di, KERNEL_BUF
-    call read_file_chunked
-    pop di
-    jc .next
-    ; verify checksum
-    mov esi, KERNEL_BUF
-    mov ecx, [kernel_bytes]
-    call checksum32
-    cmp eax, [di+16]
-    jne .next
-    clc
-    ret
-.next:
-    add di, 20
-    loop .loop_entries
-.fail:
-    stc
-    ret
+
 
 ; read_file_chunked: uses CX=sectors, EAX=lba low, EDX=lba high, DI=dest offset
 ; sets kernel_bytes
+; read_file_chunked: uses CX=sectors, EAX=lba low, EDX=lba high, DI=dest offset
+; sets kernel_bytes
 read_file_chunked:
-    mov [kernel_sectors], ecx
+    ; Debug: 'r' for read start
+    mov ah, 0x0E
+    mov al, 'r'
+    int 0x10
+
+    mov dword [kernel_sectors], ecx
     mov dword [kernel_bytes], 0
-    mov [current_lba_low], eax
-    mov [current_lba_high], edx
+    mov dword [current_lba_low], eax
+    mov dword [current_lba_high], edx
     mov dword [buf_ptr], KERNEL_BUF
+
+    ; Debug: print kernel sectors in hex
+    mov eax, ecx
+    call print_eax_hex
+    
+    ; Sanity check: max 8MB (16384 sectors)
+    cmp ecx, 16384
+    ja .rf_err
+
 .rf_loop:
+    mov ecx, [kernel_sectors]
     cmp ecx, 0
     je .done
-    ; set ES:BX from buf_ptr
-    mov eax, [buf_ptr]
-    mov bx, ax
-    and bx, 0xF
-    shr eax, 4
-    mov es, ax
 
-    mov eax, [current_lba_low]
-    mov edx, [current_lba_high]
-    call read_sector_lba
+    ; Calculate chunk size (max 64 sectors = 32KB)
+    mov ax, 64
+    cmp cx, ax
+    ja .use_Max
+    mov ax, cx
+.use_Max:
+    ; AX = sectors to read in this chunk (max 64)
+    push ax             ; save sector count
+    
+    ; Setup DAP
+    mov si, disk_packet
+    mov word [si], 0x0010
+    mov word [si+2], ax ; sector count
+    
+    ; Calculate Seg:Off from buf_ptr (linear)
+    ; Seg = (buf_ptr >> 4), Off = (buf_ptr & 0xF)
+    mov eax, dword [buf_ptr]
+    mov bx, ax
+    and bx, 0xF         ; Offset (0-15)
+    mov word [si+4], bx ; Buffer Offset
+    
+    shr eax, 4          ; Segment
+    mov word [si+6], ax ; Buffer Segment
+    
+    mov eax, dword [current_lba_low]
+    mov dword [si+8], eax
+    mov eax, dword [current_lba_high]
+    mov dword [si+12], eax
+
+    ; INT 13h Read
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    int 0x13
     jc .rf_err
-    ; advance buffer pointer
-    mov eax, [buf_ptr]
-    add eax, 512
-    mov [buf_ptr], eax
-    ; advance LBA
-    mov eax, [current_lba_low]
-    add eax, 1
-    mov [current_lba_low], eax
+
+    ; Debug: '.' per chunk
+    mov ah, 0x0E
+    mov al, '.'
+    int 0x10
+
+    pop ax              ; restore chunk sector count
+    
+    ; Update state
+    movzx ebx, ax       ; ebx = sectors read
+    
+    ; Subtract from remaining sectors (kernel_sectors)
+    mov ecx, [kernel_sectors]
+    sub ecx, ebx
+    mov [kernel_sectors], ecx
+
+    ; Advance LBA
+    add dword [current_lba_low], ebx
     adc dword [current_lba_high], 0
-    dec ecx
+    
+    ; Advance Buffer Pointer (sectors * 512)
+    shl ebx, 9          ; * 512
+    add dword [buf_ptr], ebx
+    
     jmp .rf_loop
+
 .rf_err:
+    ; Debug: 'E' on error
+    mov ah, 0x0E
+    mov al, 'E'
+    int 0x10
     stc
     ret
 .done:
-    mov eax, [kernel_sectors]
-    mov ebx, 512
-    mul ebx               ; edx:eax = sectors*512
+    ; Calculate total bytes (original sectors * 512 is lost, we need to save original count or recalc)
+    ; Actually kernel_bytes is used for checksum.
+    ; We decremented kernel_sectors to 0. 
+    ; Let's retrieve original sector count? 
+    ; Wait, the original code recalculated it at the end.
+    ; We can't rely on [kernel_sectors] being original count anymore.
+    ; But we printed it at the start.
+    ; Let's just fix the caller or save it.
+    
+    ; Caller saved ECX in [di+12] probably? No.
+    ; We can infer it from (buf_ptr - KERNEL_BUF).
+    mov eax, [buf_ptr]
+    sub eax, KERNEL_BUF
     mov [kernel_bytes], eax
+    
     clc
     ret
+
+; Helper: Print EAX in Hex
+print_eax_hex:
+    pusha
+    mov cx, 8           ; 8 hex digits
+.hex_loop:
+    rol eax, 4          ; rotate left 4 bits
+    mov ebx, eax
+    and ebx, 0x0F       ; mask execution nibble
+    add bl, '0'
+    cmp bl, '9'
+    jbe .print_digit
+    add bl, 7           ; 'A' - '9' - 1
+.print_digit:
+    mov ah, 0x0E
+    mov al, bl
+    int 0x10
+    loop .hex_loop
+    popa
+    ret
+
 
 ; checksum32: ESI=buffer, ECX=length bytes -> EAX=sum32
 BITS 16
@@ -290,7 +383,7 @@ pm_entry:
     cmp eax, 0x464C457F
     jne pm_halt
 
-    mov ebx, [kernel_bytes]
+    mov ebx, dword [kernel_bytes]
     ; ELF header fields
     mov eax, [esi+24]           ; e_entry
     mov [kernel_entry], eax
@@ -366,11 +459,11 @@ pm_memzero:
 BITS 16
 boot_drive          db 0
 entry_max           db 0
-kernel_sectors      dd 0
+kernel_sectors      dd 0xBADC0FFE  ; Patched by installer
 kernel_bytes        dd 0
 kernel_entry        dd 0
-manifest_lba_low    dd 0
-manifest_lba_high   dd 0
+kernel_lba_low      dd 0xFEEDFACE  ; Patched by installer
+kernel_lba_high     dd 0
 current_lba_low     dd 0
 current_lba_high    dd 0
 buf_ptr             dd 0
@@ -402,6 +495,3 @@ gdt_descriptor:
 
 %define CODE_SEL 0x08
 %define DATA_SEL 0x10
-
-times 510-($-$$) db 0
-dw 0xAA55

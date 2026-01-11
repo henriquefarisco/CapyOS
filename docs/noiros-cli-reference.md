@@ -40,7 +40,7 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 | `hunt-dir` | `hunt-dir <padrao> [onde]` | Busca apenas diretorios. |
 | `hunt-any` | `hunt-any <padrao> [onde]` | Busca arquivos e diretorios. |
 | `find` | `find "texto" [caminho]` | Procura texto em arquivos. |
-| `config-keyboard` | `config-keyboard [list|show|<layout>]` | Alterna layout de teclado (`us`, `br-abnt2`). |
+| `config-keyboard` | `config-keyboard [list|show|<layout>]` | Alterna layout de teclado (`us`, `br-abnt2`) e grava em `/system/config.ini`. |
 | `help-any` | `help-any` | Lista comandos disponiveis. |
 | `help-docs` | `help-docs` | Abre este documento no terminal. |
 | `mess` | `mess` | Limpa a tela. |
@@ -48,10 +48,11 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 
 ### Layouts de teclado
 - `config-keyboard list` apresenta os layouts disponiveis.
-- `config-keyboard br-abnt2` ativa o layout brasileiro.
-- `config-keyboard us` volta ao padrao americano.
+- `config-keyboard show` exibe o layout ativo.
+- `config-keyboard br-abnt2` ativa o layout brasileiro e salva o padrao.
+- `config-keyboard us` volta ao padrao americano e salva o padrao.
 - No layout `br-abnt2`, a tecla extra proxima ao Shift direito gera `/` ou `?` e o teclado numerico usa `,` como separador decimal.
-- Durante a instalacao, escolha o layout antes de definir senhas para garantir que acentos e simbolos estejam corretos.
+- Durante a instalacao, escolha o layout antes de definir senhas para garantir que acentos e simbolos estejam corretos; o instalador grava o layout selecionado em `/system/config.ini`.
 
 ### Regras de sintaxe uteis
 - Caminhos com espacos devem ser escritos entre aspas, ex.: `mk-file "notas pessoais.txt"`.

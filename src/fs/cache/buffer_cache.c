@@ -126,8 +126,10 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
 
     struct buffer_head *bh = hash_lookup(dev, block_no);
     if (bh) {
+        if (bh->refcount == 0) {
+            lru_remove(bh);
+        }
         bh->refcount++;
-        lru_remove(bh);
         return bh;
     }
 
