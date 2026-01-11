@@ -25,7 +25,7 @@ else
   CC      := $(CROSS)-gcc
   LD      := $(CROSS)-ld
   OBJCOPY := $(CROSS)-objcopy
-  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude -I$(BUILD_GEN)
+  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -fstack-protector-strong -Iinclude -I$(BUILD_GEN)
   LDFLAGS := -nostdlib
 endif
 
@@ -212,10 +212,11 @@ HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -DUNIT_TEST
 HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/test_csprng.c \
                src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
-               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/grub_cfg_builder.c
+               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/grub_cfg_builder.c \
+               src/security/csprng.c src/security/crypt.c
 
 $(GRUB_CFG_GEN): tools/gen_grub_cfg.c tools/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

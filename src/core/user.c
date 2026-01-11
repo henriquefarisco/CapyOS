@@ -1,4 +1,5 @@
 #include "core/user.h"
+#include "security/csprng.h"
 
 #include <stdint.h>
 
@@ -141,11 +142,7 @@ static void u32_to_string(uint32_t value, char *buf, size_t buf_len) {
 }
 
 static void generate_salt(uint8_t *salt, size_t len) {
-    static uint32_t seed = 0x13572468u;
-    for (size_t i = 0; i < len; ++i) {
-        seed = seed * 1664525u + 1013904223u;
-        salt[i] = (uint8_t)(seed >> 24);
-    }
+    csprng_get_bytes(salt, len);
 }
 
 void user_record_clear(struct user_record *rec) {

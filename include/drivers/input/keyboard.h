@@ -13,4 +13,7 @@ const char *keyboard_layout_name(size_t index);
 const char *keyboard_layout_description(size_t index);
 const char *keyboard_current_layout(void);
 int keyboard_set_layout_by_name(const char *name);
+
+/* Espera o usuario pressionar qualquer tecla (bloqueante por polling). */
+void keyboard_wait_any(void);
 #endif

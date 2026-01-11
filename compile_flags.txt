@@ -1,0 +1,7 @@
+-Iinclude
+-Ibuild/generated
+-m32
+-ffreestanding
+-D__i386__
+-Wall
+-Wextra
