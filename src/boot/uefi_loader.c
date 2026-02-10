@@ -1,4 +1,4 @@
-// NoirOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\noiros64.bin
+// CapyOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\noiros64.bin
 // from the same volume as BOOTX64.EFI, loads PT_LOAD segments at p_paddr and
 // jumps to e_entry after ExitBootServices, passing a basic handoff.
 #include "boot/boot_manifest.h"
@@ -900,7 +900,7 @@ static EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
   e[0].attrs = 0;
   gpt_set_name((UINT8 *)e[0].name, L"ESP");
 
-  // BOOT (NoirOS)
+  // BOOT (CapyOS)
   for (UINTN i = 0; i < 16; i++)
     e[1].part_type_guid[i] = boot_guid[i];
   fill_guid(e[1].uniq_guid, st);
@@ -1569,7 +1569,7 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
    * ============================================================ */
   Print(L"\r\n");
   Print(L"========================================\r\n");
-  Print(L"   NoirOS 64-bit - Assistente de Instalacao\r\n");
+  Print(L"   CapyOS 64-bit - Assistente de Instalacao\r\n");
   Print(L"========================================\r\n");
   Print(L"\r\n");
   Print(L"Disco destino: %lu MiB\r\n", (disk_bytes / (1024ULL * 1024ULL)));
@@ -2024,7 +2024,7 @@ static EFI_STATUS get_gop(EFI_SYSTEM_TABLE *st,
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   InitializeLib(image, systab);
-  Print(L"NoirOS UEFI loader: iniciando\r\n");
+  Print(L"CapyOS UEFI loader: iniciando\r\n");
 
   // Modo instalador: ISO de instalacao contem um marcador (NOIROS.INI) e/ou o
   // volume e read-only.
@@ -2289,7 +2289,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
 
 #if 0
     /* HYBRID BOOT: Keep Boot Services active for keyboard input support! */
-    /* NoirOS kernel will call UEFI services for input until native driver is ready. */
+    /* CapyOS kernel will call UEFI services for input until native driver is ready. */
     st = uefi_call_wrapper(systab->BootServices->ExitBootServices, 2, image, map_key);
     /* ... error handling code ... */
 #endif
