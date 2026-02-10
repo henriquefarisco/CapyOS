@@ -1,5 +1,7 @@
-*.py
+
 QEMU.sh
 *.txt
+!compile_flags.txt
 *.log
 /build/
+scripts.py
