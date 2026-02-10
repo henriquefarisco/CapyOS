@@ -19,7 +19,7 @@ static void buffer_append_local(char *dst, size_t dst_size, const char *src)
 static int cmd_help_any(struct shell_context *ctx, int argc, char **argv)
 {
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: help-any\nLista todos os comandos registrados no NoirCLI.\n");
+        shell_print("Uso: help-any\nLista todos os comandos registrados no CapyCLI.\n");
         return 0;
     }
     (void)ctx;
