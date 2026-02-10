@@ -93,9 +93,9 @@ class SmokeSession:
             self._logf = None
 
     def _connect_serial(self, timeout: float) -> socket.socket:
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         last_exc: Exception | None = None
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             if self.proc is not None and self.proc.poll() is not None:
                 raise RuntimeError(f"qemu exited early with code {self.proc.returncode}")
             try:
@@ -158,8 +158,8 @@ class SmokeSession:
         self.sock.sendall(payload)
 
     def wait_for(self, pattern: str, timeout: float, start_at: int = 0) -> None:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             if self.proc is not None and self.proc.poll() is not None:
                 raise RuntimeError(f"qemu exited early with code {self.proc.returncode}")
             buf = self.text()
