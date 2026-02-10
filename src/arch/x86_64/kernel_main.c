@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "boot/handoff.h"
+#include "branding/capyos_icon_mask.h"
 #include "core/kcon.h"
 #include "core/session.h"
 #include "core/system_init.h"
@@ -416,8 +417,107 @@ static void ui_draw_bars(void) {
   fbcon_fill_rect_px(0, 48, g_con.width, 24, rsdp_ok ? 0x004040FF : 0x00FF4040);
 }
 
+static int capyos_icon_mask_get(uint32_t x, uint32_t y) {
+  if (x >= CAPYOS_ICON_W || y >= CAPYOS_ICON_H) {
+    return 0;
+  }
+  uint8_t byte = capyos_icon_mask[y * CAPYOS_ICON_STRIDE + (x / 8u)];
+  return (byte & (uint8_t)(1u << (7u - (x & 7u)))) != 0;
+}
+
+static void splash_spin_delay(uint32_t loops) {
+  for (volatile uint32_t i = 0; i < loops; ++i) {
+    cpu_relax();
+  }
+}
+
+static void ui_draw_capyos_icon(uint32_t x0, uint32_t y0, uint32_t scale,
+                                uint32_t color) {
+  if (scale == 0) {
+    return;
+  }
+  for (uint32_t y = 0; y < CAPYOS_ICON_H; ++y) {
+    for (uint32_t x = 0; x < CAPYOS_ICON_W; ++x) {
+      if (capyos_icon_mask_get(x, y)) {
+        fbcon_fill_rect_px(x0 + (x * scale), y0 + (y * scale), scale, scale,
+                           color);
+      }
+    }
+  }
+}
+
+static void ui_boot_splash(void) {
+  if (!g_con.fb || g_con.width < 160 || g_con.height < 120) {
+    return;
+  }
+
+  const uint32_t splash_bg = 0x000A1713;
+  const uint32_t icon_color = 0x0000A651;
+  const uint32_t bar_border = 0x00213A31;
+  const uint32_t bar_bg = 0x0012221C;
+  const uint32_t bar_fill = 0x0000C364;
+
+  uint32_t scale = (g_con.height / 4u) / CAPYOS_ICON_H;
+  if (scale == 0) {
+    scale = 1;
+  }
+  if (scale > 4) {
+    scale = 4;
+  }
+  uint32_t icon_w = CAPYOS_ICON_W * scale;
+  uint32_t icon_h = CAPYOS_ICON_H * scale;
+
+  uint32_t bar_w = g_con.width / 3u;
+  if (bar_w < 140) {
+    bar_w = 140;
+  } else if (bar_w > 420) {
+    bar_w = 420;
+  }
+  uint32_t bar_h = g_con.height / 96u;
+  if (bar_h < 8) {
+    bar_h = 8;
+  } else if (bar_h > 14) {
+    bar_h = 14;
+  }
+
+  uint32_t total_h = icon_h + (scale * 10u) + bar_h;
+  uint32_t icon_x = (g_con.width > icon_w) ? (g_con.width - icon_w) / 2u : 0;
+  uint32_t icon_y =
+      (g_con.height > total_h) ? (g_con.height - total_h) / 2u : 0;
+  uint32_t bar_x = (g_con.width > bar_w) ? (g_con.width - bar_w) / 2u : 0;
+  uint32_t bar_y = icon_y + icon_h + (scale * 10u);
+
+  fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, splash_bg);
+  ui_draw_capyos_icon(icon_x, icon_y, scale, icon_color);
+  fbcon_fill_rect_px(bar_x, bar_y, bar_w, bar_h, bar_border);
+
+  uint32_t inner_x = bar_x;
+  uint32_t inner_y = bar_y;
+  uint32_t inner_w = bar_w;
+  uint32_t inner_h = bar_h;
+  if (bar_w > 4u) {
+    inner_x += 2u;
+    inner_w -= 4u;
+  }
+  if (bar_h > 4u) {
+    inner_y += 2u;
+    inner_h -= 4u;
+  }
+
+  for (uint32_t step = 0; step <= 14; ++step) {
+    fbcon_fill_rect_px(inner_x, inner_y, inner_w, inner_h, bar_bg);
+    uint32_t fill_w = (inner_w * step) / 14u;
+    if (fill_w > 0u) {
+      fbcon_fill_rect_px(inner_x, inner_y, fill_w, inner_h, bar_fill);
+    }
+    splash_spin_delay(2200000u);
+  }
+
+  splash_spin_delay(3200000u);
+}
+
 static void ui_banner(void) {
-  fbcon_print("NOIR64  ");
+  fbcon_print("CAPY64  ");
   fbcon_print("RSDP=");
   fbcon_print(rsdp_is_valid(g_h ? g_h->rsdp : 0) ? "OK " : "-- ");
   fbcon_print("rsdp=");
@@ -605,7 +705,7 @@ static int shell_bootstrap_filesystem(void) {
   }
 
   static const char *cli_doc =
-      "NoirCLI x64 (early)\n"
+      "CapyCLI x64 (early)\n"
       "Comandos principais:\n"
       "  list, go, mypath, mk-file, mk-dir, kill-file, kill-dir,\n"
       "  move, clone, print-file, open, hunt-any, find,\n"
@@ -643,7 +743,7 @@ static void init_shell_context(const struct user_record *user) {
     }
     if (system_load_settings(&g_shell_settings) != 0) {
       local_copy(g_shell_settings.hostname, sizeof(g_shell_settings.hostname),
-                 "noiros64");
+                 "capyos64");
       local_copy(g_shell_settings.theme, sizeof(g_shell_settings.theme), "noir");
       local_copy(g_shell_settings.keyboard_layout,
                  sizeof(g_shell_settings.keyboard_layout), "us");
@@ -1180,10 +1280,11 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   g_con.col = 0;
   g_con.row = 0;
 
+  ui_boot_splash();
   fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_con.bg);
   ui_draw_bars();
   ui_banner();
-  fbcon_print("NoirOS x86_64 kernel (early)\n");
+  fbcon_print("CapyOS x86_64 kernel (early)\n");
   fbcon_print("Boot OK. Inicializando drivers...\n\n");
 
   kcon_init();
@@ -1227,7 +1328,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   fbcon_putc('\n');
 
   com1_init();
-  com1_puts("[COM1] NoirOS 64-bit serial console ready\r\n");
+  com1_puts("[COM1] CapyOS 64-bit serial console ready\r\n");
 
   int has_efi = 0;
   uint64_t efi_system_table = 0;
@@ -1333,7 +1434,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
 login_prompt:
   fbcon_print("\n");
   fbcon_print("========================================\n");
-  fbcon_print("             NoirOS 64-bit             \n");
+  fbcon_print("             CapyOS 64-bit             \n");
   fbcon_print("========================================\n");
   fbcon_print("\n");
 
@@ -1384,7 +1485,7 @@ login_prompt:
         (active_user && active_user->username[0]) ? active_user->username
                                                    : "user";
     const char *host =
-        g_shell_settings.hostname[0] ? g_shell_settings.hostname : "noir64";
+        g_shell_settings.hostname[0] ? g_shell_settings.hostname : "capy64";
     const char *cwd = session_cwd(&g_session_ctx);
 
     fbcon_print(name);

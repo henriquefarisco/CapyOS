@@ -208,7 +208,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
   struct mbr_partition data_part;
   struct mbr_partition boot_part;
 
-  // Try partition 2 first (data partition in NoirOS layout)
+  // Try partition 2 first (data partition in CapyOS layout)
   if (mbr_read_partition(raw_ata, 1, &data_part) == 0) {
     vga_write("[boot] particao 2 encontrada: LBA=");
     // Print LBA start
@@ -312,7 +312,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
   int fs_ready = 0;
 
   vga_init();
-  vga_write("NoirOS 1 - Versao Singularity esta rodando!\n\n");
+  vga_write("CapyOS 1 - Versao Singularity esta rodando!\n\n");
   vga_write("Ola Mundo!\n\n");
 
   gdt_init();
@@ -489,7 +489,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
         kernel_log_process_finalize(proc_login);
         kernel_log_process_finalize_success(proc_login);
 
-        const char *proc_cli = "inicializacao do NoirCLI";
+        const char *proc_cli = "inicializacao do CapyCLI";
         kernel_log_dependency_wait(proc_login, proc_cli);
         kernel_log_process_begin(proc_cli);
         kernel_log_process_begin_success(proc_cli);
