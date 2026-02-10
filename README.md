@@ -1,141 +1,181 @@
-# 🌌 NoirOS
+﻿# NoirOS
 
-> **NoirOS** é um sistema operacional hobby desenvolvido do zero por **Henrique Schwarz Souza Farisco**.  
-> Inspirado pela cosmologia 🌠, evolui passo a passo — como o próprio universo, da **Singularidade** à **Consciência**.
+NoirOS e um sistema operacional hobby, escrito em C e Assembly, com duas linhas
+de evolucao em paralelo:
 
----
+1. Fluxo BIOS/MBR 32-bit: caminho mais completo hoje (instalador, NoirFS,
+   login, multiusuario basico e NoirCLI).
+2. Fluxo UEFI/GPT 64-bit: bring-up em progresso (loader UEFI, kernel x86_64
+   inicial, deteccao de NVMe e console framebuffer/serial).
 
-## ✨ Visão Geral
+Este README foi atualizado para refletir o estado atual do codigo no repositorio.
 
-NoirOS é um kernel **x86 32-bit** construído com uma **toolchain customizada** (`i686-elf-gcc`) e projetado para rodar em **QEMU** ou hardware real.  
-Boot via **Multiboot**, configura sua própria **IDT + PIC**, trata **interrupções de teclado** e oferece um terminal VGA em modo texto para interação.
+## O que o sistema oferece hoje
 
----
+### 1. Boot e instalacao
+- Instalador dedicado NGIS (`src/core/installer_main.c`) para BIOS/MBR.
+- Escrita automatica de `stage1` + `stage2` + `manifest` + kernel no disco
+  via `bootwriter_install_fresh`.
+- Estrutura padrao de particoes no fluxo BIOS:
+  - `sda1`: BOOT (tipo `0xDA`, contem payloads de boot)
+  - `sda2`: DATA (NoirFS cifrado)
+- Fluxo UEFI/GPT em paralelo com:
+  - `BOOTX64.EFI` (`src/boot/uefi_loader.c`)
+  - suporte a leitura de manifest em particao BOOT GPT
+  - fallback para arquivos na ESP (`/boot/noiros64.bin`, `manifest.bin`)
 
-## 🛠️ Stack Tecnológico
+### 2. Filesystem e armazenamento
+- NoirFS nativo (`src/fs/noirfs/noirfs.c`) com:
+  - superbloco, bitmap de blocos e inodes
+  - inodes com ponteiros diretos + indireto simples
+  - diretorios com entradas fixas (`NOIRFS_NAME_MAX = 32`)
+- VFS com metadata de UID/GID/permissoes e resolucao de caminhos.
+- Buffer cache de blocos e `do-sync` para flush explicito.
+- Wrappers de dispositivo para offset e chunking (512B -> 4096B).
 
-- **Linguagem:** C + Assembly (NASM, ELF32)
-- **Compilador:** `i686-elf-gcc` (cross-compiler, freestanding)
-- **Linker:** `i686-elf-ld` com `linker.ld` customizado
-- **Boot:** Multiboot v1 (suporte GRUB/QEMU)
-- **Modo CPU:** Protected Mode (x86, 32-bit)
-- **Drivers:** 
-  - Teclado (IRQ1, scancode set 1, com Shift/Backspace)
-  - VGA modo texto (framebuffer em `0xB8000`)
+### 3. Criptografia e autenticacao
+- Camada de bloco cifrada com AES-XTS 256 + PBKDF2-SHA256.
+- Montagem do volume exige senha do NoirFS no boot 32-bit.
+- Banco de usuarios em `/etc/users.db` com:
+  - salt aleatorio por usuario (CSPRNG)
+  - hash PBKDF2-SHA256 (`USER_ITERATIONS = 64000`)
+- Fluxo de login em terminal com sessao e `cwd` isolado por usuario.
 
----
+### 4. Multiusuario e permissao
+- Sessao com `uid`, `gid`, `home`, `role`, `cwd`.
+- Verificacao de permissao por owner/group/others no VFS.
+- Setup inicial cria estrutura base (`/home`, `/etc`, `/var/log`, etc.),
+  registra admin e gera `config.ini`.
 
-## ✨ Estado Atual
+### 5. CLI (NoirCLI)
+- Arquitetura modular por conjuntos de comandos:
+  - navegacao: `list`, `go`, `mypath`
+  - conteudo: `print-file`, `page`, `print-file-begin`, `print-file-end`,
+    `open`, `print-echo`
+  - gerenciamento: `mk-file`, `mk-dir`, `kill-file`, `kill-dir`, `move`,
+    `clone`, `stats-file`, `type`
+  - busca: `hunt-file`, `hunt-dir`, `hunt-any`, `find`
+  - sessao/ajuda/sistema: `help-any`, `help-docs`, `mess`, `bye`,
+    `print-me`, `print-id`, `print-host`, `print-version`, `print-time`,
+    `print-insomnia`, `print-envs`, `config-keyboard`, `shutdown-reboot`,
+    `shutdown-off`, `do-sync`
 
-- **Boot:** Multiboot v1 (GRUB/QEMU) via `kernel_entry.s`
-- **GDT:** tabela própria mínima (null, code=0x9A, data=0x92)
-- **IDT:** 256 entradas, exceções 0..31 com mensagens na tela, IRQs 32..47
-- **PIC:** remapeado para 0x20/0x28; IRQ0 (PIT) + IRQ1 (teclado) habilitados
-- **PIT (timer):** programado em 100 Hz, contador de ticks (`pit_ticks()`)
-- **Drivers:**
-  - **VGA texto** (80×25): escrita, scroll, backspace, newline, cursor de hardware
-  - **Teclado (IRQ1):** scancodes set 1, shift/backspace/enter
-- **Loop principal:** `sti(); for(;;) hlt();`
+### 6. Caminho x86_64 (estado atual)
+- Kernel 64-bit inicial (`src/arch/x86_64/kernel_main.c`) com:
+  - console framebuffer
+  - fallback de input serial COM1
+  - tentativas de input PS/2 e Hyper-V
+  - scan PCI + inicializacao NVMe basica
+  - deteccao XHCI inicial (enumeracao USB ainda pendente)
+- Este caminho ainda e experimental e nao substitui o fluxo 32-bit completo.
 
-Saída esperada no boot:
-```
-NoirOS 1 - Versao Singularity esta rodando!
-Ola Mundo!
->
-```
-Se ocorrer exceção (ex.: #PF Page Fault), mensagem clara é exibida antes do travamento.
+## Estado atual por trilha
 
----
+### Trilha A: BIOS/MBR 32-bit (mais completa)
+- Boot stage1/stage2 funcionando.
+- Instalacao e particionamento via NGIS.
+- NoirFS cifrado montado em runtime.
+- Login + sessao + NoirCLI funcional.
 
-## 📂 Estrutura
+### Trilha B: UEFI/GPT 64-bit (em evolucao)
+- ISO UEFI e loader (`make iso-uefi`) funcionais para bring-up.
+- Instalador UEFI no loader (modo detectado por marcador/read-only).
+- Kernel 64-bit ainda em fase de consolidacao de drivers, storage e auth.
 
-```
-boot/boot.s           ← boot sector opcional (não buildado)
-include/              ← headers (gdt.h, idt.h, isr.h, io.h, vga.h, keyboard.h, pit.h, debug.h …)
-src/
-├── kernel_entry.s   ← Multiboot header + _start
-├── linker.ld        ← script de link (ELF i386, base 1MiB)
-├── kernel.c         ← kernel_main (init VGA, GDT, IDT, PIC, PIT, loop)
-├── gdt.c/.h + gdt_flush.s  ← GDT mínima
-├── idt.c/.h, isr.c, interrupts.s  ← IDT + ISRs/IRQs
-├── keyboard.c/.h
-├── vga.c/.h         ← texto + cursor HW
-├── pit.c/.h         ← temporizador (IRQ0)
-├── debug.c/.h       ← saída porta 0xE9 (QEMU -debugcon)
-└── ports.c/.h, io.h ← inb/outb/cli/sti/hlt
-Makefile
-README.md
-```
+## Build e execucao
 
----
+### Dependencias
+- Linux/WSL com `make`, `nasm`, `xorriso`, `grub-mkrescue`
+- Toolchains:
+  - 32-bit: `i686-elf-gcc` (ou fallback `gcc -m32`)
+  - 64-bit: `x86_64-elf-*` (ou fallback `x86_64-linux-gnu-*`)
+- UEFI: `gnu-efi` (headers e linker script)
 
-## ⚡ Funcionalidades (v0.1 — *Singularity*)
-
-- [x] Kernel ELF bootável via Multiboot
-- [x] GDT própria instalada
-- [x] Configuração da IDT (256 entradas)
-- [x] PIC remapeado + masking
-- [x] Handler de teclado (IRQ1)
-- [x] Driver VGA texto (print, scroll, backspace, newlines, cursor HW)
-- [x] PIT 100Hz + IRQ0 habilitado
-- [x] Mensagens de exceção (#PF mostra CR2)
-- [x] Main loop com `sti(); for(;;) hlt();`
-- [ ] Gerenciamento de memória (paging, allocators)
-- [ ] System calls (user ↔ kernel)
-- [ ] Suporte a filesystem
-- [ ] Escalonador de processos
-- [ ] Multitarefa
-- [ ] Programas userland
-- [ ] Shell / interpretador de comandos
-- [ ] Stack de rede
-- [ ] Interface gráfica
-
----
-
-## ⚙️ Build & Execução
+Checagem rapida:
 
 ```bash
-make clean && make        # compila kernel ELF
-make run                  # roda QEMU: -kernel build/kernel.bin -m 64
+python3 tools/scripts/check_deps.py
 ```
 
-### Debug no QEMU
+### Build 32-bit (fluxo BIOS/MBR)
 
-* Porta 0xE9 (debugcon):
+```bash
+make clean
+make
+make run
+```
 
-  ```bash
-  qemu-system-i386 -kernel build/kernel.bin -m 64 -debugcon stdio -serial none
-  ```
-* Ver traps/interrupções:
+Com disco persistente:
 
-  ```bash
-  qemu-system-i386 -kernel build/kernel.bin -d int,cpu_reset -no-reboot -no-shutdown
-  ```
+```bash
+make disk-img
+make run-disk
+```
 
----
+ISO do instalador BIOS:
 
-## 🚧 Roadmap Próximo (v0.2 “Inflaton”)
+```bash
+make iso
+make run-installer-iso
+```
 
-* [x] GDT mínima instalada (já feito ✅)
-* [x] Mensagens de exceções (#PF mostra CR2) ✅
-* [x] Cursor VGA de hardware ✅
-* [x] PIT 100Hz + IRQ0 habilitado ✅
-* [ ] Allocator inicial (bump + kalloc/kfree)
-* [ ] Paging (ativar CR0.PG, mapear 0..4MiB identidade)
-* [ ] Scheduler rudimentar (usar ticks do PIT)
-* [ ] Melhorar tratamento de exceções (#PF: decodificar err_code)
-* [ ] API de impressão numérica (print_hex, print_dec)
+### Build 64-bit (fluxo UEFI/GPT)
 
----
+```bash
+make all64
+make iso-uefi
+make disk-gpt
+```
 
-## 📝 Notas
+Provisionamento de VHD existente:
 
-* `boot/boot.s` é apenas demonstração de boot sector real mode.
-  Não é buildado nem necessário quando usamos GRUB/QEMU (`-kernel`).
-* O kernel é freestanding (`-ffreestanding -nostdlib`), não usa libc.
+```bash
+make provision-vhd IMG=/caminho/para/NoirOSGenII.vhd
+```
 
----
+### Testes
 
-## 📜 Licença
+```bash
+make test
+```
 
-MIT (livre uso/estudo).
+Os testes de host cobrem wrappers de bloco, parser MBR, boot writer, manifest,
+layout de teclado, CSPRNG e gerador de `grub.cfg`.
+
+## Estrutura do repositorio
+
+- `boot/`: stage1/stage2 e bootstrap legado.
+- `src/core/`: kernel 32-bit principal, instalador, sessao, init.
+- `src/arch/x86/`: caminho 32-bit (GDT/IDT/ISR, linker, entry).
+- `src/arch/x86_64/`: caminho 64-bit (entry, kernel bring-up, stubs).
+- `src/boot/`: loader UEFI, manifest e escrita de payloads.
+- `src/fs/`: NoirFS, VFS, cache, block wrappers.
+- `src/security/`: crypto, KDF e CSPRNG.
+- `src/shell/`: core do NoirCLI e comandos.
+- `src/drivers/`: VGA, teclado, ATA, PCIe, NVMe, USB, Hyper-V.
+- `tools/scripts/`: provisionamento GPT, manifest, inspeccao de disco.
+- `docs/`: arquitetura, setup Hyper-V, referencia CLI e releases.
+
+## Limitacoes atuais importantes
+
+- O caminho 64-bit ainda nao reproduz todo o fluxo de login/NoirFS do 32-bit.
+- Driver USB XHCI ainda nao enumera teclado HID fim-a-fim.
+- Teclado sintetico Hyper-V (VMBus) esta com partes desativadas por watchdog.
+- Criptografia de bloco atual protege confidencialidade, mas ainda sem
+  autenticacao forte por bloco/metadata (roadmap abaixo).
+- `include/core/version.h` e `VERSION.yaml` podem divergir em algumas branches;
+  para release, usar `VERSION.yaml` como referencia oficial do canal.
+
+## Documentacao complementar
+
+- `docs/architecture.md`: mapa tecnico atualizado do boot/runtime.
+- `docs/noiros-cli-reference.md`: referencia de comandos da CLI.
+- `docs/HYPERV_SETUP.md`: fluxo recomendado para Hyper-V.
+- `docs/system-roadmap.md`: roadmap detalhado de melhorias (NFS, crypto,
+  performance, seguranca, multiusuario, CLI, multithread).
+- `docs/releases/`: notas por versao.
+
+## Proximos passos
+
+O planejamento detalhado esta em `docs/system-roadmap.md`, com prioridades
+separadas por dominio tecnico.
