@@ -1,139 +1,181 @@
-# 🌌 NoirOS
+﻿# NoirOS
 
-> **NoirOS** é um sistema operacional hobby desenvolvido do zero por **Henrique Schwarz Souza Farisco**.  
-> A jornada parte da primeira centelha (**Singularity**) rumo a um ambiente multiusuário cifrado, guiado por uma CLI batizada de **NoirCLI**.
+NoirOS e um sistema operacional hobby, escrito em C e Assembly, com duas linhas
+de evolucao em paralelo:
 
----
+1. Fluxo BIOS/MBR 32-bit: caminho mais completo hoje (instalador, NoirFS,
+   login, multiusuario basico e NoirCLI).
+2. Fluxo UEFI/GPT 64-bit: bring-up em progresso (loader UEFI, kernel x86_64
+   inicial, deteccao de NVMe e console framebuffer/serial).
 
-## ✨ Visão Geral
+Este README foi atualizado para refletir o estado atual do codigo no repositorio.
 
-NoirOS é um kernel **x86 de 32 bits**, freestanding, que inicializa via **Multiboot**, configura GDT/IDT próprias, remapeia o PIC e habilita IRQs essenciais (PIT + teclado).  
-A partir desta base o projeto já entrega:
+## O que o sistema oferece hoje
 
-- **NoirFS** — filesystem cifrado (XTS-AES) com montagem em RAMDisk e derivação de chaves via PBKDF2.
-- **Assistente de Primeira Execução** — cria estrutura de diretórios, configura hostname/tema/splash e registra o usuário administrador.
-- **Multiusuários** — base de credenciais em `/etc/users.db` com salt + hash PBKDF2.
-- **NoirCLI** — shell interativo com comandos nomeados para o universo Noir (`list`, `go`, `mypath`, `print-file` etc.) e relatório de versão/canal em `print-version` / `print-envs`.
-- **Temas & Splash** — personalização de cores VGA e animação textual opcional durante o boot.
+### 1. Boot e instalacao
+- Instalador dedicado NGIS (`src/core/installer_main.c`) para BIOS/MBR.
+- Escrita automatica de `stage1` + `stage2` + `manifest` + kernel no disco
+  via `bootwriter_install_fresh`.
+- Estrutura padrao de particoes no fluxo BIOS:
+  - `sda1`: BOOT (tipo `0xDA`, contem payloads de boot)
+  - `sda2`: DATA (NoirFS cifrado)
+- Fluxo UEFI/GPT em paralelo com:
+  - `BOOTX64.EFI` (`src/boot/uefi_loader.c`)
+  - suporte a leitura de manifest em particao BOOT GPT
+  - fallback para arquivos na ESP (`/boot/noiros64.bin`, `manifest.bin`)
 
----
+### 2. Filesystem e armazenamento
+- NoirFS nativo (`src/fs/noirfs/noirfs.c`) com:
+  - superbloco, bitmap de blocos e inodes
+  - inodes com ponteiros diretos + indireto simples
+  - diretorios com entradas fixas (`NOIRFS_NAME_MAX = 32`)
+- VFS com metadata de UID/GID/permissoes e resolucao de caminhos.
+- Buffer cache de blocos e `do-sync` para flush explicito.
+- Wrappers de dispositivo para offset e chunking (512B -> 4096B).
 
-## 🛰️ Estado Atual
+### 3. Criptografia e autenticacao
+- Camada de bloco cifrada com AES-XTS 256 + PBKDF2-SHA256.
+- Montagem do volume exige senha do NoirFS no boot 32-bit.
+- Banco de usuarios em `/etc/users.db` com:
+  - salt aleatorio por usuario (CSPRNG)
+  - hash PBKDF2-SHA256 (`USER_ITERATIONS = 64000`)
+- Fluxo de login em terminal com sessao e `cwd` isolado por usuario.
 
-- **Boot & Núcleo**
-  - Multiboot v1 (`kernel_entry.s`) + GDT mínima (null/code/data) e IDT com handlers para exceções/IRQs.
-  - PIC remapeado (0x20/0x28), PIT operando a 100 Hz (`pit_ticks()` disponível) e teclado (IRQ1) com eco/mascara.
-- **Memória & Discos**
-  - RAMDisk virtual inicializado em 256 blocos de 4 KiB.
-  - NoirFS (blocos 4096 B) com inodes, diretórios e bitmaps.
-  - Camada de criptografia XTS-AES alimentada por PBKDF2 (16k iterações) a partir da senha digitada no boot.
-- **Primeira Execução (wizard)**
-  - Cria `/bin`, `/etc`, `/home`, `/tmp`, `/var/log`, `/system`, `/docs`.
-  - Pergunta hostname, tema (`noir`, `ocean`, `forest`), splash (on/off) e credenciais do administrador.
-  - Gera `/system/config.ini` e `/system/first-run.done` para detectar inicializações futuras.
-- **Autenticação + Sessão**
-  - Login via terminal (`Usuario:` / `Senha:`) com mascaramento, validação PBKDF2 e abertura da sessão (`SESSION_PATH_MAX = 128`).
-  - Sessão mantém `USER`, `ROLE`, `UID`, `GID`, `HOME`, `PWD` e resolve caminhos relativos (`..`, `.`).
-- **NoirCLI**
-  - Prompt `usuario@hostname>` com temas aplicados.
-  - Comandos implementados: `list`, `go`, `mypath`, `print-file`, `page`, `print-file-begin`, `print-file-end`, `mk-file`, `mk-dir`, `print-echo`, `help-any`, `mess`, `bye`, `print-me`, `print-id`, `print-host`, `print-version`, `print-time`, `print-insomnia`, `print-envs`, `do-sync`.
-- `help-any`/`help-docs` oferecem consulta rápida dentro do NoirFS.
-- **Visual**
-  - `system_apply_theme()` configura cores VGA (Noir, Ocean, Forest).
-  - `system_show_splash()` apresenta animação textual progressiva quando habilitada.
+### 4. Multiusuario e permissao
+- Sessao com `uid`, `gid`, `home`, `role`, `cwd`.
+- Verificacao de permissao por owner/group/others no VFS.
+- Setup inicial cria estrutura base (`/home`, `/etc`, `/var/log`, etc.),
+  registra admin e gera `config.ini`.
 
----
+### 5. CLI (NoirCLI)
+- Arquitetura modular por conjuntos de comandos:
+  - navegacao: `list`, `go`, `mypath`
+  - conteudo: `print-file`, `page`, `print-file-begin`, `print-file-end`,
+    `open`, `print-echo`
+  - gerenciamento: `mk-file`, `mk-dir`, `kill-file`, `kill-dir`, `move`,
+    `clone`, `stats-file`, `type`
+  - busca: `hunt-file`, `hunt-dir`, `hunt-any`, `find`
+  - sessao/ajuda/sistema: `help-any`, `help-docs`, `mess`, `bye`,
+    `print-me`, `print-id`, `print-host`, `print-version`, `print-time`,
+    `print-insomnia`, `print-envs`, `config-keyboard`, `shutdown-reboot`,
+    `shutdown-off`, `do-sync`
 
-## 🛠️ Stack Tecnológico
+### 6. Caminho x86_64 (estado atual)
+- Kernel 64-bit inicial (`src/arch/x86_64/kernel_main.c`) com:
+  - console framebuffer
+  - fallback de input serial COM1
+  - tentativas de input PS/2 e Hyper-V
+  - scan PCI + inicializacao NVMe basica
+  - deteccao XHCI inicial (enumeracao USB ainda pendente)
+- Este caminho ainda e experimental e nao substitui o fluxo 32-bit completo.
 
-- **Linguagens:** C + Assembly (NASM, ELF32 freestanding)
-- **Toolchain:** `i686-elf-gcc`/`ld` (`Makefile` inclui fallback `gcc -m32`) — roda em hosts x86_64/hypervisores sem exigir extensões especiais.
-- **Bootloader:** Multiboot (GRUB/QEMU) com `kernel_entry.s`
-- **Hardware alvo:** x86 32-bit (Protected Mode)
-- **Drivers atuais:** VGA texto, teclado PS/2 (set 1), PIT, RAMDisk + camada de blocos
-- **Criptografia:** SHA-256 + PBKDF2 + AES-XTS (software puro, sem aceleração HW)
+## Estado atual por trilha
 
-### Compatibilidade x64 / Recursos
-- Kernel 32-bit protegido: executa em CPUs x86_64 via modo legado ou VMs BIOS/MBR (UEFI não suportado).
-- Memória: heap interno de 2 MiB; validado em VMs até 256 MiB de RAM (ajuste `KHEAP_SIZE` se precisar mais).
-- Disco: blocos lógicos de 4096B via wrapper; cabe até ~2 TiB (limite de 32 bits do contador de blocos).
-- Boot: requer BIOS/MBR. Sem bootloader no disco, use a entrada da ISO para carregar o kernel.
+### Trilha A: BIOS/MBR 32-bit (mais completa)
+- Boot stage1/stage2 funcionando.
+- Instalacao e particionamento via NGIS.
+- NoirFS cifrado montado em runtime.
+- Login + sessao + NoirCLI funcional.
 
----
+### Trilha B: UEFI/GPT 64-bit (em evolucao)
+- ISO UEFI e loader (`make iso-uefi`) funcionais para bring-up.
+- Instalador UEFI no loader (modo detectado por marcador/read-only).
+- Kernel 64-bit ainda em fase de consolidacao de drivers, storage e auth.
 
-## ⚙️ Build, Execução e Fluxo de Uso
+## Build e execucao
+
+### Dependencias
+- Linux/WSL com `make`, `nasm`, `xorriso`, `grub-mkrescue`
+- Toolchains:
+  - 32-bit: `i686-elf-gcc` (ou fallback `gcc -m32`)
+  - 64-bit: `x86_64-elf-*` (ou fallback `x86_64-linux-gnu-*`)
+- UEFI: `gnu-efi` (headers e linker script)
+
+Checagem rapida:
 
 ```bash
-make clean && make          # compila bootloader + 2 kernels (NoirOS e Instalador)
-make run                    # executa o kernel do NoirOS diretamente no QEMU
-
-# Disco persistente (IDE emulado)
-make disk-img               # cria build/disk.img (128 MiB por padrão; ajuste via DISK_SIZE=256M)
-make run-disk               # NoirOS + -drive file=build/disk.img,if=ide
-
-# ISO SOMENTE DO INSTALADOR (NGIS) — requer grub-mkrescue/xorriso
-make iso                    # gera build/NoirOS-Installer.iso (NGIS)
-make run-installer-iso      # QEMU com a ISO do instalador e o disco em build/disk.img
-# A ISO inclui menu "NoirOS (boot via ISO + disco instalado)" para usar o kernel direto da ISO como bootloader
-
-# (Opcional) deixar o disco bootável (GRUB no MBR) e iniciar sem -kernel
-sudo make disk-bootable     # particiona build/disk.img (sda1 ext2/GRUB + sda2 NoirFS) e instala o GRUB
-make run-disk-boot          # inicia o QEMU em -boot c (GRUB -> NoirOS)
+python3 tools/scripts/check_deps.py
 ```
 
-Fluxo recomendado:
+### Build 32-bit (fluxo BIOS/MBR)
 
-1. **Instalação (NGIS)** — inicialize com a ISO do instalador:
-   - Lista discos detectados (ex.: `ata0-master`) e permite escolher o alvo.
-   - Cria tabela MBR com 2 partições: `sda1` BOOT (16–100 MiB, padrão 64 MiB) e `sda2` dados (NoirFS cifrado).
-   - Define a senha do NoirFS e formata a partição de dados.
-   - Executa o assistente para hostname, tema (`noir`, `ocean`, `forest`), splash (on/off) e cria usuários.
-   - Escreve `/system/config.ini` e o marcador `/system/first-run.done` no NoirFS.
-2. **Primeiro boot do NoirOS** — inicie o kernel do NoirOS apontando para o mesmo disco:
-   - Informe a senha do NoirFS para montagem do volume.
-   - Vai direto ao login (sem assistente, pois a configuração foi feita no instalador).
-   - Sem GRUB no disco, mantenha a ISO anexada e escolha o menu "NoirOS (boot via ISO + disco instalado)".
-3. **NoirCLI** — prompt `user@host>`; use `help-any`/`help-docs` para consultar a lista de comandos.
+```bash
+make clean
+make
+make run
+```
 
-Saude do build:
-- `make test` executa testes unitários em modo host para validar wrappers de bloco e parsing do MBR.
+Com disco persistente:
 
-Notas sobre boot pelo disco:
-- O instalador cria a tabela MBR e reserva `sda1` para BOOT. Para tornar o disco bootável sem ISO, é necessário instalar um bootloader (ex.: GRUB) no MBR/BOOT.
-- Use `sudo make disk-bootable` no host (Linux) para instalar GRUB no `build/disk.img` já particionado, ou replique os passos com seu disco/VDI via loop device.
-- O NGIS detecta automaticamente a `sda2` (partição 2) e formata/monta o NoirFS lá.
-- Branch `feature/iso-auto-bootloader` em andamento: o instalador grava automaticamente uma partição BOOT com stage1/stage2, manifesto e kernels embarcados, preparando o disco para boot direto sem passos extras. Ainda em fase inicial (recovery usa o kernel principal como fallback).
+```bash
+make disk-img
+make run-disk
+```
 
-Notas Hyper-V:
-- A ISO gera um `grub.cfg` em modo texto com fallback serial para evitar o erro `no suitable video mode found` em VMs sem VESA (ex.: Hyper-V).
-- Prefira VMs Generation 1 (BIOS/MBR). O kernel atual é Multiboot v1 e não suporta UEFI/Generation 2.
-- Para depuração, capture a porta COM1: todo output do VGA é espelhado no serial durante o boot.
-- O `build/grub.iso.cfg` (gerado pelo `make iso`) mostra o conteúdo efetivo usado pelo GRUB.
+ISO do instalador BIOS:
 
-> **Dica**: Primeiro entre como `super-admin`. Depois, `list`, `mypath`, `hunt-any <padrao>`, `stats-file <alvo>` e `clone <src> <dst>` dão uma boa visão do novo fluxo.
+```bash
+make iso
+make run-installer-iso
+```
 
----
+### Build 64-bit (fluxo UEFI/GPT)
 
-## 📚 Documentação Complementar
+```bash
+make all64
+make iso-uefi
+make disk-gpt
+```
 
-- `docs/noiros-cli-reference.md` — detalha cada comando NoirCLI.
-- `docs/releases/` — changelog por build (ex.: `0.7.1-alpha.1`).
-- `VERSION.yaml` — manifesto oficial de canais (`alpha`, `beta`, `stable`) com histórico resumido.
-- `include/` — headers comentados com contratos de API (VGA, TTY, VFS, NoirFS etc.).
+Provisionamento de VHD existente:
 
----
+```bash
+make provision-vhd IMG=/caminho/para/NoirOSGenII.vhd
+```
 
-## 🚀 Roadmap Próximo (v0.2 “Inflaton”)
+### Testes
 
-1. **Scheduler & Jobs** — base para `print-ps`, `watch`, `run-bg/fg` com tarefas cooperativas.
-2. **Pipelines & Redirecionamento** — ampliar o NoirCLI com operadores `|` e `>`, incluindo histórico persistente.
-3. **Rede inicial** — abstrações de link + comandos `print-ip`, `tickle`, `print-ports`, `ask-dns`.
-4. **Permissões avançadas** — suporte a grupos extras/ACLs e utilitários `config-*` completos.
-5. **Splash aprimorado** — frames ASCII externos carregados de `/system/splash/`.
-6. **Tests automáticos** — harness mínimo para validar NoirFS/VFS em modo host.
+```bash
+make test
+```
 
----
+Os testes de host cobrem wrappers de bloco, parser MBR, boot writer, manifest,
+layout de teclado, CSPRNG e gerador de `grub.cfg`.
 
-## 📜 Licença
+## Estrutura do repositorio
 
-MIT — use, estude, evolua.
+- `boot/`: stage1/stage2 e bootstrap legado.
+- `src/core/`: kernel 32-bit principal, instalador, sessao, init.
+- `src/arch/x86/`: caminho 32-bit (GDT/IDT/ISR, linker, entry).
+- `src/arch/x86_64/`: caminho 64-bit (entry, kernel bring-up, stubs).
+- `src/boot/`: loader UEFI, manifest e escrita de payloads.
+- `src/fs/`: NoirFS, VFS, cache, block wrappers.
+- `src/security/`: crypto, KDF e CSPRNG.
+- `src/shell/`: core do NoirCLI e comandos.
+- `src/drivers/`: VGA, teclado, ATA, PCIe, NVMe, USB, Hyper-V.
+- `tools/scripts/`: provisionamento GPT, manifest, inspeccao de disco.
+- `docs/`: arquitetura, setup Hyper-V, referencia CLI e releases.
+
+## Limitacoes atuais importantes
+
+- O caminho 64-bit ainda nao reproduz todo o fluxo de login/NoirFS do 32-bit.
+- Driver USB XHCI ainda nao enumera teclado HID fim-a-fim.
+- Teclado sintetico Hyper-V (VMBus) esta com partes desativadas por watchdog.
+- Criptografia de bloco atual protege confidencialidade, mas ainda sem
+  autenticacao forte por bloco/metadata (roadmap abaixo).
+- `include/core/version.h` e `VERSION.yaml` podem divergir em algumas branches;
+  para release, usar `VERSION.yaml` como referencia oficial do canal.
+
+## Documentacao complementar
+
+- `docs/architecture.md`: mapa tecnico atualizado do boot/runtime.
+- `docs/noiros-cli-reference.md`: referencia de comandos da CLI.
+- `docs/HYPERV_SETUP.md`: fluxo recomendado para Hyper-V.
+- `docs/system-roadmap.md`: roadmap detalhado de melhorias (NFS, crypto,
+  performance, seguranca, multiusuario, CLI, multithread).
+- `docs/releases/`: notas por versao.
+
+## Proximos passos
+
+O planejamento detalhado esta em `docs/system-roadmap.md`, com prioridades
+separadas por dominio tecnico.
