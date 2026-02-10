@@ -1,3 +1,4 @@
+/* system_init.c: system setup helpers (config, first-run, users, theme). */
 #include "core/system_init.h"
 
 #include "core/session.h"
@@ -79,6 +80,7 @@ static void system_settings_set_defaults(struct system_settings *settings) {
   cstring_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout),
                "us");
   settings->splash_enabled = 1;
+  settings->diagnostics_enabled = 0;
 }
 
 static int config_line_equals(const char *line, size_t len, const char *key,

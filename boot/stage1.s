@@ -5,6 +5,16 @@
 BITS 16
 ORG 0x7C00
 
+%define HANDOFF_STAGE2_BASE 0x0500
+%define HANDOFF_SIG        0xA5
+%define HANDOFF_OFF_S2_LBA     0
+%define HANDOFF_OFF_S2_LBA_H   4
+%define HANDOFF_OFF_S2_SEC     8   ; word
+%define HANDOFF_OFF_SIG        10  ; byte
+%define HANDOFF_OFF_KRNL_LBA   12
+%define HANDOFF_OFF_KRNL_LBA_H 16
+%define HANDOFF_OFF_KRNL_SEC   20
+
 start:
     cli
     xor ax, ax
@@ -45,6 +55,42 @@ start:
     mov dl, [boot_drive]
     int 0x13
     jc boot_fail
+
+    ; Stash stage2 location so stage2 can recover even if its header is unreadable
+    mov eax, [stage2_lba_low]
+    mov dword [HANDOFF_STAGE2_BASE + HANDOFF_OFF_S2_LBA], eax
+    mov eax, [stage2_lba_high]
+    mov dword [HANDOFF_STAGE2_BASE + HANDOFF_OFF_S2_LBA_H], eax
+    mov ax, [stage2_sectors]
+    mov word [HANDOFF_STAGE2_BASE + HANDOFF_OFF_S2_SEC], ax
+
+    ; Also copy patched kernel header values from the loaded stage2 image
+    ; Do byte-wise to avoid operand-size quirks
+    mov si, 0x8004                ; kernel_sectors in loaded stage2
+    xor eax, eax
+    mov al, [si]
+    mov ah, [si+1]
+    xor ebx, ebx
+    mov bl, [si+2]
+    mov bh, [si+3]
+    shl ebx, 16
+    or eax, ebx
+    mov dword [HANDOFF_STAGE2_BASE + HANDOFF_OFF_KRNL_SEC], eax
+
+    mov si, 0x8008                ; kernel_lba_low in loaded stage2
+    xor eax, eax
+    mov al, [si]
+    mov ah, [si+1]
+    xor ebx, ebx
+    mov bl, [si+2]
+    mov bh, [si+3]
+    shl ebx, 16
+    or eax, ebx
+    mov dword [HANDOFF_STAGE2_BASE + HANDOFF_OFF_KRNL_LBA], eax
+    xor eax, eax
+    mov dword [HANDOFF_STAGE2_BASE + HANDOFF_OFF_KRNL_LBA_H], eax
+
+    mov byte [HANDOFF_STAGE2_BASE + HANDOFF_OFF_SIG], HANDOFF_SIG
 
     ; Debug: Print 'J' for Jumping to stage2
     mov ah, 0x0E

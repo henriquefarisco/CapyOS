@@ -63,29 +63,19 @@ static int test_bootwriter_basic(void) {
   stage1[511] = 0xAA;
   uint8_t stage2[1024];
   memset(stage2, 0, sizeof(stage2));
-  /* place stage2 LBA placeholder (0xDEADBEEF) */
-  stage2[0] = 0xEF;
-  stage2[1] = 0xBE;
-  stage2[2] = 0xAD;
-  stage2[3] = 0xDE;
-  /* place stage2 sectors placeholder (0xCAFEBABE) at offset 4 */
-  stage2[4] = 0xBE;
-  stage2[5] = 0xBA;
-  stage2[6] = 0xFE;
-  stage2[7] = 0xCA;
-  /* place kernel LBA placeholder (0xFEEDFACE) at offset 8 */
-  stage2[8] = 0xCE;
-  stage2[9] = 0xFA;
-  stage2[10] = 0xED;
-  stage2[11] = 0xFE;
-  /* place kernel sectors placeholder (0xBADC0FFE) at offset 12 */
-  stage2[12] = 0xFE;
-  stage2[13] = 0x0F;
-  stage2[14] = 0xDC;
-  stage2[15] = 0xBA;
+  /* Replicate real stage2 header layout (offsets 4/8/12/16) */
+  *(uint32_t *)(stage2 + 4) = 0xBADC0FFE;   // kernel_sectors
+  *(uint32_t *)(stage2 + 8) = 0xFEEDFACE;   // kernel_lba
+  *(uint32_t *)(stage2 + 12) = 0xDEADBEEF;  // stage2_lba
+  *(uint32_t *)(stage2 + 16) = 0xCAFEBABE;  // stage2_sectors
   uint8_t kmain[600];
   for (size_t i = 0; i < sizeof(kmain); ++i)
     kmain[i] = (uint8_t)i;
+  /* fake ELF magic so bootwriter verification passes */
+  kmain[0] = 0x7F;
+  kmain[1] = 'E';
+  kmain[2] = 'L';
+  kmain[3] = 'F';
   uint8_t krec[512];
   memset(krec, 0xAA, sizeof(krec));
 
@@ -122,14 +112,23 @@ static int test_bootwriter_basic(void) {
   uint8_t stage2_read[1024];
   mem_read(&mem, bootp.lba_start, stage2_read);
 
+  uint32_t k_sectors =
+      (uint32_t)stage2_read[4] | ((uint32_t)stage2_read[5] << 8) |
+      ((uint32_t)stage2_read[6] << 16) | ((uint32_t)stage2_read[7] << 24);
   uint32_t k_lba = (uint32_t)stage2_read[8] | ((uint32_t)stage2_read[9] << 8) |
                    ((uint32_t)stage2_read[10] << 16) |
                    ((uint32_t)stage2_read[11] << 24);
-  uint32_t k_sectors =
-      (uint32_t)stage2_read[12] | ((uint32_t)stage2_read[13] << 8) |
-      ((uint32_t)stage2_read[14] << 16) | ((uint32_t)stage2_read[15] << 24);
+  uint32_t s2_lba = (uint32_t)stage2_read[12] |
+                    ((uint32_t)stage2_read[13] << 8) |
+                    ((uint32_t)stage2_read[14] << 16) |
+                    ((uint32_t)stage2_read[15] << 24);
+  uint32_t s2_secs =
+      (uint32_t)stage2_read[16] | ((uint32_t)stage2_read[17] << 8) |
+      ((uint32_t)stage2_read[18] << 16) | ((uint32_t)stage2_read[19] << 24);
 
   uint32_t expected_klba = bootp.lba_start + (sizeof(stage2) + 511) / 512;
+  uint32_t manifest_secs = (sizeof(struct boot_manifest) + 511) / 512;
+  expected_klba += manifest_secs;
   uint32_t expected_ksectors = (sizeof(kmain) + 511) / 512;
 
   if (k_lba != expected_klba) {
@@ -144,11 +143,34 @@ static int test_bootwriter_basic(void) {
     free(mem.data);
     return 1;
   }
+  if (s2_lba != bootp.lba_start || s2_secs != (sizeof(stage2) + 511) / 512) {
+    printf("[bootwriter] stage2 header mismatch\n");
+    free(mem.data);
+    return 1;
+  }
+
+  /* Verify manifest */
+  uint8_t manifest_buf[512];
+  uint32_t manifest_lba = bootp.lba_start + (sizeof(stage2) + 511) / 512;
+  mem_read(&mem, manifest_lba, manifest_buf);
+  struct boot_manifest *mf = (struct boot_manifest *)manifest_buf;
+  if (mf->magic != BOOT_MANIFEST_MAGIC || mf->entry_count == 0) {
+    printf("[bootwriter] manifest missing or invalid\n");
+    free(mem.data);
+    return 1;
+  }
+  if (mf->entries[0].lba_start != expected_klba ||
+      mf->entries[0].sector_count != expected_ksectors) {
+    printf("[bootwriter] manifest entry mismatch\n");
+    free(mem.data);
+    return 1;
+  }
 
   /* Verify Kernel Was Written */
   uint8_t kverify[512];
   mem_read(&mem, k_lba, kverify);
-  if (kverify[0] != 0x00 || kverify[1] != 0x01) {
+  if (kverify[0] != 0x7F || kverify[1] != 'E' || kverify[2] != 'L' ||
+      kverify[3] != 'F') {
     printf("[bootwriter] kernel data verify failed\n");
     free(mem.data);
     return 1;
@@ -201,10 +223,193 @@ static int test_bootwriter_config(void) {
   return 0;
 }
 
+static int test_bootwriter_partitioning(void) {
+  struct mem_disk mem;
+  mem.block_size = 512;
+  mem.block_count = 200000; // ~100 MB
+  mem.data = (uint8_t *)calloc(mem.block_count, mem.block_size);
+  if (!mem.data)
+    return 1;
+
+  struct block_device disk = {
+      .name = "mempart",
+      .block_size = 512,
+      .block_count = mem.block_count,
+      .ctx = &mem,
+      .ops = &mem_ops,
+  };
+
+  struct mbr_partition boot_p, sys_p, data_p;
+  // Request 20MB boot, 10MB system
+  int rc = bootwriter_partition_disk(&disk, 20, 10, &boot_p, &sys_p, &data_p);
+  if (rc != 0) {
+    printf("[test_partitioning] returned %d\n", rc);
+    free(mem.data);
+    return 1;
+  }
+
+  // Check Boot (20MB = 40960 sectors)
+  // min_boot_secs is 32768 (16MB). 20MB > 16MB.
+  uint32_t expected_boot = (20 * 1024 * 1024) / 512;
+  if (boot_p.sector_count != expected_boot) {
+    printf("[test_partitioning] boot size mismatch: %u != %u\n",
+           boot_p.sector_count, expected_boot);
+    free(mem.data);
+    return 1;
+  }
+  if (boot_p.type != PARTITION_TYPE_NOIROS_BOOT || boot_p.bootable != 0x80) {
+    printf("[test_partitioning] boot flags/type malformed\n");
+    free(mem.data);
+    return 1;
+  }
+
+  // Check System (10MB = 20480 sectors)
+  uint32_t expected_sys = (10 * 1024 * 1024) / 512;
+  if (sys_p.sector_count != expected_sys) {
+    printf("[test_partitioning] sys size mismatch: %u != %u\n",
+           sys_p.sector_count, expected_sys);
+    free(mem.data);
+    return 1;
+  }
+  if (sys_p.type != PARTITION_TYPE_LINUX) {
+    printf("[test_partitioning] sys type mismatch\n");
+    free(mem.data);
+    return 1;
+  }
+
+  // Verify MBR content
+  uint8_t mbr[512];
+  mem_read(&mem, 0, mbr);
+
+  // P1 (Offset 446)
+  if (mbr[446 + 4] != PARTITION_TYPE_NOIROS_BOOT) {
+    printf("[test_partitioning] MBR P1 type wrong\n");
+    free(mem.data);
+    return 1;
+  }
+  // P2 (Offset 462)
+  if (mbr[462 + 4] != PARTITION_TYPE_LINUX) {
+    printf("[test_partitioning] MBR P2 type wrong\n");
+    free(mem.data);
+    return 1;
+  }
+  // P3 (Offset 478)
+  if (mbr[478 + 4] != PARTITION_TYPE_LINUX) {
+    printf("[test_partitioning] MBR P3 type wrong\n");
+    free(mem.data);
+    return 1;
+  }
+
+  free(mem.data);
+  return 0;
+}
+
+static int test_bootwriter_patching(void) {
+  struct mem_disk mem;
+  mem.block_size = 512;
+  mem.block_count = 20000;
+  mem.data = (uint8_t *)calloc(mem.block_count, mem.block_size);
+  if (!mem.data)
+    return 1;
+
+  struct block_device disk = {
+      .name = "mempatch",
+      .block_size = 512,
+      .block_count = mem.block_count,
+      .ctx = &mem,
+      .ops = &mem_ops,
+  };
+
+  // Mock Payloads
+  // Mock Payloads
+  uint8_t s1[512];
+  memset(s1, 0x90, 512);              // NOPs
+  *(uint32_t *)(s1 + 0) = 0xDEADBEEF; // Stage2 LBA placeholder
+  *(uint16_t *)(s1 + 4) = 0xBEEF;     // Stage2 Sectors placeholder
+  s1[510] = 0x55;
+  s1[511] = 0xAA; // MBR Signature
+
+  // Stage 2 needs to be large enough to contain placeholders?
+  // boot_writer.c replaces placeholders. The test payloads must HAVE
+  // placeholders. Real stage2 has them. Our mock payloads in tests usually
+  // don't? We need to construct a stage2 buffer with placeholders.
+  uint8_t s2[2048];
+  memset(s2, 0, 2048);
+  /* Placeholders in the same offsets used by stage2.asm header */
+  *(uint32_t *)(s2 + 4) = 0xBADC0FFE;   // kernel_sectors
+  *(uint32_t *)(s2 + 8) = 0xFEEDFACE;   // kernel_lba
+  *(uint32_t *)(s2 + 12) = 0xDEADBEEF;  // stage2_lba
+  *(uint32_t *)(s2 + 16) = 0xCAFEBABE;  // stage2_sectors
+
+  uint8_t k[4096];
+  memset(k, 0xCC, 4096); // Kernel
+  k[0] = 0x7F; k[1] = 'E'; k[2] = 'L'; k[3] = 'F';
+
+  struct boot_payload_set payloads;
+  payloads.stage1.data = s1;
+  payloads.stage1.size = 512;
+  payloads.stage2.data = s2;
+  payloads.stage2.size = 2048;
+  payloads.kernel_main.data = k;
+  payloads.kernel_main.size = 4096; // 8 sectors
+  payloads.kernel_recovery.data = NULL;
+  payloads.kernel_recovery.size = 0;
+
+  struct mbr_partition boot_p;
+  boot_p.lba_start = 2048;
+  boot_p.sector_count = 1000;
+
+  if (bootwriter_write_payloads(&disk, &boot_p, &payloads) != 0) {
+    printf("[test_patching] write_payloads failed\n");
+    free(mem.data);
+    return 1;
+  }
+
+  // Verify Stage 2 at LBA 2048
+  uint8_t read_s2[2048];
+  for (int i = 0; i < 4; i++) {
+    mem_read(&mem, 2048 + i, read_s2 + i * 512);
+  }
+
+  // Check offsets
+  uint32_t val_k_secs = *(uint32_t *)(read_s2 + 4);
+  uint32_t val_k_lba = *(uint32_t *)(read_s2 + 8);
+  uint32_t val_s2_lba = *(uint32_t *)(read_s2 + 12);
+  uint32_t val_s2_secs = *(uint32_t *)(read_s2 + 16);
+
+  if (val_s2_lba != 2048) {
+    printf("[test_patching] Stage2 LBA mismatch: %x != 2048\n", val_s2_lba);
+    free(mem.data);
+    return 1;
+  }
+  if (val_s2_secs != 4) { // 2048 bytes = 4 sectors
+    printf("[test_patching] Stage2 Sectors mismatch: %x != 4\n", val_s2_secs);
+    free(mem.data);
+    return 1;
+  }
+
+  // Kernel follows Stage 2 + manifest. Start = 2048 + 4 + 1 = 2053.
+  if (val_k_lba != 2053) {
+    printf("[test_patching] Kernel LBA mismatch: %x != 2053\n", val_k_lba);
+    free(mem.data);
+    return 1;
+  }
+  if (val_k_secs != 8) { // 4096 bytes = 8 sectors
+    printf("[test_patching] Kernel Sectors mismatch: %x != 8\n", val_k_secs);
+    free(mem.data);
+    return 1;
+  }
+
+  free(mem.data);
+  return 0;
+}
+
 int run_boot_writer_tests(void) {
   int fails = 0;
   fails += test_bootwriter_basic();
   fails += test_bootwriter_config();
+  fails += test_bootwriter_partitioning();
+  fails += test_bootwriter_patching();
   if (fails == 0) {
     printf("[tests] boot_writer OK\n");
   }

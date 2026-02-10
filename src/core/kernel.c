@@ -1,3 +1,5 @@
+/* kernel.c: main runtime entry after multiboot handoff.
+ * Initializes CPU tables/devices, mounts storage, then runs login + CLI. */
 #include "arch/x86/cpu/gdt.h"
 #include "arch/x86/cpu/idt.h"
 #include "arch/x86/cpu/isr.h"
@@ -298,6 +300,10 @@ struct multiboot_info {
 /* Sem modo de instalacao embutido. */
 
 void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
+  /* DEBUG: Write 'Y' to VGA to confirm kernel entry */
+  volatile unsigned short *vga = (unsigned short *)0xB8000;
+  vga[1] = 0x2F59; /* 'Y' in White on Green */
+
   (void)mb_magic;
   (void)mb_info_ptr;
   char line[TTY_BUFFER_MAX];

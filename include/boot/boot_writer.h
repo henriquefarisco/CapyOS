@@ -4,14 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BOOT_CONFIG_MAGIC 0xB001CF61
-#define BOOT_CONFIG_LBA 1
-
-struct boot_config_sector {
-  uint32_t magic;           // 0xB00TCFG1
-  char keyboard_layout[16]; // "us", "br-abnt2", etc.
-  uint8_t reserved[492];    // Padding to 512 bytes
-} __attribute__((packed));
+#include "boot/boot_config.h"
 
 #include "boot/boot_manifest.h"
 #include "fs/block.h"
@@ -52,31 +45,35 @@ int bootwriter_write_payloads(struct block_device *disk,
    @return 0 on success, -1 on failure. */
 int bootwriter_write_config(struct block_device *disk, const char *layout_name);
 
-/* Calculates and writes a fresh MBR partition
-   table (Boot + Data).
-   @param disk Target disk (must have valid
-   block_size=512)
-   @param boot_mb Desired size of boot partition
-   in MiB
-   @param out_boot_part Returns the created BOOT
-   partition info
-   @param out_data_part Returns the created DATA
-   partition info
+/* Partition Types */
+#define PARTITION_TYPE_NOIROS_BOOT 0xDA
+#define PARTITION_TYPE_LINUX 0x83
+#define PARTITION_TYPE_EMPTY 0x00
+
+/* Calculates and writes a fresh MBR partition table (Boot, System, Data).
+   @param disk Target disk
+   @param boot_mb Size of Boot partition in MiB
+   @param system_mb Size of System partition in MiB (0 for none)
+   @param out_boot_part Returns BOOT partition info
+   @param out_system_part Returns SYSTEM partition info (can be NULL)
+   @param out_data_part Returns DATA partition info
    @return 0 on success, -1 on failure. */
 int bootwriter_partition_disk(struct block_device *disk, uint32_t boot_mb,
+                              uint32_t system_mb,
                               struct mbr_partition *out_boot_part,
+                              struct mbr_partition *out_system_part,
                               struct mbr_partition *out_data_part);
 
 /* Full installation: partitions disk, writes MBR,
    and installs bootloader payloads. This is the
    "autonomous" install function.
    @param disk Target disk
-   @param boot_mb Desired boot partition size in
-   MiB
-   @param out_data_part Returns the DATA partition
-   for subsequent formatting
+   @param boot_mb Boot partition size in MiB
+   @param system_mb System partition size in MiB
+   @param out_data_part Returns DATA partition
    @return 0 on success, -1 on failure. */
 int bootwriter_install_fresh(struct block_device *disk, uint32_t boot_mb,
+                             uint32_t system_mb,
                              struct mbr_partition *out_data_part,
                              const struct boot_payload_set *payloads);
 

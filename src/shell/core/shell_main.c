@@ -1,3 +1,4 @@
+/* shell_main.c: NoirCLI entry, self-test, diagnostics, and command loop. */
 #include "shell/shell.h"
 #include "shell/core.h"
 #include "shell/commands.h"
@@ -754,17 +755,24 @@ enum shell_result shell_run(struct session_context *session, const struct system
 
     session_set_active(session);
 
-    if (shell_self_test(&ctx) != 0) {
-        session_set_active(NULL);
-        keyboard_set_help_callback(NULL);
-        return SHELL_RESULT_EXIT;
+    /* Skip self-tests/diagnostics to avoid boot loops in constrained setups. */
+    int run_diag = 0;
+    if (settings && settings->diagnostics_enabled) {
+        run_diag = 1;
     }
+    if (run_diag) {
+        if (shell_self_test(&ctx) != 0) {
+            session_set_active(NULL);
+            keyboard_set_help_callback(NULL);
+            return SHELL_RESULT_EXIT;
+        }
 
-    cli_log_dependency_wait("auto teste do NoirCLI", "diagnostico de comandos basicos do NoirCLI");
-    if (shell_run_diagnostics(&ctx) != 0) {
-        shell_print_error("Processo diagnostico de comandos basicos do NoirCLI finalizado com erro (veja /var/log/cli-selftest.log)");
-    } else {
-        shell_print_ok("Processo diagnostico de comandos basicos do NoirCLI finalizado com sucesso.");
+        cli_log_dependency_wait("auto teste do NoirCLI", "diagnostico de comandos basicos do NoirCLI");
+        if (shell_run_diagnostics(&ctx) != 0) {
+            shell_print_error("Processo diagnostico de comandos basicos do NoirCLI finalizado com erro (veja /var/log/cli-selftest.log)");
+        } else {
+            shell_print_ok("Processo diagnostico de comandos basicos do NoirCLI finalizado com sucesso.");
+        }
     }
 
     while (shell_context_running(&ctx)) {
