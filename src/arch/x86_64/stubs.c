@@ -98,7 +98,7 @@ void acpi_shutdown(void) {
 }
 
 /* ============== TTY stubs (polled mode, no interrupts) ============== */
-static char g_tty_prompt[64] = "noir64> ";
+static char g_tty_prompt[64] = "capy64> ";
 static int g_tty_echo = 1;
 static char g_tty_echo_mask = '\0';
 
@@ -161,7 +161,7 @@ void keyboard_set_layout(int layout) { (void)layout; }
 /* ============== System settings stubs ============== */
 #include "core/system_init.h"
 
-static struct system_settings g_mock_settings = {.hostname = "noiros64",
+static struct system_settings g_mock_settings = {.hostname = "capyos64",
                                                  .theme = "noir",
                                                  .keyboard_layout = "us",
                                                  .splash_enabled = 0,
