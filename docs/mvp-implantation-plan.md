@@ -11,6 +11,13 @@ Objetivo do ciclo atual:
 
 ## 1. Mapa de estado atual x esperado
 
+### 1.0 Estabilidade de carga relocada no x64
+
+| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
+|---|---|---|---|
+| Tabelas com ponteiros de funcao (ops/comandos) | caminhos criticos foram migrados para inicializacao em runtime (NoirFS ops, wrappers de bloco, crypto, ATA/NVMe, comandos CLI, layouts de teclado) | auditoria final dos modulos restantes com tabelas estaticas | kernel x64 carrega em endereco dinamico sem saltos para ponteiros invalidos |
+| Boot x64 em ISO UEFI | `make all64`, `make iso-uefi` e `make smoke-x64-cli` validados no ciclo atual | ampliar matriz de teste (QEMU + Hyper-V + cenarios com disco real) | bootstrap previsivel, login e comandos basicos funcionais em VMs alvo |
+
 ### 1.1 Entrada de teclado e compatibilidade de drivers
 
 | Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
@@ -58,6 +65,7 @@ Objetivo do ciclo atual:
 - Entrega:
   - consolidar prioridade EFI -> PS/2 -> VMBus -> COM
   - remover dependencia operacional de COM no Hyper-V Gen2
+  - manter tabelas de ponteiros sensiveis inicializadas em runtime no x64
   - manter logs de deteccao por backend
 - Validacao minima:
   - boot em Hyper-V Gen2
@@ -87,6 +95,18 @@ Objetivo do ciclo atual:
 - Resultado esperado:
   - x64 com comportamento de sistema instalado, nao apenas ambiente efemero
 
+Plano incremental sugerido para Fase C:
+- C1 (mount persistente minimo):
+  - detectar particao de dados no caminho x64
+  - montar NoirFS sem criptografia (modo de transicao)
+  - manter fallback para ramdisk se mount falhar
+- C2 (auth + users.db persistentes):
+  - migrar `userdb` para volume persistente
+  - garantir login/sessao com dados reaproveitados entre boots
+- C3 (volume cifrado no x64):
+  - integrar unlock de volume no boot x64
+  - validar reboot e retomada de dados cifrados com consistencia
+
 ## Fase D - Seguranca e multiusuario avancados
 - Entrega:
   - politicas de senha e lockout configuraveis
@@ -115,6 +135,12 @@ Checklist obrigatorio antes de merge:
 - documentacao atualizada
 - smoke de comandos criticos
 - evidencias de build/artefatos
+
+Smoke automatizado recomendado:
+
+```bash
+make smoke-x64-cli
+```
 
 Checklist obrigatorio de build (WSL):
 

@@ -25,14 +25,24 @@ static int cmd_bye(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static const struct shell_command g_session_commands[] = {
-    { "mess", cmd_mess },
-    { "bye", cmd_bye },
-};
+static struct shell_command g_session_commands[2];
+static int g_session_commands_initialized = 0;
+
+static void init_session_commands(void) {
+    if (g_session_commands_initialized) {
+        return;
+    }
+    g_session_commands[0].name = "mess";
+    g_session_commands[0].handler = cmd_mess;
+    g_session_commands[1].name = "bye";
+    g_session_commands[1].handler = cmd_bye;
+    g_session_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_session(size_t *count) {
+    init_session_commands();
     if (count) {
-        *count = sizeof(g_session_commands) / sizeof(g_session_commands[0]);
+        *count = 2;
     }
     return g_session_commands;
 }

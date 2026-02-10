@@ -19,12 +19,20 @@ static int off_write(void *ctx, uint32_t block_no, const void *buffer){
     return block_device_write(c->lower, c->start + block_no, buffer);
 }
 
-static struct block_device_ops off_ops = {
-    .read_block = off_read,
-    .write_block = off_write,
-};
+static struct block_device_ops off_ops;
+static int off_ops_initialized = 0;
+
+static void off_init_ops(void) {
+    if (off_ops_initialized) {
+        return;
+    }
+    off_ops.read_block = off_read;
+    off_ops.write_block = off_write;
+    off_ops_initialized = 1;
+}
 
 struct block_device *block_offset_wrap(struct block_device *lower, uint32_t start_lba, uint32_t lba_count){
+    off_init_ops();
     if (!lower || lba_count == 0) return NULL;
     if (start_lba >= lower->block_count) return NULL;
     if (lba_count > lower->block_count - start_lba) return NULL;

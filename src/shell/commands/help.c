@@ -85,15 +85,25 @@ static int cmd_help_docs(struct shell_context *ctx, int argc, char **argv)
     return 0;
 }
 
-static const struct shell_command g_help_commands[] = {
-    { "help-any", cmd_help_any },
-    { "help-docs", cmd_help_docs },
-};
+static struct shell_command g_help_commands[2];
+static int g_help_commands_initialized = 0;
+
+static void init_help_commands(void) {
+    if (g_help_commands_initialized) {
+        return;
+    }
+    g_help_commands[0].name = "help-any";
+    g_help_commands[0].handler = cmd_help_any;
+    g_help_commands[1].name = "help-docs";
+    g_help_commands[1].handler = cmd_help_docs;
+    g_help_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_help(size_t *count)
 {
+    init_help_commands();
     if (count) {
-        *count = sizeof(g_help_commands) / sizeof(g_help_commands[0]);
+        *count = 2;
     }
     return g_help_commands;
 }
