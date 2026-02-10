@@ -1,4 +1,4 @@
-# Plano de implantacao do MVP do NoirOS
+# Plano de implantacao do MVP do CapyOS
 
 Status de referencia: 2026-02-10
 
@@ -58,6 +58,16 @@ Objetivo do ciclo atual:
 | Multithread/scheduler | ainda nao implantado no kernel | task model, run queue, sincronizacao basica | jobs de fundo e manutencao sem bloquear shell |
 | Performance de I/O | cache e wrappers existentes | read-ahead/writeback, profiling e tuning NVMe | menor latencia em listagem/busca/copia |
 | Robustez de sistema | base funcional em single-thread | testes de estresse, lock ordering e diagnostico | menos regressao em cenarios reais de VM/hardware |
+
+### 1.6 Rede (drivers + TCP/IP)
+
+| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
+|---|---|---|---|
+| Descoberta de NIC no x64 | bootstrap inicial com probing PCI para e1000, rtl8139, virtio-net e hyperv-netvsc | inicializacao real do dispositivo (MMIO/PIO, RX/TX rings, interrupcoes) | NIC detectada e link util para trafego real |
+| Camada L2/L3 | parser de Ethernet, ARP e IPv4 com validacao basica de integridade | ARP request/reply ativos no fio, roteamento minimo e fila de retransmissao | resolucao de MAC e entrega IPv4 com fluxo previsivel |
+| L4 (ICMP/UDP/TCP) | decodificacao inicial e contadores de telemetria no kernel | sockets/portas, estado TCP, checksums completos, timers e retransmissao | ping, UDP e TCP funcionais para comunicacao externa |
+| Enderecamento | configuracao estatica inicial no kernel | DHCP client, DNS resolver e persistencia em config | provisionamento automatico de rede em VM/hardware |
+| Observabilidade | logs de init + self-test interno de protocolos no boot | comandos de CLI (`net-status`, `net-ifconfig`, `ping`) e traces de pacotes | diagnostico de rede direto no sistema, sem debug externo |
 
 ## 2. Fases de entrega (branch atual em diante)
 
@@ -128,6 +138,20 @@ Plano incremental sugerido para Fase C:
 - Resultado esperado:
   - ganho mensuravel de responsividade e throughput
 
+## Fase F - Rede baseline (NIC + pilha TCP/IP)
+- Entrega:
+  - estabilizar probing de NIC suportadas (e1000/rtl8139/virtio-net/hyperv-netvsc)
+  - ativar caminho de transmissao/recepcao real no primeiro driver alvo (prioridade: e1000 em QEMU)
+  - manter ARP/IPv4/ICMP/UDP/TCP com parsing e contadores confiaveis
+  - introduzir comandos de diagnostico de rede no CLI
+- Validacao minima:
+  - boot x64 detectando NIC em QEMU e Hyper-V
+  - `ping` para gateway da VM
+  - teste de transporte: UDP local + handshake TCP minimo
+  - smoke de nao regressao no boot/CLI/filesystem
+- Resultado esperado:
+  - primeira comunicacao da VM com rede externa (internet via host/NAT)
+
 ## 3. Checklist de fechamento por fase
 
 Checklist obrigatorio antes de merge:
@@ -155,6 +179,18 @@ make iso
 ```
 
 Para este plano, cada fechamento de fase deve incluir geracao de novas ISOs via WSL.
+
+Checklist adicional para fases com rede:
+
+```bash
+# build e smoke x64
+make all64
+make iso-uefi
+make smoke-x64-cli
+```
+
+Observacao: o smoke de rede dedicado sera adicionado junto com os comandos de
+CLI de diagnostico.
 
 ## 4. Politica de branches e deploy
 

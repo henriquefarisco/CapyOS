@@ -48,6 +48,7 @@ O repositorio mantem duas trilhas em paralelo:
 - Console framebuffer no x64 (`src/arch/x86_64/kernel_main.c`).
 - Console/telemetria serial COM1 como fallback de depuracao.
 - Deteccao de PCIe/NVMe e inicializacao de controladores suportados.
+- Bootstrap inicial de rede no x64 (prober de NIC + parser ARP/IPv4/ICMP/UDP/TCP).
 - Estado de sessao com usuario autenticado, `cwd`, prompt dinamico e logout.
 
 ### 3. Filesystem (NFS/NoirFS) e VFS
@@ -107,6 +108,7 @@ Impacto pratico:
 | NoirFS no x64 | Bootstrap em RAM (sem persistencia final) | Parcial |
 | Login e sessao | Funcional em 32-bit e x64 (x64 usa base em RAM) | Parcial |
 | CLI modular | Comandos principais ativos | Estavel |
+| Rede x64 | Stack inicial (prober NIC + self-test de protocolos) | Parcial |
 | Teclado em Hyper-V | Via EFI ConIn sem exigir COM (x64) | Parcial |
 | USB HID teclado x64 | Enumeracao XHCI ainda incompleta | Em desenvolvimento |
 | Multithread/scheduler | Ainda nao implantado | Pendente |
