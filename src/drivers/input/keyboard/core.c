@@ -9,15 +9,22 @@
 #include "drivers/input/keyboard_layout.h"
 #include "security/csprng.h"
 
-static const struct keyboard_layout *g_layouts[] = {
-    &g_keyboard_layout_us,
-    &g_keyboard_layout_br_abnt2,
-};
+static const struct keyboard_layout *g_layouts[2];
+static int g_layouts_initialized = 0;
 
 static const struct keyboard_layout *current_layout = NULL;
 static int shift_on = 0;
 static char g_dead_accent = 0; // '\'', '`', '^', '~', '"' for diaeresis
 static keyboard_hotkey_callback g_help_hotkey = NULL;
+
+static void keyboard_init_layout_table(void) {
+  if (g_layouts_initialized) {
+    return;
+  }
+  g_layouts[0] = &g_keyboard_layout_us;
+  g_layouts[1] = &g_keyboard_layout_br_abnt2;
+  g_layouts_initialized = 1;
+}
 
 static void keyboard_apply_layout(const struct keyboard_layout *layout) {
   if (layout) {
@@ -165,6 +172,7 @@ static void keyboard_irq(void) {
 }
 
 void keyboard_init(void) {
+  keyboard_init_layout_table();
   keyboard_apply_layout(g_layouts[0]);
   irq_install_handler(1, keyboard_irq);
 }
@@ -174,6 +182,7 @@ void keyboard_set_help_callback(keyboard_hotkey_callback cb) {
 }
 
 size_t keyboard_layout_count(void) {
+  keyboard_init_layout_table();
   return sizeof(g_layouts) / sizeof(g_layouts[0]);
 }
 

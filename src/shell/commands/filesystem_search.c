@@ -253,16 +253,28 @@ static int cmd_find(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static const struct shell_command g_fs_search_commands[] = {
-    { "hunt-file", cmd_hunt_file },
-    { "hunt-dir", cmd_hunt_dir },
-    { "hunt-any", cmd_hunt_any },
-    { "find", cmd_find },
-};
+static struct shell_command g_fs_search_commands[4];
+static int g_fs_search_commands_initialized = 0;
+
+static void init_fs_search_commands(void) {
+    if (g_fs_search_commands_initialized) {
+        return;
+    }
+    g_fs_search_commands[0].name = "hunt-file";
+    g_fs_search_commands[0].handler = cmd_hunt_file;
+    g_fs_search_commands[1].name = "hunt-dir";
+    g_fs_search_commands[1].handler = cmd_hunt_dir;
+    g_fs_search_commands[2].name = "hunt-any";
+    g_fs_search_commands[2].handler = cmd_hunt_any;
+    g_fs_search_commands[3].name = "find";
+    g_fs_search_commands[3].handler = cmd_find;
+    g_fs_search_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_filesystem_search(size_t *count) {
+    init_fs_search_commands();
     if (count) {
-        *count = sizeof(g_fs_search_commands) / sizeof(g_fs_search_commands[0]);
+        *count = 4;
     }
     return g_fs_search_commands;
 }

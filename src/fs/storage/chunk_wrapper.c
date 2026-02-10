@@ -26,12 +26,20 @@ static int chunk_write(void *ctx, uint32_t block_no, const void *buffer){
     return 0;
 }
 
-static struct block_device_ops chunk_ops = {
-    .read_block = chunk_read,
-    .write_block = chunk_write,
-};
+static struct block_device_ops chunk_ops;
+static int chunk_ops_initialized = 0;
+
+static void chunk_init_ops(void) {
+    if (chunk_ops_initialized) {
+        return;
+    }
+    chunk_ops.read_block = chunk_read;
+    chunk_ops.write_block = chunk_write;
+    chunk_ops_initialized = 1;
+}
 
 struct block_device *block_chunked_wrap(struct block_device *lower, uint32_t chunk_size){
+    chunk_init_ops();
     if (!lower || chunk_size == 0 || (chunk_size % lower->block_size) != 0) return NULL;
     uint32_t ratio = chunk_size / lower->block_size;
     if (ratio == 0 || lower->block_count < ratio) return NULL;
