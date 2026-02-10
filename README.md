@@ -48,6 +48,10 @@ O repositorio mantem duas trilhas em paralelo:
 - Console framebuffer no x64 (`src/arch/x86_64/kernel_main.c`).
 - Console/telemetria serial COM1 como fallback de depuracao.
 - Deteccao de PCIe/NVMe e inicializacao de controladores suportados.
+- Bootstrap inicial de rede no x64 com:
+  - `e1000` funcional (RX/TX + ping/ICMP)
+  - `tulip-2114x` em modo inicial/experimental (adaptador legado/generico)
+- Parser/protocolo de ARP/IPv4/ICMP/UDP/TCP com diagnostico via CLI.
 - Estado de sessao com usuario autenticado, `cwd`, prompt dinamico e logout.
 
 ### 3. Filesystem (NFS/NoirFS) e VFS
@@ -68,6 +72,7 @@ O repositorio mantem duas trilhas em paralelo:
 - Banco de usuarios em `/etc/users.db`:
   - salt por usuario
   - hash PBKDF2-SHA256 (`USER_ITERATIONS=64000`)
+- Setup inicial de formatacao com `Usuario administrador [admin]` persistido no `users.db`.
 - Login com validacao por `userdb_authenticate`.
 
 ### 5. CapyCLI (shell modular)
@@ -79,6 +84,11 @@ Conjuntos de comandos implementados:
 - Gerenciamento: `mk-file`, `mk-dir`, `kill-file`, `kill-dir`, `move`, `clone`, `stats-file`, `type`
 - Busca: `hunt-file`, `hunt-dir`, `hunt-any`, `find`
 - Sessao/ajuda/sistema: `help-any`, `help-docs`, `mess`, `bye`, `print-*`, `config-keyboard`, `shutdown-reboot`, `shutdown-off`, `do-sync`
+- Rede:
+  - `net-status`
+  - `net-ip`, `net-gw`, `net-dns`
+  - `net-set <ip> <mask> <gw> <dns>`
+  - `hey <ip|gateway|dns|self>` (ping/ICMP no x64)
 
 Observacao sobre o x64:
 - comandos antigos que estavam hardcoded no loop principal foram redirecionados para o modulo de shell.
@@ -96,6 +106,9 @@ Prioridade atual de entrada no x64:
 Impacto pratico:
 - Hyper-V Gen2 com boot UEFI pode usar teclado sem Putty/porta COM.
 - COM1 permanece para debug e contingencia.
+- Para rede no Hyper-V:
+  - `Network Adapter` (sintetico/netvsc) ainda esta em evolucao.
+  - `Legacy Network Adapter` tem caminho inicial via driver `tulip-2114x` (em hardening).
 
 ## Estado atual por dominio (resumo)
 
@@ -107,6 +120,7 @@ Impacto pratico:
 | NoirFS no x64 | Bootstrap em RAM (sem persistencia final) | Parcial |
 | Login e sessao | Funcional em 32-bit e x64 (x64 usa base em RAM) | Parcial |
 | CLI modular | Comandos principais ativos | Estavel |
+| Rede x64 | Stack com ARP/IPv4/ICMP ativo, `e1000` funcional e `tulip` em validacao | Parcial |
 | Teclado em Hyper-V | Via EFI ConIn sem exigir COM (x64) | Parcial |
 | USB HID teclado x64 | Enumeracao XHCI ainda incompleta | Em desenvolvimento |
 | Multithread/scheduler | Ainda nao implantado | Pendente |
@@ -116,6 +130,8 @@ Impacto pratico:
 - x64 ainda nao concluiu paridade total com fluxo 32-bit em persistencia real de disco cifrado.
 - driver USB HID completo (enumeracao + input) ainda nao finalizado.
 - caminho VMBus keyboard continua experimental e depende de hardening.
+- netvsc (adaptador sintetico Hyper-V) ainda nao esta pronto; usar legado para validacao de rede no Hyper-V.
+- driver `tulip-2114x` precisa de hardening adicional de RX/link para cobertura total de adaptadores genericos.
 - scheduler/multithread ainda nao entrou no kernel runtime.
 - hardening criptografico de integridade por bloco/metadata ainda pendente.
 
@@ -190,12 +206,14 @@ A evolucao detalhada esta em:
 
 Eixos principais:
 - NFS/NoirFS: journal, recuperacao, fsck, escalabilidade
+- Rede: driver NIC, ARP/IPv4/ICMP/UDP/TCP e utilitarios CLI (`hey`)
 - Criptografia: integridade autenticada, rotacao e hierarquia de chaves
 - Performance: cache, I/O, NVMe tuning, operacoes em lote
 - Seguranca: auditoria, ACL, hardening de parser e metadata
 - Multiusuario: gestao de usuarios/grupos e isolamento de sessao
 - CLI: historico, autocomplete, pipes e jobs
 - Multithread: scheduler, workers e sincronizacao
+- Futuro grafico: base de userspace + compositor para viabilizar navegador open source (Chromium/Servo/WebKit)
 
 ## Estrutura do repositorio
 
