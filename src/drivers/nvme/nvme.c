@@ -423,14 +423,22 @@ static int nvme_block_write(void *ctx, uint32_t block_no, const void *buffer) {
   return nvme_write_blocks(dev, block_no, 1, buffer);
 }
 
-static struct block_device_ops nvme_block_ops = {
-    .read_block = nvme_block_read,
-    .write_block = nvme_block_write,
-};
+static struct block_device_ops nvme_block_ops;
+static int nvme_block_ops_initialized = 0;
+
+static void nvme_init_block_ops(void) {
+  if (nvme_block_ops_initialized) {
+    return;
+  }
+  nvme_block_ops.read_block = nvme_block_read;
+  nvme_block_ops.write_block = nvme_block_write;
+  nvme_block_ops_initialized = 1;
+}
 
 static struct block_device g_nvme_block_dev;
 
 int nvme_init(void) {
+  nvme_init_block_ops();
   struct pci_device pci_dev;
 
   dbg_puts("[nvme] scanning for NVMe controller...\n");

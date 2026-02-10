@@ -214,6 +214,11 @@ typedef struct {
 
 static fbcon_t g_con;
 static const struct boot_handoff *g_h = NULL;
+static int g_serial_mirror = 0;
+static int g_com1_ready = 0;
+
+/* Forward declaration; COM1 implementation is defined later in this file. */
+static void com1_putc(char c);
 
 static inline const uint8_t *font_glyph(uint8_t uc) {
   const uint8_t (*font)[8];
@@ -277,6 +282,14 @@ static void fbcon_putch_px(uint32_t x, uint32_t y, char c) {
 void fbcon_putc(char c) {
   if (!g_con.fb || g_con.cols == 0 || g_con.rows == 0)
     return;
+  if (g_serial_mirror && g_com1_ready) {
+    if (c == '\n') {
+      com1_putc('\r');
+    }
+    if (c != '\r') {
+      com1_putc(c);
+    }
+  }
   if (c == '\r')
     return;
   if (c == '\n') {
@@ -563,13 +576,22 @@ static int shell_bootstrap_filesystem(void) {
     fbcon_print("[fs] ERRO: ramdisk indisponivel.\n");
     return -1;
   }
-  if (noirfs_format(ram, 128, ram->block_count, NULL) != 0) {
-    fbcon_print("[fs] ERRO: falha ao formatar NoirFS em RAM.\n");
+
+  int fmt_rc = noirfs_format(ram, 128, ram->block_count, NULL);
+  if (fmt_rc != 0) {
+    fbcon_print("[fs] ERRO: falha ao formatar NoirFS em RAM. rc=");
+    fbcon_print_hex((uint64_t)(uint32_t)fmt_rc);
+    fbcon_putc('\n');
     return -1;
   }
-  if (mount_noirfs(ram, &g_shell_root_sb) != 0 ||
-      vfs_mount_root(&g_shell_root_sb) != 0) {
-    fbcon_print("[fs] ERRO: falha ao montar NoirFS em RAM.\n");
+  int mount_rc = mount_noirfs(ram, &g_shell_root_sb);
+  int root_rc = (mount_rc == 0) ? vfs_mount_root(&g_shell_root_sb) : -1;
+  if (mount_rc != 0 || root_rc != 0) {
+    fbcon_print("[fs] ERRO: falha ao montar NoirFS em RAM. mount=");
+    fbcon_print_hex((uint64_t)(uint32_t)mount_rc);
+    fbcon_print(" root=");
+    fbcon_print_hex((uint64_t)(uint32_t)root_rc);
+    fbcon_putc('\n');
     return -1;
   }
 
@@ -713,9 +735,13 @@ static int com1_poll_char(char *ch) {
 }
 
 static void com1_putc(char c) {
-  while ((inb(COM1_PORT + 5) & 0x20) == 0)
-    ;
-  outb(COM1_PORT, (uint8_t)c);
+  for (uint32_t spin = 0; spin < 200000; ++spin) {
+    if (inb(COM1_PORT + 5) & 0x20) {
+      outb(COM1_PORT, (uint8_t)c);
+      return;
+    }
+    cpu_relax();
+  }
 }
 
 static void com1_puts(const char *s) {
@@ -1245,6 +1271,16 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     }
   }
 
+  /* If no keyboard backend is available, keep COM1 as emergency channel even
+   * when loopback detection fails (common in some VM serial backends). */
+  if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
+    has_com1 = 1;
+    fbcon_print("[info] COM1 habilitado em modo de emergencia.\n");
+  }
+
+  g_com1_ready = has_com1 ? 1 : 0;
+  g_serial_mirror = has_com1 ? 1 : 0;
+
   int has_usb = 0;
   struct xhci_controller xhci = {0};
   if (!has_ps2 && !has_efi && !has_hyperv && !is_hyperv) {
@@ -1278,6 +1314,14 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
 
   if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
     fbcon_print("\n[erro] Nenhum dispositivo de entrada disponivel.\n");
+  }
+
+  /* Prepare filesystem/user database before login authentication. */
+  init_shell_context(NULL);
+  if (!g_shell_initialized) {
+    fbcon_print("[erro] Falha ao preparar runtime do shell.\n");
+    for (;;)
+      cpu_relax();
   }
 
   char line[128];
