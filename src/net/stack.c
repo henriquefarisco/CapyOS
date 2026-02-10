@@ -309,7 +309,8 @@ static void build_ipv4_header(struct net_ipv4_hdr *ip, uint16_t payload_len,
   ip->checksum = 0;
   ip->src_ip = htonl32(src_ip);
   ip->dst_ip = htonl32(dst_ip);
-  ip->checksum = checksum16((const uint8_t *)ip, sizeof(struct net_ipv4_hdr));
+  ip->checksum =
+      htons16(checksum16((const uint8_t *)ip, sizeof(struct net_ipv4_hdr)));
 }
 
 static int wait_for_arp(uint32_t target_ip, uint32_t timeout_ms) {
@@ -394,7 +395,7 @@ static int handle_icmp(uint32_t src_ip, const uint8_t *payload, size_t len,
     hdr->type = 0;
     hdr->code = 0;
     hdr->checksum = 0;
-    hdr->checksum = checksum16(reply, len);
+    hdr->checksum = htons16(checksum16(reply, len));
     (void)net_stack_send_ipv4(NET_L4_PROTO_ICMP, src_ip, reply, len);
     return 0;
   }
@@ -669,7 +670,7 @@ int net_stack_ping(uint32_t dst_ip, uint32_t timeout_ms, uint32_t *rtt_ms,
   for (uint32_t i = 16; i < sizeof(icmp_pkt); ++i) {
     icmp_pkt[i] = (uint8_t)i;
   }
-  icmp->checksum = checksum16(icmp_pkt, sizeof(icmp_pkt));
+  icmp->checksum = htons16(checksum16(icmp_pkt, sizeof(icmp_pkt)));
 
   g_net.icmp_waiting = 1;
   g_net.icmp_wait_ident = ident;
@@ -724,8 +725,8 @@ int net_stack_protocol_selftest(void) {
   }
 
   struct net_stack_stats before = g_net.stats;
-  const uint8_t peer_mac[6] = {0x52u, 0x54u, 0x00u, 0x12u, 0x34u, 0x56u};
-  const uint32_t peer_ip = NET_IPV4_ADDR(10, 0, 2, 2);
+  const uint8_t peer_mac[6] = {0x52u, 0x54u, 0x00u, 0x12u, 0x34u, 0x99u};
+  const uint32_t peer_ip = NET_IPV4_ADDR(10, 0, 2, 200);
 
   /* 1) ARP request to local IP. */
   {
@@ -767,7 +768,7 @@ int net_stack_protocol_selftest(void) {
     data[1] = 0x41u;
     data[2] = 0x50u;
     data[3] = 0x59u;
-    icmp->checksum = checksum16((const uint8_t *)icmp, sizeof(*icmp) + 4u);
+    icmp->checksum = htons16(checksum16((const uint8_t *)icmp, sizeof(*icmp) + 4u));
     (void)net_stack_receive_frame(frame, off + sizeof(*icmp) + 4u);
   }
 
