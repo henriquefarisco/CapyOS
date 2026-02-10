@@ -22,6 +22,7 @@
 #include "fs/ramdisk.h"
 #include "fs/vfs.h"
 #include "memory/kmem.h"
+#include "net/stack.h"
 #include "shell/commands.h"
 #include "shell/core.h"
 
@@ -355,6 +356,52 @@ void fbcon_print_hex64(uint64_t v) {
 }
 
 void fbcon_print_hex(uint64_t v) { fbcon_print_hex64(v); }
+
+static void fbcon_print_dec_u32(uint32_t v) {
+  char rev[16];
+  uint32_t n = 0;
+  if (v == 0) {
+    fbcon_putc('0');
+    return;
+  }
+  while (v > 0 && n < sizeof(rev)) {
+    rev[n++] = (char)('0' + (v % 10u));
+    v /= 10u;
+  }
+  while (n > 0) {
+    fbcon_putc(rev[--n]);
+  }
+}
+
+static void fbcon_print_hex8(uint8_t v) {
+  static const char hex[] = "0123456789ABCDEF";
+  fbcon_putc(hex[(v >> 4) & 0xF]);
+  fbcon_putc(hex[v & 0xF]);
+}
+
+static void fbcon_print_hex16(uint16_t v) {
+  fbcon_print_hex8((uint8_t)(v >> 8));
+  fbcon_print_hex8((uint8_t)(v & 0xFFu));
+}
+
+static void fbcon_print_ipv4(uint32_t ip) {
+  fbcon_print_dec_u32((ip >> 24) & 0xFFu);
+  fbcon_putc('.');
+  fbcon_print_dec_u32((ip >> 16) & 0xFFu);
+  fbcon_putc('.');
+  fbcon_print_dec_u32((ip >> 8) & 0xFFu);
+  fbcon_putc('.');
+  fbcon_print_dec_u32(ip & 0xFFu);
+}
+
+static void fbcon_print_mac(const uint8_t mac[6]) {
+  for (uint32_t i = 0; i < 6; ++i) {
+    if (i) {
+      fbcon_putc(':');
+    }
+    fbcon_print_hex8(mac[i]);
+  }
+}
 
 static int streq(const char *a, const char *b) {
   if (!a || !b)
@@ -1405,6 +1452,44 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     }
   }
   (void)has_usb;
+
+  fbcon_print("[net] Inicializando stack TCP/IP...\n");
+  int net_rc = net_stack_init();
+  struct net_stack_status net_status;
+  if (net_stack_status(&net_status) == 0) {
+    if (net_rc == 0 && net_status.nic.found) {
+      fbcon_print("[net] NIC: ");
+      fbcon_print(net_driver_name(net_status.nic.kind));
+      fbcon_print(" @ ");
+      fbcon_print_dec_u32((uint32_t)net_status.nic.bus);
+      fbcon_putc(':');
+      fbcon_print_dec_u32((uint32_t)net_status.nic.device);
+      fbcon_putc('.');
+      fbcon_print_dec_u32((uint32_t)net_status.nic.function);
+      fbcon_print(" vendor=");
+      fbcon_print_hex16(net_status.nic.vendor_id);
+      fbcon_print(" device=");
+      fbcon_print_hex16(net_status.nic.device_id);
+      fbcon_putc('\n');
+    } else {
+      fbcon_print("[net] Nenhuma NIC suportada detectada (e1000/rtl8139/virtio/hyperv).\n");
+    }
+    fbcon_print("[net] MAC: ");
+    fbcon_print_mac(net_status.ipv4.mac);
+    fbcon_print("  IPv4: ");
+    fbcon_print_ipv4(net_status.ipv4.addr);
+    fbcon_print("  GW: ");
+    fbcon_print_ipv4(net_status.ipv4.gateway);
+    fbcon_putc('\n');
+  } else {
+    fbcon_print("[net] Falha ao consultar estado da stack.\n");
+  }
+
+  if (net_stack_protocol_selftest() == 0) {
+    fbcon_print("[net] Self-test de protocolos (ARP/IPv4/ICMP/UDP/TCP): OK\n");
+  } else {
+    fbcon_print("[net] Self-test de protocolos (ARP/IPv4/ICMP/UDP/TCP): FALHOU\n");
+  }
 
   g_has_efi_input = has_efi;
   g_efi_system_table = efi_system_table;

@@ -107,10 +107,12 @@ NOIROS64_OBJS = \
 	$(BUILD)/x86_64/core/user.o \
 	$(BUILD)/x86_64/core/session.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
+	$(BUILD)/x86_64/drivers/net/net_probe.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme.o \
 	$(BUILD)/x86_64/drivers/usb/xhci.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_keyboard.o \
 	$(BUILD)/x86_64/drivers/storage/ramdisk.o \
+	$(BUILD)/x86_64/net/stack.o \
 	$(BUILD)/x86_64/fs/cache/buffer_cache.o \
 	$(BUILD)/x86_64/fs/storage/block_device.o \
 	$(BUILD)/x86_64/fs/storage/offset_wrapper.o \
@@ -133,7 +135,7 @@ NOIROS64_OBJS = \
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
 
 # Fontes C: separar por sabor removendo a unidade de entrada principal do outro
-EXCL32_C   := $(shell find $(SRC_DIR)/arch/x86_64 -name '*.c') $(SRC_DIR)/boot/uefi_loader.c $(SRC_DIR)/drivers/hyperv/vmbus_keyboard.c $(SRC_DIR)/drivers/nvme/nvme.c $(SRC_DIR)/drivers/usb/xhci.c $(SRC_DIR)/drivers/pcie/pcie.c
+EXCL32_C   := $(shell find $(SRC_DIR)/arch/x86_64 -name '*.c') $(shell find $(SRC_DIR)/net -name '*.c') $(shell find $(SRC_DIR)/drivers/net -name '*.c') $(SRC_DIR)/boot/uefi_loader.c $(SRC_DIR)/drivers/hyperv/vmbus_keyboard.c $(SRC_DIR)/drivers/nvme/nvme.c $(SRC_DIR)/drivers/usb/xhci.c $(SRC_DIR)/drivers/pcie/pcie.c
 MAIN_EXCLUDE       = $(SRC_DIR)/core/installer_main.c $(SRC_DIR)/boot/embedded_payloads.c $(EXCL32_C)
 INSTALLER_EXCLUDE  = $(SRC_DIR)/core/kernel.c $(SRC_DIR)/system/kernel_main.c $(EXCL32_C)
 
