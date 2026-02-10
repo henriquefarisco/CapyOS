@@ -381,20 +381,36 @@ static int cmd_type(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static const struct shell_command g_fs_manage_commands[] = {
-    { "mk-file", cmd_mk_file },
-    { "mk-dir", cmd_mk_dir },
-    { "kill-file", cmd_kill_file },
-    { "kill-dir", cmd_kill_dir },
-    { "move", cmd_move },
-    { "clone", cmd_clone },
-    { "stats-file", cmd_stats_file },
-    { "type", cmd_type },
-};
+static struct shell_command g_fs_manage_commands[8];
+static int g_fs_manage_commands_initialized = 0;
+
+static void init_fs_manage_commands(void) {
+    if (g_fs_manage_commands_initialized) {
+        return;
+    }
+    g_fs_manage_commands[0].name = "mk-file";
+    g_fs_manage_commands[0].handler = cmd_mk_file;
+    g_fs_manage_commands[1].name = "mk-dir";
+    g_fs_manage_commands[1].handler = cmd_mk_dir;
+    g_fs_manage_commands[2].name = "kill-file";
+    g_fs_manage_commands[2].handler = cmd_kill_file;
+    g_fs_manage_commands[3].name = "kill-dir";
+    g_fs_manage_commands[3].handler = cmd_kill_dir;
+    g_fs_manage_commands[4].name = "move";
+    g_fs_manage_commands[4].handler = cmd_move;
+    g_fs_manage_commands[5].name = "clone";
+    g_fs_manage_commands[5].handler = cmd_clone;
+    g_fs_manage_commands[6].name = "stats-file";
+    g_fs_manage_commands[6].handler = cmd_stats_file;
+    g_fs_manage_commands[7].name = "type";
+    g_fs_manage_commands[7].handler = cmd_type;
+    g_fs_manage_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_filesystem_manage(size_t *count) {
+    init_fs_manage_commands();
     if (count) {
-        *count = sizeof(g_fs_manage_commands) / sizeof(g_fs_manage_commands[0]);
+        *count = 8;
     }
     return g_fs_manage_commands;
 }

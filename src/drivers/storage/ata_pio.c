@@ -292,10 +292,17 @@ static int ata_write_block(void *ctx, uint32_t block_no, const void *buffer) {
                                   buffer);
 }
 
-static struct block_device_ops ata_ops = {
-    .read_block = ata_read_block,
-    .write_block = ata_write_block,
-};
+static struct block_device_ops ata_ops;
+static int ata_ops_initialized = 0;
+
+static void ata_init_ops(void) {
+  if (ata_ops_initialized) {
+    return;
+  }
+  ata_ops.read_block = ata_read_block;
+  ata_ops.write_block = ata_write_block;
+  ata_ops_initialized = 1;
+}
 
 #define MAX_ATA_DEV 4
 static struct block_device g_ata_devs[MAX_ATA_DEV];
@@ -369,6 +376,7 @@ static int ata_drive_present(uint16_t io, uint8_t drive_sel) {
 }
 
 void ata_init(void) {
+  ata_init_ops();
   ata_log(ATA_LOG_INFO, "inicializando controlador ATA PIO");
   g_ata_count = 0;
 

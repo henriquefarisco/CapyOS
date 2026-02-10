@@ -154,17 +154,28 @@ static int cmd_do_sync(struct shell_context *ctx, int argc, char **argv) {
   return 0;
 }
 
-static const struct shell_command g_system_control_commands[] = {
-    {"config-keyboard", cmd_config_keyboard},
-    {"shutdown-reboot", cmd_shutdown_reboot},
-    {"shutdown-off", cmd_shutdown_off},
-    {"do-sync", cmd_do_sync},
-};
+static struct shell_command g_system_control_commands[4];
+static int g_system_control_commands_initialized = 0;
+
+static void init_system_control_commands(void) {
+  if (g_system_control_commands_initialized) {
+    return;
+  }
+  g_system_control_commands[0].name = "config-keyboard";
+  g_system_control_commands[0].handler = cmd_config_keyboard;
+  g_system_control_commands[1].name = "shutdown-reboot";
+  g_system_control_commands[1].handler = cmd_shutdown_reboot;
+  g_system_control_commands[2].name = "shutdown-off";
+  g_system_control_commands[2].handler = cmd_shutdown_off;
+  g_system_control_commands[3].name = "do-sync";
+  g_system_control_commands[3].handler = cmd_do_sync;
+  g_system_control_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
+  init_system_control_commands();
   if (count) {
-    *count = sizeof(g_system_control_commands) /
-             sizeof(g_system_control_commands[0]);
+    *count = 4;
   }
   return g_system_control_commands;
 }
