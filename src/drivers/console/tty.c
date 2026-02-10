@@ -1,3 +1,4 @@
+/* tty.c: line buffer, echo control, and keyboard-driven input. */
 #include "drivers/console/tty.h"
 
 #include "drivers/video/vga.h"

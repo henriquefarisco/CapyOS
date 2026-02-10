@@ -14,6 +14,7 @@ struct system_settings {
     char theme[16];
     char keyboard_layout[16];
     int splash_enabled;
+    int diagnostics_enabled; /* 0 = skip CLI self-tests/diagnostics (default) */
 };
 
 int system_load_settings(struct system_settings *out);

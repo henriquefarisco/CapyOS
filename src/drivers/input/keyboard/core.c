@@ -1,3 +1,4 @@
+/* keyboard/core.c: IRQ handler and scancode translation with dead keys. */
 #include <stddef.h>
 #include <stdint.h>
 
