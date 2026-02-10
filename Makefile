@@ -7,27 +7,53 @@ BOOT_DIR = boot
 # --- Toolchain (i686-elf é o oficial; fallback = gcc -m32) ---
 AS      := nasm
 CROSS   ?= i686-elf
+CROSS64 ?= x86_64-elf
+CROSS64 ?= x86_64-elf
 
 HOST_32_OK := $(shell echo "int x;" | gcc -m32 -xc - -c -o /tmp/noiros-m32-check.$$ 2>/dev/null && echo yes || echo no)
+# Se apenas metas 64-bit/UEFI/host-test forem pedidas, não obrigue toolchain 32-bit
+NEED_32 := $(if $(MAKECMDGOALS),$(filter-out all64 iso-uefi manifest64 disk-gpt provision-vhd test clean,$(MAKECMDGOALS)),yes)
 
 ifeq ($(shell which $(CROSS)-gcc 2>/dev/null),)
-  # Fallback (usa compilador do host em 32-bit) — menos isolado
+  # Fallback (usa compilador do host em 32-bit) – menos isolado
+  ifneq ($(NEED_32),)
   ifeq ($(HOST_32_OK),no)
     $(error Toolchain 32-bit ausente. Instale i686-elf-gcc ou habilite gcc-multilib (pacote gcc-multilib).)
+  endif
   endif
   CC      := gcc
   LD      := ld
   OBJCOPY := objcopy
-  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -Iinclude -I$(BUILD_GEN)
+  CFLAGS  := -m32 -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -mno-sse -mno-mmx -mno-80387 -Iinclude -I$(BUILD_GEN)
   LDFLAGS := -nostdlib -m elf_i386
 else
   # Oficial (cross bare-metal)
   CC      := $(CROSS)-gcc
   LD      := $(CROSS)-ld
   OBJCOPY := $(CROSS)-objcopy
-  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -fstack-protector-strong -Iinclude -I$(BUILD_GEN)
+  CFLAGS  := -ffreestanding -O2 -Wall -Wextra -Wa,--noexecstack -fstack-protector-strong -mno-sse -mno-mmx -mno-80387 -Iinclude -I$(BUILD_GEN)
   LDFLAGS := -nostdlib
 endif
+
+# Toolchain 64-bit (fallback para x86_64-linux-gnu-* se x86_64-elf-* não existir)
+ifeq ($(shell which $(CROSS64)-gcc 2>/dev/null),)
+  CC64      := x86_64-linux-gnu-gcc
+  LD64      := x86_64-linux-gnu-ld
+  OBJCOPY64 := x86_64-linux-gnu-objcopy
+else
+  CC64      := $(CROSS64)-gcc
+  LD64      := $(CROSS64)-ld
+  OBJCOPY64 := $(CROSS64)-objcopy
+endif
+CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -fpie -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -Iinclude -I$(BUILD_GEN)
+LDFLAGS64 := -nostdlib
+
+# Toolchain EFI (assume gnu-efi via x86_64-linux-gnu-*)
+EFI_CC := x86_64-linux-gnu-gcc
+EFI_LD := x86_64-linux-gnu-ld
+EFI_CFLAGS := -I/usr/include/efi -I/usr/include/efi/x86_64 -Iinclude -fno-stack-protector -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
+EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L/usr/lib -T /usr/lib/elf_x86_64_efi.lds
+EFI_LIBS := /usr/lib/crt0-efi-x86_64.o -lefi -lgnuefi
 
 # toolchain = conjunto compilador/ligador; freestanding = sem libc/ambiente do SO; -m elf_i386 força ld a gerar ELF 32-bit; ELF = Executable and Linkable Format
 
@@ -35,6 +61,11 @@ endif
 NOIROS_ELF  = $(BUILD)/noiros.bin
 NGIS_ELF    = $(BUILD)/installer.bin
 BOOT_BIN    = $(BUILD)/bootloader.bin
+# Artefatos 64-bit (UEFI/long mode)
+NOIROS_ELF64 = $(BUILD)/noiros64.bin
+NOIROS_EFI   = $(BUILD)/noiros64.efi
+UEFI_LOADER  = $(BUILD)/boot/uefi_loader.efi
+UEFI_LOADER_ELF = $(BUILD)/boot/uefi_loader.so
 
 # Boot artifacts (stage1/2 + payloads)
 STAGE1_BIN := $(BUILD)/boot/stage1.bin
@@ -42,18 +73,68 @@ STAGE2_BIN := $(BUILD)/boot/stage2.bin
 BOOT_PAYLOAD_HDR := $(BUILD_GEN)/boot_payloads.h
 
 LINKER_SCRIPT = $(SRC_DIR)/arch/x86/linker.ld
+LINKER64_SCRIPT = $(SRC_DIR)/arch/x86_64/linker64.ld
 
 ALL_C_SRCS   = $(shell find $(SRC_DIR) -name '*.c')
 ALL_S_SRCS   = $(shell find $(SRC_DIR) -name '*.s')
 ALL_ASM_SRCS = $(shell find $(SRC_DIR) -name '*.asm')
 
+# 64-bit assembly sources (explicit for now)
+ALL_S_SRCS64 = $(wildcard $(SRC_DIR)/arch/x86_64/*.S)
+
 # Objetos comuns (assembly/asm e .s são compartilhados entre sabores)
 COMMON_S_OBJS   = $(patsubst $(SRC_DIR)/%.s,$(BUILD)/%.o,$(ALL_S_SRCS))
 COMMON_ASM_OBJS = $(patsubst $(SRC_DIR)/%.asm,$(BUILD)/%.o,$(ALL_ASM_SRCS))
 
+# Objetos 64-bit (reaproveita C se agnóstico; exclui código específico de x86 32-bit)
+EXCL64_C   := $(shell find $(SRC_DIR)/arch/x86 -name '*.c')
+MAIN64_EXCLUDE      = $(MAIN_EXCLUDE) $(EXCL64_C)
+INSTALLER64_EXCLUDE = $(INSTALLER_EXCLUDE) $(EXCL64_C)
+
+MAIN64_C_SRCS      = $(filter-out $(MAIN64_EXCLUDE),$(ALL_C_SRCS))
+INSTALLER64_C_SRCS = $(filter-out $(INSTALLER64_EXCLUDE),$(ALL_C_SRCS))
+
+MAIN64_C_OBJS      = $(patsubst $(SRC_DIR)/%.c,$(BUILD)/x86_64/%.o,$(MAIN64_C_SRCS))
+INSTALLER64_C_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD)/x86_64/%.o,$(INSTALLER64_C_SRCS))
+
+# Build 64-bit: entry64 + kernel_main64 + drivers + core + fs + shell + security
+NOIROS64_OBJS = \
+	$(BUILD)/x86_64/arch/x86_64/entry64.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
+	$(BUILD)/x86_64/arch/x86_64/stubs.o \
+	$(BUILD)/x86_64/arch/x86_64/kmem64.o \
+	$(BUILD)/x86_64/core/kcon.o \
+	$(BUILD)/x86_64/core/user.o \
+	$(BUILD)/x86_64/core/session.o \
+	$(BUILD)/x86_64/drivers/pcie/pcie.o \
+	$(BUILD)/x86_64/drivers/nvme/nvme.o \
+	$(BUILD)/x86_64/drivers/usb/xhci.o \
+	$(BUILD)/x86_64/drivers/hyperv/vmbus_keyboard.o \
+	$(BUILD)/x86_64/fs/cache/buffer_cache.o \
+	$(BUILD)/x86_64/fs/storage/block_device.o \
+	$(BUILD)/x86_64/fs/storage/offset_wrapper.o \
+	$(BUILD)/x86_64/fs/storage/chunk_wrapper.o \
+	$(BUILD)/x86_64/fs/storage/partition.o \
+	$(BUILD)/x86_64/fs/noirfs/noirfs.o \
+	$(BUILD)/x86_64/fs/vfs/vfs.o \
+	$(BUILD)/x86_64/security/crypt.o \
+	$(BUILD)/x86_64/security/csprng.o \
+	$(BUILD)/x86_64/shell/core/shell_main.o \
+	$(BUILD)/x86_64/shell/commands/help.o \
+	$(BUILD)/x86_64/shell/commands/session.o \
+	$(BUILD)/x86_64/shell/commands/system_info.o \
+	$(BUILD)/x86_64/shell/commands/system_control.o \
+	$(BUILD)/x86_64/shell/commands/filesystem_navigation.o \
+	$(BUILD)/x86_64/shell/commands/filesystem_content.o \
+	$(BUILD)/x86_64/shell/commands/filesystem_manage.o \
+	$(BUILD)/x86_64/shell/commands/filesystem_search.o
+
+EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
+
 # Fontes C: separar por sabor removendo a unidade de entrada principal do outro
-MAIN_EXCLUDE       = $(SRC_DIR)/core/installer_main.c $(SRC_DIR)/boot/embedded_payloads.c
-INSTALLER_EXCLUDE  = $(SRC_DIR)/core/kernel.c $(SRC_DIR)/system/kernel_main.c
+EXCL32_C   := $(shell find $(SRC_DIR)/arch/x86_64 -name '*.c') $(SRC_DIR)/boot/uefi_loader.c
+MAIN_EXCLUDE       = $(SRC_DIR)/core/installer_main.c $(SRC_DIR)/boot/embedded_payloads.c $(EXCL32_C)
+INSTALLER_EXCLUDE  = $(SRC_DIR)/core/kernel.c $(SRC_DIR)/system/kernel_main.c $(EXCL32_C)
 
 MAIN_C_SRCS      = $(filter-out $(MAIN_EXCLUDE),$(ALL_C_SRCS))
 INSTALLER_C_SRCS = $(filter-out $(INSTALLER_EXCLUDE),$(ALL_C_SRCS))
@@ -61,11 +142,11 @@ INSTALLER_C_SRCS = $(filter-out $(INSTALLER_EXCLUDE),$(ALL_C_SRCS))
 MAIN_C_OBJS      = $(patsubst $(SRC_DIR)/%.c,$(BUILD)/%.o,$(MAIN_C_SRCS))
 INSTALLER_C_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD)/%.o,$(INSTALLER_C_SRCS))
 
-NOIROS_OBJS = $(COMMON_S_OBJS) $(COMMON_ASM_OBJS) $(MAIN_C_OBJS)
-NGIS_OBJS   = $(COMMON_S_OBJS) $(COMMON_ASM_OBJS) $(INSTALLER_C_OBJS)
+NOIROS_OBJS    = $(COMMON_S_OBJS) $(COMMON_ASM_OBJS) $(MAIN_C_OBJS)
+NGIS_OBJS      = $(COMMON_S_OBJS) $(COMMON_ASM_OBJS) $(INSTALLER_C_OBJS)
 
 
-all: $(BOOT_BIN) $(NOIROS_ELF) $(NGIS_ELF)
+all: $(BOOT_BIN) $(NOIROS_ELF) $(NGIS_ELF) $(BOOT_CONFIG_BIN)
 
 # Bootloader
 $(BOOT_BIN): $(BOOT_DIR)/boot.s | $(BUILD)
@@ -87,6 +168,9 @@ $(BOOT_PAYLOAD_HDR): $(STAGE1_BIN) $(STAGE2_BIN) $(NOIROS_ELF) | $(BUILD_GEN)
 	xxd -i -n stage2_image $(STAGE2_BIN) >> $@
 	xxd -i -n noiros_image $(NOIROS_ELF) >> $@
 
+# Explicit dependency: embedded_payloads.c includes generated header
+$(BUILD)/src/boot/embedded_payloads.o: $(BOOT_PAYLOAD_HDR)
+
 # Create build directory if it doesn't exist
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -105,6 +189,10 @@ $(BUILD)/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/x86_64/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) -c $< -o $@
+
 $(BUILD)/boot/embedded_payloads.o: $(BOOT_PAYLOAD_HDR)
 
 $(BUILD)/%.o: $(SRC_DIR)/%.s | $(BUILD)
@@ -114,6 +202,63 @@ $(BUILD)/%.o: $(SRC_DIR)/%.s | $(BUILD)
 $(BUILD)/%.o: $(SRC_DIR)/%.asm | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(AS) -f elf32 $< -o $@
+
+$(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) -c $< -o $@
+
+$(NOIROS_ELF64): $(NOIROS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
+	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(NOIROS64_OBJS)
+
+.PHONY: all64
+all64: $(NOIROS_ELF64)
+
+# UEFI loader (stub) — compila só quando iso-uefi for chamado e gnu-efi estiver presente
+$(UEFI_LOADER_ELF): $(EFI_LOADER_SRC) | $(BUILD) $(BUILD)/boot
+	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
+	$(EFI_CC) $(EFI_CFLAGS) -c $(EFI_LOADER_SRC) -o $(BUILD)/boot/uefi_loader.o
+	$(EFI_LD) $(EFI_LDFLAGS) -o $(UEFI_LOADER_ELF) $(BUILD)/boot/uefi_loader.o $(EFI_LIBS)
+
+$(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
+	# UEFI espera PE/COFF (não ELF). Converte o ELF gerado pelo gnu-efi em BOOTX64.EFI.
+	x86_64-linux-gnu-objcopy --subsystem=efi-app \
+	  -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
+	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
+
+.PHONY: iso-uefi
+iso-uefi: $(UEFI_LOADER) $(NOIROS_ELF64)
+	mkdir -p $(EFI_BOOT)
+	cp $(UEFI_LOADER) $(BOOTX64)
+	# Opcional: incluir kernel64 em /boot
+	mkdir -p $(ISO_DIR_EFI)/boot
+	cp $(NOIROS_ELF64) $(ISO_DIR_EFI)/boot/noiros64.bin
+	# Hyper-V Gen2 requer que o El Torito UEFI aponte para uma imagem FAT (nao para o .EFI direto)
+	python3 tools/scripts/mk_efiboot_img.py --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(NOIROS_ELF64)
+	@ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); echo "[ok] ISO UEFI gerada em $$ISO_OUT"
+
+# Manifest 64-bit (para BOOT partition GPT) - LBA relativo default = 1 (logo após o manifest)
+MANIFEST64 := $(BUILD)/manifest.bin
+
+$(MANIFEST64): $(NOIROS_ELF64) tools/scripts/gen_manifest.py | $(BUILD)
+	python3 tools/scripts/gen_manifest.py --kernel $(NOIROS_ELF64) --out $(MANIFEST64) --kernel-lba 1
+
+.PHONY: manifest64
+manifest64: $(MANIFEST64)
+
+# GPT disk image helper (ESP FAT32 + BOOT raw + DATA). Não requer sudo.
+DISK_GPT_IMG ?= build/disk-gpt.img
+DISK_GPT_SIZE ?= 2G
+
+.PHONY: disk-gpt
+disk-gpt: $(UEFI_LOADER) $(NOIROS_ELF64) $(MANIFEST64)
+	python3 tools/scripts/provision_gpt.py --img $(DISK_GPT_IMG) --size $(DISK_GPT_SIZE) --bootx64 $(UEFI_LOADER) --kernel $(NOIROS_ELF64) --manifest $(MANIFEST64) --allow-existing --confirm
+
+# Provision an existing Hyper-V fixed VHD (or raw .img) with GPT/ESP/BOOT using the current build artifacts.
+# Usage (inside WSL): make provision-vhd IMG=/mnt/c/ProgramData/Microsoft/Windows/Virtual\\ Hard\\ Disks/NoirOSGenII.vhd
+.PHONY: provision-vhd
+provision-vhd: $(UEFI_LOADER) $(NOIROS_ELF64)
+	@if [ -z "$(IMG)" ]; then echo "Usage: make provision-vhd IMG=/mnt/c/ProgramData/Microsoft/Windows/Virtual\\ Hard\\ Disks/NoirOSGenII.vhd"; exit 2; fi
+	python3 tools/scripts/provision_gpt.py --img "$(IMG)" --bootx64 $(UEFI_LOADER) --kernel $(NOIROS_ELF64) --auto-manifest --allow-existing --confirm
 
 run: $(NOIROS_ELF)
 	@echo "Iniciando QEMU (NoirOS kernel direto)..."
@@ -141,7 +286,14 @@ ISO_IMG := build/NoirOS-Installer.iso
 GRUB_CFG_GEN := $(BUILD)/tools/gen_grub_cfg
 GRUB_CFG_ISO := $(BUILD)/grub.iso.cfg
 GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
+GEN_BOOT_CONFIG := $(BUILD)/tools/gen_boot_config
+BOOT_CONFIG_BIN := $(BUILD)/boot_config.bin
 
+ISO_DIR_EFI ?= build/iso-uefi-root
+ISO_IMG_EFI ?= build/NoirOS-Installer-UEFI.iso
+EFI_BOOT := $(ISO_DIR_EFI)/EFI/BOOT
+BOOTX64 := $(EFI_BOOT)/BOOTX64.EFI
+EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 
 $(ISO_DIR): $(BUILD) $(NGIS_ELF) $(NOIROS_ELF) $(GRUB_CFG_ISO)
 	mkdir -p $(ISO_DIR)/boot/grub
@@ -209,18 +361,25 @@ install-grub-device: $(NOIROS_ELF) $(GRUB_CFG_DISK)
 
 # --- Host-side unit tests (gcc) ---
 HOST_CC     ?= gcc
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -DUNIT_TEST
-HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include -DUNIT_TEST
+HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include
 TEST_BIN    := $(BUILD)/tests/unit_tests
 TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/test_csprng.c \
-               src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
+               tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
-               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/grub_cfg_builder.c \
+               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c \
                src/security/csprng.c src/security/crypt.c
 
-$(GRUB_CFG_GEN): tools/gen_grub_cfg.c tools/grub_cfg_builder.c | $(BUILD)
+$(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools
-	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ tools/gen_grub_cfg.c tools/grub_cfg_builder.c
+	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c
+
+$(GEN_BOOT_CONFIG): tools/host/src/gen_boot_config.c | $(BUILD)
+	@mkdir -p $(BUILD)/tools
+	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ tools/host/src/gen_boot_config.c
+
+$(BOOT_CONFIG_BIN): $(GEN_BOOT_CONFIG) | $(BUILD)
+	$(GEN_BOOT_CONFIG) $@ --layout us
 
 $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ iso

@@ -1,3 +1,4 @@
+/* embedded_payloads.c: exposes boot payload blobs generated at build time. */
 #include "boot/boot_writer.h"
 #include "boot_payloads.h"
 

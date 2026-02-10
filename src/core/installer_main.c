@@ -369,7 +369,35 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
 
   // Use new autonomous bootloader installer
   struct boot_payload_set payloads = boot_embedded_payloads();
-  if (bootwriter_install_fresh(target, boot_mb, &data_part, &payloads) != 0) {
+
+  /* DEBUG: Print payload sizes */
+  vga_write("[debug] Stage1 size: ");
+  {
+    char b[32];
+    utoa10(payloads.stage1.size, b);
+    b[10] = '\0';
+    vga_write(b);
+    vga_write("\n");
+  }
+  vga_write("[debug] Stage2 size: ");
+  {
+    char b[32];
+    utoa10(payloads.stage2.size, b);
+    b[10] = '\0';
+    vga_write(b);
+    vga_write("\n");
+  }
+  vga_write("[debug] Kernel size: ");
+  {
+    char b[32];
+    utoa10(payloads.kernel_main.size, b);
+    b[10] = '\0';
+    vga_write(b);
+    vga_write("\n");
+  }
+
+  if (bootwriter_install_fresh(target, boot_mb, 0, &data_part, &payloads) !=
+      0) {
     vga_write("[install] Falha critica ao instalar bootloader/particoes.\n");
     goto hang;
   }

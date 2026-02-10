@@ -1,3 +1,4 @@
+/* boot_manifest.c: on-disk manifest helpers and checksum used by stage2. */
 #include "boot/boot_manifest.h"
 
 void boot_manifest_init(struct boot_manifest *m) {

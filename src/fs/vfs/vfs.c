@@ -1,3 +1,4 @@
+/* vfs.c: VFS root state, dentry tree, and metadata defaults. */
 #include "fs/vfs.h"
 #include "drivers/video/vga.h"
 #include "fs/noirfs.h"
