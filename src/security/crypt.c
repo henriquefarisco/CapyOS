@@ -628,14 +628,22 @@ static int crypt_write_block(void *ctx, uint32_t block_no, const void *buffer) {
   return result;
 }
 
-static const struct block_device_ops crypt_ops = {
-    .read_block = crypt_read_block,
-    .write_block = crypt_write_block,
-};
+static struct block_device_ops crypt_ops;
+static int crypt_ops_initialized = 0;
+
+static void crypt_init_ops(void) {
+  if (crypt_ops_initialized) {
+    return;
+  }
+  crypt_ops.read_block = crypt_read_block;
+  crypt_ops.write_block = crypt_write_block;
+  crypt_ops_initialized = 1;
+}
 
 struct block_device *crypt_init(struct block_device *lower,
                                 const uint8_t key1[CRYPT_KEY_SIZE],
                                 const uint8_t key2[CRYPT_KEY_SIZE]) {
+  crypt_init_ops();
   if (!lower || !key1 || !key2) {
     return NULL;
   }

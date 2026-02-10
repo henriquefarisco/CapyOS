@@ -147,6 +147,22 @@ make iso-uefi
 make test
 ```
 
+### Smoke automatizado x64 (QEMU + UEFI)
+
+O repositorio inclui um smoke test de login + CLI para o kernel x64:
+
+```bash
+make smoke-x64-cli
+```
+
+Ele valida, em fluxo automatizado:
+- login (`admin/admin`)
+- comandos `help-any -help`, `mk-dir`, `go`, `mk-file`, `open`, `print-file`, `find`, `list`
+- logout (`bye`) retornando para o prompt de login
+
+Script base:
+- `tools/scripts/smoke_x64_cli.py`
+
 ## Validacao recomendada apos mudancas
 
 1. Build 64-bit e ISO UEFI.

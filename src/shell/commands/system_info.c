@@ -170,19 +170,34 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static const struct shell_command g_system_info_commands[] = {
-    { "print-me", cmd_print_me },
-    { "print-id", cmd_print_id },
-    { "print-host", cmd_print_host },
-    { "print-version", cmd_print_version },
-    { "print-time", cmd_print_time },
-    { "print-insomnia", cmd_print_insomnia },
-    { "print-envs", cmd_print_envs },
-};
+static struct shell_command g_system_info_commands[7];
+static int g_system_info_commands_initialized = 0;
+
+static void init_system_info_commands(void) {
+    if (g_system_info_commands_initialized) {
+        return;
+    }
+    g_system_info_commands[0].name = "print-me";
+    g_system_info_commands[0].handler = cmd_print_me;
+    g_system_info_commands[1].name = "print-id";
+    g_system_info_commands[1].handler = cmd_print_id;
+    g_system_info_commands[2].name = "print-host";
+    g_system_info_commands[2].handler = cmd_print_host;
+    g_system_info_commands[3].name = "print-version";
+    g_system_info_commands[3].handler = cmd_print_version;
+    g_system_info_commands[4].name = "print-time";
+    g_system_info_commands[4].handler = cmd_print_time;
+    g_system_info_commands[5].name = "print-insomnia";
+    g_system_info_commands[5].handler = cmd_print_insomnia;
+    g_system_info_commands[6].name = "print-envs";
+    g_system_info_commands[6].handler = cmd_print_envs;
+    g_system_info_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
+    init_system_info_commands();
     if (count) {
-        *count = sizeof(g_system_info_commands) / sizeof(g_system_info_commands[0]);
+        *count = 7;
     }
     return g_system_info_commands;
 }

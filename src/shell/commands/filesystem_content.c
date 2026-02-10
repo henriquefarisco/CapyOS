@@ -251,18 +251,32 @@ static int cmd_open(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static const struct shell_command g_fs_content_commands[] = {
-    { "print-file", cmd_print_file },
-    { "page", cmd_page },
-    { "print-file-begin", cmd_print_file_begin },
-    { "print-file-end", cmd_print_file_end },
-    { "open", cmd_open },
-    { "print-echo", cmd_print_echo },
-};
+static struct shell_command g_fs_content_commands[6];
+static int g_fs_content_commands_initialized = 0;
+
+static void init_fs_content_commands(void) {
+    if (g_fs_content_commands_initialized) {
+        return;
+    }
+    g_fs_content_commands[0].name = "print-file";
+    g_fs_content_commands[0].handler = cmd_print_file;
+    g_fs_content_commands[1].name = "page";
+    g_fs_content_commands[1].handler = cmd_page;
+    g_fs_content_commands[2].name = "print-file-begin";
+    g_fs_content_commands[2].handler = cmd_print_file_begin;
+    g_fs_content_commands[3].name = "print-file-end";
+    g_fs_content_commands[3].handler = cmd_print_file_end;
+    g_fs_content_commands[4].name = "open";
+    g_fs_content_commands[4].handler = cmd_open;
+    g_fs_content_commands[5].name = "print-echo";
+    g_fs_content_commands[5].handler = cmd_print_echo;
+    g_fs_content_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_filesystem_content(size_t *count) {
+    init_fs_content_commands();
     if (count) {
-        *count = sizeof(g_fs_content_commands) / sizeof(g_fs_content_commands[0]);
+        *count = 6;
     }
     return g_fs_content_commands;
 }

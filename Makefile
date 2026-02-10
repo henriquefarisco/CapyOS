@@ -392,10 +392,14 @@ test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 
+smoke-x64-cli: all64 iso-uefi
+	@echo "Executando smoke test x64 (login + CLI)..."
+	python3 tools/scripts/smoke_x64_cli.py --iso $(ISO_IMG_EFI)
+
 $(TEST_BIN): $(TEST_SRCS) | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $(TEST_SRCS)
 
 clean:
 	rm -rf $(BUILD)
-.PHONY: all run run-disk run-installer-iso iso clean test
+.PHONY: all run run-disk run-installer-iso iso clean test smoke-x64-cli

@@ -88,15 +88,26 @@ static int cmd_mypath(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static const struct shell_command g_fs_nav_commands[] = {
-    { "list", cmd_list },
-    { "go", cmd_go },
-    { "mypath", cmd_mypath },
-};
+static struct shell_command g_fs_nav_commands[3];
+static int g_fs_nav_commands_initialized = 0;
+
+static void init_fs_nav_commands(void) {
+    if (g_fs_nav_commands_initialized) {
+        return;
+    }
+    g_fs_nav_commands[0].name = "list";
+    g_fs_nav_commands[0].handler = cmd_list;
+    g_fs_nav_commands[1].name = "go";
+    g_fs_nav_commands[1].handler = cmd_go;
+    g_fs_nav_commands[2].name = "mypath";
+    g_fs_nav_commands[2].handler = cmd_mypath;
+    g_fs_nav_commands_initialized = 1;
+}
 
 const struct shell_command *shell_commands_filesystem_navigation(size_t *count) {
+    init_fs_nav_commands();
     if (count) {
-        *count = sizeof(g_fs_nav_commands) / sizeof(g_fs_nav_commands[0]);
+        *count = 3;
     }
     return g_fs_nav_commands;
 }
