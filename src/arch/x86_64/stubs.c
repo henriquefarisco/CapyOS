@@ -49,7 +49,9 @@ int memcmp(const void *s1, const void *s2, size_t n) {
 }
 
 /* VGA stubs - redirect to framebuffer console */
-void vga_clear(void) {}
+extern void fbcon_clear_view(void);
+void vga_init(void) { fbcon_clear_view(); }
+void vga_clear(void) { fbcon_clear_view(); }
 
 extern void fbcon_putc(char c);
 void vga_putc(char c) { fbcon_putc(c); }
@@ -60,7 +62,21 @@ void vga_backspace_multiple(int n) {
     fbcon_putc('\b');
   }
 }
+void vga_get_cursor(int *row, int *col) {
+  if (row)
+    *row = 0;
+  if (col)
+    *col = 0;
+}
+void vga_set_cursor(int row, int col) {
+  (void)row;
+  (void)col;
+}
 void vga_update_hw_cursor(void) {}
+void vga_set_color(unsigned char fg, unsigned char bg) {
+  (void)fg;
+  (void)bg;
+}
 
 /* vga_write - print string to framebuffer console */
 extern void fbcon_print(const char *s);
@@ -83,6 +99,12 @@ void acpi_shutdown(void) {
 
 /* ============== TTY stubs (polled mode, no interrupts) ============== */
 static char g_tty_prompt[64] = "noir64> ";
+static int g_tty_echo = 1;
+static char g_tty_echo_mask = '\0';
+
+/* Implemented in kernel_main64.c */
+extern size_t kernel_input_readline(char *buf, size_t maxlen, int mask);
+extern int kernel_input_getc(char *out);
 
 void tty_init(void) {}
 
@@ -102,17 +124,26 @@ void tty_show_prompt(void) {
   fbcon_print(g_tty_prompt);
 }
 
-void tty_set_echo(int enabled) { (void)enabled; }
-void tty_set_echo_mask(char mask) { (void)mask; }
+void tty_set_echo(int enabled) { g_tty_echo = enabled ? 1 : 0; }
+void tty_set_echo_mask(char mask) { g_tty_echo_mask = mask; }
 
-/* These functions wait on IRQs which don't work in polled mode */
 size_t tty_readline(char *out, size_t max_len) {
-  (void)out;
-  (void)max_len;
-  return 0;
+  int mask = 0;
+  if (g_tty_echo_mask != '\0') {
+    mask = 1;
+  } else if (!g_tty_echo) {
+    mask = 1;
+  }
+  return kernel_input_readline(out, max_len, mask);
 }
 
-char tty_getc(void) { return 0; }
+char tty_getc(void) {
+  char ch = 0;
+  if (kernel_input_getc(&ch)) {
+    return ch;
+  }
+  return 0;
+}
 void tty_handle_char(char ch) { (void)ch; }
 void tty_handle_backspace(void) {}
 void tty_handle_enter(void) {}

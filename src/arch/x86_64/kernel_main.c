@@ -9,12 +9,17 @@
 #include "core/kcon.h"
 #include "core/session.h"
 #include "core/system_init.h"
+#include "core/user.h"
 #include "drivers/efi/efi_console.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/nvme.h"
 #include "drivers/pcie.h"
 #include "drivers/usb/xhci.h"
 #include "fs/block.h"
+#include "fs/buffer.h"
+#include "fs/noirfs.h"
+#include "fs/ramdisk.h"
+#include "fs/vfs.h"
 #include "memory/kmem.h"
 #include "shell/commands.h"
 #include "shell/core.h"
@@ -315,6 +320,16 @@ void fbcon_print(const char *s) {
   }
 }
 
+void fbcon_clear_view(void) {
+  if (!g_con.fb || g_con.height <= g_con.origin_y) {
+    return;
+  }
+  fbcon_fill_rect_px(0, g_con.origin_y, g_con.width, g_con.height - g_con.origin_y,
+                     g_con.bg);
+  g_con.col = 0;
+  g_con.row = 0;
+}
+
 void fbcon_print_hex64(uint64_t v) {
   static const char hex[] = "0123456789ABCDEF";
   char buf[17];
@@ -399,10 +414,6 @@ static void ui_banner(void) {
   fbcon_putc('\n');
 }
 
-static void cmd_help(void) {
-  fbcon_print("Comandos: help, info, clear, reboot, halt\n");
-}
-
 static void cmd_info(void) {
   fbcon_print("handoff.magic=");
   fbcon_print_hex64(g_h ? (uint64_t)g_h->magic : 0);
@@ -443,25 +454,198 @@ static void cmd_info(void) {
 
 static struct shell_context g_shell_ctx;
 static struct session_context g_session_ctx;
+static struct super_block g_shell_root_sb;
+static struct system_settings g_shell_settings;
 static int g_shell_initialized = 0;
+static int g_shell_fs_ready = 0;
+
+static size_t local_strlen(const char *s) {
+  size_t len = 0;
+  if (!s)
+    return 0;
+  while (s[len]) {
+    ++len;
+  }
+  return len;
+}
+
+static void local_copy(char *dst, size_t dst_size, const char *src) {
+  if (!dst || dst_size == 0) {
+    return;
+  }
+  size_t i = 0;
+  if (src) {
+    while (src[i] && i < dst_size - 1) {
+      dst[i] = src[i];
+      ++i;
+    }
+  }
+  dst[i] = '\0';
+}
+
+static int fs_ensure_dir_recursive(const char *path) {
+  if (!path || path[0] != '/') {
+    return -1;
+  }
+  char build[128];
+  size_t build_len = 1;
+  build[0] = '/';
+  build[1] = '\0';
+  const char *p = path;
+  while (*p == '/') {
+    ++p;
+  }
+  while (*p) {
+    const char *start = p;
+    size_t len = 0;
+    while (start[len] && start[len] != '/') {
+      ++len;
+    }
+    if (len > 0) {
+      if (build_len > 1) {
+        if (build_len + 1 >= sizeof(build)) {
+          return -1;
+        }
+        build[build_len++] = '/';
+      }
+      if (build_len + len >= sizeof(build)) {
+        return -1;
+      }
+      for (size_t i = 0; i < len; ++i) {
+        build[build_len++] = start[i];
+      }
+      build[build_len] = '\0';
+      struct dentry *d = NULL;
+      if (vfs_lookup(build, &d) != 0) {
+        if (vfs_create(build, VFS_MODE_DIR, NULL) != 0) {
+          return -1;
+        }
+      } else if (d && d->refcount) {
+        d->refcount--;
+      }
+    }
+    p += len;
+    while (*p == '/') {
+      ++p;
+    }
+  }
+  return 0;
+}
+
+static int fs_write_text_file(const char *path, const char *text) {
+  if (!path || !text) {
+    return -1;
+  }
+  (void)vfs_unlink(path);
+  if (vfs_create(path, VFS_MODE_FILE, NULL) != 0) {
+    return -1;
+  }
+  struct file *f = vfs_open(path, VFS_OPEN_WRITE);
+  if (!f) {
+    return -1;
+  }
+  size_t len = local_strlen(text);
+  long written = vfs_write(f, text, len);
+  vfs_close(f);
+  return (written == (long)len) ? 0 : -1;
+}
+
+static int shell_bootstrap_filesystem(void) {
+  if (g_shell_fs_ready) {
+    return 0;
+  }
+
+  buffer_cache_init();
+  vfs_init();
+  ramdisk_init(512);
+  struct block_device *ram = ramdisk_device();
+  if (!ram) {
+    fbcon_print("[fs] ERRO: ramdisk indisponivel.\n");
+    return -1;
+  }
+  if (noirfs_format(ram, 128, ram->block_count, NULL) != 0) {
+    fbcon_print("[fs] ERRO: falha ao formatar NoirFS em RAM.\n");
+    return -1;
+  }
+  if (mount_noirfs(ram, &g_shell_root_sb) != 0 ||
+      vfs_mount_root(&g_shell_root_sb) != 0) {
+    fbcon_print("[fs] ERRO: falha ao montar NoirFS em RAM.\n");
+    return -1;
+  }
+
+  const char *dirs[] = {"/bin", "/docs", "/etc", "/home",
+                        "/home/admin", "/system", "/tmp", "/var", "/var/log"};
+  for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+    if (fs_ensure_dir_recursive(dirs[i]) != 0) {
+      fbcon_print("[fs] ERRO: falha ao criar estrutura base.\n");
+      return -1;
+    }
+  }
+
+  static const char *cli_doc =
+      "NoirCLI x64 (early)\n"
+      "Comandos principais:\n"
+      "  list, go, mypath, mk-file, mk-dir, kill-file, kill-dir,\n"
+      "  move, clone, print-file, open, hunt-any, find,\n"
+      "  help-any, help-docs, print-version, print-envs,\n"
+      "  shutdown-reboot, shutdown-off, do-sync\n";
+  if (fs_write_text_file("/docs/noiros-cli-reference.txt", cli_doc) != 0) {
+    fbcon_print("[fs] aviso: nao foi possivel gravar /docs/noiros-cli-reference.txt\n");
+  }
+
+  if (userdb_ensure() != 0) {
+    fbcon_print("[fs] ERRO: nao foi possivel preparar /etc/users.db.\n");
+    return -1;
+  }
+  struct user_record existing;
+  if (userdb_find("admin", &existing) != 0) {
+    struct user_record admin;
+    if (user_record_init("admin", "admin", "admin", 0, 0, "/home/admin",
+                         &admin) != 0 ||
+        userdb_add(&admin) != 0) {
+      fbcon_print("[fs] ERRO: nao foi possivel criar usuario admin padrao.\n");
+      return -1;
+    }
+  }
+
+  g_shell_fs_ready = 1;
+  fbcon_print("[fs] NoirFS em RAM pronto para CLI.\n");
+  return 0;
+}
 
 /* Initialize shell context for command dispatch */
-static void init_shell_context(const char *username) {
-  fbcon_print("[shell] init_shell_context called\n");
+static void init_shell_context(const struct user_record *user) {
+  if (!g_shell_initialized) {
+    if (shell_bootstrap_filesystem() != 0) {
+      return;
+    }
+    if (system_load_settings(&g_shell_settings) != 0) {
+      local_copy(g_shell_settings.hostname, sizeof(g_shell_settings.hostname),
+                 "noiros64");
+      local_copy(g_shell_settings.theme, sizeof(g_shell_settings.theme), "noir");
+      local_copy(g_shell_settings.keyboard_layout,
+                 sizeof(g_shell_settings.keyboard_layout), "us");
+      g_shell_settings.splash_enabled = 0;
+      g_shell_settings.diagnostics_enabled = 0;
+    }
+    g_shell_initialized = 1;
+  }
 
-  if (g_shell_initialized)
-    return;
+  struct user_record fallback;
+  user_record_clear(&fallback);
+  local_copy(fallback.username, sizeof(fallback.username), "admin");
+  fallback.uid = 0;
+  fallback.gid = 0;
+  local_copy(fallback.role, sizeof(fallback.role), "admin");
+  local_copy(fallback.home, sizeof(fallback.home), "/home/admin");
+  const struct user_record *active = user ? user : &fallback;
 
-  /* Initialize minimal session */
-  session_reset(&g_session_ctx);
-  session_set_cwd(&g_session_ctx, "/");
-
-  /* Initialize shell context */
-  shell_context_init(&g_shell_ctx, &g_session_ctx, NULL);
-
-  g_shell_initialized = 1;
-  fbcon_print("[shell] initialized OK\n");
-  (void)username;
+  if (session_begin(&g_session_ctx, active) != 0) {
+    session_reset(&g_session_ctx);
+    session_set_cwd(&g_session_ctx, "/");
+  }
+  session_set_active(&g_session_ctx);
+  shell_context_init(&g_shell_ctx, &g_session_ctx, &g_shell_settings);
 }
 
 /* Try to execute command through shell module system.
@@ -478,41 +662,33 @@ static int try_shell_command(char *line) {
   if (argc == 0)
     return 0;
 
-  /* Look up command in shell module registry */
   size_t set_count = 0;
   const struct shell_command_set *sets = shell_command_sets(&set_count);
 
-  /* Debug: show what we're looking for */
-  fbcon_print("[shell] cmd=");
-  fbcon_print(argv[0]);
-  fbcon_print(" sets=");
-  fbcon_print_hex(set_count);
-  fbcon_print("\n");
-
   for (size_t i = 0; i < set_count; i++) {
-    /* Debug: show first command of this set */
-    if (sets[i].count > 0 && sets[i].commands[0].name) {
-      fbcon_print("[shell] set");
-      fbcon_print_hex(i);
-      fbcon_print(" first=");
-      fbcon_print(sets[i].commands[0].name);
-      fbcon_print("\n");
-    }
-
     for (size_t j = 0; j < sets[i].count; j++) {
       if (shell_string_equal(argv[0], sets[i].commands[j].name)) {
-        /* Found command - execute it */
-        fbcon_print("[shell] MATCH! executing...\n");
-        int result = sets[i].commands[j].handler(&g_shell_ctx, argc, argv);
-        if (result != 0) {
-          fbcon_print("[!] comando retornou erro\n");
-        }
-        return 1; /* Command was handled */
+        (void)sets[i].commands[j].handler(&g_shell_ctx, argc, argv);
+        return 1;
       }
     }
   }
 
-  return 0; /* Command not found in shell modules */
+  return 0;
+}
+
+static int run_shell_alias(const char *alias_line) {
+  if (!alias_line) {
+    return 0;
+  }
+  char tmp[64];
+  size_t i = 0;
+  while (alias_line[i] && i < sizeof(tmp) - 1) {
+    tmp[i] = alias_line[i];
+    ++i;
+  }
+  tmp[i] = '\0';
+  return try_shell_command(tmp);
 }
 
 /* COM1 Serial UART for input fallback (Hyper-V Gen 2 has no PS/2) */
@@ -605,13 +781,6 @@ static void ps2_flush(void) {
   }
 }
 
-static void ps2_reboot(void) {
-  // Try the classic keyboard controller reset.
-  outb(0x64, 0xFE);
-  for (;;)
-    cpu_relax();
-}
-
 /* PS/2 controller detection:
  * Send 0xAA (self-test) command and check for 0x55 response.
  * Returns 1 if PS/2 controller is present, 0 otherwise.
@@ -653,7 +822,9 @@ static int ps2_controller_detect(void) {
 /* Global input state for readline */
 static int g_has_ps2_input = 0;
 static int g_has_com1_input = 0;
+static int g_has_efi_input = 0;
 static int g_has_hyperv_input = 0;
+static uint64_t g_efi_system_table = 0;
 static int g_shift = 0;
 
 /* VMBus keyboard polling (from vmbus_keyboard.c) */
@@ -664,123 +835,145 @@ extern int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
 /* Forward declaration */
 static char scancode_to_ascii(uint8_t sc, int shift);
 
-/* Kernel readline: read a line with optional password masking */
-static size_t kernel_readline(char *buf, size_t maxlen, int mask) {
-  if (!buf || maxlen < 2)
+/* Polls one translated input character from available backends. */
+static int poll_input_char(char *out_char) {
+  if (!out_char) {
     return 0;
+  }
+
+  char c = 0;
+  uint8_t sc = 0;
+
+  /* Prefer firmware keyboard path in UEFI VMs (Hyper-V Gen2/OVMF). */
+  if (g_has_efi_input && efi_poll_char(g_efi_system_table, &c)) {
+    *out_char = c;
+    return 1;
+  }
+
+  /* PS/2 fallback for legacy keyboards. */
+  if (g_has_ps2_input && ps2_poll_scancode(&sc)) {
+    if (sc == 0x2A || sc == 0x36) {
+      g_shift = 1;
+      return 0;
+    }
+    if (sc == 0xAA || sc == 0xB6) {
+      g_shift = 0;
+      return 0;
+    }
+    if (sc & 0x80) {
+      return 0;
+    }
+    if (sc == 0x1C) {
+      *out_char = '\n';
+      return 1;
+    }
+    if (sc == 0x0E) {
+      *out_char = '\b';
+      return 1;
+    }
+    c = scancode_to_ascii(sc, g_shift);
+    if (c) {
+      *out_char = c;
+      return 1;
+    }
+  }
+
+  /* Hyper-V synthetic keyboard path (kept optional while driver matures). */
+  if (g_has_hyperv_input) {
+    struct vmbus_keyboard *hvkbd = vmbus_get_keyboard();
+    if (hvkbd) {
+      uint8_t hv_sc = 0;
+      int hv_break = 0;
+      if (vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break) && !hv_break) {
+        if (hv_sc == 0x2A || hv_sc == 0x36) {
+          g_shift = 1;
+          return 0;
+        }
+        if (hv_sc == 0xAA || hv_sc == 0xB6) {
+          g_shift = 0;
+          return 0;
+        }
+        if (hv_sc == 0x1C) {
+          *out_char = '\n';
+          return 1;
+        }
+        if (hv_sc == 0x0E) {
+          *out_char = '\b';
+          return 1;
+        }
+        c = scancode_to_ascii(hv_sc, g_shift);
+        if (c) {
+          *out_char = c;
+          return 1;
+        }
+      }
+    }
+  }
+
+  /* COM1 remains only as last-resort fallback/debug channel. */
+  if (g_has_com1_input && com1_poll_char(&c)) {
+    if (c == '\r') {
+      c = '\n';
+    }
+    *out_char = c;
+    return 1;
+  }
+
+  return 0;
+}
+
+int kernel_input_getc(char *out_char) {
+  if (!out_char)
+    return 0;
+  for (;;) {
+    if (poll_input_char(out_char)) {
+      return 1;
+    }
+    cpu_relax();
+  }
+}
+
+size_t kernel_input_readline(char *buf, size_t maxlen, int mask) {
+  if (!buf || maxlen < 2) {
+    return 0;
+  }
 
   size_t len = 0;
   buf[0] = 0;
 
   for (;;) {
-    uint8_t sc = 0;
-    char c_com = 0;
+    char ch = 0;
+    if (!kernel_input_getc(&ch)) {
+      continue;
+    }
 
-    /* COM1 Input */
-    if (g_has_com1_input && com1_poll_char(&c_com)) {
-      if (c_com == '\r')
-        c_com = '\n';
-      if (c_com == 127 || c_com == '\b') {
-        if (len > 0) {
-          len--;
-          buf[len] = 0;
-          fbcon_putc('\b');
-        }
-      } else if (c_com == '\n') {
-        fbcon_putc('\n');
+    if (ch == 127 || ch == '\b') {
+      if (len > 0) {
+        len--;
         buf[len] = 0;
-        return len;
-      } else if (len + 1 < maxlen) {
-        buf[len++] = c_com;
-        buf[len] = 0;
-        fbcon_putc(mask ? '*' : c_com);
+        fbcon_putc('\b');
       }
       continue;
     }
 
-    /* PS/2 Input */
-    if (g_has_ps2_input && ps2_poll_scancode(&sc)) {
-      /* Shift handling */
-      if (sc == 0x2A || sc == 0x36) {
-        g_shift = 1;
-        continue;
-      }
-      if (sc == 0xAA || sc == 0xB6) {
-        g_shift = 0;
-        continue;
-      }
-      if (sc & 0x80)
-        continue; /* ignore key-up */
-
-      /* Enter */
-      if (sc == 0x1C) {
-        fbcon_putc('\n');
-        buf[len] = 0;
-        return len;
-      }
-      /* Backspace */
-      if (sc == 0x0E) {
-        if (len > 0) {
-          len--;
-          buf[len] = 0;
-          fbcon_putc('\b');
-        }
-        continue;
-      }
-
-      char ch = scancode_to_ascii(sc, g_shift);
-      if (ch && len + 1 < maxlen) {
-        buf[len++] = ch;
-        buf[len] = 0;
-        fbcon_putc(mask ? '*' : ch);
-      }
-      continue;
+    if (ch == '\r') {
+      ch = '\n';
     }
-
-    /* VMBus/Hyper-V Synthetic Keyboard Input */
-    if (g_has_hyperv_input) {
-      struct vmbus_keyboard *hvkbd = vmbus_get_keyboard();
-      if (hvkbd) {
-        uint8_t hv_sc = 0;
-        int hv_break = 0;
-        if (vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break) && !hv_break) {
-          /* Process Hyper-V scancode (similar to PS/2) */
-          if (hv_sc == 0x2A || hv_sc == 0x36) {
-            g_shift = 1;
-            continue;
-          }
-          if (hv_sc == 0xAA || hv_sc == 0xB6) {
-            g_shift = 0;
-            continue;
-          }
-          if (hv_sc == 0x1C) { /* Enter */
-            fbcon_putc('\n');
-            buf[len] = 0;
-            return len;
-          }
-          if (hv_sc == 0x0E) { /* Backspace */
-            if (len > 0) {
-              len--;
-              buf[len] = 0;
-              fbcon_putc('\b');
-            }
-            continue;
-          }
-          char ch = scancode_to_ascii(hv_sc, g_shift);
-          if (ch && len + 1 < maxlen) {
-            buf[len++] = ch;
-            buf[len] = 0;
-            fbcon_putc(mask ? '*' : ch);
-          }
-          continue;
-        }
-      }
+    if (ch == '\n') {
+      fbcon_putc('\n');
+      buf[len] = 0;
+      return len;
     }
-
-    /* Yield CPU to avoid Hyper-V watchdog during input wait */
-    cpu_relax();
-    __asm__ volatile("hlt");
+    if (len + 1 < maxlen) {
+      buf[len++] = ch;
+      buf[len] = 0;
+      fbcon_putc(mask ? '*' : ch);
+    }
   }
+}
+
+static size_t kernel_readline(char *buf, size_t maxlen, int mask) {
+  return kernel_input_readline(buf, maxlen, mask);
 }
 
 static char scancode_to_ascii(uint8_t sc, int shift) {
@@ -939,7 +1132,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       cpu_relax();
   }
 
-  // Setup framebuffer console (below the status bars)
   if (!range_ok(h->fb.base, h->fb.size) || h->fb.bpp != 32 ||
       h->fb.pitch == 0) {
     dbgcon_putc('F');
@@ -968,11 +1160,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   fbcon_print("NoirOS x86_64 kernel (early)\n");
   fbcon_print("Boot OK. Inicializando drivers...\n\n");
 
-  /* Initialize kernel console and memory allocator */
   kcon_init();
   kinit();
 
-  /* Initialize NVMe driver */
   fbcon_print("[pci] Scanning PCIe bus...\n");
   if (nvme_init() == 0) {
     struct block_device *nvme_dev = nvme_get_block_device(0);
@@ -980,7 +1170,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       fbcon_print("[nvme] Detectado: ");
       fbcon_print(nvme_dev->name);
       fbcon_print(" (");
-      /* Print size in MB */
       uint32_t size_mb = (nvme_dev->block_count / 2048);
       char size_buf[16];
       int pos = 0;
@@ -1007,131 +1196,67 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     fbcon_print("       (Normal em sistemas legados ou com AHCI)\n");
   }
 
-  fbcon_print("\nDigite 'help' para comandos.\n");
-  fbcon_print(
-      "Obs: em Hyper-V Gen2 o teclado pode ser sintetico (sem PS/2),\n");
-  fbcon_print("entao a linha de comando pode nao receber input ainda.\n\n");
+  fbcon_print("\nDigite 'help-any' para comandos.\n");
   cmd_info();
   fbcon_putc('\n');
 
-  /* Initialize COM1 for serial console fallback */
   com1_init();
-  fbcon_print("[dbg] COM1 inicializado (38400 8N1)\n");
   com1_puts("[COM1] NoirOS 64-bit serial console ready\r\n");
 
-  /* Debug: show EFI pointers */
+  int has_efi = 0;
+  uint64_t efi_system_table = 0;
   if (g_h && g_h->efi_system_table) {
     EFI_SYSTEM_TABLE_K *st =
         (EFI_SYSTEM_TABLE_K *)(uintptr_t)g_h->efi_system_table;
-    fbcon_print("[dbg] EFI SystemTable=");
-    fbcon_print_hex64(g_h->efi_system_table);
-    fbcon_print(" ConIn=");
-    fbcon_print_hex64((uint64_t)(uintptr_t)st->ConIn);
-    if (st->ConIn) {
-      fbcon_print(" ReadKey=");
-      fbcon_print_hex64((uint64_t)(uintptr_t)st->ConIn->ReadKeyStroke);
+    efi_system_table = g_h->efi_system_table;
+    if (st && st->ConIn && st->ConIn->ReadKeyStroke) {
+      has_efi = 1;
     }
-    fbcon_putc('\n');
+    fbcon_print("[info] EFI ConIn: ");
+    fbcon_print(has_efi ? "disponivel.\n" : "indisponivel.\n");
   } else {
-    fbcon_print("[dbg] EFI SystemTable not available\n");
+    fbcon_print("[info] EFI ConIn: indisponivel.\n");
   }
 
   ps2_flush();
-
-  /* Detect PS/2 controller presence - Hyper-V Gen2 has none */
   int has_ps2 = ps2_controller_detect();
-  if (has_ps2) {
-    fbcon_print("[info] PS/2 controller detectado.\n");
-  } else {
-    fbcon_print("[info] PS/2 nao detectado.\n");
-  }
+  fbcon_print(has_ps2 ? "[info] PS/2 detectado.\n"
+                      : "[info] PS/2 nao detectado.\n");
 
-  /* Detect COM1 serial port - may return garbage on some VMs */
   int has_com1 = com1_detect();
-  if (has_com1) {
-    fbcon_print("[info] COM1 serial detectado.\n");
-  } else {
-    fbcon_print("[info] COM1 nao detectado.\n");
-  }
+  fbcon_print(has_com1 ? "[info] COM1 detectado.\n"
+                       : "[info] COM1 nao detectado.\n");
 
-  /* ===============================================================
-   * HYPER-V DETECTION - Enable COM1 fallback if Hyper-V detected
-   * Hyper-V Gen2 may have emulated COM1 that fails loopback test
-   * =============================================================== */
   int is_hyperv = hyperv_detect();
-  if (is_hyperv && !has_com1) {
-    fbcon_print("[hyperv] Hyper-V detectado. Forçando COM1 habilitado.\n");
-    has_com1 = 1; /* Trust Hyper-V COM1 emulation even without loopback */
-  }
-
-  if (!has_ps2 && !has_com1) {
-    fbcon_print("[AVISO] Nenhum dispositivo de entrada detectado!\n");
-    fbcon_print("        Hyper-V Gen2 precisa de driver USB/VMBus.\n");
-  }
-
-  /* ===============================================================
-   * HYPER-V SYNTHETIC KEYBOARD DETECTION
-   * Hyper-V Gen2 uses VMBus synthetic keyboard, not USB
-   * Try VMBus keyboard but don't block boot if it fails
-   * =============================================================== */
   int has_hyperv = 0;
   extern int hyperv_keyboard_init(void);
-
   if (is_hyperv) {
-    /* DISABLED: VMBus triggers Hyper-V watchdog even with short timeouts.
-     * Multiple version negotiation attempts accumulate and cause reboot.
-     * Use COM1 serial input until VMBus is properly fixed.
-     */
-    fbcon_print("[hyperv] VMBus desabilitado (watchdog issue).\n");
-    fbcon_print("[hyperv] Use COM1 serial para input.\n");
+    fbcon_print("[hyperv] Hyper-V detectado.\n");
+    if (!has_efi && !has_ps2) {
+      fbcon_print("[hyperv] Tentando teclado VMBus (experimental)...\n");
+      if (hyperv_keyboard_init() == 0) {
+        has_hyperv = 1;
+        fbcon_print("[hyperv] Teclado VMBus ativo.\n");
+      } else {
+        fbcon_print("[hyperv] Falha no VMBus keyboard; usando fallback.\n");
+      }
+    } else {
+      fbcon_print("[hyperv] Entrada por EFI/PS/2 ativa, VMBus opcional.\n");
+    }
   }
 
-  fbcon_print("[dbg] CP1: post-hyperv\n");
-
-  /* ===============================================================
-   * XHCI USB Controller Detection
-   * Fallback for real hardware without PS/2 (not Hyper-V)
-   * =============================================================== */
   int has_usb = 0;
   struct xhci_controller xhci = {0};
-
-  if (!has_ps2 && !has_com1 && !has_hyperv) {
+  if (!has_ps2 && !has_efi && !has_hyperv && !is_hyperv) {
     fbcon_print("[usb] Buscando controlador XHCI...\n");
     if (xhci_find(&xhci) == 0) {
-      char msg[64];
-      msg[0] = '[';
-      msg[1] = 'u';
-      msg[2] = 's';
-      msg[3] = 'b';
-      msg[4] = ']';
-      msg[5] = ' ';
-      msg[6] = 'X';
-      msg[7] = 'H';
-      msg[8] = 'C';
-      msg[9] = 'I';
-      msg[10] = ' ';
-      msg[11] = 'e';
-      msg[12] = 'n';
-      msg[13] = 'c';
-      msg[14] = 'o';
-      msg[15] = 'n';
-      msg[16] = 't';
-      msg[17] = 'r';
-      msg[18] = 'a';
-      msg[19] = 'd';
-      msg[20] = 'o';
-      msg[21] = '!';
-      msg[22] = '\n';
-      msg[23] = 0;
-      fbcon_print(msg);
-
+      fbcon_print("[usb] XHCI encontrado.\n");
       if (xhci_init(&xhci) == 0) {
         fbcon_print("[usb] XHCI inicializado.\n");
         if (xhci_start(&xhci) == 0) {
           fbcon_print("[usb] XHCI rodando.\n");
           has_usb = 1;
-          /* TODO: Enumerate USB devices and find keyboard */
-          fbcon_print("[usb] Prox. passo: enum dispositivos...\n");
+          fbcon_print("[usb] Enumeracao HID pendente para teclado.\n");
         } else {
           fbcon_print("[usb] Falha ao iniciar XHCI.\n");
         }
@@ -1142,78 +1267,64 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       fbcon_print("[usb] XHCI nao encontrado via PCIe.\n");
     }
   }
-  (void)has_usb; /* Will be used when USB keyboard polling is added */
+  (void)has_usb;
 
-  /* ===============================================================
-   * KERNEL BOOT FLOW
-   *
-   * The UEFI loader handles installation when booted from ISO.
-   * When we reach here, the system is installed and ready.
-   * Show login prompt (or CLI for now until login is implemented).
-   * =============================================================== */
+  g_has_efi_input = has_efi;
+  g_efi_system_table = efi_system_table;
+  g_has_ps2_input = has_ps2;
+  g_has_hyperv_input = has_hyperv;
+  g_has_com1_input = has_com1;
+  g_shift = 0;
 
-  if (!has_ps2 && !has_com1 && !has_usb) {
-    /* No input device - warn user but continue (for display purposes) */
-    fbcon_print("\n[ERRO] Nenhum teclado disponivel.\n");
-    fbcon_print("USB HID keyboard em desenvolvimento.\n");
+  if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
+    fbcon_print("\n[erro] Nenhum dispositivo de entrada disponivel.\n");
   }
 
   char line[128];
-  size_t len = 0;
-  int shift = 0;
-  uint32_t heartbeat = 0;
-
-  /* Initialize global input flags */
-  g_has_ps2_input = has_ps2;
-  g_has_com1_input = has_com1;
-
-  /* Current session state */
+  char user_input[USER_NAME_MAX];
+  char pass_input[64];
+  struct user_record login_user;
   int logged_in = 0;
-  char current_user[64] = {0};
-  char user_input[64], pass_input[64];
 
 login_prompt:
-  /* ========== LOGIN SCREEN ========== */
   fbcon_print("\n");
   fbcon_print("========================================\n");
   fbcon_print("             NoirOS 64-bit             \n");
   fbcon_print("========================================\n");
   fbcon_print("\n");
 
-  if (!has_ps2 && !has_com1) {
-    fbcon_print("[!] Sem dispositivo de entrada.\n\n");
+  if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
+    fbcon_print("[!] Sem dispositivo de entrada disponivel.\n\n");
   }
 
   logged_in = 0;
-
-  /* Login loop - try up to 3 times */
+  user_record_clear(&login_user);
   for (int attempts = 0; attempts < 3 && !logged_in; attempts++) {
-    /* Get username */
     fbcon_print("Usuario: ");
     kernel_readline(user_input, sizeof(user_input), 0);
 
-    /* Get password (masked) */
     fbcon_print("Senha: ");
     kernel_readline(pass_input, sizeof(pass_input), 1);
 
-    /* Validate credentials - hardcoded admin/admin for now */
-    /* TODO: Read from userdb in NoirFS once mounted */
-    if (streq(user_input, "admin") && streq(pass_input, "admin")) {
-      logged_in = 1;
-      for (size_t i = 0; user_input[i] && i < 63; i++) {
-        current_user[i] = user_input[i];
+    if (userdb_authenticate(user_input, pass_input, &login_user) == 0) {
+      init_shell_context(&login_user);
+      if (!g_shell_initialized) {
+        fbcon_print("[erro] Falha ao inicializar shell.\n");
+        break;
       }
-      current_user[63] = 0;
+      logged_in = 1;
       fbcon_print("\nBem-vindo, ");
-      fbcon_print(current_user);
+      fbcon_print(login_user.username);
       fbcon_print("!\n\n");
-      /* Initialize shell context for command dispatch */
-      init_shell_context(current_user);
     } else {
       fbcon_print("\nCredenciais invalidas.\n");
       if (attempts < 2) {
         fbcon_print("Tente novamente.\n\n");
       }
+    }
+
+    for (size_t i = 0; i < sizeof(pass_input); ++i) {
+      pass_input[i] = '\0';
     }
   }
 
@@ -1223,126 +1334,62 @@ login_prompt:
       cpu_relax();
   }
 
-  /* ========== CLI PROMPT LOOP ========== */
   for (;;) {
-    /* Show prompt with username */
-    fbcon_print(current_user);
-    fbcon_print("@noir64> ");
+    const struct user_record *active_user = session_user(&g_session_ctx);
+    const char *name =
+        (active_user && active_user->username[0]) ? active_user->username
+                                                   : "user";
+    const char *host =
+        g_shell_settings.hostname[0] ? g_shell_settings.hostname : "noir64";
+    const char *cwd = session_cwd(&g_session_ctx);
 
-    /* Read command using kernel_readline */
-    len = kernel_readline(line, sizeof(line), 0);
-    (void)shift;
-    (void)heartbeat; /* Suppress unused warnings */
+    fbcon_print(name);
+    fbcon_putc('@');
+    fbcon_print(host);
+    fbcon_putc(':');
+    fbcon_print(cwd);
+    fbcon_print("> ");
 
-    /* Command dispatch - aligned with noiros-cli-reference.md */
-    if (streq(line, "help") || streq(line, "help-any")) {
-      fbcon_print("Comandos disponiveis:\n");
-      fbcon_print(" - help-any       Lista todos os comandos\n");
-      fbcon_print(" - help-docs      Documentacao (em breve)\n");
-      fbcon_print(" - mess           Limpa a tela\n");
-      fbcon_print(" - mypath         Diretorio atual\n");
-      fbcon_print(" - print-host     Hostname\n");
-      fbcon_print(" - print-me       Usuario atual\n");
-      fbcon_print(" - print-id       UID/GID\n");
-      fbcon_print(" - print-version  Versao do NoirOS\n");
-      fbcon_print(" - print-time     Horario desde boot\n");
-      fbcon_print(" - print-insomnia Uptime\n");
-      fbcon_print(" - print-envs     Variaveis de ambiente\n");
-      fbcon_print(" - bye            Logout (retorna ao login)\n");
-      fbcon_print(" - shutdown-reboot Reinicia o sistema\n");
-      fbcon_print(" - shutdown-off   Desliga o sistema\n");
-      fbcon_print(" - info           Info tecnica do kernel\n");
-    } else if (streq(line, "info")) {
-      cmd_info();
-    } else if (streq(line, "mess") || streq(line, "clear")) {
-      fbcon_fill_rect_px(0, g_con.origin_y, g_con.width,
-                         g_con.height - g_con.origin_y, g_con.bg);
-      g_con.col = 0;
-      g_con.row = 0;
-      ui_banner();
-    } else if (streq(line, "shutdown-reboot") || streq(line, "reboot")) {
-      fbcon_print("Sincronizando buffers...\n");
-      fbcon_print("Reiniciando...\n");
-      ps2_reboot();
-    } else if (streq(line, "shutdown-off") || streq(line, "halt")) {
-      fbcon_print("Sincronizando buffers...\n");
-      fbcon_print("Desligando...\n");
-      for (;;)
-        __asm__ volatile("hlt");
-    } else if (streq(line, "bye")) {
-      fbcon_print("Encerrando sessao...\n");
-      fbcon_fill_rect_px(0, g_con.origin_y, g_con.width,
-                         g_con.height - g_con.origin_y, g_con.bg);
-      g_con.col = 0;
-      g_con.row = 0;
-      goto login_prompt;
-    } else if (streq(line, "print-host")) {
-      fbcon_print("noiros64\n");
-    } else if (streq(line, "mypath")) {
-      fbcon_print("/\n");
-    } else if (streq(line, "print-me")) {
-      fbcon_print(current_user);
-      fbcon_print("\n");
-    } else if (streq(line, "print-id")) {
-      fbcon_print("uid=0(admin) gid=0(admin)\n");
-    } else if (streq(line, "print-version")) {
-      fbcon_print("NoirOS 64-bit\n");
-      fbcon_print("Version: 0.1.0-alpha\n");
-      fbcon_print("Channel: dev\n");
-    } else if (streq(line, "print-time")) {
-      /* Fake time based on PIT ticks */
-      uint32_t ticks = pit_ticks();
-      uint32_t secs = ticks / 100; /* Approximate */
-      uint32_t mins = secs / 60;
-      uint32_t hours = mins / 60;
-      char buf[16];
-      buf[0] = '0' + (hours / 10) % 10;
-      buf[1] = '0' + hours % 10;
-      buf[2] = ':';
-      buf[3] = '0' + (mins % 60) / 10;
-      buf[4] = '0' + (mins % 60) % 10;
-      buf[5] = ':';
-      buf[6] = '0' + (secs % 60) / 10;
-      buf[7] = '0' + (secs % 60) % 10;
-      buf[8] = '\n';
-      buf[9] = '\0';
-      fbcon_print(buf);
-    } else if (streq(line, "print-insomnia")) {
-      uint32_t ticks = pit_ticks();
-      uint32_t secs = ticks / 100;
-      uint32_t mins = secs / 60;
-      uint32_t hours = mins / 60;
-      fbcon_print("Uptime: ");
-      char buf[16];
-      buf[0] = '0' + (hours / 10) % 10;
-      buf[1] = '0' + hours % 10;
-      buf[2] = ':';
-      buf[3] = '0' + (mins % 60) / 10;
-      buf[4] = '0' + (mins % 60) % 10;
-      buf[5] = ':';
-      buf[6] = '0' + (secs % 60) / 10;
-      buf[7] = '0' + (secs % 60) % 10;
-      buf[8] = '\n';
-      buf[9] = '\0';
-      fbcon_print(buf);
-    } else if (streq(line, "print-envs")) {
-      fbcon_print("USER=admin\n");
-      fbcon_print("HOME=/home/admin\n");
-      fbcon_print("HOST=noiros64\n");
-      fbcon_print("VERSION=0.1.0-alpha\n");
-      fbcon_print("CHANNEL=dev\n");
-    } else if (line[0] == '\0') {
-      /* Empty line - ignore */
-    } else if (try_shell_command(line)) {
-      /* Command handled by shell module */
-    } else {
-      fbcon_print("Comando desconhecido: ");
-      fbcon_print(line);
-      fbcon_print("\nDigite 'help-any' para lista de comandos.\n");
+    kernel_readline(line, sizeof(line), 0);
+    if (!line[0]) {
+      continue;
     }
 
-    fbcon_putc('\n');
+    if (try_shell_command(line)) {
+      if (shell_context_should_logout(&g_shell_ctx)) {
+        session_reset(&g_session_ctx);
+        session_set_active(NULL);
+        fbcon_clear_view();
+        ui_banner();
+        goto login_prompt;
+      }
+      continue;
+    }
+
+    if (streq(line, "help")) {
+      (void)run_shell_alias("help-any");
+      continue;
+    }
+    if (streq(line, "clear")) {
+      (void)run_shell_alias("mess");
+      continue;
+    }
+    if (streq(line, "reboot")) {
+      (void)run_shell_alias("shutdown-reboot");
+      continue;
+    }
+    if (streq(line, "halt")) {
+      (void)run_shell_alias("shutdown-off");
+      continue;
+    }
+    if (streq(line, "info")) {
+      cmd_info();
+      continue;
+    }
+
+    fbcon_print("Comando desconhecido: ");
+    fbcon_print(line);
+    fbcon_print("\nUse 'help-any' para listar comandos.\n");
   }
 }
-
 __asm__(".section .note.GNU-stack,\"\",@progbits");

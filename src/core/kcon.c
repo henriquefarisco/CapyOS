@@ -1,12 +1,17 @@
-/* Kernel console implementation for 64-bit kernel.
- * Uses the framebuffer console from kernel_main64.c.
- */
 #include "core/kcon.h"
+
 #include <stdint.h>
 
-/* External framebuffer console functions from kernel_main64.c */
+#ifdef __x86_64__
 extern void fbcon_print(const char *s);
 extern void fbcon_putc(char c);
+#define KCON_PUTC(c) fbcon_putc(c)
+#define KCON_PUTS(s) fbcon_print(s)
+#else
+#include "drivers/video/vga.h"
+#define KCON_PUTC(c) vga_putc(c)
+#define KCON_PUTS(s) vga_write(s)
+#endif
 
 static int g_kcon_initialized = 0;
 static int g_log_level = KLOG_INFO; /* Default: show INFO and above */
@@ -15,13 +20,13 @@ void kcon_init(void) { g_kcon_initialized = 1; }
 
 void k_putc(char c) {
   if (g_kcon_initialized) {
-    fbcon_putc(c);
+    KCON_PUTC(c);
   }
 }
 
 void k_puts(const char *s) {
   if (g_kcon_initialized && s) {
-    fbcon_print(s);
+    KCON_PUTS(s);
   }
 }
 
