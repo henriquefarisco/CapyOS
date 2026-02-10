@@ -527,6 +527,8 @@ static const char *g_cli_reference_text =
     "  print-host           - hostname\n"
     "  print-time           - uptime\n"
     "  do-sync              - sincroniza discos\n"
+    "  net-status           - estado da rede (x64)\n"
+    "  hey <destino>        - ping (ICMP echo)\n"
     "  mess                 - limpa tela\n"
     "  bye                  - encerra sessao\n"
     "\n"

@@ -13,7 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static struct shell_command_set g_command_sets[8];
+static struct shell_command_set g_command_sets[9];
 static size_t g_command_set_count = 0;
 static int g_command_sets_initialized = 0;
 static void shell_hotkey_help_docs(void)
@@ -49,6 +49,7 @@ static void shell_init_command_sets(void)
     ADD_COMMAND_SET(shell_commands_session);
     ADD_COMMAND_SET(shell_commands_system_info);
     ADD_COMMAND_SET(shell_commands_system_control);
+    ADD_COMMAND_SET(shell_commands_network);
 
 #undef ADD_COMMAND_SET
 

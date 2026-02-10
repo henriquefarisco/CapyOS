@@ -757,7 +757,7 @@ static int shell_bootstrap_filesystem(void) {
       "  list, go, mypath, mk-file, mk-dir, kill-file, kill-dir,\n"
       "  move, clone, print-file, open, hunt-any, find,\n"
       "  help-any, help-docs, print-version, print-envs,\n"
-      "  shutdown-reboot, shutdown-off, do-sync\n";
+      "  net-status, hey <ip>, shutdown-reboot, shutdown-off, do-sync\n";
   if (fs_write_text_file("/docs/noiros-cli-reference.txt", cli_doc) != 0) {
     fbcon_print("[fs] aviso: nao foi possivel gravar /docs/noiros-cli-reference.txt\n");
   }

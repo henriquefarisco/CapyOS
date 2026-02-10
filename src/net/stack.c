@@ -1,5 +1,7 @@
 #include "net/stack.h"
 
+#include "drivers/net/e1000.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -13,6 +15,7 @@
 #define NET_FRAME_MAX 1600u
 #define NET_IPV4_VERSION_IHL 0x45u
 #define NET_IPV4_DONT_FRAGMENT 0x4000u
+#define NET_POLL_BUDGET 16u
 
 struct net_eth_hdr {
   uint8_t dst[6];
@@ -87,6 +90,12 @@ struct net_state {
   struct net_ipv4_config ipv4;
   struct net_stack_stats stats;
   struct net_arp_entry arp[NET_ARP_CAPACITY];
+
+  uint8_t icmp_waiting;
+  uint16_t icmp_wait_ident;
+  uint16_t icmp_wait_seq;
+  uint8_t icmp_reply_ready;
+  uint32_t icmp_reply_ip;
 };
 
 static struct net_state g_net;
@@ -133,9 +142,61 @@ static uint16_t checksum16(const uint8_t *data, size_t len) {
   return (uint16_t)(~sum);
 }
 
+static void delay_approx_1ms(void) {
+  for (volatile uint32_t i = 0; i < 60000u; ++i) {
+    __asm__ volatile("pause");
+  }
+}
+
 static int ip_is_local(uint32_t ip) { return ip == g_net.ipv4.addr; }
 
-static int ip_is_broadcast(uint32_t ip) { return ip == NET_IPV4_ADDR(255, 255, 255, 255); }
+static int ip_is_broadcast(uint32_t ip) {
+  return ip == NET_IPV4_ADDR(255, 255, 255, 255);
+}
+
+void net_ipv4_format(uint32_t ip, char out[16]) {
+  if (!out) {
+    return;
+  }
+  uint8_t a = (uint8_t)((ip >> 24) & 0xFFu);
+  uint8_t b = (uint8_t)((ip >> 16) & 0xFFu);
+  uint8_t c = (uint8_t)((ip >> 8) & 0xFFu);
+  uint8_t d = (uint8_t)(ip & 0xFFu);
+  char *p = out;
+  uint8_t octets[4] = {a, b, c, d};
+  for (uint32_t i = 0; i < 4; ++i) {
+    uint8_t v = octets[i];
+    if (v >= 100u) {
+      *p++ = (char)('0' + (v / 100u));
+      v %= 100u;
+      *p++ = (char)('0' + (v / 10u));
+      *p++ = (char)('0' + (v % 10u));
+    } else if (v >= 10u) {
+      *p++ = (char)('0' + (v / 10u));
+      *p++ = (char)('0' + (v % 10u));
+    } else {
+      *p++ = (char)('0' + v);
+    }
+    if (i != 3u) {
+      *p++ = '.';
+    }
+  }
+  *p = '\0';
+}
+
+static int driver_send_frame(const uint8_t *frame, uint16_t len) {
+  if (g_net.nic.kind == NET_NIC_KIND_E1000) {
+    return e1000_send_frame(frame, len);
+  }
+  return -1;
+}
+
+static int driver_poll_frame(uint8_t *out, uint16_t cap, uint16_t *len) {
+  if (g_net.nic.kind == NET_NIC_KIND_E1000) {
+    return e1000_poll_frame(out, cap, len);
+  }
+  return 0;
+}
 
 static int arp_find(uint32_t ip) {
   for (uint32_t i = 0; i < NET_ARP_CAPACITY; ++i) {
@@ -191,6 +252,94 @@ static void set_default_config(void) {
   g_net.ipv4.mac[5] = 0x64u;
 }
 
+static int send_arp_packet(uint16_t opcode, const uint8_t dst_mac[6],
+                           const uint8_t target_mac[6], uint32_t sender_ip,
+                           uint32_t target_ip) {
+  uint8_t frame[sizeof(struct net_eth_hdr) + sizeof(struct net_arp_pkt)];
+  struct net_eth_hdr *eth = (struct net_eth_hdr *)frame;
+  struct net_arp_pkt *arp =
+      (struct net_arp_pkt *)(frame + sizeof(struct net_eth_hdr));
+
+  mem_copy(eth->dst, dst_mac, 6);
+  mem_copy(eth->src, g_net.ipv4.mac, 6);
+  eth->ethertype = htons16(NET_ETHERTYPE_ARP);
+
+  arp->htype = htons16(NET_ARP_HTYPE_ETHERNET);
+  arp->ptype = htons16(NET_ARP_PTYPE_IPV4);
+  arp->hlen = 6;
+  arp->plen = 4;
+  arp->opcode = htons16(opcode);
+  mem_copy(arp->sender_mac, g_net.ipv4.mac, 6);
+  arp->sender_ip = htonl32(sender_ip);
+  mem_copy(arp->target_mac, target_mac, 6);
+  arp->target_ip = htonl32(target_ip);
+
+  if (driver_send_frame(frame, (uint16_t)sizeof(frame)) == 0) {
+    g_net.stats.frames_tx++;
+    return 0;
+  }
+  g_net.stats.frames_drop++;
+  return -1;
+}
+
+static int send_arp_request(uint32_t target_ip) {
+  static const uint8_t bcast[6] = {0xFFu, 0xFFu, 0xFFu,
+                                   0xFFu, 0xFFu, 0xFFu};
+  static const uint8_t zero[6] = {0, 0, 0, 0, 0, 0};
+  return send_arp_packet(NET_ARP_OP_REQUEST, bcast, zero, g_net.ipv4.addr,
+                         target_ip);
+}
+
+static int send_arp_reply(const uint8_t target_mac[6], uint32_t target_ip) {
+  return send_arp_packet(NET_ARP_OP_REPLY, target_mac, target_mac,
+                         g_net.ipv4.addr, target_ip);
+}
+
+static void build_ipv4_header(struct net_ipv4_hdr *ip, uint16_t payload_len,
+                              uint8_t protocol, uint32_t src_ip,
+                              uint32_t dst_ip, uint16_t ident) {
+  ip->version_ihl = NET_IPV4_VERSION_IHL;
+  ip->dscp_ecn = 0;
+  ip->total_len =
+      htons16((uint16_t)(sizeof(struct net_ipv4_hdr) + payload_len));
+  ip->ident = htons16(ident);
+  ip->flags_frag_off = htons16(NET_IPV4_DONT_FRAGMENT);
+  ip->ttl = g_net.ipv4.ttl ? g_net.ipv4.ttl : 64;
+  ip->protocol = protocol;
+  ip->checksum = 0;
+  ip->src_ip = htonl32(src_ip);
+  ip->dst_ip = htonl32(dst_ip);
+  ip->checksum = checksum16((const uint8_t *)ip, sizeof(struct net_ipv4_hdr));
+}
+
+static int wait_for_arp(uint32_t target_ip, uint32_t timeout_ms) {
+  for (uint32_t elapsed = 0; elapsed < timeout_ms; ++elapsed) {
+    if (arp_find(target_ip) >= 0) {
+      return 0;
+    }
+    (void)net_stack_poll();
+    delay_approx_1ms();
+  }
+  return -1;
+}
+
+static int resolve_arp(uint32_t target_ip) {
+  if (arp_find(target_ip) >= 0) {
+    return 0;
+  }
+
+  for (uint32_t tries = 0; tries < 3; ++tries) {
+    g_net.stats.arp_misses++;
+    if (send_arp_request(target_ip) != 0) {
+      continue;
+    }
+    if (wait_for_arp(target_ip, 200u) == 0) {
+      return 0;
+    }
+  }
+  return -1;
+}
+
 static int handle_arp(const uint8_t *payload, size_t len) {
   if (len < sizeof(struct net_arp_pkt)) {
     g_net.stats.frames_drop++;
@@ -212,25 +361,53 @@ static int handle_arp(const uint8_t *payload, size_t len) {
 
   if (opcode == NET_ARP_OP_REQUEST && ip_is_local(target_ip)) {
     g_net.stats.arp_hits++;
-  }
-  if (opcode == NET_ARP_OP_REPLY && ip_is_local(target_ip)) {
+    if (g_net.ready) {
+      (void)send_arp_reply(arp->sender_mac, sender_ip);
+    }
+  } else if (opcode == NET_ARP_OP_REPLY && ip_is_local(target_ip)) {
     g_net.stats.arp_hits++;
   }
   return 0;
 }
 
-static int handle_icmp(const uint8_t *payload, size_t len, int to_local) {
+static int handle_icmp(uint32_t src_ip, const uint8_t *payload, size_t len,
+                       int to_local) {
   if (len < sizeof(struct net_icmp_hdr)) {
     g_net.stats.frames_drop++;
     return -1;
   }
+
   const struct net_icmp_hdr *icmp = (const struct net_icmp_hdr *)payload;
   g_net.stats.icmp_rx++;
-  if (to_local && icmp->type == 8 && icmp->code == 0) {
-    /* Echo request received; reply path is tracked even before NIC TX is wired.
-     */
-    g_net.stats.icmp_tx++;
+
+  if (!to_local) {
+    return 0;
   }
+
+  if (icmp->type == 8 && icmp->code == 0) {
+    if (len > 256u) {
+      return -1;
+    }
+    uint8_t reply[256];
+    mem_copy(reply, payload, len);
+    struct net_icmp_hdr *hdr = (struct net_icmp_hdr *)reply;
+    hdr->type = 0;
+    hdr->code = 0;
+    hdr->checksum = 0;
+    hdr->checksum = checksum16(reply, len);
+    (void)net_stack_send_ipv4(NET_L4_PROTO_ICMP, src_ip, reply, len);
+    return 0;
+  }
+
+  if (icmp->type == 0 && icmp->code == 0 && g_net.icmp_waiting) {
+    uint16_t ident = ntohs16(icmp->ident);
+    uint16_t seq = ntohs16(icmp->sequence);
+    if (ident == g_net.icmp_wait_ident && seq == g_net.icmp_wait_seq) {
+      g_net.icmp_reply_ready = 1;
+      g_net.icmp_reply_ip = src_ip;
+    }
+  }
+
   return 0;
 }
 
@@ -296,7 +473,7 @@ static int handle_ipv4(const uint8_t *payload, size_t len,
   size_t l4_len = total_len - ihl_bytes;
   switch (ip->protocol) {
   case NET_L4_PROTO_ICMP:
-    return handle_icmp(l4_payload, l4_len, 1);
+    return handle_icmp(src_ip, l4_payload, l4_len, 1);
   case NET_L4_PROTO_UDP:
     return handle_udp(l4_payload, l4_len);
   case NET_L4_PROTO_TCP:
@@ -313,9 +490,15 @@ int net_stack_init(void) {
   g_net.ident_seq = 1;
 
   if (net_probe_first_supported(&g_net.nic) == 0 && g_net.nic.found) {
-    g_net.ready = 1;
     g_net.ipv4.mtu = g_net.nic.mtu;
     mem_copy(g_net.ipv4.mac, g_net.nic.mac, 6);
+
+    if (g_net.nic.kind == NET_NIC_KIND_E1000 &&
+        e1000_init(g_net.nic.bar0, g_net.ipv4.mac) == 0 && e1000_ready()) {
+      g_net.ready = 1;
+    } else {
+      g_net.ready = 0;
+    }
   } else {
     g_net.ready = 0;
   }
@@ -374,29 +557,28 @@ int net_stack_receive_frame(const uint8_t *frame, size_t len) {
   }
 }
 
-static void build_ipv4_header(struct net_ipv4_hdr *ip, uint16_t payload_len,
-                              uint8_t protocol, uint32_t src_ip,
-                              uint32_t dst_ip, uint16_t ident) {
-  ip->version_ihl = NET_IPV4_VERSION_IHL;
-  ip->dscp_ecn = 0;
-  ip->total_len =
-      htons16((uint16_t)(sizeof(struct net_ipv4_hdr) + payload_len));
-  ip->ident = htons16(ident);
-  ip->flags_frag_off = htons16(NET_IPV4_DONT_FRAGMENT);
-  ip->ttl = g_net.ipv4.ttl ? g_net.ipv4.ttl : 64;
-  ip->protocol = protocol;
-  ip->checksum = 0;
-  ip->src_ip = htonl32(src_ip);
-  ip->dst_ip = htonl32(dst_ip);
-  ip->checksum = checksum16((const uint8_t *)ip, sizeof(struct net_ipv4_hdr));
+int net_stack_poll(void) {
+  if (!g_net.initialized || !g_net.ready) {
+    return 0;
+  }
+
+  uint8_t frame[NET_FRAME_MAX];
+  uint16_t frame_len = 0;
+  int processed = 0;
+  for (uint32_t i = 0; i < NET_POLL_BUDGET; ++i) {
+    int rc = driver_poll_frame(frame, sizeof(frame), &frame_len);
+    if (rc <= 0) {
+      break;
+    }
+    (void)net_stack_receive_frame(frame, frame_len);
+    processed++;
+  }
+  return processed;
 }
 
 int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
                         const uint8_t *payload, size_t payload_len) {
-  if (!g_net.initialized || !payload || payload_len == 0) {
-    return -1;
-  }
-  if (!g_net.ready) {
+  if (!g_net.initialized || !g_net.ready || !payload || payload_len == 0) {
     g_net.stats.frames_drop++;
     return -1;
   }
@@ -410,10 +592,12 @@ int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
     return -1;
   }
 
-  g_net.stats.frames_tx++;
+  if (resolve_arp(dst_ip) != 0) {
+    g_net.stats.frames_drop++;
+    return -1;
+  }
   int arp_idx = arp_find(dst_ip);
   if (arp_idx < 0) {
-    g_net.stats.arp_misses++;
     g_net.stats.frames_drop++;
     return -1;
   }
@@ -436,9 +620,14 @@ int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
       (struct net_ipv4_hdr *)(frame + sizeof(struct net_eth_hdr));
   build_ipv4_header(ip, (uint16_t)payload_len, protocol, g_net.ipv4.addr,
                     dst_ip, g_net.ident_seq++);
-
   mem_copy((uint8_t *)ip + sizeof(struct net_ipv4_hdr), payload, payload_len);
 
+  if (driver_send_frame(frame, (uint16_t)frame_len) != 0) {
+    g_net.stats.frames_drop++;
+    return -1;
+  }
+
+  g_net.stats.frames_tx++;
   if (protocol == NET_L4_PROTO_ICMP) {
     g_net.stats.icmp_tx++;
   } else if (protocol == NET_L4_PROTO_UDP) {
@@ -446,11 +635,72 @@ int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
   } else if (protocol == NET_L4_PROTO_TCP) {
     g_net.stats.tcp_tx++;
   }
+  return 0;
+}
 
-  /* Driver TX hook is still pending; this path validates packet assembly. */
-  (void)frame;
-  (void)frame_len;
-  g_net.stats.frames_drop++;
+int net_stack_ping(uint32_t dst_ip, uint32_t timeout_ms, uint32_t *rtt_ms,
+                   uint32_t *reply_ip) {
+  if (!g_net.initialized || !g_net.ready || dst_ip == 0 || timeout_ms == 0) {
+    return -1;
+  }
+
+  if (resolve_arp(dst_ip) != 0) {
+    return -1;
+  }
+
+  uint8_t icmp_pkt[32];
+  struct net_icmp_hdr *icmp = (struct net_icmp_hdr *)icmp_pkt;
+  uint16_t seq = g_net.ident_seq++;
+  uint16_t ident = 0xCA50u;
+
+  icmp->type = 8;
+  icmp->code = 0;
+  icmp->checksum = 0;
+  icmp->ident = htons16(ident);
+  icmp->sequence = htons16(seq);
+  icmp_pkt[8] = 'h';
+  icmp_pkt[9] = 'e';
+  icmp_pkt[10] = 'y';
+  icmp_pkt[11] = '-';
+  icmp_pkt[12] = 'c';
+  icmp_pkt[13] = 'a';
+  icmp_pkt[14] = 'p';
+  icmp_pkt[15] = 'y';
+  for (uint32_t i = 16; i < sizeof(icmp_pkt); ++i) {
+    icmp_pkt[i] = (uint8_t)i;
+  }
+  icmp->checksum = checksum16(icmp_pkt, sizeof(icmp_pkt));
+
+  g_net.icmp_waiting = 1;
+  g_net.icmp_wait_ident = ident;
+  g_net.icmp_wait_seq = seq;
+  g_net.icmp_reply_ready = 0;
+  g_net.icmp_reply_ip = 0;
+
+  if (net_stack_send_ipv4(NET_L4_PROTO_ICMP, dst_ip, icmp_pkt,
+                          sizeof(icmp_pkt)) != 0) {
+    g_net.icmp_waiting = 0;
+    return -1;
+  }
+
+  for (uint32_t elapsed = 0; elapsed <= timeout_ms; ++elapsed) {
+    (void)net_stack_poll();
+    if (g_net.icmp_reply_ready) {
+      g_net.icmp_waiting = 0;
+      if (rtt_ms) {
+        *rtt_ms = elapsed;
+      }
+      if (reply_ip) {
+        *reply_ip = g_net.icmp_reply_ip;
+      }
+      g_net.icmp_reply_ready = 0;
+      return 0;
+    }
+    delay_approx_1ms();
+  }
+
+  g_net.icmp_waiting = 0;
+  g_net.icmp_reply_ready = 0;
   return -1;
 }
 
@@ -559,7 +809,6 @@ int net_stack_protocol_selftest(void) {
       g_net.stats.tcp_rx <= before.tcp_rx) {
     return -1;
   }
-
   return 0;
 }
 
