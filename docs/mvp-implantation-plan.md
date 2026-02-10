@@ -48,6 +48,7 @@ Objetivo do ciclo atual:
 | Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
 |---|---|---|---|
 | Auth de usuarios | `userdb_authenticate` ativo no x64 e 32-bit | politicas de senha, lockout e auditoria | login robusto e rastreavel |
+| Provisionamento do admin na formatacao | setup inicial agora coleta `Usuario administrador [admin]` e grava esse nome no `users.db` (sem forcar `admin`) | propagar preseed do UEFI installer para o runtime x64 persistente | usuario escolhido durante instalacao permanece como conta administrativa ativa |
 | Criptografia em disco | AES-XTS + PBKDF2 no fluxo 32-bit | integridade autenticada por bloco/metadata, rotacao de chaves | confidencialidade + deteccao de adulteracao |
 | Multiusuario | modelo base de UID/GID/sessao/permissoes | comandos de gestao de usuarios e grupos | administracao multiusuario completa via CLI |
 
@@ -63,11 +64,11 @@ Objetivo do ciclo atual:
 
 | Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
 |---|---|---|---|
-| Descoberta de NIC no x64 | bootstrap inicial com probing PCI para e1000, rtl8139, virtio-net e hyperv-netvsc | inicializacao real do dispositivo (MMIO/PIO, RX/TX rings, interrupcoes) | NIC detectada e link util para trafego real |
-| Camada L2/L3 | parser de Ethernet, ARP e IPv4 com validacao basica de integridade | ARP request/reply ativos no fio, roteamento minimo e fila de retransmissao | resolucao de MAC e entrega IPv4 com fluxo previsivel |
+| Descoberta de NIC no x64 | probing PCI ativo com match para e1000 e `tulip-2114x` (legacy/generico Hyper-V); netvsc ainda pendente | ampliar matriz de IDs suportados e implementar netvsc (VMBus) | NIC detectada e caminho de dados funcional em QEMU e Hyper-V |
+| Camada L2/L3 | parser de Ethernet/ARP/IPv4 ativo com ARP real e roteamento minimo via gateway (`next-hop`) | fila de retransmissao e politicas de timeout adaptativas | resolucao de MAC e entrega IPv4 com fluxo previsivel |
 | L4 (ICMP/UDP/TCP) | decodificacao inicial e contadores de telemetria no kernel | sockets/portas, estado TCP, checksums completos, timers e retransmissao | ping, UDP e TCP funcionais para comunicacao externa |
-| Enderecamento | configuracao estatica inicial no kernel | DHCP client, DNS resolver e persistencia em config | provisionamento automatico de rede em VM/hardware |
-| Observabilidade | logs de init + self-test interno de protocolos no boot | comandos de CLI (`net-status`, `net-ifconfig`, `hey`) e traces de pacotes | diagnostico de rede direto no sistema, sem debug externo |
+| Enderecamento | configuracao estatica em runtime com `net-set <ip> <mask> <gw> <dns>` | DHCP client, DNS resolver e persistencia em config | provisionamento automatico de rede em VM/hardware |
+| Observabilidade | logs de init + self-test interno no boot + comandos `net-status`, `net-ip`, `net-gw`, `net-dns`, `hey` | traces de pacotes e counters por interface/fila | diagnostico de rede direto no sistema, sem debug externo |
 
 ### 1.7 Caminho grafico e navegador (futuro)
 
@@ -149,10 +150,11 @@ Plano incremental sugerido para Fase C:
 
 ## Fase F - Rede baseline (NIC + pilha TCP/IP)
 - Entrega:
-  - estabilizar probing de NIC suportadas (e1000/rtl8139/virtio-net/hyperv-netvsc)
-  - ativar caminho de transmissao/recepcao real no primeiro driver alvo (prioridade: e1000 em QEMU)
+  - estabilizar probing de NIC suportadas (e1000 + legacy Hyper-V via `tulip-2114x`)
+  - manter caminho de transmissao/recepcao real no `e1000` e caminho inicial no `tulip` (hardening de RX/link pendente)
+  - manter fallback documentado para Hyper-V: `Legacy Network Adapter` enquanto netvsc nao estiver pronto
   - manter ARP/IPv4/ICMP/UDP/TCP com parsing e contadores confiaveis
-  - introduzir comandos de diagnostico de rede no CLI
+  - introduzir comandos de diagnostico/config de rede no CLI (`net-status`, `net-ip`, `net-gw`, `net-dns`, `net-set`, `hey`)
 - Validacao minima:
   - boot x64 detectando NIC em QEMU e Hyper-V
   - `ping` para gateway da VM

@@ -1,6 +1,7 @@
 #include "net/stack.h"
 
 #include "drivers/net/e1000.h"
+#include "drivers/net/tulip.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -154,6 +155,12 @@ static int ip_is_broadcast(uint32_t ip) {
   return ip == NET_IPV4_ADDR(255, 255, 255, 255);
 }
 
+static int ip_is_unspecified(uint32_t ip) { return ip == 0u; }
+
+static int ip_is_same_subnet(uint32_t a, uint32_t b, uint32_t mask) {
+  return (a & mask) == (b & mask);
+}
+
 void net_ipv4_format(uint32_t ip, char out[16]) {
   if (!out) {
     return;
@@ -188,12 +195,18 @@ static int driver_send_frame(const uint8_t *frame, uint16_t len) {
   if (g_net.nic.kind == NET_NIC_KIND_E1000) {
     return e1000_send_frame(frame, len);
   }
+  if (g_net.nic.kind == NET_NIC_KIND_TULIP) {
+    return tulip_send_frame(frame, len);
+  }
   return -1;
 }
 
 static int driver_poll_frame(uint8_t *out, uint16_t cap, uint16_t *len) {
   if (g_net.nic.kind == NET_NIC_KIND_E1000) {
     return e1000_poll_frame(out, cap, len);
+  }
+  if (g_net.nic.kind == NET_NIC_KIND_TULIP) {
+    return tulip_poll_frame(out, cap, len);
   }
   return 0;
 }
@@ -339,6 +352,19 @@ static int resolve_arp(uint32_t target_ip) {
     }
   }
   return -1;
+}
+
+static uint32_t route_next_hop(uint32_t dst_ip) {
+  if (ip_is_local(dst_ip) || ip_is_broadcast(dst_ip)) {
+    return dst_ip;
+  }
+  if (ip_is_same_subnet(dst_ip, g_net.ipv4.addr, g_net.ipv4.mask)) {
+    return dst_ip;
+  }
+  if (ip_is_unspecified(g_net.ipv4.gateway)) {
+    return dst_ip;
+  }
+  return g_net.ipv4.gateway;
 }
 
 static int handle_arp(const uint8_t *payload, size_t len) {
@@ -497,6 +523,10 @@ int net_stack_init(void) {
     if (g_net.nic.kind == NET_NIC_KIND_E1000 &&
         e1000_init(g_net.nic.bar0, g_net.ipv4.mac) == 0 && e1000_ready()) {
       g_net.ready = 1;
+    } else if (g_net.nic.kind == NET_NIC_KIND_TULIP &&
+               tulip_init(g_net.nic.bar0, g_net.nic.bar0_is_io) == 0 &&
+               tulip_ready()) {
+      g_net.ready = 1;
     } else {
       g_net.ready = 0;
     }
@@ -519,6 +549,9 @@ int net_stack_set_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
   g_net.ipv4.mask = mask;
   g_net.ipv4.gateway = gateway;
   g_net.ipv4.dns = dns;
+  mem_zero(g_net.arp, sizeof(g_net.arp));
+  g_net.icmp_waiting = 0;
+  g_net.icmp_reply_ready = 0;
   return 0;
 }
 
@@ -593,11 +626,12 @@ int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
     return -1;
   }
 
-  if (resolve_arp(dst_ip) != 0) {
+  uint32_t next_hop = route_next_hop(dst_ip);
+  if (resolve_arp(next_hop) != 0) {
     g_net.stats.frames_drop++;
     return -1;
   }
-  int arp_idx = arp_find(dst_ip);
+  int arp_idx = arp_find(next_hop);
   if (arp_idx < 0) {
     g_net.stats.frames_drop++;
     return -1;
@@ -645,7 +679,8 @@ int net_stack_ping(uint32_t dst_ip, uint32_t timeout_ms, uint32_t *rtt_ms,
     return -1;
   }
 
-  if (resolve_arp(dst_ip) != 0) {
+  uint32_t next_hop = route_next_hop(dst_ip);
+  if (resolve_arp(next_hop) != 0) {
     return -1;
   }
 

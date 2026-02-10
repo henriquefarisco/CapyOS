@@ -757,7 +757,9 @@ static int shell_bootstrap_filesystem(void) {
       "  list, go, mypath, mk-file, mk-dir, kill-file, kill-dir,\n"
       "  move, clone, print-file, open, hunt-any, find,\n"
       "  help-any, help-docs, print-version, print-envs,\n"
-      "  net-status, hey <ip>, shutdown-reboot, shutdown-off, do-sync\n";
+      "  net-status, net-ip, net-gw, net-dns,\n"
+      "  net-set <ip> <mask> <gw> <dns>, hey <ip>,\n"
+      "  shutdown-reboot, shutdown-off, do-sync\n";
   if (fs_write_text_file("/docs/noiros-cli-reference.txt", cli_doc) != 0) {
     fbcon_print("[fs] aviso: nao foi possivel gravar /docs/noiros-cli-reference.txt\n");
   }
@@ -1472,7 +1474,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       fbcon_print_hex16(net_status.nic.device_id);
       fbcon_putc('\n');
     } else {
-      fbcon_print("[net] Nenhuma NIC suportada detectada (e1000/rtl8139/virtio/hyperv).\n");
+      fbcon_print("[net] Nenhuma NIC suportada detectada (e1000/tulip/rtl8139/virtio/hyperv).\n");
     }
     fbcon_print("[net] MAC: ");
     fbcon_print_mac(net_status.ipv4.mac);

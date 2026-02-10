@@ -108,6 +108,7 @@ NOIROS64_OBJS = \
 	$(BUILD)/x86_64/core/session.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
+	$(BUILD)/x86_64/drivers/net/tulip.o \
 	$(BUILD)/x86_64/drivers/net/net_probe.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme.o \
 	$(BUILD)/x86_64/drivers/usb/xhci.o \

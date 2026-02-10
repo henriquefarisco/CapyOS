@@ -48,6 +48,34 @@ static int parse_ipv4(const char *text, uint32_t *out) {
          ((parts[2] & 0xFFu) << 8) | (parts[3] & 0xFFu);
   return 0;
 }
+
+static int read_net_status(struct net_stack_status *out) {
+  if (!out) {
+    return -1;
+  }
+  if (net_stack_status(out) != 0) {
+    shell_print_error("stack de rede nao inicializada");
+    return -1;
+  }
+  return 0;
+}
+
+static uint32_t resolve_target_ip(const char *target,
+                                  const struct net_stack_status *st) {
+  if (!target || !st) {
+    return 0;
+  }
+  if (shell_string_equal(target, "gateway") || shell_string_equal(target, "gw")) {
+    return st->ipv4.gateway;
+  }
+  if (shell_string_equal(target, "dns")) {
+    return st->ipv4.dns;
+  }
+  if (shell_string_equal(target, "self") || shell_string_equal(target, "ip")) {
+    return st->ipv4.addr;
+  }
+  return 0;
+}
 #endif
 
 static int cmd_net_status(struct shell_context *ctx, int argc, char **argv) {
@@ -63,13 +91,13 @@ static int cmd_net_status(struct shell_context *ctx, int argc, char **argv) {
   return -1;
 #else
   struct net_stack_status st;
-  if (net_stack_status(&st) != 0) {
-    shell_print_error("stack de rede nao inicializada");
+  if (read_net_status(&st) != 0) {
     return -1;
   }
 
-  char ip[16], gw[16], dns[16];
+  char ip[16], mask[16], gw[16], dns[16];
   net_ipv4_format(st.ipv4.addr, ip);
+  net_ipv4_format(st.ipv4.mask, mask);
   net_ipv4_format(st.ipv4.gateway, gw);
   net_ipv4_format(st.ipv4.dns, dns);
 
@@ -80,6 +108,8 @@ static int cmd_net_status(struct shell_context *ctx, int argc, char **argv) {
 
   shell_print("ipv4=");
   shell_print(ip);
+  shell_print(" mask=");
+  shell_print(mask);
   shell_print(" gw=");
   shell_print(gw);
   shell_print(" dns=");
@@ -99,10 +129,121 @@ static int cmd_net_status(struct shell_context *ctx, int argc, char **argv) {
 #endif
 }
 
+static int cmd_net_ip(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx;
+  if (shell_handle_help(argc, argv, "net-ip",
+                        "Exibe o IPv4 local e mascara de rede atuais.")) {
+    return 0;
+  }
+#if !defined(__x86_64__)
+  shell_print_error("comando nao suportado neste runtime");
+  return -1;
+#else
+  struct net_stack_status st;
+  if (read_net_status(&st) != 0) {
+    return -1;
+  }
+
+  char ip[16], mask[16];
+  net_ipv4_format(st.ipv4.addr, ip);
+  net_ipv4_format(st.ipv4.mask, mask);
+  shell_print("ipv4=");
+  shell_print(ip);
+  shell_print(" mask=");
+  shell_print(mask);
+  shell_newline();
+  return 0;
+#endif
+}
+
+static int cmd_net_dns(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx;
+  if (shell_handle_help(argc, argv, "net-dns",
+                        "Exibe o servidor DNS configurado atualmente.")) {
+    return 0;
+  }
+#if !defined(__x86_64__)
+  shell_print_error("comando nao suportado neste runtime");
+  return -1;
+#else
+  struct net_stack_status st;
+  if (read_net_status(&st) != 0) {
+    return -1;
+  }
+  char dns[16];
+  net_ipv4_format(st.ipv4.dns, dns);
+  shell_print("dns=");
+  shell_print(dns);
+  shell_newline();
+  return 0;
+#endif
+}
+
+static int cmd_net_gw(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx;
+  if (shell_handle_help(argc, argv, "net-gw",
+                        "Exibe o gateway padrao configurado.")) {
+    return 0;
+  }
+#if !defined(__x86_64__)
+  shell_print_error("comando nao suportado neste runtime");
+  return -1;
+#else
+  struct net_stack_status st;
+  if (read_net_status(&st) != 0) {
+    return -1;
+  }
+  char gw[16];
+  net_ipv4_format(st.ipv4.gateway, gw);
+  shell_print("gateway=");
+  shell_print(gw);
+  shell_newline();
+  return 0;
+#endif
+}
+
+static int cmd_net_set(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx;
+  if (shell_handle_help(
+          argc, argv, "net-set <ip> <mask> <gateway> <dns>",
+          "Aplica configuracao IPv4 estatica na stack atual de rede.")) {
+    return 0;
+  }
+
+  if (argc != 5) {
+    shell_print_error("uso invalido");
+    shell_suggest_help("net-set");
+    return -1;
+  }
+
+#if !defined(__x86_64__)
+  shell_print_error("comando nao suportado neste runtime");
+  return -1;
+#else
+  uint32_t ip = 0;
+  uint32_t mask = 0;
+  uint32_t gw = 0;
+  uint32_t dns = 0;
+  if (parse_ipv4(argv[1], &ip) != 0 || parse_ipv4(argv[2], &mask) != 0 ||
+      parse_ipv4(argv[3], &gw) != 0 || parse_ipv4(argv[4], &dns) != 0) {
+    shell_print_error("parametros invalidos; use IPv4 no formato a.b.c.d");
+    return -1;
+  }
+
+  if (net_stack_set_ipv4(ip, mask, gw, dns) != 0) {
+    shell_print_error("falha ao aplicar configuracao de rede");
+    return -1;
+  }
+
+  shell_print_ok("configuracao de rede aplicada");
+  return cmd_net_status(ctx, 1, argv);
+#endif
+}
+
 static int cmd_hey(struct shell_context *ctx, int argc, char **argv) {
   (void)ctx;
   if (shell_handle_help(
-          argc, argv, "hey <ip|gateway|dns>",
+          argc, argv, "hey <ip|gateway|dns|self>",
           "Envia ICMP echo (ping) e responde: hello from (<destino>/<host>) Xms).")) {
     return 0;
   }
@@ -122,17 +263,16 @@ static int cmd_hey(struct shell_context *ctx, int argc, char **argv) {
   }
 
   const char *target = argv[1];
+  struct net_stack_status st;
+  if (read_net_status(&st) != 0) {
+    return -1;
+  }
   uint32_t dst_ip = 0;
-  if (shell_string_equal(target, "gateway") || shell_string_equal(target, "gw") ||
-      shell_string_equal(target, "dns")) {
-    struct net_stack_status st;
-    if (net_stack_status(&st) != 0) {
-      shell_print_error("nao foi possivel obter configuracao de rede");
-      return -1;
-    }
-    dst_ip = shell_string_equal(target, "dns") ? st.ipv4.dns : st.ipv4.gateway;
+  uint32_t alias_ip = resolve_target_ip(target, &st);
+  if (alias_ip != 0u) {
+    dst_ip = alias_ip;
   } else if (parse_ipv4(target, &dst_ip) != 0) {
-    shell_print_error("destino invalido (use IPv4, gateway ou dns)");
+    shell_print_error("destino invalido (use IPv4, gateway, dns ou self)");
     return -1;
   }
 
@@ -162,7 +302,7 @@ static int cmd_hey(struct shell_context *ctx, int argc, char **argv) {
 #endif
 }
 
-static struct shell_command g_network_commands[2];
+static struct shell_command g_network_commands[6];
 static int g_network_commands_initialized = 0;
 
 static void init_network_commands(void) {
@@ -173,13 +313,21 @@ static void init_network_commands(void) {
   g_network_commands[0].handler = cmd_hey;
   g_network_commands[1].name = "net-status";
   g_network_commands[1].handler = cmd_net_status;
+  g_network_commands[2].name = "net-ip";
+  g_network_commands[2].handler = cmd_net_ip;
+  g_network_commands[3].name = "net-dns";
+  g_network_commands[3].handler = cmd_net_dns;
+  g_network_commands[4].name = "net-gw";
+  g_network_commands[4].handler = cmd_net_gw;
+  g_network_commands[5].name = "net-set";
+  g_network_commands[5].handler = cmd_net_set;
   g_network_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_network(size_t *count) {
   init_network_commands();
   if (count) {
-    *count = 2;
+    *count = 6;
   }
   return g_network_commands;
 }

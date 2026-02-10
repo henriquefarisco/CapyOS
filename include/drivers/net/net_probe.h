@@ -9,6 +9,7 @@ enum net_nic_kind {
   NET_NIC_KIND_RTL8139 = 2,
   NET_NIC_KIND_VIRTIO_NET = 3,
   NET_NIC_KIND_HYPERV_NETVSC = 4,
+  NET_NIC_KIND_TULIP = 5,
 };
 
 struct net_nic_probe {
@@ -21,6 +22,7 @@ struct net_nic_probe {
   uint16_t device_id;
   uint16_t mtu;
   uint64_t bar0;
+  uint8_t bar0_is_io;
   uint8_t mac[6];
 };
 
