@@ -1,4 +1,4 @@
-/* shell_main.c: NoirCLI entry, self-test, diagnostics, and command loop. */
+/* shell_main.c: CapyCLI entry, self-test, diagnostics, and command loop. */
 #include "shell/shell.h"
 #include "shell/core.h"
 #include "shell/commands.h"
@@ -415,7 +415,7 @@ void shell_update_prompt(struct shell_context *ctx)
 {
     const struct user_record *user = session_user(ctx->session);
     const char *username = user ? user->username : "user";
-    const char *hostname = ctx->settings ? ctx->settings->hostname : "noiros";
+    const char *hostname = ctx->settings ? ctx->settings->hostname : "capyos";
     char prompt[TTY_PROMPT_MAX];
     size_t idx = 0;
     const char *parts[] = { username, "@", hostname, "> " };
@@ -624,7 +624,7 @@ static void cli_log_dependency_wait(const char *dependency, const char *target)
 
 static int shell_self_test(struct shell_context *ctx)
 {
-    const char *proc = "auto teste do NoirCLI";
+    const char *proc = "auto teste do CapyCLI";
     cli_log_process_begin(proc);
     cli_log_process_begin_success(proc);
     if (!ctx || !ctx->session) {
@@ -689,7 +689,7 @@ static int shell_run_diagnostics(struct shell_context *ctx)
     if (!ctx) {
         return -1;
     }
-    const char *proc = "diagnostico de comandos basicos do NoirCLI";
+    const char *proc = "diagnostico de comandos basicos do CapyCLI";
     cli_log_process_begin(proc);
     cli_log_process_begin_success(proc);
     diag_log_append("[diag] CLI self-test iniciado");
@@ -767,11 +767,11 @@ enum shell_result shell_run(struct session_context *session, const struct system
             return SHELL_RESULT_EXIT;
         }
 
-        cli_log_dependency_wait("auto teste do NoirCLI", "diagnostico de comandos basicos do NoirCLI");
+        cli_log_dependency_wait("auto teste do CapyCLI", "diagnostico de comandos basicos do CapyCLI");
         if (shell_run_diagnostics(&ctx) != 0) {
-            shell_print_error("Processo diagnostico de comandos basicos do NoirCLI finalizado com erro (veja /var/log/cli-selftest.log)");
+            shell_print_error("Processo diagnostico de comandos basicos do CapyCLI finalizado com erro (veja /var/log/cli-selftest.log)");
         } else {
-            shell_print_ok("Processo diagnostico de comandos basicos do NoirCLI finalizado com sucesso.");
+            shell_print_ok("Processo diagnostico de comandos basicos do CapyCLI finalizado com sucesso.");
         }
     }
 

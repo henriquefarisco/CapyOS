@@ -1,13 +1,22 @@
-# NoirOS
+# CapyOS
+
+<p align="center">
+  <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
+</p>
 
 Ultima atualizacao: 2026-02-10
 
-NoirOS e um sistema operacional hobby escrito em C/Assembly, com foco em:
+CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco em:
 - boot proprio (BIOS e UEFI)
 - filesystem proprio (NFS/NoirFS)
 - seguranca por criptografia no volume de dados
-- shell modular (NoirCLI)
+- shell modular (CapyCLI)
 - evolucao gradual de 32-bit para 64-bit
+
+Nota de compatibilidade de build:
+- alguns artefatos e nomes tecnicos internos ainda usam o prefixo `noiros`
+  (por exemplo `noiros64.bin`, `NOIROS64.BIN`, `NOIROS.LOG`), para manter
+  retrocompatibilidade com o fluxo de boot atual.
 
 ## Visao geral do projeto
 
@@ -17,7 +26,7 @@ O repositorio mantem duas trilhas em paralelo:
 - instalador funcional
 - particionamento e bootstrap completos
 - NoirFS cifrado em disco
-- login, sessao e NoirCLI em uso real
+- login, sessao e CapyCLI em uso real
 
 2. `UEFI/GPT 64-bit` (trilha em consolidacao)
 - loader UEFI funcional (`BOOTX64.EFI`)
@@ -61,7 +70,7 @@ O repositorio mantem duas trilhas em paralelo:
   - hash PBKDF2-SHA256 (`USER_ITERATIONS=64000`)
 - Login com validacao por `userdb_authenticate`.
 
-### 5. NoirCLI (shell modular)
+### 5. CapyCLI (shell modular)
 
 Conjuntos de comandos implementados:
 
@@ -197,7 +206,7 @@ Eixos principais:
 - `src/core/`: kernel core, instalador, sessao, init
 - `src/fs/`: NoirFS, VFS, cache e wrappers de bloco
 - `src/security/`: crypto/KDF/CSPRNG
-- `src/shell/`: core do NoirCLI e comandos
+- `src/shell/`: core do CapyCLI e comandos
 - `src/drivers/`: video/input/storage/pci/usb/hyper-v
 - `docs/`: arquitetura, setup, roadmap e referencia de comandos
 - `tools/scripts/`: utilitarios de build/provisionamento/inspecao
