@@ -527,6 +527,12 @@ static const char *g_cli_reference_text =
     "  print-host           - hostname\n"
     "  print-time           - uptime\n"
     "  do-sync              - sincroniza discos\n"
+    "  net-status           - estado da rede (x64)\n"
+    "  net-ip               - exibe IPv4 local e mascara\n"
+    "  net-gw               - exibe gateway atual\n"
+    "  net-dns              - exibe DNS atual\n"
+    "  net-set <ip> <mask> <gw> <dns> - aplica IPv4 estatico\n"
+    "  hey <destino>        - ping (ICMP echo)\n"
     "  mess                 - limpa tela\n"
     "  bye                  - encerra sessao\n"
     "\n"
@@ -683,6 +689,35 @@ static void build_home_path(const char *username, char *out, size_t out_len) {
     out[base_len + i] = username[i];
   }
   out[base_len + uname_len] = '\0';
+}
+
+static int valid_username_char(char c) {
+  if (c >= 'a' && c <= 'z') {
+    return 1;
+  }
+  if (c >= 'A' && c <= 'Z') {
+    return 1;
+  }
+  if (c >= '0' && c <= '9') {
+    return 1;
+  }
+  return c == '-' || c == '_';
+}
+
+static int validate_admin_username(const char *username) {
+  if (!username || !username[0]) {
+    return 0;
+  }
+  size_t len = cstring_length(username);
+  if (len == 0 || len >= USER_NAME_MAX) {
+    return 0;
+  }
+  for (size_t i = 0; i < len; ++i) {
+    if (!valid_username_char(username[i])) {
+      return 0;
+    }
+  }
+  return 1;
 }
 
 static const char *validate_theme(const char *input) {
@@ -853,7 +888,18 @@ static int first_boot_setup_impl(void) {
   print_line(splash_enabled ? "   Splash animado: habilitado"
                             : "   Splash animado: desabilitado");
 
-  const char *admin_username = "admin";
+  char admin_username[USER_NAME_MAX];
+  memory_zero(admin_username, sizeof(admin_username));
+  size_t ulen = wizard_prompt("Usuario administrador [admin]: ", admin_username,
+                              sizeof(admin_username), 0);
+  if (ulen == 0) {
+    cstring_copy(admin_username, sizeof(admin_username), "admin");
+  }
+  if (!validate_admin_username(admin_username)) {
+    print_line("Nome de usuario invalido; usando padrao 'admin'.");
+    cstring_copy(admin_username, sizeof(admin_username), "admin");
+  }
+
   uint32_t admin_uid = 1000;
   uint32_t admin_gid = 1000;
   char admin_password[TTY_BUFFER_MAX];
@@ -886,7 +932,8 @@ static int first_boot_setup_impl(void) {
   int admin_ready = 0;
   struct user_record existing;
   if (userdb_find(admin_username, &existing) == 0) {
-    print_line("   Usuario admin ja existente. Validando registro atual.");
+    print_line(
+        "   Usuario administrador ja existente. Validando registro atual.");
     if (verify_directory_exists(existing.home) != 0) {
       char rebuild_msg[128];
       rebuild_msg[0] = '\0';
@@ -897,7 +944,7 @@ static int first_boot_setup_impl(void) {
       print_line(rebuild_msg);
       if (ensure_directory(existing.home) != 0 ||
           verify_directory_exists(existing.home) != 0) {
-        print_line("   Falha ao reconstruir diretorio pessoal do admin.");
+        print_line("   Falha ao reconstruir diretorio pessoal do administrador.");
         return -1;
       }
     }
@@ -906,9 +953,16 @@ static int first_boot_setup_impl(void) {
     admin_ready = 1;
   }
 
+  char password_prompt[96];
+  password_prompt[0] = '\0';
+  buffer_append(password_prompt, sizeof(password_prompt),
+                "Defina a senha para o usuario ");
+  buffer_append(password_prompt, sizeof(password_prompt), admin_username);
+  buffer_append(password_prompt, sizeof(password_prompt), ": ");
+
   while (!admin_ready) {
-    if (prompt_password_pair("Defina a senha para o usuario admin: ",
-                             admin_password, sizeof(admin_password)) != 0) {
+    if (prompt_password_pair(password_prompt, admin_password,
+                             sizeof(admin_password)) != 0) {
       print_line("Nao foi possivel registrar o usuario administrador.");
       memory_zero(admin_password, sizeof(admin_password));
       continue;
@@ -1022,11 +1076,11 @@ static int first_boot_setup_impl(void) {
 
   struct user_record final_rec;
   if (userdb_find(admin_username, &final_rec) == 0) {
-    print_line("   Validacao final do registro admin concluida.");
+    print_line("   Validacao final do registro do administrador concluida.");
     log_user_record_state(&final_rec);
   } else {
-    print_line(
-        "   Aviso: nao foi possivel reler registro admin apos configuracao.");
+    print_line("   Aviso: nao foi possivel reler registro do administrador "
+               "apos configuracao.");
   }
 
   log_flush_pending();
