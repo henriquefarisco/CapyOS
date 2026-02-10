@@ -30,8 +30,12 @@ Este documento acompanha a distribuicao atual do CapyCLI. Cada comando implement
 | `print-me` | `print-me` | Exibe usuario autenticado. |
 | `print-id` | `print-id` | Exibe UID/GID do usuario. |
 | `print-envs` | `print-envs` | Mostra variaveis basicas (USER, HOME, HOST etc.) e expÃµe CHANNEL/VERSION correntes. |
-| `net-status` | `net-status` | Exibe estado da rede no runtime x64 (driver, IPv4, ARP, contadores). |
-| `hey` | `hey <ip\|gateway\|dns>` | Envia ICMP echo e responde no formato `hello from (...) Xms)`. |
+| `net-status` | `net-status` | Exibe estado da rede no runtime x64 (driver, IPv4/mask, ARP, contadores). |
+| `net-ip` | `net-ip` | Exibe o IPv4 local e mascara de rede configurados. |
+| `net-gw` | `net-gw` | Exibe o gateway padrao configurado. |
+| `net-dns` | `net-dns` | Exibe o DNS configurado. |
+| `net-set` | `net-set <ip> <mask> <gateway> <dns>` | Aplica configuracao IPv4 estatica na stack atual de rede. |
+| `hey` | `hey <ip\|gateway\|dns\|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms)`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (hh:mm:ss). |
 | `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |

@@ -17,6 +17,7 @@ static void probe_zero(struct net_nic_probe *out) {
   out->device_id = 0;
   out->mtu = 1500;
   out->bar0 = 0;
+  out->bar0_is_io = 0;
   for (int i = 0; i < 6; ++i) {
     out->mac[i] = 0;
   }
@@ -37,6 +38,9 @@ static uint8_t match_nic_kind(uint16_t vendor, uint16_t device) {
   }
   if (vendor == 0x1414u && device == 0x0001u) {
     return NET_NIC_KIND_HYPERV_NETVSC;
+  }
+  if (vendor == 0x1011u && (device == 0x0019u || device == 0x0009u)) {
+    return NET_NIC_KIND_TULIP;
   }
   return NET_NIC_KIND_UNKNOWN;
 }
@@ -93,8 +97,15 @@ int net_probe_first_supported(struct net_nic_probe *out) {
         if (kind != NET_NIC_KIND_UNKNOWN) {
           uint16_t cmd =
               pci_config_read16((uint8_t)bus, dev, func, PCI_COMMAND);
-          cmd |= (uint16_t)(PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER);
+          cmd |=
+              (uint16_t)(PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER);
           pci_config_write16((uint8_t)bus, dev, func, PCI_COMMAND, cmd);
+
+          uint32_t bar0_raw =
+              pci_config_read32((uint8_t)bus, dev, func, PCI_BAR0);
+          uint8_t bar0_is_io = (bar0_raw & 0x1u) ? 1u : 0u;
+          uint64_t bar0 = bar0_is_io ? (uint64_t)(bar0_raw & ~0x3u)
+                                     : pci_read_bar64((uint8_t)bus, dev, func, 0);
 
           out->found = 1;
           out->kind = kind;
@@ -104,7 +115,8 @@ int net_probe_first_supported(struct net_nic_probe *out) {
           out->vendor_id = vendor;
           out->device_id = device_id;
           out->mtu = 1500;
-          out->bar0 = pci_read_bar64((uint8_t)bus, dev, func, 0);
+          out->bar0 = bar0;
+          out->bar0_is_io = bar0_is_io;
           probe_set_fallback_mac(out);
           return 0;
         }
@@ -133,6 +145,8 @@ const char *net_probe_kind_name(uint8_t kind) {
     return "virtio-net";
   case NET_NIC_KIND_HYPERV_NETVSC:
     return "hyperv-netvsc";
+  case NET_NIC_KIND_TULIP:
+    return "tulip-2114x";
   default:
     return "unknown";
   }
