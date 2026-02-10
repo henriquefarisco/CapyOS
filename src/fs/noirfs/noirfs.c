@@ -4,7 +4,7 @@
 #include "fs/buffer.h"
 #include "memory/kmem.h"
 
-#define NOIRFS_DEBUG_CREATE 1
+#define NOIRFS_DEBUG_CREATE 0
 
 static void noirfs_dbg_puts(const char *msg) {
 #if NOIRFS_DEBUG_CREATE
@@ -58,21 +58,29 @@ static int noirfs_rename_inode(struct inode *src_dir, const char *src_name,
 static int noirfs_stat_inode(struct inode *inode, struct vfs_stat *out);
 static int noirfs_set_metadata(struct inode *inode, const struct vfs_metadata *meta);
 
-static const struct file_ops noirfs_ops = {
-    .open = noirfs_open,
-    .close = noirfs_close,
-    .lookup = noirfs_lookup,
-    .create = noirfs_create,
-    .read = noirfs_read,
-    .write = noirfs_write,
-    .iterate = noirfs_iterate,
-    .remove = noirfs_remove,
-    .rename = noirfs_rename_inode,
-    .stat = noirfs_stat_inode,
-    .set_metadata = noirfs_set_metadata,
-};
+static struct file_ops noirfs_ops;
+static int noirfs_ops_initialized = 0;
+
+static void noirfs_init_ops(void) {
+    if (noirfs_ops_initialized) {
+        return;
+    }
+    noirfs_ops.open = noirfs_open;
+    noirfs_ops.close = noirfs_close;
+    noirfs_ops.lookup = noirfs_lookup;
+    noirfs_ops.create = noirfs_create;
+    noirfs_ops.read = noirfs_read;
+    noirfs_ops.write = noirfs_write;
+    noirfs_ops.iterate = noirfs_iterate;
+    noirfs_ops.remove = noirfs_remove;
+    noirfs_ops.rename = noirfs_rename_inode;
+    noirfs_ops.stat = noirfs_stat_inode;
+    noirfs_ops.set_metadata = noirfs_set_metadata;
+    noirfs_ops_initialized = 1;
+}
 
 const struct file_ops *noirfs_file_ops(void) {
+    noirfs_init_ops();
     return &noirfs_ops;
 }
 
@@ -152,7 +160,7 @@ int noirfs_format(struct block_device *dev,
                   uint32_t block_count,
                   noirfs_progress_cb progress) {
     if (!dev || dev->block_size != NOIRFS_BLOCK_SIZE) {
-        return -1;
+        return -10;
     }
     if (block_count == 0 || block_count > dev->block_count) {
         block_count = dev->block_count;
@@ -171,7 +179,7 @@ int noirfs_format(struct block_device *dev,
     uint32_t inode_start = imap_start + inode_bitmap_blocks;
     uint32_t data_start = inode_start + inode_table_blocks;
     if (data_start >= block_count) {
-        return -1;
+        return -11;
     }
 
     if (progress) {
@@ -192,7 +200,7 @@ int noirfs_format(struct block_device *dev,
     // Escreve superbloco via buffer cache (um bloco completo)
     struct buffer_head *sbh = buffer_get(dev, 0);
     if (!sbh) {
-        return -1;
+        return -12;
     }
     zero_block(sbh);
     for (size_t i = 0; i < sizeof(struct noir_super); ++i) {
@@ -211,7 +219,7 @@ int noirfs_format(struct block_device *dev,
     for (uint32_t i = bmap_start; i < data_start; ++i) {
         bh = buffer_get(dev, i);
         if (!bh) {
-            return -1;
+            return -13;
         }
         zero_block(bh);
         buffer_release(bh);
@@ -239,7 +247,7 @@ int noirfs_format(struct block_device *dev,
         uint32_t block_idx = super.bmap_start + index / (NOIRFS_BLOCK_SIZE * 8);
         struct buffer_head *map_bh = buffer_get(dev, block_idx);
         if (!map_bh) {
-            return -1;
+            return -14;
         }
         uint32_t byte = rel / 8;
         uint32_t bit = rel % 8;
@@ -263,7 +271,7 @@ int noirfs_format(struct block_device *dev,
     uint32_t map_block = super.imap_start + root_ino / (NOIRFS_BLOCK_SIZE * 8);
     struct buffer_head *imap_bh = buffer_get(dev, map_block);
     if (!imap_bh) {
-        return -1;
+        return -15;
     }
     uint32_t byte = rel / 8;
     uint32_t bit = rel % 8;
@@ -285,7 +293,7 @@ int noirfs_format(struct block_device *dev,
     root_disk.indirect = 0;
     struct noirfs_mount fake_mount = { .dev = dev, .super = super };
     if (noirfs_write_inode_disk(&fake_mount, root_ino, &root_disk) != 0) {
-        return -1;
+        return -16;
     }
 
     if (progress) {
@@ -914,7 +922,7 @@ static struct inode *noirfs_create_vfs_inode(struct super_block *sb, struct noir
     inode->uid = disk->uid;
     inode->gid = disk->gid;
     inode->perm = disk->perm;
-    inode->ops = &noirfs_ops;
+    inode->ops = noirfs_file_ops();
     inode->private_data = priv;
     return inode;
 }
