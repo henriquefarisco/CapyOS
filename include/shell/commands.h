@@ -14,5 +14,6 @@ const struct shell_command *shell_commands_help(size_t *count);
 const struct shell_command *shell_commands_session(size_t *count);
 const struct shell_command *shell_commands_system_info(size_t *count);
 const struct shell_command *shell_commands_system_control(size_t *count);
+const struct shell_command *shell_commands_network(size_t *count);
 
 #endif

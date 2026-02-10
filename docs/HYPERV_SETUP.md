@@ -11,6 +11,9 @@ Este documento cobre dois cenários:
 - **Geração**: **2**
 - **Memória**: 512 MiB ou 1 GiB (**memória dinâmica desabilitada**)
 - **Secure Boot**: **Desabilitado** (não assinamos `BOOTX64.EFI`)
+- **Rede (estado atual)**:
+  - para validar o caminho de driver legado no CapyOS atual, prefira adicionar **Legacy Network Adapter** (driver `tulip-2114x`, em evolucao)
+  - o adaptador sintético padrão (`Network Adapter`/netvsc) segue em desenvolvimento
 
 ### Disco
 - Crie um disco **VHD fixo** (`.vhd`) e conecte como **SCSI** (padrão da Geração 2).

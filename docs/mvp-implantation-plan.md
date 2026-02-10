@@ -1,4 +1,4 @@
-# Plano de implantacao do MVP do NoirOS
+# Plano de implantacao do MVP do CapyOS
 
 Status de referencia: 2026-02-10
 
@@ -48,6 +48,7 @@ Objetivo do ciclo atual:
 | Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
 |---|---|---|---|
 | Auth de usuarios | `userdb_authenticate` ativo no x64 e 32-bit | politicas de senha, lockout e auditoria | login robusto e rastreavel |
+| Provisionamento do admin na formatacao | setup inicial agora coleta `Usuario administrador [admin]` e grava esse nome no `users.db` (sem forcar `admin`) | propagar preseed do UEFI installer para o runtime x64 persistente | usuario escolhido durante instalacao permanece como conta administrativa ativa |
 | Criptografia em disco | AES-XTS + PBKDF2 no fluxo 32-bit | integridade autenticada por bloco/metadata, rotacao de chaves | confidencialidade + deteccao de adulteracao |
 | Multiusuario | modelo base de UID/GID/sessao/permissoes | comandos de gestao de usuarios e grupos | administracao multiusuario completa via CLI |
 
@@ -58,6 +59,25 @@ Objetivo do ciclo atual:
 | Multithread/scheduler | ainda nao implantado no kernel | task model, run queue, sincronizacao basica | jobs de fundo e manutencao sem bloquear shell |
 | Performance de I/O | cache e wrappers existentes | read-ahead/writeback, profiling e tuning NVMe | menor latencia em listagem/busca/copia |
 | Robustez de sistema | base funcional em single-thread | testes de estresse, lock ordering e diagnostico | menos regressao em cenarios reais de VM/hardware |
+
+### 1.6 Rede (drivers + TCP/IP)
+
+| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
+|---|---|---|---|
+| Descoberta de NIC no x64 | probing PCI ativo com match para e1000 e `tulip-2114x` (legacy/generico Hyper-V); netvsc ainda pendente | ampliar matriz de IDs suportados e implementar netvsc (VMBus) | NIC detectada e caminho de dados funcional em QEMU e Hyper-V |
+| Camada L2/L3 | parser de Ethernet/ARP/IPv4 ativo com ARP real e roteamento minimo via gateway (`next-hop`) | fila de retransmissao e politicas de timeout adaptativas | resolucao de MAC e entrega IPv4 com fluxo previsivel |
+| L4 (ICMP/UDP/TCP) | decodificacao inicial e contadores de telemetria no kernel | sockets/portas, estado TCP, checksums completos, timers e retransmissao | ping, UDP e TCP funcionais para comunicacao externa |
+| Enderecamento | configuracao estatica em runtime com `net-set <ip> <mask> <gw> <dns>` | DHCP client, DNS resolver e persistencia em config | provisionamento automatico de rede em VM/hardware |
+| Observabilidade | logs de init + self-test interno no boot + comandos `net-status`, `net-ip`, `net-gw`, `net-dns`, `hey` | traces de pacotes e counters por interface/fila | diagnostico de rede direto no sistema, sem debug externo |
+
+### 1.7 Caminho grafico e navegador (futuro)
+
+| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
+|---|---|---|---|
+| Stack grafica | framebuffer basico e console texto no kernel | composicao 2D, gerenciamento de janelas, input pointer e toolkit UI | sessao grafica real com apps de usuario |
+| Userspace moderno | runtime atual centrado em kernel+CLI | ABI estavel, carregador ELF userspace, isolamento de processos e IPC | execucao de processos graficos isolados do kernel |
+| Aceleracao/driver GPU | sem stack 3D dedicada | DRM/KMS equivalente, memoria compartilhada, fallback software | renderizacao acelerada para UI e web engine |
+| Navegador open source | inexistente | portar engine (ex.: Chromium/CEF, Servo, WebKitGTK), TLS, DNS, sockets, sandbox e font/render stack | navegacao web grafica com seguranca e desempenho aceitaveis |
 
 ## 2. Fases de entrega (branch atual em diante)
 
@@ -128,6 +148,34 @@ Plano incremental sugerido para Fase C:
 - Resultado esperado:
   - ganho mensuravel de responsividade e throughput
 
+## Fase F - Rede baseline (NIC + pilha TCP/IP)
+- Entrega:
+  - estabilizar probing de NIC suportadas (e1000 + legacy Hyper-V via `tulip-2114x`)
+  - manter caminho de transmissao/recepcao real no `e1000` e caminho inicial no `tulip` (hardening de RX/link pendente)
+  - manter fallback documentado para Hyper-V: `Legacy Network Adapter` enquanto netvsc nao estiver pronto
+  - manter ARP/IPv4/ICMP/UDP/TCP com parsing e contadores confiaveis
+  - introduzir comandos de diagnostico/config de rede no CLI (`net-status`, `net-ip`, `net-gw`, `net-dns`, `net-set`, `hey`)
+- Validacao minima:
+  - boot x64 detectando NIC em QEMU e Hyper-V
+  - `ping` para gateway da VM
+  - teste de transporte: UDP local + handshake TCP minimo
+  - smoke de nao regressao no boot/CLI/filesystem
+- Resultado esperado:
+  - primeira comunicacao da VM com rede externa (internet via host/NAT)
+
+## Fase G - Base para sessao grafica e navegador
+- Entrega:
+  - definir arquitetura de userspace (loader, processo, memoria virtual e IPC)
+  - implantar compositor 2D minimo com input de teclado/mouse
+  - disponibilizar API grafica basica para apps nativos
+  - preparar stack de rede/userland (DNS, TLS, sockets) necessaria para browser
+- Validacao minima:
+  - abrir sessao grafica com app de teste de janelas
+  - renderizar texto/fonte e entrada de pointer
+  - realizar requisicao HTTPS de teste em processo userspace
+- Resultado esperado:
+  - base tecnica para integrar navegador open source (Chromium/Servo/WebKit) sem acoplamento no kernel
+
 ## 3. Checklist de fechamento por fase
 
 Checklist obrigatorio antes de merge:
@@ -155,6 +203,18 @@ make iso
 ```
 
 Para este plano, cada fechamento de fase deve incluir geracao de novas ISOs via WSL.
+
+Checklist adicional para fases com rede:
+
+```bash
+# build e smoke x64
+make all64
+make iso-uefi
+make smoke-x64-cli
+```
+
+Observacao: o smoke de rede dedicado sera adicionado junto com os comandos de
+CLI de diagnostico.
 
 ## 4. Politica de branches e deploy
 
