@@ -45,20 +45,20 @@ static int cmd_print_host(struct shell_context *ctx, int argc, char **argv) {
     }
     (void)argc;
     (void)argv;
-    shell_print(ctx->settings ? ctx->settings->hostname : "noiros");
+    shell_print(ctx->settings ? ctx->settings->hostname : "capyos");
     shell_newline();
     return 0;
 }
 
 static int cmd_print_version(struct shell_context *ctx, int argc, char **argv) {
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-version\nMostra a versao do NoirOS.\n");
+        shell_print("Uso: print-version\nMostra a versao do CapyOS.\n");
         return 0;
     }
     (void)ctx;
     (void)argc;
     (void)argv;
-    shell_print("NoirOS ");
+    shell_print("CapyOS ");
     shell_print(NOIR_VERSION_EXTENDED);
     shell_print(" [");
     shell_print(NOIR_VERSION_CHANNEL);
@@ -155,7 +155,7 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     shell_print(session_cwd(ctx->session));
     shell_newline();
     shell_print("HOST=");
-    shell_print(ctx->settings ? ctx->settings->hostname : "noiros");
+    shell_print(ctx->settings ? ctx->settings->hostname : "capyos");
     shell_newline();
     shell_print("CHANNEL=");
     shell_print(NOIR_VERSION_CHANNEL);

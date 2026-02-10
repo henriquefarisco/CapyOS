@@ -75,7 +75,7 @@ static void system_settings_set_defaults(struct system_settings *settings) {
   if (!settings) {
     return;
   }
-  cstring_copy(settings->hostname, sizeof(settings->hostname), "noiros-node");
+  cstring_copy(settings->hostname, sizeof(settings->hostname), "capyos-node");
   cstring_copy(settings->theme, sizeof(settings->theme), "noir");
   cstring_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout),
                "us");
@@ -493,7 +493,7 @@ static int prompt_password_pair(const char *label, char *password,
 }
 
 static const char *g_cli_reference_text =
-    "NoirCLI - Referencia Rapida\n"
+    "CapyCLI - Referencia Rapida\n"
     "============================\n"
     "\n"
     "Navegacao\n"
@@ -705,7 +705,7 @@ int system_mark_first_boot_complete(void) {
 
 /* Implementacao da configuracao inicial. */
 static int first_boot_setup_impl(void) {
-  print_line("=== Assistente NoirOS - Configuracao Inicial ===");
+  print_line("=== Assistente CapyOS - Configuracao Inicial ===");
   print_line(
       "Este assistente prepara usuarios, configuracao e estrutura basica.");
   vga_newline();
@@ -793,16 +793,16 @@ static int first_boot_setup_impl(void) {
   log_process_finalize(proc_userdb);
   log_process_finalize_success(proc_userdb);
 
-  const char *proc_docs = "instalacao da referencia NoirCLI";
+  const char *proc_docs = "instalacao da referencia CapyCLI";
   log_dependency_wait(proc_userdb, proc_docs);
   log_process_begin(proc_docs);
   log_process_begin_success(proc_docs);
   if (write_text_file("/docs/noiros-cli-reference.txt", g_cli_reference_text) !=
       0) {
-    print_line("   Aviso: nao foi possivel gravar referencia do NoirCLI.");
+    print_line("   Aviso: nao foi possivel gravar referencia do CapyCLI.");
   } else {
     print_line(
-        "   Referencia NoirCLI pronta em /docs/noiros-cli-reference.txt.");
+        "   Referencia CapyCLI pronta em /docs/noiros-cli-reference.txt.");
   }
   sync_root_device();
   log_process_conclude(proc_docs);
@@ -821,9 +821,9 @@ static int first_boot_setup_impl(void) {
   log_process_begin(proc_settings);
   log_process_begin_success(proc_settings);
   size_t hlen =
-      wizard_prompt("Hostname [noiros-node]: ", hostname, sizeof(hostname), 0);
+      wizard_prompt("Hostname [capyos-node]: ", hostname, sizeof(hostname), 0);
   if (hlen == 0) {
-    cstring_copy(hostname, sizeof(hostname), "noiros-node");
+    cstring_copy(hostname, sizeof(hostname), "capyos-node");
   }
   char host_msg[128];
   host_msg[0] = '\0';
@@ -1178,7 +1178,7 @@ int system_login(struct session_context *session,
   log_process_begin(proc_login);
   log_process_begin_success(proc_login);
   vga_newline();
-  print_line("== NoirOS Login ==");
+  print_line("== CapyOS Login ==");
   if (settings) {
     char host_msg[128];
     host_msg[0] = '\0';
@@ -1261,7 +1261,7 @@ void system_show_splash(const struct system_settings *settings) {
                                  "[========= ]", "[==========]"};
   for (size_t i = 0; i < sizeof(frames) / sizeof(frames[0]); ++i) {
     vga_clear();
-    vga_write("NoirOS iniciando...\n\n");
+    vga_write("CapyOS iniciando...\n\n");
     vga_write(frames[i]);
     vga_write("\n");
     for (volatile uint32_t wait = 0; wait < 1000000; ++wait) {

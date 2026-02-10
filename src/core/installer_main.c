@@ -25,7 +25,7 @@
 
 #include "core/system_init.h"
 
-// Noir Guided Installation System — instalador dedicado
+// Capy Guided Installation System - instalador dedicado
 
 struct dev_choice {
   struct block_device *dev;
@@ -255,7 +255,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
   (void)mb_magic;
   (void)mb_info_ptr;
   vga_init();
-  vga_write("Noir Guided Installation System\n\n");
+  vga_write("Capy Guided Installation System\n\n");
   gdt_init();
   idt_install();
   pic_remap(0x20, 0x28);
