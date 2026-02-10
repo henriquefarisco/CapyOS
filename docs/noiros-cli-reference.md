@@ -1,6 +1,6 @@
-# NoirOS – Guia Atualizado de Comandos
+﻿# CapyOS â€“ Guia Atualizado de Comandos
 
-Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implementado possui ajuda integrada (`<comando> -help`).
+Este documento acompanha a distribuicao atual do CapyCLI. Cada comando implementado possui ajuda integrada (`<comando> -help`).
 
 ## Como obter ajuda rapidamente
 - Pressione `F1` para abrir imediatamente a documentacao interativa (`help-docs`) a partir do prompt.
@@ -24,12 +24,14 @@ Este documento acompanha a distribuicao atual do NoirCLI. Cada comando implement
 | `print-file-end` | `print-file-end <arquivo> [-n <linhas>]` | Mostra final do arquivo. |
 | `open` | `open <arquivo>` | Abre para edicao linha-a-linha; finalize com `.wq` para salvar. |
 | `print-echo` | `print-echo [texto...]` | Replica texto na tela. |
-| `print-version` | `print-version` | Informa versao e canal do NoirOS conforme manifesto (`VERSION.yaml`). |
+| `print-version` | `print-version` | Informa versao e canal do CapyOS conforme manifesto (`VERSION.yaml`). |
 | `print-time` | `print-time` | Horario simulado desde o boot (hh:mm:ss). |
 | `print-host` | `print-host` | Exibe hostname carregado. |
 | `print-me` | `print-me` | Exibe usuario autenticado. |
 | `print-id` | `print-id` | Exibe UID/GID do usuario. |
-| `print-envs` | `print-envs` | Mostra variaveis basicas (USER, HOME, HOST etc.) e expõe CHANNEL/VERSION correntes. |
+| `print-envs` | `print-envs` | Mostra variaveis basicas (USER, HOME, HOST etc.) e expÃµe CHANNEL/VERSION correntes. |
+| `net-status` | `net-status` | Exibe estado da rede no runtime x64 (driver, IPv4, ARP, contadores). |
+| `hey` | `hey <ip\|gateway\|dns>` | Envia ICMP echo e responde no formato `hello from (...) Xms)`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (hh:mm:ss). |
 | `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |
@@ -80,3 +82,4 @@ Estes comandos estao documentados apenas como referencia futura e retornarao err
 - O comando `bye` efetua logout e bloqueia o terminal ate nova autenticacao.
 - Logs de processo ficam em `/var/log/setup.log` e `/var/log/cli-selftest.log`.
 - Diretories `/home/<usuario>`, `/tmp` e `/var/log` receberam permissoes ajustadas para permitir criacao de arquivos pelo usuario administrador.
+

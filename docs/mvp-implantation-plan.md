@@ -67,7 +67,16 @@ Objetivo do ciclo atual:
 | Camada L2/L3 | parser de Ethernet, ARP e IPv4 com validacao basica de integridade | ARP request/reply ativos no fio, roteamento minimo e fila de retransmissao | resolucao de MAC e entrega IPv4 com fluxo previsivel |
 | L4 (ICMP/UDP/TCP) | decodificacao inicial e contadores de telemetria no kernel | sockets/portas, estado TCP, checksums completos, timers e retransmissao | ping, UDP e TCP funcionais para comunicacao externa |
 | Enderecamento | configuracao estatica inicial no kernel | DHCP client, DNS resolver e persistencia em config | provisionamento automatico de rede em VM/hardware |
-| Observabilidade | logs de init + self-test interno de protocolos no boot | comandos de CLI (`net-status`, `net-ifconfig`, `ping`) e traces de pacotes | diagnostico de rede direto no sistema, sem debug externo |
+| Observabilidade | logs de init + self-test interno de protocolos no boot | comandos de CLI (`net-status`, `net-ifconfig`, `hey`) e traces de pacotes | diagnostico de rede direto no sistema, sem debug externo |
+
+### 1.7 Caminho grafico e navegador (futuro)
+
+| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
+|---|---|---|---|
+| Stack grafica | framebuffer basico e console texto no kernel | composicao 2D, gerenciamento de janelas, input pointer e toolkit UI | sessao grafica real com apps de usuario |
+| Userspace moderno | runtime atual centrado em kernel+CLI | ABI estavel, carregador ELF userspace, isolamento de processos e IPC | execucao de processos graficos isolados do kernel |
+| Aceleracao/driver GPU | sem stack 3D dedicada | DRM/KMS equivalente, memoria compartilhada, fallback software | renderizacao acelerada para UI e web engine |
+| Navegador open source | inexistente | portar engine (ex.: Chromium/CEF, Servo, WebKitGTK), TLS, DNS, sockets, sandbox e font/render stack | navegacao web grafica com seguranca e desempenho aceitaveis |
 
 ## 2. Fases de entrega (branch atual em diante)
 
@@ -151,6 +160,19 @@ Plano incremental sugerido para Fase C:
   - smoke de nao regressao no boot/CLI/filesystem
 - Resultado esperado:
   - primeira comunicacao da VM com rede externa (internet via host/NAT)
+
+## Fase G - Base para sessao grafica e navegador
+- Entrega:
+  - definir arquitetura de userspace (loader, processo, memoria virtual e IPC)
+  - implantar compositor 2D minimo com input de teclado/mouse
+  - disponibilizar API grafica basica para apps nativos
+  - preparar stack de rede/userland (DNS, TLS, sockets) necessaria para browser
+- Validacao minima:
+  - abrir sessao grafica com app de teste de janelas
+  - renderizar texto/fonte e entrada de pointer
+  - realizar requisicao HTTPS de teste em processo userspace
+- Resultado esperado:
+  - base tecnica para integrar navegador open source (Chromium/Servo/WebKit) sem acoplamento no kernel
 
 ## 3. Checklist de fechamento por fase
 

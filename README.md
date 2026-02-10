@@ -80,6 +80,7 @@ Conjuntos de comandos implementados:
 - Gerenciamento: `mk-file`, `mk-dir`, `kill-file`, `kill-dir`, `move`, `clone`, `stats-file`, `type`
 - Busca: `hunt-file`, `hunt-dir`, `hunt-any`, `find`
 - Sessao/ajuda/sistema: `help-any`, `help-docs`, `mess`, `bye`, `print-*`, `config-keyboard`, `shutdown-reboot`, `shutdown-off`, `do-sync`
+- Rede: `net-status`, `hey <ip|gateway|dns>` (ping/ICMP no x64)
 
 Observacao sobre o x64:
 - comandos antigos que estavam hardcoded no loop principal foram redirecionados para o modulo de shell.
@@ -192,12 +193,14 @@ A evolucao detalhada esta em:
 
 Eixos principais:
 - NFS/NoirFS: journal, recuperacao, fsck, escalabilidade
+- Rede: driver NIC, ARP/IPv4/ICMP/UDP/TCP e utilitarios CLI (`hey`)
 - Criptografia: integridade autenticada, rotacao e hierarquia de chaves
 - Performance: cache, I/O, NVMe tuning, operacoes em lote
 - Seguranca: auditoria, ACL, hardening de parser e metadata
 - Multiusuario: gestao de usuarios/grupos e isolamento de sessao
 - CLI: historico, autocomplete, pipes e jobs
 - Multithread: scheduler, workers e sincronizacao
+- Futuro grafico: base de userspace + compositor para viabilizar navegador open source (Chromium/Servo/WebKit)
 
 ## Estrutura do repositorio
 

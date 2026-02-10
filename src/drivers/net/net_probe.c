@@ -91,6 +91,11 @@ int net_probe_first_supported(struct net_nic_probe *out) {
             pci_config_read16((uint8_t)bus, dev, func, PCI_DEVICE_ID);
         uint8_t kind = match_nic_kind(vendor, device_id);
         if (kind != NET_NIC_KIND_UNKNOWN) {
+          uint16_t cmd =
+              pci_config_read16((uint8_t)bus, dev, func, PCI_COMMAND);
+          cmd |= (uint16_t)(PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER);
+          pci_config_write16((uint8_t)bus, dev, func, PCI_COMMAND, cmd);
+
           out->found = 1;
           out->kind = kind;
           out->bus = (uint8_t)bus;

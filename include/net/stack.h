@@ -60,9 +60,13 @@ int net_stack_set_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
                        uint32_t dns);
 int net_stack_status(struct net_stack_status *out);
 int net_stack_receive_frame(const uint8_t *frame, size_t len);
+int net_stack_poll(void);
 int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
                         const uint8_t *payload, size_t payload_len);
+int net_stack_ping(uint32_t dst_ip, uint32_t timeout_ms, uint32_t *rtt_ms,
+                   uint32_t *reply_ip);
 int net_stack_protocol_selftest(void);
 const char *net_driver_name(uint8_t kind);
+void net_ipv4_format(uint32_t ip, char out[16]);
 
 #endif /* NET_STACK_H */

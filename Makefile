@@ -107,6 +107,7 @@ NOIROS64_OBJS = \
 	$(BUILD)/x86_64/core/user.o \
 	$(BUILD)/x86_64/core/session.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
+	$(BUILD)/x86_64/drivers/net/e1000.o \
 	$(BUILD)/x86_64/drivers/net/net_probe.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme.o \
 	$(BUILD)/x86_64/drivers/usb/xhci.o \
@@ -127,6 +128,7 @@ NOIROS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/session.o \
 	$(BUILD)/x86_64/shell/commands/system_info.o \
 	$(BUILD)/x86_64/shell/commands/system_control.o \
+	$(BUILD)/x86_64/shell/commands/network.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_navigation.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_content.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_manage.o \
