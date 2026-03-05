@@ -358,27 +358,19 @@ static int write_settings_file(const struct system_settings *settings) {
 
   const char *splash_value = settings->splash_enabled ? "enabled" : "disabled";
   char config_buffer[256];
-  size_t idx = 0;
-  const char *entries[] = {"hostname=",
-                           settings->hostname,
-                           "\n",
-                           "theme=",
-                           settings->theme,
-                           "\n",
-                           "keyboard=",
-                           settings->keyboard_layout,
-                           "\n",
-                           "splash=",
-                           splash_value,
-                           "\n"};
-  for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); ++i) {
-    const char *p = entries[i];
-    size_t plen = cstring_length(p);
-    for (size_t j = 0; j < plen && idx < sizeof(config_buffer) - 1; ++j) {
-      config_buffer[idx++] = p[j];
-    }
-  }
-  config_buffer[idx] = '\0';
+  config_buffer[0] = '\0';
+  buffer_append(config_buffer, sizeof(config_buffer), "hostname=");
+  buffer_append(config_buffer, sizeof(config_buffer), settings->hostname);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "theme=");
+  buffer_append(config_buffer, sizeof(config_buffer), settings->theme);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "keyboard=");
+  buffer_append(config_buffer, sizeof(config_buffer), settings->keyboard_layout);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "splash=");
+  buffer_append(config_buffer, sizeof(config_buffer), splash_value);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
 
   return write_text_file("/system/config.ini", config_buffer);
 }
@@ -747,25 +739,60 @@ static int first_boot_setup_impl(void) {
 
   g_setup_debug = 1; // habilita logs detalhados durante a preparacao inicial
 
-  const char *directories[] = {"/bin", "/etc",     "/home",   "/tmp",
-                               "/var", "/var/log", "/system", "/docs"};
-
   const char *proc_dirs = "preparacao de diretorios padrao";
   log_process_begin(proc_dirs);
   log_process_begin_success(proc_dirs);
-  for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); ++i) {
-    dbg_print_heap("[setup] ensure path: ", directories[i]);
-    if (ensure_directory(directories[i]) != 0) {
-      print_line("Falha ao preparar estrutura de diretorios.");
-      return -1;
-    }
+  dbg_print_heap("[setup] ensure path: ", "/bin");
+  if (ensure_directory("/bin") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/etc");
+  if (ensure_directory("/etc") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/home");
+  if (ensure_directory("/home") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/tmp");
+  if (ensure_directory("/tmp") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/var");
+  if (ensure_directory("/var") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/var/log");
+  if (ensure_directory("/var/log") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/system");
+  if (ensure_directory("/system") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
+  }
+  dbg_print_heap("[setup] ensure path: ", "/docs");
+  if (ensure_directory("/docs") != 0) {
+    print_line("Falha ao preparar estrutura de diretorios.");
+    return -1;
   }
   log_process_progress(proc_dirs);
-  for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); ++i) {
-    if (verify_directory_exists(directories[i]) != 0) {
-      print_line("Verificacao de diretorios falhou.");
-      return -1;
-    }
+  if (verify_directory_exists("/bin") != 0 ||
+      verify_directory_exists("/etc") != 0 ||
+      verify_directory_exists("/home") != 0 ||
+      verify_directory_exists("/tmp") != 0 ||
+      verify_directory_exists("/var") != 0 ||
+      verify_directory_exists("/var/log") != 0 ||
+      verify_directory_exists("/system") != 0 ||
+      verify_directory_exists("/docs") != 0) {
+    print_line("Verificacao de diretorios falhou.");
+    return -1;
   }
   print_line("   Estrutura de diretorios pronta.");
   if (!g_setup_log_ready) {
@@ -843,6 +870,47 @@ static int first_boot_setup_impl(void) {
   log_process_conclude(proc_docs);
   log_process_finalize(proc_docs);
   log_process_finalize_success(proc_docs);
+
+  print_line("Layouts de teclado disponiveis:");
+  for (size_t i = 0; i < keyboard_layout_count(); ++i) {
+    char idxbuf[4];
+    idxbuf[0] = '[';
+    idxbuf[1] = (char)('0' + (int)i);
+    idxbuf[2] = ']';
+    idxbuf[3] = '\0';
+    vga_write("  ");
+    vga_write(idxbuf);
+    vga_write(" ");
+    vga_write(keyboard_layout_name(i));
+    vga_write(" - ");
+    vga_write(keyboard_layout_description(i));
+    vga_newline();
+  }
+
+  char layout_choice[32];
+  memory_zero(layout_choice, sizeof(layout_choice));
+  while (1) {
+    size_t llen =
+        wizard_prompt("Layout do teclado [us]: ", layout_choice,
+                      sizeof(layout_choice), 0);
+    if (llen == 0) {
+      cstring_copy(layout_choice, sizeof(layout_choice), "us");
+    } else if (llen == 1 && layout_choice[0] >= '0' &&
+               layout_choice[0] < '0' + (char)keyboard_layout_count()) {
+      size_t pick = (size_t)(layout_choice[0] - '0');
+      cstring_copy(layout_choice, sizeof(layout_choice),
+                   keyboard_layout_name(pick));
+    }
+    if (keyboard_set_layout_by_name(layout_choice) == 0) {
+      char msg[96];
+      msg[0] = '\0';
+      buffer_append(msg, sizeof(msg), "   Layout aplicado: ");
+      buffer_append(msg, sizeof(msg), layout_choice);
+      print_line(msg);
+      break;
+    }
+    print_line("Layout desconhecido. Escolha um indice ou nome valido.");
+  }
 
   char hostname[TTY_BUFFER_MAX];
   char theme_input[TTY_BUFFER_MAX];
@@ -1020,18 +1088,18 @@ static int first_boot_setup_impl(void) {
     keyboard_value = "us";
   }
 
-  size_t idx = 0;
-  const char *entries[] = {
-      "hostname=", hostname,       "\n", "theme=",  theme,        "\n",
-      "keyboard=", keyboard_value, "\n", "splash=", splash_value, "\n"};
-  for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); ++i) {
-    const char *p = entries[i];
-    size_t plen = cstring_length(p);
-    for (size_t j = 0; j < plen && idx < sizeof(config_buffer) - 1; ++j) {
-      config_buffer[idx++] = p[j];
-    }
-  }
-  config_buffer[idx] = '\0';
+  buffer_append(config_buffer, sizeof(config_buffer), "hostname=");
+  buffer_append(config_buffer, sizeof(config_buffer), hostname);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "theme=");
+  buffer_append(config_buffer, sizeof(config_buffer), theme);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "keyboard=");
+  buffer_append(config_buffer, sizeof(config_buffer), keyboard_value);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "splash=");
+  buffer_append(config_buffer, sizeof(config_buffer), splash_value);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
 
   const char *proc_config = "gravacao da configuracao do sistema";
   log_dependency_wait(proc_admin, proc_config);
@@ -1311,8 +1379,9 @@ void system_show_splash(const struct system_settings *settings) {
   if (!settings || !settings->splash_enabled) {
     return;
   }
-  static const char *frames[] = {"[=         ]", "[===       ]", "[======    ]",
-                                 "[========= ]", "[==========]"};
+  static const char frames[][13] = {"[=         ]", "[===       ]",
+                                    "[======    ]", "[========= ]",
+                                    "[==========]"};
   for (size_t i = 0; i < sizeof(frames) / sizeof(frames[0]); ++i) {
     vga_clear();
     vga_write("CapyOS iniciando...\n\n");
