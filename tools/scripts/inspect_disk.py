@@ -133,7 +133,7 @@ def fat32_read_file(img: mmap.mmap, part_lba: int, path: str) -> bytes:
     root_cluster = int.from_bytes(bs[44:48], "little")
 
     if bps != 512 or spc == 0 or fatsz32 == 0 or num_fats == 0:
-        raise ValueError("FAT32 inválido/inesperado na ESP.")
+        raise ValueError("FAT32 invÃƒÂ¡lido/inesperado na ESP.")
 
     fat_start_lba = part_lba + reserved
     data_start_lba = fat_start_lba + num_fats * fatsz32
@@ -215,13 +215,13 @@ def fat32_read_file(img: mmap.mmap, part_lba: int, path: str) -> bytes:
                 found = e
                 break
         if not found:
-            raise FileNotFoundError(f"Arquivo não encontrado na ESP: {path}")
+            raise FileNotFoundError(f"Arquivo nÃƒÂ£o encontrado na ESP: {path}")
         is_last = (i == len(parts) - 1)
         if is_last:
             data = read_chain(found["cluster"])
             return data[: found["size"]]
         if (found["attr"] & 0x10) == 0:
-            raise FileNotFoundError(f"Caminho inválido (não é diretório): {comp}")
+            raise FileNotFoundError(f"Caminho invÃƒÂ¡lido (nÃƒÂ£o ÃƒÂ© diretÃƒÂ³rio): {comp}")
         cur = found["cluster"]
 
     raise FileNotFoundError(f"Caminho vazio: {path!r}")
@@ -460,14 +460,14 @@ def write_stage2(disk: Path, stage2_bin: Path, info: dict):
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description="Inspeciona MBR/GPT/stage2 de um disco NoirOS.")
-    parser.add_argument("disk", nargs="?", default=r"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\NoirOSGenII.vhd",
+    parser = argparse.ArgumentParser(description="Inspeciona MBR/GPT/stage2 de um disco CAPYOS.")
+    parser.add_argument("disk", nargs="?", default=r"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\CapyOSGenII.vhd",
                         help="Caminho para o disco (default: %(default)s)")
     parser.add_argument("--cat-esp", metavar="PATH",
-                        help="Mostra um arquivo dentro da ESP FAT32 (ex.: EFI/NOIROS.LOG)")
+                        help="Mostra um arquivo dentro da ESP FAT32 (ex.: EFI/CAPYOS.LOG)")
     parser.add_argument("--ls-esp", nargs="?", const="/", metavar="DIR",
-                        help="Lista um diretório dentro da ESP FAT32 (ex.: EFI, EFI/BOOT, ou /)")
-    parser.add_argument("--log-file", help="Opcional: grava a saída em um arquivo de log")
+                        help="Lista um diretÃƒÂ³rio dentro da ESP FAT32 (ex.: EFI, EFI/BOOT, ou /)")
+    parser.add_argument("--log-file", help="Opcional: grava a saÃƒÂ­da em um arquivo de log")
     parser.add_argument("--write-stage2", action="store_true",
                         help="Sobrescreve stage2 no disco usando o binario indicado (veja --stage2-bin)")
     parser.add_argument("--stage2-bin", default="build/boot/stage2.new.bin",
@@ -486,7 +486,7 @@ def main():
             esp_guid = bytes([0x28,0x73,0x2A,0xC1,0x1F,0xF8,0xD2,0x11,0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B])
             esp = find_gpt_partition(mm, esp_guid)
             if not esp:
-                log("[erro] ESP não encontrada no GPT.")
+                log("[erro] ESP nÃƒÂ£o encontrada no GPT.")
                 return
             esp_lba, _ = esp
             try:
@@ -501,7 +501,7 @@ def main():
             esp_guid = bytes([0x28,0x73,0x2A,0xC1,0x1F,0xF8,0xD2,0x11,0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B])
             esp = find_gpt_partition(mm, esp_guid)
             if not esp:
-                log("[erro] ESP não encontrada no GPT.")
+                log("[erro] ESP nÃƒÂ£o encontrada no GPT.")
                 return
             esp_lba, _ = esp
             try:
@@ -522,7 +522,7 @@ def main():
         if boot_part_lba:
             inspect_gpt_boot(f, boot_part_lba)
         else:
-            # Legacy MBR path: Assume P1 é BOOT.
+            # Legacy MBR path: Assume P1 ÃƒÂ© BOOT.
             boot_lba = struct.unpack("<I", read_lba(mm, 0)[454:458])[0]
             if boot_lba == 0:
                 log("Boot partition starts at 0? Fishy.")

@@ -8,11 +8,10 @@ REQUIRED_TOOLS = [
     "x86_64-elf-gcc",
     "x86_64-elf-ld",
     "x86_64-elf-objcopy",
-    # Assemblers
-    "nasm",
     # ISO/EFI tooling
     "xorriso",
-    "grub-mkrescue",
+    # Runtime tooling for provisioning/smoke scripts
+    "python3",
 ]
 
 def check_tool(tool):

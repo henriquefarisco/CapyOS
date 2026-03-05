@@ -58,7 +58,7 @@ static int cmd_config_keyboard(struct shell_context *ctx, int argc,
 static void sync_and_flush(void) {
   struct super_block *root = vfs_root();
   if (root && root->bdev) {
-    buffer_cache_sync(root->bdev);
+    (void)buffer_cache_sync(root->bdev);
   }
 }
 
@@ -149,7 +149,10 @@ static int cmd_do_sync(struct shell_context *ctx, int argc, char **argv) {
     shell_print_error("sem dispositivo");
     return -1;
   }
-  buffer_cache_sync(root->bdev);
+  if (buffer_cache_sync(root->bdev) != 0) {
+    shell_print_error("falha ao sincronizar buffers de disco");
+    return -1;
+  }
   shell_print_ok("buffers sincronizados");
   return 0;
 }

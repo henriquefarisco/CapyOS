@@ -1,5 +1,5 @@
 /**
- * ACPI Driver for NoirOS
+ * ACPI Driver for CAPYOS
  * Provides power management via ACPI tables.
  */
 #ifndef ACPI_H

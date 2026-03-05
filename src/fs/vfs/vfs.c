@@ -1,7 +1,7 @@
 /* vfs.c: VFS root state, dentry tree, and metadata defaults. */
 #include "fs/vfs.h"
 #include "drivers/video/vga.h"
-#include "fs/noirfs.h"
+#include "fs/capyfs.h"
 
 #include "memory/kmem.h"
 #include "core/session.h"
@@ -259,13 +259,13 @@ int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta)
     }
 
     if (dentry_lookup_child(parent, name)) {
-        return -1; // Já existe
+        return -1; // JÃƒÂ¡ existe
     }
 
-    // Para o FS nativo atual (NoirFS), garantimos que o conjunto de ops
-    // a ser usado é o oficial, evitando qualquer salto indevido por corrupcao.
+    // Para o FS nativo atual (CAPYFS), garantimos que o conjunto de ops
+    // a ser usado ÃƒÂ© o oficial, evitando qualquer salto indevido por corrupcao.
     if (parent->inode) {
-        parent->inode->ops = noirfs_file_ops();
+        parent->inode->ops = capyfs_file_ops();
     }
     if (!parent->inode || !parent->inode->ops || !parent->inode->ops->create) {
         vga_write("[vfs] create: ops indisponiveis\n");
@@ -283,12 +283,12 @@ int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta)
     }
     struct inode *inode = NULL;
     vga_write("[vfs] calling fs->create for: "); vga_write(name); vga_newline();
-    // Chamada direta ao NoirFS para evitar dependencia de ponteiros corrompidos
-    if (noirfs_create_pub(parent->inode, name, mode, &local_meta, &inode) != 0 || !inode) {
-        vga_write("[vfs] create: noirfs_create returned error\n");
+    // Chamada direta ao CAPYFS para evitar dependencia de ponteiros corrompidos
+    if (capyfs_create_pub(parent->inode, name, mode, &local_meta, &inode) != 0 || !inode) {
+        vga_write("[vfs] create: capyfs_create returned error\n");
         return -1;
     }
-    vga_write("[vfs] create: noirfs_create ok\n");
+    vga_write("[vfs] create: capyfs_create ok\n");
     struct dentry *child = dentry_alloc(name, inode, parent);
     if (!child) {
         return -1;

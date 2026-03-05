@@ -59,9 +59,9 @@ static int cmd_print_version(struct shell_context *ctx, int argc, char **argv) {
     (void)argc;
     (void)argv;
     shell_print("CapyOS ");
-    shell_print(NOIR_VERSION_EXTENDED);
+    shell_print(CAPYOS_VERSION_EXTENDED);
     shell_print(" [");
-    shell_print(NOIR_VERSION_CHANNEL);
+    shell_print(CAPYOS_VERSION_CHANNEL);
     shell_print("]\n");
     return 0;
 }
@@ -158,13 +158,13 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     shell_print(ctx->settings ? ctx->settings->hostname : "capyos");
     shell_newline();
     shell_print("CHANNEL=");
-    shell_print(NOIR_VERSION_CHANNEL);
+    shell_print(CAPYOS_VERSION_CHANNEL);
     shell_newline();
     shell_print("VERSION=");
-    shell_print(NOIR_VERSION_EXTENDED);
+    shell_print(CAPYOS_VERSION_EXTENDED);
     shell_newline();
     shell_print("VERSION_FULL=");
-    shell_print(NOIR_VERSION_FULL);
+    shell_print(CAPYOS_VERSION_FULL);
     shell_newline();
     shell_print("PATH=/bin:/system\n");
     return 0;

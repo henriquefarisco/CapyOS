@@ -1,7 +1,8 @@
-// CapyOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\noiros64.bin
+// CapyOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\capyos64.bin
 // from the same volume as BOOTX64.EFI, loads PT_LOAD segments at p_paddr and
 // jumps to e_entry after ExitBootServices, passing a basic handoff.
 #include "boot/boot_manifest.h"
+#include "boot/boot_config.h"
 #include "boot/handoff.h"
 #include <efi.h>
 #include <efilib.h>
@@ -21,10 +22,13 @@ static inline void dbgcon_putc(UINT8 c) {
 #define EFI_PART_TYPE_ESP                                                      \
   {0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,                             \
    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B}
-/* Temporário: GUID de partição BOOT NoirOS (ajustar no instalador GPT) */
-#define EFI_PART_TYPE_NOIROS_BOOT                                              \
+/* TemporÃƒÂ¡rio: GUID de partiÃƒÂ§ÃƒÂ£o BOOT CAPYOS (ajustar no instalador GPT) */
+#define EFI_PART_TYPE_CAPYOS_BOOT                                              \
   {0x76, 0x0b, 0x98, 0x04, 0x42, 0x10, 0x4c, 0x9b,                             \
    0x86, 0x1f, 0x11, 0xe0, 0x29, 0xea, 0xc1, 0x01}
+#define EFI_PART_TYPE_LINUX_FS                                                 \
+  {0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,                             \
+   0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4}
 
 typedef struct {
   UINT8 e_ident[16];
@@ -80,12 +84,159 @@ typedef struct {
   UINT16 name[36];
 } __attribute__((packed)) gpt_entry_t;
 
+typedef struct {
+  UINT8 Type;
+  UINT8 SubType;
+  UINT8 Length[2];
+} __attribute__((packed)) dp_node_hdr_t;
+
+typedef struct {
+  dp_node_hdr_t Header;
+  UINT32 PartitionNumber;
+  UINT64 PartitionStart;
+  UINT64 PartitionSize;
+  UINT8 Signature[16];
+  UINT8 MBRType;
+  UINT8 SignatureType;
+} __attribute__((packed)) dp_hd_node_t;
+
+#define DP_TYPE_MEDIA 0x04
+#define DP_SUBTYPE_HARDDRIVE 0x01
+#define DP_TYPE_END 0x7F
+#define DP_SUBTYPE_END_ENTIRE 0xFF
+
 static BOOLEAN guid_eq(const UINT8 *a, const UINT8 *b) {
   for (UINTN i = 0; i < 16; i++) {
     if (a[i] != b[i])
       return FALSE;
   }
   return TRUE;
+}
+
+static EFI_STATUS read_file(EFI_FILE_HANDLE root, CHAR16 *path, VOID **buf,
+                            UINTN *size);
+
+static struct boot_config_sector g_runtime_boot_cfg;
+static BOOLEAN g_runtime_boot_cfg_valid = FALSE;
+
+static void bootcfg_clear(struct boot_config_sector *cfg) {
+  if (!cfg)
+    return;
+  for (UINTN i = 0; i < sizeof(*cfg); ++i) {
+    ((UINT8 *)cfg)[i] = 0;
+  }
+}
+
+static BOOLEAN ascii_is_alnum_u16(CHAR16 c) {
+  if (c >= L'0' && c <= L'9')
+    return TRUE;
+  if (c >= L'a' && c <= L'z')
+    return TRUE;
+  if (c >= L'A' && c <= L'Z')
+    return TRUE;
+  return FALSE;
+}
+
+static CHAR16 ascii_upper_u16(CHAR16 c) {
+  if (c >= L'a' && c <= L'z')
+    return (CHAR16)(c - L'a' + L'A');
+  return c;
+}
+
+static void char16_to_ascii(char *out, UINTN out_len, const CHAR16 *in) {
+  if (!out || out_len == 0) {
+    return;
+  }
+  UINTN n = 0;
+  if (in) {
+    for (; in[n] && n + 1 < out_len; ++n) {
+      CHAR16 c = in[n];
+      out[n] = (char)((c <= 0x7F) ? c : '?');
+    }
+  }
+  out[n] = 0;
+}
+
+static int ascii_streq(const char *a, const char *b) {
+  if (!a || !b) {
+    return 0;
+  }
+  UINTN i = 0;
+  while (a[i] && b[i]) {
+    if (a[i] != b[i]) {
+      return 0;
+    }
+    ++i;
+  }
+  return a[i] == b[i];
+}
+
+static int normalize_key_char16(const CHAR16 *in, char *out, UINTN out_len) {
+  if (!in || !out || out_len < 2) {
+    return -1;
+  }
+  UINTN n = 0;
+  for (UINTN i = 0; in[i]; ++i) {
+    CHAR16 c = in[i];
+    if (c == L'-' || c == L' ' || c == L'\t' || c == L'\r' || c == L'\n') {
+      continue;
+    }
+    if (!ascii_is_alnum_u16(c)) {
+      return -1;
+    }
+    if (n + 1 >= out_len) {
+      return -1;
+    }
+    out[n++] = (char)ascii_upper_u16(c);
+  }
+  if (n < 8) {
+    return -1;
+  }
+  out[n] = 0;
+  return 0;
+}
+
+static EFI_STATUS load_boot_config_from_root(EFI_FILE_HANDLE root) {
+  if (!root) {
+    return EFI_INVALID_PARAMETER;
+  }
+  bootcfg_clear(&g_runtime_boot_cfg);
+  g_runtime_boot_cfg_valid = FALSE;
+
+  VOID *cfg_buf = NULL;
+  UINTN cfg_size = 0;
+  EFI_STATUS st = read_file(root, L"BOOT\\CAPYCFG.BIN", &cfg_buf, &cfg_size);
+  if (EFI_ERROR(st)) {
+    st = read_file(root, L"\\BOOT\\CAPYCFG.BIN", &cfg_buf, &cfg_size);
+  }
+  if (EFI_ERROR(st)) {
+    st = read_file(root, L"\\boot\\capycfg.bin", &cfg_buf, &cfg_size);
+  }
+  if (EFI_ERROR(st)) {
+    st = read_file(root, L"boot\\capycfg.bin", &cfg_buf, &cfg_size);
+  }
+  if (EFI_ERROR(st)) {
+    return st;
+  }
+  if (!cfg_buf || cfg_size < sizeof(struct boot_config_sector)) {
+    if (cfg_buf)
+      FreePool(cfg_buf);
+    return EFI_LOAD_ERROR;
+  }
+
+  struct boot_config_sector *cfg = (struct boot_config_sector *)cfg_buf;
+  if (cfg->magic == BOOT_CONFIG_MAGIC) {
+    g_runtime_boot_cfg = *cfg;
+    if (g_runtime_boot_cfg.version == 0) {
+      g_runtime_boot_cfg.version = 1;
+    }
+    if (g_runtime_boot_cfg.version > BOOT_CONFIG_VERSION) {
+      g_runtime_boot_cfg.version = BOOT_CONFIG_VERSION;
+    }
+    g_runtime_boot_cfg_valid = TRUE;
+  }
+  FreePool(cfg_buf);
+  return g_runtime_boot_cfg_valid ? EFI_SUCCESS : EFI_LOAD_ERROR;
 }
 
 static EFI_STATUS read_file(EFI_FILE_HANDLE root, CHAR16 *path, VOID **buf,
@@ -155,13 +306,13 @@ static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
 
   Elf64_Ehdr *eh = (Elf64_Ehdr *)kernel_buf;
   if (*(UINT32 *)eh->e_ident != ELF_MAGIC || eh->e_machine != EM_X86_64) {
-    Print(L"[UEFI] kernel ELF64 inválido\r\n");
+    Print(L"[UEFI] kernel ELF64 invÃƒÂ¡lido\r\n");
     return EFI_UNSUPPORTED;
   }
 
-  // Carrega o kernel em um bloco contíguo abaixo de 4GiB e aplica um offset
-  // único. O kernel 64-bit é linkado em um endereço base (ex.: 0x0040_0000),
-  // mas deve ser escrito de forma relocável (PC-relative/RIP-relative) para
+  // Carrega o kernel em um bloco contÃƒÂ­guo abaixo de 4GiB e aplica um offset
+  // ÃƒÂºnico. O kernel 64-bit ÃƒÂ© linkado em um endereÃƒÂ§o base (ex.: 0x0040_0000),
+  // mas deve ser escrito de forma relocÃƒÂ¡vel (PC-relative/RIP-relative) para
   // suportar esse offset.
   EFI_PHYSICAL_ADDRESS link_base = 0xFFFFFFFFFFFFFFFFULL;
   EFI_PHYSICAL_ADDRESS link_end = 0;
@@ -179,7 +330,7 @@ static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
       link_end = seg_end;
   }
   if (link_base == 0xFFFFFFFFFFFFFFFFULL || link_end <= link_base) {
-    Print(L"[UEFI] ELF sem segmentos PT_LOAD válidos\r\n");
+    Print(L"[UEFI] ELF sem segmentos PT_LOAD vÃƒÂ¡lidos\r\n");
     return EFI_LOAD_ERROR;
   }
 
@@ -195,7 +346,7 @@ static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
     return alloc_st;
   }
 
-  // Zera toda a área (inclui gaps e BSS)
+  // Zera toda a ÃƒÂ¡rea (inclui gaps e BSS)
   UINT8 *base = (UINT8 *)(UINTN)load_base;
   for (UINTN b = 0; b < span; b++)
     base[b] = 0;
@@ -257,7 +408,7 @@ static EFI_STATUS try_manifest_from_gpt(EFI_BLOCK_IO_PROTOCOL *bio,
     return EFI_NOT_FOUND;
 
   UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
-  UINT8 boot_guid[16] = EFI_PART_TYPE_NOIROS_BOOT;
+  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
 
   UINTN ents_per_block = bsz / entsz;
   UINT64 cur_lba = ent_lba;
@@ -284,7 +435,7 @@ static EFI_STATUS try_manifest_from_gpt(EFI_BLOCK_IO_PROTOCOL *bio,
       if (guid_eq(e->part_type_guid, esp_guid))
         continue; // pular ESP
       if (!guid_eq(e->part_type_guid, boot_guid))
-        continue; // só BOOT
+        continue; // sÃƒÂ³ BOOT
       UINT64 start_lba = e->first_lba;
       VOID *mf_buf = AllocatePool(bsz);
       if (!mf_buf) {
@@ -354,6 +505,8 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   if (EFI_ERROR(stt) || root == NULL)
     return stt;
 
+  (void)load_boot_config_from_root(root);
+
   // Tentar manifest first
   VOID *manifest_buf = NULL;
   UINTN manifest_size = 0;
@@ -400,7 +553,7 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
       mf = (struct boot_manifest *)manifest_buf;
     }
   }
-  // Usar manifest se válido
+  // Usar manifest se vÃƒÂ¡lido
   if (boot_part_lba != 0 && mf && mf->magic == BOOT_MANIFEST_MAGIC &&
       mf->entry_count > 0 && bio && bio->Media) {
     if (block_sz == 0)
@@ -419,7 +572,7 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
     if (kernel_buf) {
       UINT64 lba = sel->lba_start;
       if (boot_part_lba != 0) {
-        lba += boot_part_lba; // lba relativo à partição BOOT
+        lba += boot_part_lba; // lba relativo ÃƒÂ  partiÃƒÂ§ÃƒÂ£o BOOT
       }
       EFI_STATUS rb =
           uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId, lba,
@@ -441,28 +594,28 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   // Fallback: caminho fixo
   VOID *kernel_buf = NULL;
   UINTN kernel_size = 0;
-  stt = read_file(root, L"BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_size);
+  stt = read_file(root, L"BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_size = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_size);
+    stt = read_file(root, L"\\BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_size = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\boot\\noiros64.bin", &kernel_buf, &kernel_size);
+    stt = read_file(root, L"\\boot\\capyos64.bin", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_size = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"boot\\noiros64.bin", &kernel_buf, &kernel_size);
+    stt = read_file(root, L"boot\\capyos64.bin", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt)) {
     Print(L"[UEFI] Falha ao ler kernel: %r\r\n", stt);
     return stt;
@@ -590,10 +743,10 @@ static BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     return FALSE;
 
   EFI_FILE_HANDLE fh = NULL;
-  stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"\\NOIROS.INI",
+  stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"\\CAPYOS.INI",
                           EFI_FILE_MODE_READ, 0);
   if (EFI_ERROR(stt)) {
-    stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"NOIROS.INI",
+    stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"CAPYOS.INI",
                             EFI_FILE_MODE_READ, 0);
   }
   if (!EFI_ERROR(stt) && fh) {
@@ -649,6 +802,358 @@ static EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
   return EFI_SUCCESS;
 }
 
+static UINTN dp_node_len(const dp_node_hdr_t *node) {
+  if (!node) {
+    return 0;
+  }
+  return (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
+}
+
+static int get_partition_hint_from_handle(EFI_SYSTEM_TABLE *st,
+                                          EFI_HANDLE handle,
+                                          UINT64 *out_start,
+                                          UINT64 *out_count) {
+  if (out_start) {
+    *out_start = 0;
+  }
+  if (out_count) {
+    *out_count = 0;
+  }
+  if (!st || !st->BootServices || !handle) {
+    return -1;
+  }
+
+  VOID *dp_raw = NULL;
+  EFI_STATUS stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, handle,
+                                     &DevicePathProtocol, (VOID **)&dp_raw);
+  if (EFI_ERROR(stt) || !dp_raw) {
+    return -1;
+  }
+
+  dp_node_hdr_t *node = (dp_node_hdr_t *)dp_raw;
+  for (UINTN guard = 0; node && guard < 128; ++guard) {
+    UINTN len = dp_node_len(node);
+    if (len < sizeof(dp_node_hdr_t)) {
+      break;
+    }
+    if (node->Type == DP_TYPE_END &&
+        node->SubType == DP_SUBTYPE_END_ENTIRE) {
+      break;
+    }
+    if (node->Type == DP_TYPE_MEDIA &&
+        node->SubType == DP_SUBTYPE_HARDDRIVE &&
+        len >= sizeof(dp_hd_node_t)) {
+      const dp_hd_node_t *hd = (const dp_hd_node_t *)node;
+      if (hd->PartitionStart != 0 && hd->PartitionSize != 0) {
+        if (out_start) {
+          *out_start = hd->PartitionStart;
+        }
+        if (out_count) {
+          *out_count = hd->PartitionSize;
+        }
+        return 0;
+      }
+    }
+    node = (dp_node_hdr_t *)((UINT8 *)node + len);
+  }
+
+  return -1;
+}
+
+static int get_boot_partition_hint(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
+                                   UINT64 *out_start, UINT64 *out_count) {
+  if (out_start) {
+    *out_start = 0;
+  }
+  if (out_count) {
+    *out_count = 0;
+  }
+  if (!image || !st || !st->BootServices) {
+    return -1;
+  }
+
+  EFI_LOADED_IMAGE *li = NULL;
+  EFI_STATUS stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, image,
+                                     &LoadedImageProtocol, (VOID **)&li);
+  if (EFI_ERROR(stt) || !li || !li->DeviceHandle) {
+    return -1;
+  }
+  return get_partition_hint_from_handle(st, li->DeviceHandle, out_start,
+                                        out_count);
+}
+
+static EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
+                                                 UINT64 *out_data_start,
+                                                 UINT64 *out_data_count,
+                                                 UINT64 *out_esp_start,
+                                                 UINT64 *out_esp_count) {
+  if (!bio || !bio->Media || !out_data_start || !out_data_count) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *out_data_start = 0;
+  *out_data_count = 0;
+  if (out_esp_start) {
+    *out_esp_start = 0;
+  }
+  if (out_esp_count) {
+    *out_esp_count = 0;
+  }
+
+  UINT32 bsz = bio->Media->BlockSize;
+  if (bsz == 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  VOID *hdr_buf = AllocatePool(bsz);
+  if (!hdr_buf) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  EFI_STATUS st = uefi_call_wrapper(bio->ReadBlocks, 5, bio,
+                                    bio->Media->MediaId, GPT_HEADER_LBA, bsz,
+                                    hdr_buf);
+  if (EFI_ERROR(st)) {
+    FreePool(hdr_buf);
+    return st;
+  }
+
+  gpt_header_t *hdr = (gpt_header_t *)hdr_buf;
+  if (hdr->signature != GPT_SIG || hdr->part_entry_size == 0 ||
+      hdr->num_part_entries == 0 || hdr->part_entry_size > bsz) {
+    FreePool(hdr_buf);
+    return EFI_NOT_FOUND;
+  }
+
+  UINT32 entsz = hdr->part_entry_size;
+  UINT32 entcnt = hdr->num_part_entries;
+  UINT64 ent_lba = hdr->part_entry_lba;
+  FreePool(hdr_buf);
+
+  UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
+  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
+  UINT8 data_guid[16] = EFI_PART_TYPE_LINUX_FS;
+
+  UINTN ents_per_block = bsz / entsz;
+  UINTN read_entries = 0;
+  UINT64 cur_lba = ent_lba;
+
+  UINT64 esp_start = 0;
+  UINT64 esp_count = 0;
+  UINT64 boot_part_lba = 0;
+  UINT64 data_start = 0;
+  UINT64 data_count = 0;
+
+  VOID *ent_buf = AllocatePool(bsz);
+  if (!ent_buf) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  while (read_entries < entcnt) {
+    st = uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId,
+                           cur_lba, bsz, ent_buf);
+    if (EFI_ERROR(st)) {
+      FreePool(ent_buf);
+      return st;
+    }
+    UINTN max_in_block = (entcnt - read_entries) < ents_per_block
+                             ? (entcnt - read_entries)
+                             : ents_per_block;
+    for (UINTN i = 0; i < max_in_block; i++) {
+      UINT8 *ptr = (UINT8 *)ent_buf + i * entsz;
+      gpt_entry_t *e = (gpt_entry_t *)ptr;
+      if (e->first_lba == 0 || e->last_lba < e->first_lba) {
+        continue;
+      }
+      if (guid_eq(e->part_type_guid, esp_guid)) {
+        esp_start = e->first_lba;
+        esp_count = (e->last_lba - e->first_lba) + 1ULL;
+      } else if (guid_eq(e->part_type_guid, boot_guid)) {
+        boot_part_lba = e->first_lba;
+      } else if (guid_eq(e->part_type_guid, data_guid)) {
+        data_start = e->first_lba;
+        data_count = (e->last_lba - e->first_lba) + 1ULL;
+      }
+    }
+    read_entries += max_in_block;
+    cur_lba++;
+  }
+  FreePool(ent_buf);
+
+  if (boot_part_lba == 0 || data_start == 0 || data_count == 0) {
+    return EFI_NOT_FOUND;
+  }
+
+  VOID *mf_buf = AllocatePool(bsz);
+  if (!mf_buf) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  st = uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId,
+                         boot_part_lba, bsz, mf_buf);
+  if (EFI_ERROR(st)) {
+    FreePool(mf_buf);
+    return st;
+  }
+  struct boot_manifest *mf = (struct boot_manifest *)mf_buf;
+  if (mf->magic != BOOT_MANIFEST_MAGIC || mf->entry_count == 0) {
+    FreePool(mf_buf);
+    return EFI_NOT_FOUND;
+  }
+  FreePool(mf_buf);
+
+  *out_data_start = data_start;
+  *out_data_count = data_count;
+  if (out_esp_start) {
+    *out_esp_start = esp_start;
+  }
+  if (out_esp_count) {
+    *out_esp_count = esp_count;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
+                                                EFI_SYSTEM_TABLE *st,
+                                                EFI_BLOCK_IO_PROTOCOL **out_bio,
+                                                UINT64 *out_data_start,
+                                                UINT64 *out_data_count,
+                                                EFI_BLOCK_IO_PROTOCOL **out_raw_bio,
+                                                UINT64 *out_raw_data_start,
+                                                UINT64 *out_raw_data_count) {
+  if (!image || !st || !st->BootServices || !out_bio || !out_data_start ||
+      !out_data_count || !out_raw_bio || !out_raw_data_start ||
+      !out_raw_data_count) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *out_bio = NULL;
+  *out_data_start = 0;
+  *out_data_count = 0;
+  *out_raw_bio = NULL;
+  *out_raw_data_start = 0;
+  *out_raw_data_count = 0;
+
+  UINT64 boot_part_hint_start = 0;
+  UINT64 boot_part_hint_count = 0;
+  int has_boot_part_hint =
+      (get_boot_partition_hint(image, st, &boot_part_hint_start,
+                               &boot_part_hint_count) == 0 &&
+       boot_part_hint_start != 0 && boot_part_hint_count != 0);
+
+  EFI_HANDLE *handles = NULL;
+  UINTN count = 0;
+  EFI_STATUS stt =
+      uefi_call_wrapper(st->BootServices->LocateHandleBuffer, 5, ByProtocol,
+                        &BlockIoProtocol, NULL, &count, &handles);
+  if (EFI_ERROR(stt) || !handles || count == 0) {
+    return EFI_NOT_FOUND;
+  }
+
+  EFI_BLOCK_IO_PROTOCOL *best = NULL;
+  UINT64 best_blocks = 0;
+  UINT64 best_data_start = 0;
+  UINT64 best_data_count = 0;
+
+  for (UINTN i = 0; i < count; i++) {
+    EFI_BLOCK_IO_PROTOCOL *bio = NULL;
+    stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, handles[i],
+                            &BlockIoProtocol, (VOID **)&bio);
+    if (EFI_ERROR(stt) || !bio || !bio->Media) {
+      continue;
+    }
+    if (bio->Media->LogicalPartition || bio->Media->ReadOnly ||
+        bio->Media->RemovableMedia) {
+      continue;
+    }
+
+    UINT64 data_start = 0;
+    UINT64 data_count = 0;
+    UINT64 esp_start = 0;
+    UINT64 esp_count = 0;
+    if (EFI_ERROR(gpt_find_capyos_data_partition(bio, &data_start, &data_count,
+                                                 &esp_start, &esp_count))) {
+      continue;
+    }
+
+    if (has_boot_part_hint && esp_start == boot_part_hint_start &&
+        esp_count == boot_part_hint_count) {
+      best = bio;
+      best_data_start = data_start;
+      best_data_count = data_count;
+      break;
+    }
+
+    UINT64 blocks = (UINT64)bio->Media->LastBlock + 1ULL;
+    if (!best || blocks > best_blocks) {
+      best = bio;
+      best_blocks = blocks;
+      best_data_start = data_start;
+      best_data_count = data_count;
+    }
+  }
+
+  FreePool(handles);
+
+  if (!best) {
+    return EFI_NOT_FOUND;
+  }
+
+  /* Prefer the logical DATA partition handle itself when available.
+   * Some firmware/hypervisors are stricter with raw-disk BlockIO reads from
+   * high LBAs during runtime and return EFI_DEVICE_ERROR for otherwise valid
+   * sectors. Using the partition handle keeps LBA addressing local to DATA. */
+  EFI_HANDLE *logical_handles = NULL;
+  UINTN logical_count = 0;
+  stt = uefi_call_wrapper(st->BootServices->LocateHandleBuffer, 5, ByProtocol,
+                          &BlockIoProtocol, NULL, &logical_count,
+                          &logical_handles);
+  if (!EFI_ERROR(stt) && logical_handles && logical_count > 0) {
+    for (UINTN i = 0; i < logical_count; ++i) {
+      EFI_BLOCK_IO_PROTOCOL *bio = NULL;
+      stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3,
+                              logical_handles[i], &BlockIoProtocol,
+                              (VOID **)&bio);
+      if (EFI_ERROR(stt) || !bio || !bio->Media) {
+        continue;
+      }
+      if (!bio->Media->LogicalPartition || bio->Media->ReadOnly ||
+          bio->Media->RemovableMedia) {
+        continue;
+      }
+
+      UINT64 part_start = 0;
+      UINT64 part_count = 0;
+      if (get_partition_hint_from_handle(st, logical_handles[i], &part_start,
+                                         &part_count) != 0) {
+        continue;
+      }
+      if (part_start == best_data_start && part_count == best_data_count) {
+        FreePool(logical_handles);
+        *out_bio = bio;
+        *out_data_start = 0;
+        *out_data_count = best_data_count;
+        *out_raw_bio = best;
+        *out_raw_data_start = best_data_start;
+        *out_raw_data_count = best_data_count;
+        return EFI_SUCCESS;
+      }
+    }
+    FreePool(logical_handles);
+  }
+
+  *out_bio = best;
+  *out_data_start = best_data_start;
+  *out_data_count = best_data_count;
+  *out_raw_bio = best;
+  *out_raw_data_start = best_data_start;
+  *out_raw_data_count = best_data_count;
+  return EFI_SUCCESS;
+}
+
+static void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st) {
+  if (!st || !st->BootServices || !st->BootServices->SetWatchdogTimer) {
+    return;
+  }
+  (void)uefi_call_wrapper(st->BootServices->SetWatchdogTimer, 4, 0, 0, 0, NULL);
+}
+
 /* UEFI readline with optional password masking */
 static UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
                            BOOLEAN mask) {
@@ -697,26 +1202,74 @@ static UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
   }
 }
 
-/* Generate pseudo-random encryption key (displayed to user for recovery) */
+/* Generate random recovery key shown during ISO install. */
 static void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,
                                   UINTN key_len) {
-  /* Use UEFI timer and memory addresses as entropy source */
-  UINT64 tsc = 0;
-  __asm__ volatile("rdtsc" : "=A"(tsc));
-  UINT64 entropy = tsc ^ (UINT64)(UINTN)st ^ (UINT64)(UINTN)key_out;
+  if (!key_out || key_len < 8) {
+    return;
+  }
+
+  UINTN groups = 6; /* 24 hex chars => 96 bits */
+  const UINTN chars_per_group = 4;
+  UINTN max_chars = key_len - 1;
+  while (groups > 1 &&
+         (groups * chars_per_group + (groups - 1)) > max_chars) {
+    --groups;
+  }
+  UINTN nibble_count = groups * chars_per_group;
+  UINTN rnd_need = (nibble_count + 1) / 2;
+
+  UINT8 rnd[32];
+  for (UINTN i = 0; i < sizeof(rnd); ++i) {
+    rnd[i] = 0;
+  }
+
+  BOOLEAN have_rng = FALSE;
+  if (st && st->BootServices) {
+    EFI_GUID rng_guid = EFI_RNG_PROTOCOL_GUID;
+    EFI_RNG_PROTOCOL *rng = NULL;
+    EFI_STATUS rng_st = uefi_call_wrapper(st->BootServices->LocateProtocol, 3,
+                                          &rng_guid, NULL, (VOID **)&rng);
+    if (!EFI_ERROR(rng_st) && rng && rng->GetRNG) {
+      rng_st = uefi_call_wrapper(rng->GetRNG, 4, rng, NULL, rnd_need, rnd);
+      if (!EFI_ERROR(rng_st)) {
+        have_rng = TRUE;
+      }
+    }
+  }
+
+  if (!have_rng) {
+    UINT64 tsc = 0;
+    __asm__ volatile("rdtsc" : "=A"(tsc));
+    UINT64 seed = tsc ^ (UINT64)(UINTN)st ^ (UINT64)(UINTN)key_out ^
+                  ((UINT64)key_len << 17);
+    for (UINTN i = 0; i < rnd_need; ++i) {
+      seed ^= seed << 13;
+      seed ^= seed >> 7;
+      seed ^= seed << 17;
+      seed ^= ((UINT64)(UINTN)&seed >> (i & 7U));
+      rnd[i] = (UINT8)(seed & 0xFF);
+    }
+  }
 
   const CHAR16 *hex = L"0123456789ABCDEF";
   UINTN pos = 0;
-  for (UINTN i = 0; i < 4 && pos + 5 < key_len; i++) {
-    if (i > 0 && pos + 1 < key_len) {
+  UINTN nib = 0;
+  for (UINTN g = 0; g < groups && pos + 1 < key_len; ++g) {
+    if (g > 0 && pos + 1 < key_len) {
       key_out[pos++] = L'-';
     }
-    for (UINTN j = 0; j < 4 && pos + 1 < key_len; j++) {
-      key_out[pos++] = hex[entropy & 0xF];
-      entropy = (entropy >> 4) ^ (entropy * 0x5DEECE66DLL);
+    for (UINTN j = 0; j < chars_per_group && pos + 1 < key_len; ++j, ++nib) {
+      UINT8 b = rnd[nib / 2];
+      UINT8 v = (nib & 1U) ? (b & 0x0F) : ((b >> 4) & 0x0F);
+      key_out[pos++] = hex[v];
     }
   }
   key_out[pos] = 0;
+
+  for (UINTN i = 0; i < sizeof(rnd); ++i) {
+    rnd[i] = 0;
+  }
 }
 
 static EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
@@ -759,6 +1312,50 @@ static EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
     uefi_call_wrapper(bio->FlushBlocks, 1, bio);
   }
   return stt;
+}
+
+/*
+ * Prepare DATA partition for first boot:
+ * - clear head/tail regions
+ * - clear a middle chunk
+ *
+ * This prevents stale bytes from previous installations from being interpreted
+ * as an existing encrypted volume.
+ */
+static EFI_STATUS scrub_data_partition_for_first_boot(
+    EFI_BLOCK_IO_PROTOCOL *bio, UINT64 data_lba, UINT64 data_sectors) {
+  if (!bio || !bio->Media || data_sectors == 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  const UINT64 edge_span = 4096ULL; /* 2 MiB with 512-byte sectors */
+  const UINT64 mid_span = 16ULL;    /* 8 KiB around the midpoint */
+  UINT64 head_secs = (data_sectors < edge_span) ? data_sectors : edge_span;
+  EFI_STATUS st = wipe_blocks(bio, data_lba, head_secs);
+  if (EFI_ERROR(st)) {
+    return st;
+  }
+
+  if (data_sectors > head_secs) {
+    UINT64 tail_start = data_lba + data_sectors - head_secs;
+    st = wipe_blocks(bio, tail_start, head_secs);
+    if (EFI_ERROR(st)) {
+      return st;
+    }
+  }
+
+  if (data_sectors > mid_span + 2ULL) {
+    UINT64 mid_rel = data_sectors / 2ULL;
+    if (mid_rel + mid_span >= data_sectors) {
+      mid_rel = data_sectors - mid_span;
+    }
+    st = wipe_blocks(bio, data_lba + mid_rel, mid_span);
+    if (EFI_ERROR(st)) {
+      return st;
+    }
+  }
+
+  return EFI_SUCCESS;
 }
 
 static VOID fill_guid(UINT8 out[16], EFI_SYSTEM_TABLE *st) {
@@ -841,7 +1438,9 @@ static EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
                                    UINT64 boot_mib, UINT64 *out_esp_lba,
                                    UINT64 *out_esp_sectors,
                                    UINT64 *out_boot_lba,
-                                   UINT64 *out_boot_sectors) {
+                                   UINT64 *out_boot_sectors,
+                                   UINT64 *out_data_lba,
+                                   UINT64 *out_data_sectors) {
   if (!st || !st->BootServices || !bio || !bio->Media)
     return EFI_INVALID_PARAMETER;
   if (bio->Media->BlockSize != 512)
@@ -885,9 +1484,8 @@ static EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
 
   gpt_entry_t *e = (gpt_entry_t *)entries;
   UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
-  UINT8 boot_guid[16] = EFI_PART_TYPE_NOIROS_BOOT;
-  UINT8 linux_guid[16] = {0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,
-                          0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4};
+  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
+  UINT8 linux_guid[16] = EFI_PART_TYPE_LINUX_FS;
   UINT8 disk_guid[16];
   fill_guid(disk_guid, st);
 
@@ -1025,6 +1623,10 @@ static EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
     *out_boot_lba = boot_start;
   if (out_boot_sectors)
     *out_boot_sectors = boot_sectors;
+  if (out_data_lba)
+    *out_data_lba = data_start;
+  if (out_data_sectors)
+    *out_data_sectors = (data_end - data_start) + 1ULL;
   return EFI_SUCCESS;
 }
 
@@ -1140,7 +1742,8 @@ static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
                                      UINT64 part_lba, UINT64 total_sectors,
                                      const UINT8 *bootx64, UINTN bootx64_sz,
                                      const UINT8 *kernel, UINTN kernel_sz,
-                                     const UINT8 *manifest, UINTN manifest_sz) {
+                                     const UINT8 *manifest, UINTN manifest_sz,
+                                     const UINT8 *bootcfg, UINTN bootcfg_sz) {
   if (!bio || !bio->Media)
     return EFI_INVALID_PARAMETER;
   if (bio->Media->BlockSize != 512)
@@ -1207,8 +1810,8 @@ static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     return EFI_OUT_OF_RESOURCES;
   }
 
-  UINT32 bootx64_cl = 0, kernel_cl = 0, manifest_cl = 0;
-  UINT32 bootx64_need = 0, kernel_need = 0, manifest_need = 0;
+  UINT32 bootx64_cl = 0, kernel_cl = 0, manifest_cl = 0, bootcfg_cl = 0;
+  UINT32 bootx64_need = 0, kernel_need = 0, manifest_need = 0, bootcfg_need = 0;
   if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                           bootx64_sz, &bootx64_cl, &bootx64_need)) {
     FreePool(fat);
@@ -1222,6 +1825,13 @@ static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   if (manifest && manifest_sz) {
     if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                             manifest_sz, &manifest_cl, &manifest_need)) {
+      FreePool(fat);
+      return EFI_OUT_OF_RESOURCES;
+    }
+  }
+  if (bootcfg && bootcfg_sz) {
+    if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
+                            bootcfg_sz, &bootcfg_cl, &bootcfg_need)) {
       FreePool(fat);
       return EFI_OUT_OF_RESOURCES;
     }
@@ -1416,11 +2026,17 @@ static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
 
   fat32_dirent83(&boot_dir[0], ".       ", "   ", 0x10, bootdir_cl, 0);
   fat32_dirent83(&boot_dir[32], "..      ", "   ", 0x10, root_cluster, 0);
-  fat32_dirent83(&boot_dir[64], "NOIROS64", "BIN", 0x20, kernel_cl,
+  fat32_dirent83(&boot_dir[64], "CAPYOS64", "BIN", 0x20, kernel_cl,
                  (UINT32)kernel_sz);
+  UINTN boot_file_off = 96;
   if (manifest && manifest_sz) {
-    fat32_dirent83(&boot_dir[96], "MANIFEST", "BIN", 0x20, manifest_cl,
+    fat32_dirent83(&boot_dir[boot_file_off], "MANIFEST", "BIN", 0x20, manifest_cl,
                    (UINT32)manifest_sz);
+    boot_file_off += 32;
+  }
+  if (bootcfg && bootcfg_sz) {
+    fat32_dirent83(&boot_dir[boot_file_off], "CAPYCFG ", "BIN", 0x20,
+                   bootcfg_cl, (UINT32)bootcfg_sz);
   }
 
   stt = fat32_write_cluster(bio, data_start_lba, spc, bytes_per_cluster,
@@ -1455,6 +2071,35 @@ static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     stt = fat32_write_chain_contig(bio, data_start_lba, spc, bytes_per_cluster,
                                    scratch, manifest_cl, manifest_need,
                                    manifest, manifest_sz);
+  if (!EFI_ERROR(stt) && bootcfg && bootcfg_sz)
+    stt = fat32_write_chain_contig(bio, data_start_lba, spc, bytes_per_cluster,
+                                   scratch, bootcfg_cl, bootcfg_need, bootcfg,
+                                   bootcfg_sz);
+  if (!EFI_ERROR(stt) && bootcfg && bootcfg_sz) {
+    UINTN verify_bytes = (UINTN)bootcfg_need * (UINTN)bytes_per_cluster;
+    UINT8 *verify_buf = AllocatePool(verify_bytes);
+    if (!verify_buf) {
+      FreePool(scratch);
+      return EFI_OUT_OF_RESOURCES;
+    }
+    UINT64 verify_lba =
+        data_start_lba + (UINT64)(bootcfg_cl - 2U) * (UINT64)spc;
+    stt = uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId,
+                            verify_lba, verify_bytes, verify_buf);
+    if (!EFI_ERROR(stt)) {
+      for (UINTN i = 0; i < bootcfg_sz; ++i) {
+        if (verify_buf[i] != bootcfg[i]) {
+          stt = EFI_CRC_ERROR;
+          break;
+        }
+      }
+    }
+    FreePool(verify_buf);
+    if (EFI_ERROR(stt)) {
+      FreePool(scratch);
+      return stt;
+    }
+  }
   FreePool(scratch);
   if (EFI_ERROR(stt))
     return stt;
@@ -1528,21 +2173,21 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     return stt;
   }
 
-  stt = read_file(root, L"BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_sz);
+  stt = read_file(root, L"BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_sz);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_sz = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_sz);
+    stt = read_file(root, L"\\BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_sz);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_sz = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\boot\\noiros64.bin", &kernel_buf, &kernel_sz);
+    stt = read_file(root, L"\\boot\\capyos64.bin", &kernel_buf, &kernel_sz);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
@@ -1589,70 +2234,62 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   }
   Print(L"\r\n\r\n");
 
-  /* --- Step 1: Admin Username --- */
-  Print(L"=== Configuracao do Administrador ===\r\n\r\n");
-
-  CHAR16 admin_user[64];
-  Print(L"Nome de usuario admin: ");
-  UINTN user_len = uefi_readline(st, admin_user, 64, FALSE);
-  if (user_len == 0) {
-    /* Default to 'admin' */
-    admin_user[0] = L'a';
-    admin_user[1] = L'd';
-    admin_user[2] = L'm';
-    admin_user[3] = L'i';
-    admin_user[4] = L'n';
-    admin_user[5] = 0;
-    Print(L"(usando padrao: admin)\r\n");
+  /* --- Step 1: Keyboard layout preference --- */
+  CHAR16 keyboard_layout[16];
+  keyboard_layout[0] = L'u';
+  keyboard_layout[1] = L's';
+  keyboard_layout[2] = 0;
+  CHAR16 layout_in[32];
+  Print(L"=== Layout de Teclado ===\r\n\r\n");
+  Print(L"  [1] us        (US English)\r\n");
+  Print(L"  [2] br-abnt2  (Portugues Brasil)\r\n\r\n");
+  Print(L"Layout preferido [1]: ");
+  uefi_readline(st, layout_in, 32, FALSE);
+  if (layout_in[0] == L'2' || layout_in[0] == L'b' || layout_in[0] == L'B') {
+    keyboard_layout[0] = L'b';
+    keyboard_layout[1] = L'r';
+    keyboard_layout[2] = L'-';
+    keyboard_layout[3] = L'a';
+    keyboard_layout[4] = L'b';
+    keyboard_layout[5] = L'n';
+    keyboard_layout[6] = L't';
+    keyboard_layout[7] = L'2';
+    keyboard_layout[8] = 0;
   }
+  Print(L"Layout selecionado: %s\r\n\r\n", keyboard_layout);
 
-  /* --- Step 2: Admin Password --- */
-  CHAR16 admin_pass[128], admin_pass2[128];
-  for (;;) {
-    Print(L"Senha do administrador: ");
-    UINTN pass_len = uefi_readline(st, admin_pass, 128, TRUE);
-    if (pass_len < 4) {
-      Print(L"Senha muito curta (minimo 4 caracteres).\r\n");
-      continue;
-    }
+  /* --- Step 2: Admin account policy --- */
+  Print(L"=== Conta Administrativa ===\r\n\r\n");
+  Print(L"O usuario administrador sera criado no primeiro boot do disco.\r\n");
+  Print(L"Esta etapa de instalacao nao persiste usuario/senha de login.\r\n\r\n");
 
-    Print(L"Confirmar senha: ");
-    UINTN pass2_len = uefi_readline(st, admin_pass2, 128, TRUE);
-
-    if (pass_len != pass2_len) {
-      Print(L"Senhas nao conferem. Tente novamente.\r\n");
-      continue;
-    }
-
-    BOOLEAN match = TRUE;
-    for (UINTN i = 0; i < pass_len; i++) {
-      if (admin_pass[i] != admin_pass2[i]) {
-        match = FALSE;
-        break;
-      }
-    }
-    if (!match) {
-      Print(L"Senhas nao conferem. Tente novamente.\r\n");
-      continue;
-    }
-    break;
+  /* --- Step 3: Volume key guidance --- */
+  CHAR16 recovery_key[64];
+  char recovery_key_norm[64];
+  generate_recovery_key(st, recovery_key, sizeof(recovery_key) / sizeof(recovery_key[0]));
+  if (normalize_key_char16(recovery_key, recovery_key_norm,
+                           sizeof(recovery_key_norm)) != 0) {
+    Print(L"[UEFI] Falha ao gerar chave de volume.\r\n");
+    return EFI_ABORTED;
   }
-
-  /* --- Step 3: Generate and display recovery key --- */
-  Print(L"\r\n=== Chave de Recuperacao ===\r\n\r\n");
-  CHAR16 recovery_key[32];
-  generate_recovery_key(st, recovery_key, 32);
-  Print(L"ANOTE ESTA CHAVE EM LOCAL SEGURO:\r\n\r\n");
-  Print(L"    %s\r\n\r\n", recovery_key);
-  Print(L"Esta chave permite recuperar dados em caso de\r\n");
-  Print(L"esquecimento da senha. Guarde-a com cuidado!\r\n\r\n");
+  Print(L"\r\n=== Chave do Volume Cifrado ===\r\n\r\n");
+  Print(L"Chave gerada automaticamente para o volume:\r\n");
+  Print(L"  %s\r\n\r\n", recovery_key);
+  Print(L"Guarde essa chave em local seguro.\r\n");
+  Print(
+      L"No primeiro boot ela sera usada para montar/inicializar o volume cifrado.\r\n");
+  Print(L"Formato aceito no sistema: letras/numeros, hifens opcionais.\r\n");
+  Print(L"\r\nValidacao manual da chave esta desativada nesta fase.\r\n");
   Print(L"Pressione ENTER para continuar...");
-  uefi_readline(st, admin_pass2, 2, FALSE); /* Reuse buffer for confirmation */
-  Print(L"\r\n");
+  CHAR16 continue_line[8];
+  uefi_readline(st, continue_line, sizeof(continue_line) / sizeof(continue_line[0]),
+                FALSE);
+  Print(L"[info] Layout selecionado para o setup: %s\r\n\r\n", keyboard_layout);
 
   /* --- Step 4: Confirm installation --- */
   Print(L"=== Confirmacao Final ===\r\n\r\n");
-  Print(L"Usuario: %s\r\n", admin_user);
+  Print(L"Layout teclado: %s\r\n", keyboard_layout);
+  Print(L"Usuario administrador: definido no primeiro boot\r\n");
   Print(L"Disco: %lu MiB (sera APAGADO)\r\n",
         (disk_bytes / (1024ULL * 1024ULL)));
   Print(L"\r\nConfirmar instalacao? [S/n]: ");
@@ -1664,21 +2301,30 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   }
   Print(L"\r\n");
 
-  // Wipe head/tail (2 MiB) to clear stale boot records + GPT backup.
-  const UINT64 wipe_span = 4096ULL;
-  Print(L"[UEFI] Limpando cabecalho/rodape...\r\n");
-  wipe_blocks(disk, 0, wipe_span);
-  if (disk->Media->LastBlock + 1ULL > wipe_span) {
-    UINT64 tail_start = (UINT64)disk->Media->LastBlock + 1ULL - wipe_span;
-    wipe_blocks(disk, tail_start, wipe_span);
+  // Clean install policy: wipe entire target disk before creating a new GPT.
+  UINT64 full_disk_sectors = (UINT64)disk->Media->LastBlock + 1ULL;
+  Print(L"[UEFI] Limpando disco inteiro...\r\n");
+  stt = wipe_blocks(disk, 0, full_disk_sectors);
+  if (EFI_ERROR(stt)) {
+    Print(L"[UEFI] Falha ao limpar disco: %r\r\n", stt);
+    return stt;
   }
 
   UINT64 esp_lba = 0, esp_secs = 0, boot_lba = 0, boot_secs = 0;
+  UINT64 data_lba = 0, data_secs = 0;
   Print(L"[UEFI] Gravando GPT...\r\n");
   stt = gpt_write_layout(st, disk, INSTALL_ESP_SIZE_MIB, INSTALL_BOOT_SIZE_MIB,
-                         &esp_lba, &esp_secs, &boot_lba, &boot_secs);
+                         &esp_lba, &esp_secs, &boot_lba, &boot_secs, &data_lba,
+                         &data_secs);
   if (EFI_ERROR(stt)) {
     Print(L"[UEFI] GPT falhou: %r\r\n", stt);
+    return stt;
+  }
+
+  Print(L"[UEFI] Preparando particao DATA para primeiro boot...\r\n");
+  stt = scrub_data_partition_for_first_boot(disk, data_lba, data_secs);
+  if (EFI_ERROR(stt)) {
+    Print(L"[UEFI] Falha ao preparar DATA: %r\r\n", stt);
     return stt;
   }
 
@@ -1689,10 +2335,41 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   build_manifest(&mf, 1, ksec, cksum);
 
   Print(L"[UEFI] Criando ESP (FAT32) e copiando arquivos...\r\n");
+  struct boot_config_sector boot_cfg;
+  bootcfg_clear(&boot_cfg);
+  boot_cfg.magic = BOOT_CONFIG_MAGIC;
+  boot_cfg.version = BOOT_CONFIG_VERSION;
+  boot_cfg.flags = BOOT_CONFIG_FLAG_HAS_VOLUME_KEY;
+  char16_to_ascii(boot_cfg.keyboard_layout, sizeof(boot_cfg.keyboard_layout),
+                  keyboard_layout);
+  for (UINTN i = 0; i + 1 < sizeof(boot_cfg.volume_key) && recovery_key_norm[i];
+       ++i) {
+    boot_cfg.volume_key[i] = recovery_key_norm[i];
+  }
+  UINTN key_len = 0;
+  while (recovery_key_norm[key_len]) {
+    ++key_len;
+  }
+  UINTN persisted_len = 0;
+  while (persisted_len < sizeof(boot_cfg.volume_key) &&
+         boot_cfg.volume_key[persisted_len]) {
+    ++persisted_len;
+  }
+  if (key_len == 0 || key_len >= sizeof(boot_cfg.volume_key) ||
+      persisted_len != key_len ||
+      !ascii_streq(boot_cfg.volume_key, recovery_key_norm)) {
+    Print(L"[UEFI] ERRO: chave de volume nao persistivel no BOOT config.\r\n");
+    return EFI_ABORTED;
+  }
+
   stt = fat32_write_volume(disk, esp_lba, esp_secs, (const UINT8 *)bootx64_buf,
                            bootx64_sz, (const UINT8 *)kernel_buf, kernel_sz,
-                           (const UINT8 *)&mf, sizeof(mf));
+                           (const UINT8 *)&mf, sizeof(mf),
+                           (const UINT8 *)&boot_cfg, sizeof(boot_cfg));
   if (EFI_ERROR(stt)) {
+    if (stt == EFI_CRC_ERROR) {
+      Print(L"[UEFI] ERRO: chave em CAPYCFG.BIN diverge da chave provisionada.\r\n");
+    }
     Print(L"[UEFI] FAT32/ESP falhou: %r\r\n", stt);
     return stt;
   }
@@ -1757,7 +2434,7 @@ static BOOLEAN rsdp_is_valid_ptr(const VOID *ptr) {
     UINT32 len = r->length;
     if (len < 36 || len > 4096) {
       // Alguns firmwares reportam length inesperado; aceite ACPI 1.0 checksum
-      // como mínimo.
+      // como mÃƒÂ­nimo.
       return TRUE;
     }
     return sum8_bytes(p, len) == 0;
@@ -1803,7 +2480,7 @@ static EFI_STATUS scan_rsdp(UINT64 *out_rsdp) {
     }
   }
 
-  // Área BIOS "high" tradicional: 0xE0000..0xFFFFF
+  // ÃƒÂrea BIOS "high" tradicional: 0xE0000..0xFFFFF
   UINT64 found = 0;
   if (!EFI_ERROR(scan_rsdp_range(0xE0000ULL, 0x100000ULL, &found)) && found) {
     *out_rsdp = found;
@@ -1960,7 +2637,7 @@ static EFI_STATUS log_open(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
 
   EFI_FILE_HANDLE fh = NULL;
   stt = uefi_call_wrapper(
-      out->root->Open, 5, out->root, &fh, L"\\EFI\\NOIROS.LOG",
+      out->root->Open, 5, out->root, &fh, L"\\EFI\\CAPYOS.LOG",
       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
       EFI_FILE_ARCHIVE);
   if (EFI_ERROR(stt) || !fh) {
@@ -2025,8 +2702,9 @@ static EFI_STATUS get_gop(EFI_SYSTEM_TABLE *st,
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   InitializeLib(image, systab);
   Print(L"CapyOS UEFI loader: iniciando\r\n");
+  disable_uefi_watchdog(systab);
 
-  // Modo instalador: ISO de instalacao contem um marcador (NOIROS.INI) e/ou o
+  // Modo instalador: ISO de instalacao contem um marcador (CAPYOS.INI) e/ou o
   // volume e read-only.
   BOOLEAN install_marker = boot_volume_has_marker(image, systab);
   BOOLEAN install_ro = boot_volume_is_readonly(image, systab);
@@ -2035,10 +2713,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
           install_marker ? 1 : 0, install_ro ? 1 : 0);
     EFI_STATUS ist = installer_run(image, systab);
     if (!EFI_ERROR(ist)) {
-      // Normalmente não retorna (ResetSystem). Se retornar, apenas aguarde.
+      // Normalmente nÃƒÂ£o retorna (ResetSystem). Se retornar, apenas aguarde.
       uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     }
-    // Se a instalação foi cancelada ou falhou, continue para o boot normal
+    // Se a instalaÃƒÂ§ÃƒÂ£o foi cancelada ou falhou, continue para o boot normal
     // (kernel do ISO).
   }
 
@@ -2046,7 +2724,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   EFI_STATUS st = load_kernel(image, systab, &entry);
   if (EFI_ERROR(st)) {
     Print(L"[UEFI] Falha ao carregar kernel: %r\r\n", st);
-    // Não retorne ao firmware em caso de erro: isso vira "boot loader failed"
+    // NÃƒÂ£o retorne ao firmware em caso de erro: isso vira "boot loader failed"
     // no Hyper-V. Mantemos a tela para facilitar debug.
     uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     for (;;) {
@@ -2117,41 +2795,67 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     fb.bpp = 32; // GOP usually 32 bpp in BGRA
   }
 
-  // Alocar handoff e memory map abaixo de 1GiB (compatível com identity map do
+  EFI_BLOCK_IO_PROTOCOL *runtime_disk = NULL;
+  UINT64 runtime_data_lba = 0;
+  UINT64 runtime_data_count = 0;
+  EFI_BLOCK_IO_PROTOCOL *runtime_disk_raw = NULL;
+  UINT64 runtime_data_lba_raw = 0;
+  UINT64 runtime_data_count_raw = 0;
+  EFI_STATUS runtime_st =
+      choose_runtime_disk_with_data(image, systab, &runtime_disk,
+                                    &runtime_data_lba, &runtime_data_count,
+                                    &runtime_disk_raw, &runtime_data_lba_raw,
+                                    &runtime_data_count_raw);
+  if (!EFI_ERROR(runtime_st) && runtime_disk && runtime_disk->Media) {
+    Print(L"[UEFI] Runtime disk detectado: block=%u last_lba=%lu data=%lu+%lu\r\n",
+          runtime_disk->Media->BlockSize,
+          (UINT64)runtime_disk->Media->LastBlock, runtime_data_lba,
+          runtime_data_count);
+    if (runtime_disk_raw && runtime_disk_raw->Media) {
+      Print(L"[UEFI] Runtime raw fallback: block=%u last_lba=%lu data=%lu+%lu\r\n",
+            runtime_disk_raw->Media->BlockSize,
+            (UINT64)runtime_disk_raw->Media->LastBlock, runtime_data_lba_raw,
+            runtime_data_count_raw);
+    }
+  } else {
+    Print(L"[UEFI] Runtime disk nao detectado (fallback RAM).\r\n");
+  }
+
+  // Alocar handoff e memory map abaixo de 1GiB (compatÃƒÂ­vel com identity map do
   // kernel atual)
   log_file_t logf = {0};
   EFI_STATUS logst = log_open(image, systab, &logf);
   if (EFI_ERROR(logst)) {
     Print(L"[UEFI] log_open falhou: %r\r\n", logst);
   } else {
-    log_write_ascii(&logf, "\r\n[noiros] boot start\r\n");
-    log_write_ascii(&logf, "[noiros] kernel entry=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] boot start\r\n");
+    log_write_ascii(&logf, "[CAPYOS] kernel entry=");
     log_write_u64_hex(&logf, (UINT64)entry);
-    log_write_ascii(&logf, "\r\n[noiros] rsdp=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] rsdp=");
     log_write_u64_hex(&logf, rsdp);
-    log_write_ascii(&logf, "\r\n[noiros] rsdp.src=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] rsdp.src=");
     log_write_ascii(&logf, rsdp_src8);
-    log_write_ascii(&logf, "\r\n[noiros] rsdp.copied=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] rsdp.copied=");
     log_write_u64_hex(&logf, rsdp_copied ? 1 : 0);
-    log_write_ascii(&logf, "\r\n[noiros] fb.base=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] fb.base=");
     log_write_u64_hex(&logf, fb.base);
     log_write_ascii(&logf, "\r\n");
 
-    log_write_ascii(&logf, "[noiros] rsdp.valid=");
+    log_write_ascii(&logf, "[CAPYOS] rsdp.valid=");
     log_write_u64_hex(&logf,
                       rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp) ? 1 : 0);
     log_write_ascii(&logf, "\r\n");
     if (rsdp && rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp)) {
       const UINT8 *p = (const UINT8 *)(UINTN)rsdp;
       const acpi_rsdp_t *r = (const acpi_rsdp_t *)(UINTN)rsdp;
-      log_write_ascii(&logf, "[noiros] rsdp.rev=");
+      log_write_ascii(&logf, "[CAPYOS] rsdp.rev=");
       log_write_u64_hex(&logf, (UINT64)r->revision);
       log_write_ascii(&logf, " chk=");
       log_write_u64_hex(&logf, (UINT64)r->checksum);
       log_write_ascii(&logf, " rsdt=");
       log_write_u64_hex(&logf, (UINT64)r->rsdt);
       log_write_ascii(&logf, "\r\n");
-      log_write_ascii(&logf, "[noiros] rsdp.sum20=");
+      log_write_ascii(&logf, "[CAPYOS] rsdp.sum20=");
       log_write_u64_hex(&logf, (UINT64)sum8_bytes(p, 20));
       log_write_ascii(&logf, " bytes20=");
       log_write_bytes_hex(&logf, p, 20);
@@ -2160,7 +2864,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
         UINT32 len = r->length;
         if (len < 36 || len > 4096)
           len = 36;
-        log_write_ascii(&logf, "[noiros] rsdp.len=");
+        log_write_ascii(&logf, "[CAPYOS] rsdp.len=");
         log_write_u64_hex(&logf, (UINT64)len);
         log_write_ascii(&logf, " xsdt=");
         log_write_u64_hex(&logf, (UINT64)r->xsdt);
@@ -2173,7 +2877,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       }
     }
     // IMPORTANTE: feche o arquivo ANTES do GetMemoryMap/ExitBootServices.
-    // Qualquer I/O/alloc após GetMemoryMap pode alterar o map_key e causar
+    // Qualquer I/O/alloc apÃƒÂ³s GetMemoryMap pode alterar o map_key e causar
     // EFI_INVALID_PARAMETER.
     log_close(&logf);
   }
@@ -2195,6 +2899,38 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->memmap = 0;
   handoff->memmap_desc_size = 0;
   handoff->memmap_entries = 0;
+  handoff->efi_block_io = 0;
+  handoff->efi_disk_last_lba = 0;
+  handoff->data_lba_start = 0;
+  handoff->data_lba_count = 0;
+  handoff->efi_block_size = 0;
+  handoff->efi_media_id = 0;
+  handoff->efi_block_io_raw = 0;
+  handoff->efi_disk_last_lba_raw = 0;
+  handoff->data_lba_start_raw = 0;
+  handoff->data_lba_count_raw = 0;
+  handoff->efi_media_id_raw = 0;
+  handoff->_pad_raw = 0;
+  handoff->boot_cfg_flags = 0;
+  for (UINTN i = 0; i < sizeof(handoff->boot_keyboard_layout); ++i) {
+    handoff->boot_keyboard_layout[i] = 0;
+  }
+  for (UINTN i = 0; i < sizeof(handoff->boot_volume_key); ++i) {
+    handoff->boot_volume_key[i] = 0;
+  }
+  if (g_runtime_boot_cfg_valid && g_runtime_boot_cfg.magic == BOOT_CONFIG_MAGIC) {
+    handoff->boot_cfg_flags = (UINT32)g_runtime_boot_cfg.flags;
+    for (UINTN i = 0; i < sizeof(handoff->boot_keyboard_layout) - 1 &&
+                     g_runtime_boot_cfg.keyboard_layout[i];
+         ++i) {
+      handoff->boot_keyboard_layout[i] = g_runtime_boot_cfg.keyboard_layout[i];
+    }
+    for (UINTN i = 0; i < sizeof(handoff->boot_volume_key) - 1 &&
+                     g_runtime_boot_cfg.volume_key[i];
+         ++i) {
+      handoff->boot_volume_key[i] = g_runtime_boot_cfg.volume_key[i];
+    }
+  }
 
   UINTN map_sz = 0, map_key = 0, desc_sz = 0;
   UINT32 desc_ver = 0;
@@ -2234,7 +2970,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       return st;
     }
 
-    // Importante: não chame mais nada que possa alocar/IO entre GetMemoryMap e
+    // Importante: nÃƒÂ£o chame mais nada que possa alocar/IO entre GetMemoryMap e
     // ExitBootServices.
 
     /* HYBRID BOOT: Skip ExitBootServices to keep UEFI ConIn available for
@@ -2246,7 +2982,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       break;
     }
 
-    // map_key ficou inválido (firmware mudou o memory map). Libera o buffer e
+    // map_key ficou invÃƒÂ¡lido (firmware mudou o memory map). Libera o buffer e
     // tenta de novo.
     uefi_call_wrapper(systab->BootServices->FreePages, 2, map_addr, pages);
     map = NULL;
@@ -2267,7 +3003,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     }
 
     Print(L"[UEFI] ExitBootServices falhou: %r\r\n", st);
-    // Não retorne ao firmware (isso vira PXE/boot fail confuso no Hyper-V).
+    // NÃƒÂ£o retorne ao firmware (isso vira PXE/boot fail confuso no Hyper-V).
     // Mantenha a tela.
     uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     for (;;) {
@@ -2286,6 +3022,28 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->memmap_desc_size = (UINT32)desc_sz;
   handoff->memmap_entries = (UINT32)(map_sz / desc_sz);
   handoff->efi_system_table = (UINT64)(UINTN)systab;
+  if (!EFI_ERROR(runtime_st) && runtime_disk && runtime_disk->Media) {
+    handoff->efi_block_io = (UINT64)(UINTN)runtime_disk;
+    handoff->efi_disk_last_lba = (UINT64)runtime_disk->Media->LastBlock;
+    handoff->data_lba_start = runtime_data_lba;
+    handoff->data_lba_count = runtime_data_count;
+    handoff->efi_block_size = (UINT32)runtime_disk->Media->BlockSize;
+    handoff->efi_media_id = (UINT32)runtime_disk->Media->MediaId;
+    if (runtime_disk_raw && runtime_disk_raw->Media) {
+      handoff->efi_block_io_raw = (UINT64)(UINTN)runtime_disk_raw;
+      handoff->efi_disk_last_lba_raw =
+          (UINT64)runtime_disk_raw->Media->LastBlock;
+      handoff->data_lba_start_raw = runtime_data_lba_raw;
+      handoff->data_lba_count_raw = runtime_data_count_raw;
+      handoff->efi_media_id_raw = (UINT32)runtime_disk_raw->Media->MediaId;
+    } else {
+      handoff->efi_block_io_raw = handoff->efi_block_io;
+      handoff->efi_disk_last_lba_raw = handoff->efi_disk_last_lba;
+      handoff->data_lba_start_raw = handoff->data_lba_start;
+      handoff->data_lba_count_raw = handoff->data_lba_count;
+      handoff->efi_media_id_raw = handoff->efi_media_id;
+    }
+  }
 
 #if 0
     /* HYBRID BOOT: Keep Boot Services active for keyboard input support! */
