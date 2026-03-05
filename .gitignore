@@ -5,3 +5,5 @@ QEMU.sh
 *.log
 /build/
 scripts.py
+__pycache__/
+*.pyc

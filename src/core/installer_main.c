@@ -103,7 +103,7 @@ static int mount_noirfs_root(struct block_device *crypt_dev) {
     return -1;
   if (vfs_mount_root(&root_sb) != 0)
     return -1;
-  vga_write("NoirFS montado em / (dados cifrados)\n");
+  vga_write("CFS (Capybara File System) montado em / (dados cifrados)\n");
   return 0;
 }
 
@@ -132,18 +132,18 @@ static void format_progress(const char *stage, uint32_t percent) {
 }
 
 static int format_and_mount(struct block_device *crypt_dev) {
-  vga_write("NoirFS indisponivel. Iniciando formatacao...\n");
+  vga_write("CFS indisponivel. Iniciando formatacao...\n");
   format_progress_complete = 0;
   int fmt =
       noirfs_format(crypt_dev, 128, crypt_dev->block_count, format_progress);
   if (!format_progress_complete)
     vga_write("\n");
   if (fmt != 0) {
-    vga_write("Falha ao formatar NoirFS\n");
+    vga_write("Falha ao formatar CFS\n");
     return -1;
   }
   if (mount_noirfs_root(crypt_dev) != 0) {
-    vga_write("Falha ao montar NoirFS apos formatacao\n");
+    vga_write("Falha ao montar CFS apos formatacao\n");
     return -1;
   }
   return 0;
@@ -421,7 +421,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
   // Criptografia + format/mount
   char pass1[128], pass2[128];
   while (1) {
-    vga_write("Defina a senha do volume cifrado NoirFS.\n");
+    vga_write("Defina a senha do volume cifrado CFS.\n");
     tty_set_prompt("Nova senha: ");
     tty_set_echo_mask('*');
     tty_show_prompt();

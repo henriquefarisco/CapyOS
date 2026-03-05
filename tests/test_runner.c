@@ -7,6 +7,7 @@ int run_grub_cfg_builder_tests(void);
 int run_boot_manifest_tests(void);
 int run_boot_writer_tests(void);
 int run_csprng_tests(void);
+int run_efi_block_tests(void);
 
 int main(void) {
     int failures = 0;
@@ -17,6 +18,7 @@ int main(void) {
     failures += run_boot_manifest_tests();
     failures += run_boot_writer_tests();
     failures += run_csprng_tests();
+    failures += run_efi_block_tests();
 
     if (failures == 0) {
         printf("Todos os testes passaram.\n");

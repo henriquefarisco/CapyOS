@@ -43,7 +43,7 @@ static int mount_noirfs_root(struct block_device *crypt_dev) {
   if (vfs_mount_root(&root_sb) != 0) {
     return -1;
   }
-  vga_write("NoirFS montado em / (dados cifrados)\n");
+  vga_write("CFS (Capybara File System) montado em / (dados cifrados)\n");
   return 0;
 }
 
@@ -254,7 +254,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
     slice =
         block_offset_wrap(raw_ata, data_part.lba_start, data_part.sector_count);
     if (slice) {
-      vga_write("[boot] usando particao 2 como volume NoirFS\n");
+      vga_write("[boot] usando particao 2 como volume CFS\n");
     } else {
       vga_write("[boot] falha ao criar wrapper para particao 2\n");
     }
@@ -374,7 +374,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
       }
 
       // Fluxo de volume cifrado existente: obrigatorio autenticar, sem formatar
-      vga_write("Volume cifrado detectado. Informe a senha do NoirFS.\n");
+      vga_write("Volume cifrado detectado. Informe a senha do CFS.\n");
       while (!fs_ready) {
         tty_set_prompt("Senha: ");
         tty_set_echo_mask('*');
@@ -520,7 +520,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
       }
     }
   } else {
-    vga_write("Falha ao localizar ou montar volume NoirFS.\n");
+    vga_write("Falha ao localizar ou montar volume CFS.\n");
     vga_write("Reinicie e inicialize a partir da ISO do instalador para "
               "preparar o disco.\n");
     while (1) {

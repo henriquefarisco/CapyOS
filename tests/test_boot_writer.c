@@ -204,8 +204,9 @@ static int test_bootwriter_config(void) {
 
   uint8_t sector[512];
   mem_read(&mem, 1, sector); // LBA 1
-  uint32_t magic = (uint32_t)sector[0] | ((uint32_t)sector[1] << 8) |
-                   ((uint32_t)sector[2] << 16) | ((uint32_t)sector[3] << 24);
+  const struct boot_config_sector *cfg =
+      (const struct boot_config_sector *)sector;
+  uint32_t magic = cfg->magic;
 
   if (magic != 0xB001CF61) {
     printf("[test_config] magic mismatch: 0x%x\n", magic);
@@ -213,8 +214,86 @@ static int test_bootwriter_config(void) {
     return 1;
   }
 
-  if (strncmp((char *)&sector[4], layout, strlen(layout)) != 0) {
+  if (cfg->version != BOOT_CONFIG_VERSION) {
+    printf("[test_config] version mismatch: %u != %u\n", (unsigned)cfg->version,
+           (unsigned)BOOT_CONFIG_VERSION);
+    free(mem.data);
+    return 1;
+  }
+
+  if (strncmp(cfg->keyboard_layout, layout, strlen(layout)) != 0) {
     printf("[test_config] layout string mismatch\n");
+    free(mem.data);
+    return 1;
+  }
+
+  free(mem.data);
+  return 0;
+}
+
+static int test_bootwriter_config_preserves_volume_key(void) {
+  struct mem_disk mem;
+  mem.block_size = 512;
+  mem.block_count = 100;
+  mem.data = (uint8_t *)calloc(mem.block_count, mem.block_size);
+  if (!mem.data)
+    return 1;
+
+  struct block_device disk = {
+      .name = "memtest-preserve",
+      .block_size = 512,
+      .block_count = mem.block_count,
+      .ctx = &mem,
+      .ops = &mem_ops,
+  };
+
+  struct boot_config_sector seeded;
+  memset(&seeded, 0, sizeof(seeded));
+  seeded.magic = BOOT_CONFIG_MAGIC;
+  seeded.version = BOOT_CONFIG_VERSION;
+  seeded.flags = BOOT_CONFIG_FLAG_HAS_VOLUME_KEY;
+  strncpy(seeded.keyboard_layout, "us", sizeof(seeded.keyboard_layout) - 1);
+  strncpy(seeded.volume_key, "A1B2C3D4E5F60718293A4B5C",
+          sizeof(seeded.volume_key) - 1);
+  if (mem_write(&mem, BOOT_CONFIG_LBA, &seeded) != 0) {
+    printf("[test_config_preserve] seed write failed\n");
+    free(mem.data);
+    return 1;
+  }
+
+  const char *layout = "br-abnt2";
+  if (bootwriter_write_config(&disk, layout) != 0) {
+    printf("[test_config_preserve] write failed\n");
+    free(mem.data);
+    return 1;
+  }
+
+  uint8_t sector[512];
+  mem_read(&mem, BOOT_CONFIG_LBA, sector);
+  const struct boot_config_sector *cfg =
+      (const struct boot_config_sector *)sector;
+
+  if (cfg->magic != BOOT_CONFIG_MAGIC ||
+      cfg->version != BOOT_CONFIG_VERSION) {
+    printf("[test_config_preserve] header mismatch\n");
+    free(mem.data);
+    return 1;
+  }
+
+  if ((cfg->flags & BOOT_CONFIG_FLAG_HAS_VOLUME_KEY) == 0) {
+    printf("[test_config_preserve] key flag was cleared\n");
+    free(mem.data);
+    return 1;
+  }
+
+  if (strncmp(cfg->volume_key, seeded.volume_key, sizeof(cfg->volume_key)) != 0) {
+    printf("[test_config_preserve] volume key changed unexpectedly\n");
+    free(mem.data);
+    return 1;
+  }
+
+  if (strncmp(cfg->keyboard_layout, layout, strlen(layout)) != 0) {
+    printf("[test_config_preserve] layout was not updated\n");
     free(mem.data);
     return 1;
   }
@@ -408,6 +487,7 @@ int run_boot_writer_tests(void) {
   int fails = 0;
   fails += test_bootwriter_basic();
   fails += test_bootwriter_config();
+  fails += test_bootwriter_config_preserves_volume_key();
   fails += test_bootwriter_partitioning();
   fails += test_bootwriter_patching();
   if (fails == 0) {
