@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke flow helpers for NoirOS x64 CLI validation."""
+"""Smoke flow helpers for CapyOS x64 CLI validation."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def maybe_run_first_boot_setup(
     # first-boot wizard path
     session.send_line("" if keyboard_layout == "us" else keyboard_layout)
     wait_and_send(session, "Hostname [capyos-node]:", "smoke-node", timeout)
-    wait_and_send(session, "Tema [noir]:", "noir", timeout)
+    wait_and_send(session, "Tema [capyos]:", "capyos", timeout)
     wait_and_send(session, "Ativar splash animado? [S/n]:", "n", timeout)
     wait_and_send(session, "Usuario administrador [admin]:", user, timeout)
     while True:

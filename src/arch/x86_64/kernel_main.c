@@ -24,7 +24,7 @@
 #include "drivers/usb/xhci.h"
 #include "fs/block.h"
 #include "fs/buffer.h"
-#include "fs/noirfs.h"
+#include "fs/capyfs.h"
 #include "fs/ramdisk.h"
 #include "fs/vfs.h"
 #include "memory/kmem.h"
@@ -668,7 +668,7 @@ static char g_active_volume_key[VOLUME_KEY_MAX];
 static int g_active_volume_key_ready = 0;
 static char g_handoff_volume_key[VOLUME_KEY_MAX];
 static int g_handoff_volume_key_ready = 0;
-static uint8_t g_data_io_probe[NOIRFS_BLOCK_SIZE]
+static uint8_t g_data_io_probe[CAPYFS_BLOCK_SIZE]
     __attribute__((aligned(64)));
 
 static const uint8_t g_disk_salt[16] = {0x4e, 0x6f, 0x69, 0x72, 0x4f, 0x53,
@@ -1072,11 +1072,11 @@ static int device_is_blank(struct block_device *dev) {
   return 1;
 }
 
-static int mount_root_noirfs(struct block_device *dev, const char *label) {
-  int mount_rc = mount_noirfs(dev, &g_shell_root_sb);
+static int mount_root_CAPYFS(struct block_device *dev, const char *label) {
+  int mount_rc = mount_capyfs(dev, &g_shell_root_sb);
   int root_rc = (mount_rc == 0) ? vfs_mount_root(&g_shell_root_sb) : -1;
   if (mount_rc != 0 || root_rc != 0) {
-    fbcon_print("[fs] ERRO: falha ao montar CFS (Capybara File System) em ");
+    fbcon_print("[fs] ERRO: falha ao montar CAPYFS em ");
     fbcon_print(label ? label : "dispositivo");
     fbcon_print(". mount=");
     fbcon_print_hex((uint64_t)(uint32_t)mount_rc);
@@ -1104,7 +1104,7 @@ static int initialize_encrypted_data_volume(struct block_device *data_dev,
     return -1;
   }
 
-  int fmt_rc = noirfs_format(crypt_dev, 128, crypt_dev->block_count, NULL);
+  int fmt_rc = capyfs_format(crypt_dev, 128, crypt_dev->block_count, NULL);
   if (fmt_rc != 0) {
     fbcon_print("[fs] ERRO: falha ao formatar volume cifrado. rc=");
     fbcon_print_hex((uint64_t)(uint32_t)fmt_rc);
@@ -1150,7 +1150,7 @@ static int initialize_encrypted_data_volume(struct block_device *data_dev,
   } else {
     fbcon_print("[fs] Aviso: probe RAW apos formatacao falhou.\n");
   }
-  if (mount_root_noirfs(crypt_dev, "DATA cifrada") != 0) {
+  if (mount_root_CAPYFS(crypt_dev, "DATA cifrada") != 0) {
     crypt_free(crypt_dev);
     return -1;
   }
@@ -1210,7 +1210,7 @@ static int mount_encrypted_data_volume(struct block_device *data_dev) {
   if (g_handoff_volume_key_ready) {
     struct block_device *crypt_dev =
         open_crypt_volume_with_password(data_dev, g_handoff_volume_key);
-    if (crypt_dev && mount_root_noirfs(crypt_dev, "DATA cifrada") == 0) {
+    if (crypt_dev && mount_root_CAPYFS(crypt_dev, "DATA cifrada") == 0) {
       local_copy(g_active_volume_key, sizeof(g_active_volume_key),
                  g_handoff_volume_key);
       g_active_volume_key_ready = 1;
@@ -1262,7 +1262,7 @@ static int mount_encrypted_data_volume(struct block_device *data_dev) {
       if (!crypt_dev) {
         continue;
       }
-      if (mount_root_noirfs(crypt_dev, "DATA cifrada") == 0) {
+      if (mount_root_CAPYFS(crypt_dev, "DATA cifrada") == 0) {
         mounted = 1;
         break;
       }
@@ -1496,7 +1496,7 @@ static struct block_device *open_handoff_data_device(void) {
   if (!slice) {
     return NULL;
   }
-  return block_chunked_wrap(slice, NOIRFS_BLOCK_SIZE);
+  return block_chunked_wrap(slice, CAPYFS_BLOCK_SIZE);
 }
 
 static int bootstrap_ramdisk_runtime(void) {
@@ -1507,14 +1507,14 @@ static int bootstrap_ramdisk_runtime(void) {
     return -1;
   }
 
-  int fmt_rc = noirfs_format(ram, 128, ram->block_count, NULL);
+  int fmt_rc = capyfs_format(ram, 128, ram->block_count, NULL);
   if (fmt_rc != 0) {
-    fbcon_print("[fs] ERRO: falha ao formatar CFS em RAM. rc=");
+    fbcon_print("[fs] ERRO: falha ao formatar CAPYFS em RAM. rc=");
     fbcon_print_hex((uint64_t)(uint32_t)fmt_rc);
     fbcon_putc('\n');
     return -1;
   }
-  if (mount_root_noirfs(ram, "RAM") != 0) {
+  if (mount_root_CAPYFS(ram, "RAM") != 0) {
     return -1;
   }
 
@@ -1537,9 +1537,9 @@ static int bootstrap_ramdisk_runtime(void) {
       "  net-set <ip> <mask> <gw> <dns>, hey <ip>,\n"
       "  add-user <user> <pass> [role], set-pass <user> <pass>, list-users,\n"
       "  shutdown-reboot, shutdown-off, do-sync\n";
-  if (fs_write_text_file("/docs/noiros-cli-reference.txt", cli_doc) != 0) {
+  if (fs_write_text_file("/docs/capyos-cli-reference.txt", cli_doc) != 0) {
     fbcon_print(
-        "[fs] aviso: nao foi possivel gravar /docs/noiros-cli-reference.txt\n");
+        "[fs] aviso: nao foi possivel gravar /docs/capyos-cli-reference.txt\n");
   }
 
   if (userdb_ensure() != 0) {
@@ -1558,7 +1558,7 @@ static int bootstrap_ramdisk_runtime(void) {
   }
 
   g_shell_persistent_storage = 0;
-  fbcon_print("[fs] CFS em RAM pronto para CLI.\n");
+  fbcon_print("[fs] CAPYFS em RAM pronto para CLI.\n");
   return 0;
 }
 
@@ -1596,13 +1596,13 @@ static int shell_bootstrap_filesystem(void) {
     }
   } else {
     if (data_dev) {
-      fbcon_print("[fs] ERRO: falha no volume persistente CFS.\n");
+      fbcon_print("[fs] ERRO: falha no volume persistente CAPYFS.\n");
       fbcon_print("[fs] Boot normal nao deve cair para RAM nem formatar automaticamente.\n");
       fbcon_print("[fs] Valide a chave e inicialize via ISO para recuperacao.\n");
       return -1;
     } else {
       if (g_h && g_h->version >= 2 && g_h->efi_system_table != 0) {
-        fbcon_print("[fs] ERRO: handoff sem volume DATA CFS em boot UEFI.\n");
+        fbcon_print("[fs] ERRO: handoff sem volume DATA CAPYFS em boot UEFI.\n");
         fbcon_print("[fs] Bloqueando fallback em RAM para evitar perda de persistencia.\n");
         return -1;
       }
@@ -1615,7 +1615,7 @@ static int shell_bootstrap_filesystem(void) {
 
   g_shell_fs_ready = 1;
   if (g_shell_persistent_storage) {
-    fbcon_print("[fs] CFS persistente ativo (dados cifrados).\n");
+    fbcon_print("[fs] CAPYFS persistente ativo (dados cifrados).\n");
   }
   return 0;
 }
@@ -1628,7 +1628,7 @@ static int prepare_shell_runtime(void) {
     if (system_load_settings(&g_shell_settings) != 0) {
       local_copy(g_shell_settings.hostname, sizeof(g_shell_settings.hostname),
                  "capyos64");
-      local_copy(g_shell_settings.theme, sizeof(g_shell_settings.theme), "noir");
+      local_copy(g_shell_settings.theme, sizeof(g_shell_settings.theme), "capyos");
       local_copy(g_shell_settings.keyboard_layout,
                  sizeof(g_shell_settings.keyboard_layout), "us");
       g_shell_settings.splash_enabled = 0;

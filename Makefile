@@ -27,13 +27,13 @@ EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L/usr/lib -T /usr/lib
 EFI_LIBS := /usr/lib/crt0-efi-x86_64.o -lefi -lgnuefi
 
 # Artefatos 64-bit (UEFI/long mode)
-NOIROS_ELF64    = $(BUILD)/noiros64.bin
+CAPYOS_ELF64    = $(BUILD)/capyos64.bin
 UEFI_LOADER     = $(BUILD)/boot/uefi_loader.efi
 UEFI_LOADER_ELF = $(BUILD)/boot/uefi_loader.so
 LINKER64_SCRIPT = $(SRC_DIR)/arch/x86_64/linker64.ld
 
 # Build 64-bit: entry64 + kernel_main64 + drivers + core + fs + shell + security
-NOIROS64_OBJS = \
+CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/entry64.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
 	$(BUILD)/x86_64/arch/x86_64/stubs.o \
@@ -62,7 +62,7 @@ NOIROS64_OBJS = \
 	$(BUILD)/x86_64/fs/storage/offset_wrapper.o \
 	$(BUILD)/x86_64/fs/storage/chunk_wrapper.o \
 	$(BUILD)/x86_64/fs/storage/partition.o \
-	$(BUILD)/x86_64/fs/noirfs/noirfs.o \
+	$(BUILD)/x86_64/fs/capyfs/capyfs.o \
 	$(BUILD)/x86_64/fs/vfs/vfs.o \
 	$(BUILD)/x86_64/security/crypt.o \
 	$(BUILD)/x86_64/security/csprng.o \
@@ -100,58 +100,58 @@ $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) -c $< -o $@
 
-$(NOIROS_ELF64): $(NOIROS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
-	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(NOIROS64_OBJS)
+$(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
+	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(CAPYOS64_OBJS)
 
 .PHONY: all64
-all64: $(NOIROS_ELF64)
+all64: $(CAPYOS_ELF64)
 
-# UEFI loader (stub) — compila só quando iso-uefi for chamado e gnu-efi estiver presente
+# UEFI loader (stub) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compila sÃƒÆ’Ã‚Â³ quando iso-uefi for chamado e gnu-efi estiver presente
 $(UEFI_LOADER_ELF): $(EFI_LOADER_SRC) | $(BUILD) $(BUILD)/boot
 	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
 	$(EFI_CC) $(EFI_CFLAGS) -c $(EFI_LOADER_SRC) -o $(BUILD)/boot/uefi_loader.o
 	$(EFI_LD) $(EFI_LDFLAGS) -o $(UEFI_LOADER_ELF) $(BUILD)/boot/uefi_loader.o $(EFI_LIBS)
 
 $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
-	# UEFI espera PE/COFF (não ELF). Converte o ELF gerado pelo gnu-efi em BOOTX64.EFI.
+	# UEFI espera PE/COFF (nÃƒÆ’Ã‚Â£o ELF). Converte o ELF gerado pelo gnu-efi em BOOTX64.EFI.
 	x86_64-linux-gnu-objcopy --subsystem=efi-app \
 	  -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
 	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
 
 .PHONY: iso-uefi
-iso-uefi: $(UEFI_LOADER) $(NOIROS_ELF64)
+iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64)
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
 	# Opcional: incluir kernel64 em /boot
 	mkdir -p $(ISO_DIR_EFI)/boot
-	cp $(NOIROS_ELF64) $(ISO_DIR_EFI)/boot/noiros64.bin
+	cp $(CAPYOS_ELF64) $(ISO_DIR_EFI)/boot/capyos64.bin
 	# Hyper-V Gen2 requer que o El Torito UEFI aponte para uma imagem FAT (nao para o .EFI direto)
-	python3 tools/scripts/mk_efiboot_img.py --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(NOIROS_ELF64)
+	python3 tools/scripts/mk_efiboot_img.py --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64)
 	@ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); echo "[ok] ISO UEFI gerada em $$ISO_OUT"
 
-# Manifest 64-bit (para BOOT partition GPT) - LBA relativo default = 1 (logo após o manifest)
+# Manifest 64-bit (para BOOT partition GPT) - LBA relativo default = 1 (logo apÃƒÆ’Ã‚Â³s o manifest)
 MANIFEST64 := $(BUILD)/manifest.bin
 
-$(MANIFEST64): $(NOIROS_ELF64) tools/scripts/gen_manifest.py | $(BUILD)
-	python3 tools/scripts/gen_manifest.py --kernel $(NOIROS_ELF64) --out $(MANIFEST64) --kernel-lba 1
+$(MANIFEST64): $(CAPYOS_ELF64) tools/scripts/gen_manifest.py | $(BUILD)
+	python3 tools/scripts/gen_manifest.py --kernel $(CAPYOS_ELF64) --out $(MANIFEST64) --kernel-lba 1
 
 .PHONY: manifest64
 manifest64: $(MANIFEST64)
 
-# GPT disk image helper (ESP FAT32 + BOOT raw + DATA). Não requer sudo.
+# GPT disk image helper (ESP FAT32 + BOOT raw + DATA). NÃƒÆ’Ã‚Â£o requer sudo.
 DISK_GPT_IMG ?= build/disk-gpt.img
 DISK_GPT_SIZE ?= 2G
 
 .PHONY: disk-gpt
-disk-gpt: $(UEFI_LOADER) $(NOIROS_ELF64) $(MANIFEST64)
-	python3 tools/scripts/provision_gpt.py --img $(DISK_GPT_IMG) --size $(DISK_GPT_SIZE) --bootx64 $(UEFI_LOADER) --kernel $(NOIROS_ELF64) --manifest $(MANIFEST64) --allow-existing --confirm
+disk-gpt: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64)
+	python3 tools/scripts/provision_gpt.py --img $(DISK_GPT_IMG) --size $(DISK_GPT_SIZE) --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64) --manifest $(MANIFEST64) --allow-existing --confirm
 
 # Provision an existing Hyper-V fixed VHD (or raw .img) with GPT/ESP/BOOT using the current build artifacts.
-# Usage (inside WSL): make provision-vhd IMG=/mnt/c/ProgramData/Microsoft/Windows/Virtual\\ Hard\\ Disks/NoirOSGenII.vhd
+# Usage (inside WSL): make provision-vhd IMG=/mnt/c/ProgramData/Microsoft/Windows/Virtual\\ Hard\\ Disks/CapyOSGenII.vhd
 .PHONY: provision-vhd
-provision-vhd: $(UEFI_LOADER) $(NOIROS_ELF64)
-	@if [ -z "$(IMG)" ]; then echo "Usage: make provision-vhd IMG=/mnt/c/ProgramData/Microsoft/Windows/Virtual\\ Hard\\ Disks/NoirOSGenII.vhd"; exit 2; fi
-	python3 tools/scripts/provision_gpt.py --img "$(IMG)" --bootx64 $(UEFI_LOADER) --kernel $(NOIROS_ELF64) --auto-manifest --allow-existing --confirm
+provision-vhd: $(UEFI_LOADER) $(CAPYOS_ELF64)
+	@if [ -z "$(IMG)" ]; then echo "Usage: make provision-vhd IMG=/mnt/c/ProgramData/Microsoft/Windows/Virtual\\ Hard\\ Disks/CapyOSGenII.vhd"; exit 2; fi
+	python3 tools/scripts/provision_gpt.py --img "$(IMG)" --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64) --auto-manifest --allow-existing --confirm
 
 LEGACY_DISABLED_MSG = "[legacy] Caminho BIOS/x86_32 foi removido. Use apenas UEFI/x86_64."
 
@@ -169,7 +169,7 @@ GEN_BOOT_CONFIG := $(BUILD)/tools/gen_boot_config
 BOOT_CONFIG_BIN := $(BUILD)/boot_config.bin
 
 ISO_DIR_EFI ?= build/iso-uefi-root
-ISO_IMG_EFI ?= build/NoirOS-Installer-UEFI.iso
+ISO_IMG_EFI ?= build/CapyOS-Installer-UEFI.iso
 EFI_BOOT := $(ISO_DIR_EFI)/EFI/BOOT
 BOOTX64 := $(EFI_BOOT)/BOOTX64.EFI
 EFI_STUB := $(BUILD)/boot/uefi_loader.efi
@@ -216,7 +216,7 @@ smoke-x64-cli: all64 iso-uefi manifest64
 # Host-side GPT/ESP/BOOT audit for installed disks or disk images.
 # Usage:
 #   make inspect-disk IMG=build/disk-gpt.img
-#   make inspect-disk IMG=/mnt/c/.../NoirOSGenII.vhd
+#   make inspect-disk IMG=/mnt/c/.../CapyOSGenII.vhd
 .PHONY: inspect-disk
 inspect-disk:
 	@if [ -z "$(IMG)" ]; then echo "Usage: make inspect-disk IMG=build/disk-gpt.img"; exit 2; fi

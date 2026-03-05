@@ -11,7 +11,7 @@ static int test_build_includes_console_and_entries(void) {
   char buffer[1024];
   struct grub_menu_entry entries[2] = {
       {.title = "Installer", .multiboot_path = "/boot/installer.bin"},
-      {.title = "Kernel", .multiboot_path = "/boot/noiros.bin"},
+      {.title = "Kernel", .multiboot_path = "/boot/capyos.bin"},
   };
   struct grub_cfg_options opts = {
       .timeout_seconds = 2,
@@ -33,7 +33,7 @@ static int test_build_includes_console_and_entries(void) {
     printf("[grub] gfxpayload=text ausente\n");
     return 1;
   }
-  if (!strstr(buffer, "Installer") || !strstr(buffer, "/boot/noiros.bin")) {
+  if (!strstr(buffer, "Installer") || !strstr(buffer, "/boot/capyos.bin")) {
     printf("[grub] entradas nao renderizadas\n");
     return 1;
   }
@@ -47,7 +47,7 @@ static int test_build_includes_console_and_entries(void) {
 static int test_build_rejects_invalid_default_or_buffer(void) {
   char buffer[64];
   struct grub_menu_entry entry = {.title = "Kernel",
-                                  .multiboot_path = "/boot/noiros.bin"};
+                                  .multiboot_path = "/boot/capyos.bin"};
   struct grub_cfg_options opts = {
       .timeout_seconds = 1,
       .default_entry = 1, // invalido para 1 entrada
@@ -79,7 +79,7 @@ static int test_write_file_creates_content(void) {
   close(fd);
 
   struct grub_menu_entry entry = {.title = "Kernel",
-                                  .multiboot_path = "/boot/noiros.bin"};
+                                  .multiboot_path = "/boot/capyos.bin"};
   struct grub_cfg_options opts = {
       .timeout_seconds = 1,
       .default_entry = 0,

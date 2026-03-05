@@ -162,7 +162,7 @@ int bootwriter_write_stage1(struct block_device *disk,
   /* DEBUG: Show Stage1 patching params */
   dbg_print_u32("[s1] LBA: ", stage2_lba);
   dbg_print_u32("[s1] Sec: ", stage2_sectors);
-  /* Preserva tabela de partições existente. */
+  /* Preserva tabela de partiÃ§Ãµes existente. */
   uint8_t mbr_existing[512];
   if (block_device_read(disk, 0, mbr_existing) != 0) {
     return -1;
@@ -556,7 +556,7 @@ int bootwriter_partition_disk(struct block_device *disk, uint32_t boot_mb,
   /* Fill Output Structures */
   struct mbr_partition p_boot = {0};
   p_boot.bootable = 0x80;
-  p_boot.type = PARTITION_TYPE_NOIROS_BOOT;
+  p_boot.type = PARTITION_TYPE_CAPYOS_BOOT;
   p_boot.lba_start = boot_start;
   p_boot.sector_count = boot_secs;
 

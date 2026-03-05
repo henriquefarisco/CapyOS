@@ -11,8 +11,8 @@ static int initialized = 0;
 
 /*
  * Precisamos de primitivas de trava para evitar corrida entre ISR
- * e código de usuário. Como estamos em uniprocessador, desabilitar
- * interrupções basta.
+ * e cÃ³digo de usuÃ¡rio. Como estamos em uniprocessador, desabilitar
+ * interrupÃ§Ãµes basta.
  */
 #ifdef UNIT_TEST
 static inline unsigned long irq_save(void) { return 0; }
@@ -37,8 +37,8 @@ void csprng_init(void) {
   if (initialized)
     return;
   sha256_init(&entropy_pool);
-  // Mistura algum sal inicial fixo para garantir estado não-nulo
-  uint8_t salt[] = "NoirOS_Initial_Salt_v1";
+  // Mistura algum sal inicial fixo para garantir estado nÃ£o-nulo
+  uint8_t salt[] = "CAPYOS_Initial_Salt_v1";
   sha256_update(&entropy_pool, salt, sizeof(salt));
   reseed_counter = 0;
   initialized = 1;
@@ -65,23 +65,23 @@ void csprng_get_bytes(void *buf, size_t len) {
     csprng_init();
   uint8_t *p = (uint8_t *)buf;
 
-  unsigned long flags = irq_save(); // Região crítica: acesso ao pool global
+  unsigned long flags = irq_save(); // RegiÃ£o crÃ­tica: acesso ao pool global
 
   while (len > 0) {
     // Snapshot do pool atual
     uint8_t digest[32];
     struct sha256_ctx temp_ctx = entropy_pool; // Copia estado atual
 
-    // Finaliza cópia para gerar bloco
+    // Finaliza cÃ³pia para gerar bloco
     sha256_update(&temp_ctx, (uint8_t *)&reseed_counter,
                   sizeof(reseed_counter));
     sha256_final(&temp_ctx, digest);
 
-    // Atualiza pool com o próprio output para "forward secrecy" (rekey)
+    // Atualiza pool com o prÃ³prio output para "forward secrecy" (rekey)
     sha256_update(&entropy_pool, digest, 32);
     reseed_counter++;
 
-    // Copia para saída
+    // Copia para saÃ­da
     size_t to_copy = (len < 32) ? len : 32;
     for (size_t i = 0; i < to_copy; ++i) {
       *p++ = digest[i];

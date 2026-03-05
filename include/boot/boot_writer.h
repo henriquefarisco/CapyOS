@@ -22,17 +22,17 @@ struct boot_payload_set {
   struct boot_payload kernel_recovery; /* ELF (fallback) */
 };
 
-/* Retorna payloads embarcados no binário (gerados em
+/* Retorna payloads embarcados no binÃ¡rio (gerados em
  * build/generated/boot_payloads.h). */
 struct boot_payload_set boot_embedded_payloads(void);
 
-/* Prepara setor 0 combinando stage1 + partições e patches de LBA/size. */
+/* Prepara setor 0 combinando stage1 + partiÃ§Ãµes e patches de LBA/size. */
 int bootwriter_write_stage1(struct block_device *disk,
                             const struct mbr_partition *boot_part,
                             uint32_t stage2_lba, uint32_t stage2_sectors,
                             const struct boot_payload *stage1);
 
-/* Escreve stage2 + manifest + kernels na partição BOOT. */
+/* Escreve stage2 + manifest + kernels na partiÃ§Ã£o BOOT. */
 int bootwriter_write_payloads(struct block_device *disk,
                               const struct mbr_partition *boot_part,
                               const struct boot_payload_set *payloads);
@@ -46,7 +46,7 @@ int bootwriter_write_payloads(struct block_device *disk,
 int bootwriter_write_config(struct block_device *disk, const char *layout_name);
 
 /* Partition Types */
-#define PARTITION_TYPE_NOIROS_BOOT 0xDA
+#define PARTITION_TYPE_CAPYOS_BOOT 0xDA
 #define PARTITION_TYPE_LINUX 0x83
 #define PARTITION_TYPE_EMPTY 0x00
 

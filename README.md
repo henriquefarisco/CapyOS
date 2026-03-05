@@ -5,18 +5,29 @@
 </p>
 
 Ultima atualizacao: 2026-03-05
+Versao de referencia: `0.8.0-alpha.0`
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco em:
 - boot proprio UEFI/GPT
-- filesystem proprio (NFS/NoirFS)
+- filesystem proprio (CAPYFS)
 - seguranca por criptografia no volume de dados
 - shell modular (CapyCLI)
 - consolidacao da trilha x86_64
 
 Nota de compatibilidade de build:
-- alguns artefatos e nomes tecnicos internos ainda usam o prefixo `noiros`
-  (por exemplo `noiros64.bin`, `NOIROS64.BIN`, `NOIROS.LOG`), para manter
-  retrocompatibilidade com o fluxo de boot atual.
+- alguns artefatos de boot ainda usam identificadores tecnicos em caixa alta
+  (por exemplo `CAPYOS64.BIN` na ESP e `CAPYOS.LOG` no diagnostico UEFI), para
+  manter compatibilidade com FAT/EFI e com o fluxo de boot atual.
+
+## Documentacao
+
+- indice principal: `docs/README.md`
+- arquitetura atual: `docs/architecture/system-overview.md`
+- setup Hyper-V: `docs/setup/hyper-v.md`
+- validacao de boot/login/CLI: `docs/testing/boot-and-cli-validation.md`
+- referencia de comandos: `docs/reference/cli-reference.md`
+- roadmap e planos: `docs/plans/`
+- release notes: `docs/releases/README.md`
 
 ## Visao geral do projeto
 
@@ -52,9 +63,9 @@ mas nao faz parte do pipeline suportado de build, boot, instalacao ou release.
 - Parser/protocolo de ARP/IPv4/ICMP/UDP/TCP com diagnostico via CLI.
 - Estado de sessao com usuario autenticado, `cwd`, prompt dinamico e logout.
 
-### 3. Filesystem (NFS/NoirFS) e VFS
+### 3. Filesystem (CAPYFS) e VFS
 
-- NoirFS com superbloco, bitmap, inode e diretorios.
+- CAPYFS com superbloco, bitmap, inode e diretorios.
 - VFS com resolucao de caminhos absolutos/relativos e metadados.
 - Buffer cache com sincronizacao explicita (`do-sync`).
 - Runtime x64 em disco provisionado:
@@ -116,8 +127,8 @@ Impacto pratico:
 |---|---|---|
 | Boot BIOS/MBR | Descontinuado | Fora de suporte |
 | Boot UEFI/GPT | Loader + kernel x64 com smoke em disco | Parcial |
-| NoirFS em disco cifrado | Ativo no x64 | Parcial |
-| NoirFS no x64 | Persistente em disco; RAM apenas como contingencia controlada | Parcial |
+| CAPYFS em disco cifrado | Ativo no x64 | Parcial |
+| CAPYFS no x64 | Persistente em disco; RAM apenas como contingencia controlada | Parcial |
 | Login e sessao | Funcional no x64 com persistencia em disco | Parcial |
 | CLI modular | Comandos principais ativos | Estavel |
 | Rede x64 | Stack com ARP/IPv4/ICMP ativo, `e1000` funcional e `tulip` em validacao | Parcial |
@@ -202,11 +213,11 @@ make inspect-disk IMG=build/disk-gpt.img
 ## Roadmap tecnico (macro)
 
 A evolucao detalhada esta em:
-- `docs/mvp-implantation-plan.md`
-- `docs/system-roadmap.md`
+- `docs/plans/mvp-implementation-plan.md`
+- `docs/plans/system-roadmap.md`
 
 Eixos principais:
-- NFS/NoirFS: journal, recuperacao, fsck, escalabilidade
+- CAPYFS: journal, recuperacao, fsck, escalabilidade
 - Rede: driver NIC, ARP/IPv4/ICMP/UDP/TCP e utilitarios CLI (`hey`)
 - Criptografia: integridade autenticada, rotacao e hierarquia de chaves
 - Performance: cache, I/O, NVMe tuning, operacoes em lote
@@ -223,11 +234,12 @@ Eixos principais:
 - `src/arch/x86/`: codigo legado 32-bit em desuso
 - `src/arch/x86_64/`: kernel path 64-bit
 - `src/core/`: kernel core, instalador, sessao, init
-- `src/fs/`: NoirFS, VFS, cache e wrappers de bloco
+- `src/fs/`: CAPYFS, VFS, cache e wrappers de bloco
 - `src/security/`: crypto/KDF/CSPRNG
 - `src/shell/`: core do CapyCLI e comandos
 - `src/drivers/`: video/input/storage/pci/usb/hyper-v
-- `docs/`: arquitetura, setup, roadmap e referencia de comandos
+- `docs/`: documentacao organizada por dominio (`architecture/`, `setup/`,
+  `testing/`, `reference/`, `plans/`, `releases/`, `archive/`)
 - `tools/scripts/`: utilitarios de build/provisionamento/inspecao
 
 ## Gitflow sugerido

@@ -336,7 +336,7 @@ static int test_bootwriter_partitioning(void) {
     free(mem.data);
     return 1;
   }
-  if (boot_p.type != PARTITION_TYPE_NOIROS_BOOT || boot_p.bootable != 0x80) {
+  if (boot_p.type != PARTITION_TYPE_CAPYOS_BOOT || boot_p.bootable != 0x80) {
     printf("[test_partitioning] boot flags/type malformed\n");
     free(mem.data);
     return 1;
@@ -361,7 +361,7 @@ static int test_bootwriter_partitioning(void) {
   mem_read(&mem, 0, mbr);
 
   // P1 (Offset 446)
-  if (mbr[446 + 4] != PARTITION_TYPE_NOIROS_BOOT) {
+  if (mbr[446 + 4] != PARTITION_TYPE_CAPYOS_BOOT) {
     printf("[test_partitioning] MBR P1 type wrong\n");
     free(mem.data);
     return 1;

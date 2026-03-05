@@ -19,12 +19,9 @@ do caminho suportado do projeto.
 - o legado `BIOS/x86_32` foi removido do pipeline de build e release
 - manter um segundo bootloader historico aumentaria a superficie de regressao
 
-## Uso deste arquivo
+## Consulte em vez disso
 
-Considere este documento apenas como referencia historica. Para o fluxo atual,
-use:
-
-- `README.md`
-- `docs/architecture.md`
-- `docs/HYPERV_SETUP.md`
-- `docs/cli_test_plan.md`
+- `../../README.md`
+- `../../architecture/system-overview.md`
+- `../../setup/hyper-v.md`
+- `../../testing/boot-and-cli-validation.md`

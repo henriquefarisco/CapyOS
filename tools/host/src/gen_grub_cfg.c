@@ -6,10 +6,10 @@
 
 static int build_iso_cfg(const char *out_path) {
   const struct grub_menu_entry entries[] = {
-      {.title = "Noir Guided Installation System",
+      {.title = "CAPYOS Guided Installation System",
        .multiboot_path = "/boot/installer.bin"},
-      {.title = "NoirOS (boot via ISO + disco instalado)",
-       .multiboot_path = "/boot/noiros.bin"},
+      {.title = "CAPYOS (boot via ISO + disco instalado)",
+       .multiboot_path = "/boot/capyos.bin"},
   };
   const struct grub_cfg_options opts = {
       .timeout_seconds = 1,
@@ -24,7 +24,7 @@ static int build_iso_cfg(const char *out_path) {
 
 static int build_disk_cfg(const char *out_path) {
   const struct grub_menu_entry entries[] = {
-      {.title = "NoirOS", .multiboot_path = "/boot/noiros.bin"},
+      {.title = "CAPYOS", .multiboot_path = "/boot/capyos.bin"},
   };
   const struct grub_cfg_options opts = {
       .timeout_seconds = 3,

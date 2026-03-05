@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reusable smoke-session helpers for NoirOS x64 smoke tests."""
+"""Reusable smoke-session helpers for CAPYOS x64 smoke tests."""
 
 from __future__ import annotations
 
