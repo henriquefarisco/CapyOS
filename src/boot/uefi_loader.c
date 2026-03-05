@@ -1,4 +1,4 @@
-// CapyOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\noiros64.bin
+// CapyOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\capyos64.bin
 // from the same volume as BOOTX64.EFI, loads PT_LOAD segments at p_paddr and
 // jumps to e_entry after ExitBootServices, passing a basic handoff.
 #include "boot/boot_manifest.h"
@@ -22,8 +22,8 @@ static inline void dbgcon_putc(UINT8 c) {
 #define EFI_PART_TYPE_ESP                                                      \
   {0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,                             \
    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B}
-/* Temporário: GUID de partição BOOT NoirOS (ajustar no instalador GPT) */
-#define EFI_PART_TYPE_NOIROS_BOOT                                              \
+/* TemporÃƒÂ¡rio: GUID de partiÃƒÂ§ÃƒÂ£o BOOT CAPYOS (ajustar no instalador GPT) */
+#define EFI_PART_TYPE_CAPYOS_BOOT                                              \
   {0x76, 0x0b, 0x98, 0x04, 0x42, 0x10, 0x4c, 0x9b,                             \
    0x86, 0x1f, 0x11, 0xe0, 0x29, 0xea, 0xc1, 0x01}
 #define EFI_PART_TYPE_LINUX_FS                                                 \
@@ -306,13 +306,13 @@ static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
 
   Elf64_Ehdr *eh = (Elf64_Ehdr *)kernel_buf;
   if (*(UINT32 *)eh->e_ident != ELF_MAGIC || eh->e_machine != EM_X86_64) {
-    Print(L"[UEFI] kernel ELF64 inválido\r\n");
+    Print(L"[UEFI] kernel ELF64 invÃƒÂ¡lido\r\n");
     return EFI_UNSUPPORTED;
   }
 
-  // Carrega o kernel em um bloco contíguo abaixo de 4GiB e aplica um offset
-  // único. O kernel 64-bit é linkado em um endereço base (ex.: 0x0040_0000),
-  // mas deve ser escrito de forma relocável (PC-relative/RIP-relative) para
+  // Carrega o kernel em um bloco contÃƒÂ­guo abaixo de 4GiB e aplica um offset
+  // ÃƒÂºnico. O kernel 64-bit ÃƒÂ© linkado em um endereÃƒÂ§o base (ex.: 0x0040_0000),
+  // mas deve ser escrito de forma relocÃƒÂ¡vel (PC-relative/RIP-relative) para
   // suportar esse offset.
   EFI_PHYSICAL_ADDRESS link_base = 0xFFFFFFFFFFFFFFFFULL;
   EFI_PHYSICAL_ADDRESS link_end = 0;
@@ -330,7 +330,7 @@ static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
       link_end = seg_end;
   }
   if (link_base == 0xFFFFFFFFFFFFFFFFULL || link_end <= link_base) {
-    Print(L"[UEFI] ELF sem segmentos PT_LOAD válidos\r\n");
+    Print(L"[UEFI] ELF sem segmentos PT_LOAD vÃƒÂ¡lidos\r\n");
     return EFI_LOAD_ERROR;
   }
 
@@ -346,7 +346,7 @@ static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
     return alloc_st;
   }
 
-  // Zera toda a área (inclui gaps e BSS)
+  // Zera toda a ÃƒÂ¡rea (inclui gaps e BSS)
   UINT8 *base = (UINT8 *)(UINTN)load_base;
   for (UINTN b = 0; b < span; b++)
     base[b] = 0;
@@ -408,7 +408,7 @@ static EFI_STATUS try_manifest_from_gpt(EFI_BLOCK_IO_PROTOCOL *bio,
     return EFI_NOT_FOUND;
 
   UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
-  UINT8 boot_guid[16] = EFI_PART_TYPE_NOIROS_BOOT;
+  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
 
   UINTN ents_per_block = bsz / entsz;
   UINT64 cur_lba = ent_lba;
@@ -435,7 +435,7 @@ static EFI_STATUS try_manifest_from_gpt(EFI_BLOCK_IO_PROTOCOL *bio,
       if (guid_eq(e->part_type_guid, esp_guid))
         continue; // pular ESP
       if (!guid_eq(e->part_type_guid, boot_guid))
-        continue; // só BOOT
+        continue; // sÃƒÂ³ BOOT
       UINT64 start_lba = e->first_lba;
       VOID *mf_buf = AllocatePool(bsz);
       if (!mf_buf) {
@@ -553,7 +553,7 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
       mf = (struct boot_manifest *)manifest_buf;
     }
   }
-  // Usar manifest se válido
+  // Usar manifest se vÃƒÂ¡lido
   if (boot_part_lba != 0 && mf && mf->magic == BOOT_MANIFEST_MAGIC &&
       mf->entry_count > 0 && bio && bio->Media) {
     if (block_sz == 0)
@@ -572,7 +572,7 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
     if (kernel_buf) {
       UINT64 lba = sel->lba_start;
       if (boot_part_lba != 0) {
-        lba += boot_part_lba; // lba relativo à partição BOOT
+        lba += boot_part_lba; // lba relativo ÃƒÂ  partiÃƒÂ§ÃƒÂ£o BOOT
       }
       EFI_STATUS rb =
           uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId, lba,
@@ -594,28 +594,28 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   // Fallback: caminho fixo
   VOID *kernel_buf = NULL;
   UINTN kernel_size = 0;
-  stt = read_file(root, L"BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_size);
+  stt = read_file(root, L"BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_size = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_size);
+    stt = read_file(root, L"\\BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_size = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\boot\\noiros64.bin", &kernel_buf, &kernel_size);
+    stt = read_file(root, L"\\boot\\capyos64.bin", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_size = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"boot\\noiros64.bin", &kernel_buf, &kernel_size);
+    stt = read_file(root, L"boot\\capyos64.bin", &kernel_buf, &kernel_size);
   if (EFI_ERROR(stt)) {
     Print(L"[UEFI] Falha ao ler kernel: %r\r\n", stt);
     return stt;
@@ -743,10 +743,10 @@ static BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     return FALSE;
 
   EFI_FILE_HANDLE fh = NULL;
-  stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"\\NOIROS.INI",
+  stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"\\CAPYOS.INI",
                           EFI_FILE_MODE_READ, 0);
   if (EFI_ERROR(stt)) {
-    stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"NOIROS.INI",
+    stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"CAPYOS.INI",
                             EFI_FILE_MODE_READ, 0);
   }
   if (!EFI_ERROR(stt) && fh) {
@@ -929,7 +929,7 @@ static EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
   FreePool(hdr_buf);
 
   UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
-  UINT8 boot_guid[16] = EFI_PART_TYPE_NOIROS_BOOT;
+  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
   UINT8 data_guid[16] = EFI_PART_TYPE_LINUX_FS;
 
   UINTN ents_per_block = bsz / entsz;
@@ -1484,7 +1484,7 @@ static EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
 
   gpt_entry_t *e = (gpt_entry_t *)entries;
   UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
-  UINT8 boot_guid[16] = EFI_PART_TYPE_NOIROS_BOOT;
+  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
   UINT8 linux_guid[16] = EFI_PART_TYPE_LINUX_FS;
   UINT8 disk_guid[16];
   fill_guid(disk_guid, st);
@@ -2026,7 +2026,7 @@ static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
 
   fat32_dirent83(&boot_dir[0], ".       ", "   ", 0x10, bootdir_cl, 0);
   fat32_dirent83(&boot_dir[32], "..      ", "   ", 0x10, root_cluster, 0);
-  fat32_dirent83(&boot_dir[64], "NOIROS64", "BIN", 0x20, kernel_cl,
+  fat32_dirent83(&boot_dir[64], "CAPYOS64", "BIN", 0x20, kernel_cl,
                  (UINT32)kernel_sz);
   UINTN boot_file_off = 96;
   if (manifest && manifest_sz) {
@@ -2173,21 +2173,21 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     return stt;
   }
 
-  stt = read_file(root, L"BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_sz);
+  stt = read_file(root, L"BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_sz);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_sz = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\BOOT\\NOIROS64.BIN", &kernel_buf, &kernel_sz);
+    stt = read_file(root, L"\\BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_sz);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
     kernel_sz = 0;
   }
   if (EFI_ERROR(stt))
-    stt = read_file(root, L"\\boot\\noiros64.bin", &kernel_buf, &kernel_sz);
+    stt = read_file(root, L"\\boot\\capyos64.bin", &kernel_buf, &kernel_sz);
   if (EFI_ERROR(stt) && kernel_buf) {
     FreePool(kernel_buf);
     kernel_buf = NULL;
@@ -2434,7 +2434,7 @@ static BOOLEAN rsdp_is_valid_ptr(const VOID *ptr) {
     UINT32 len = r->length;
     if (len < 36 || len > 4096) {
       // Alguns firmwares reportam length inesperado; aceite ACPI 1.0 checksum
-      // como mínimo.
+      // como mÃƒÂ­nimo.
       return TRUE;
     }
     return sum8_bytes(p, len) == 0;
@@ -2480,7 +2480,7 @@ static EFI_STATUS scan_rsdp(UINT64 *out_rsdp) {
     }
   }
 
-  // Área BIOS "high" tradicional: 0xE0000..0xFFFFF
+  // ÃƒÂrea BIOS "high" tradicional: 0xE0000..0xFFFFF
   UINT64 found = 0;
   if (!EFI_ERROR(scan_rsdp_range(0xE0000ULL, 0x100000ULL, &found)) && found) {
     *out_rsdp = found;
@@ -2637,7 +2637,7 @@ static EFI_STATUS log_open(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
 
   EFI_FILE_HANDLE fh = NULL;
   stt = uefi_call_wrapper(
-      out->root->Open, 5, out->root, &fh, L"\\EFI\\NOIROS.LOG",
+      out->root->Open, 5, out->root, &fh, L"\\EFI\\CAPYOS.LOG",
       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
       EFI_FILE_ARCHIVE);
   if (EFI_ERROR(stt) || !fh) {
@@ -2704,7 +2704,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   Print(L"CapyOS UEFI loader: iniciando\r\n");
   disable_uefi_watchdog(systab);
 
-  // Modo instalador: ISO de instalacao contem um marcador (NOIROS.INI) e/ou o
+  // Modo instalador: ISO de instalacao contem um marcador (CAPYOS.INI) e/ou o
   // volume e read-only.
   BOOLEAN install_marker = boot_volume_has_marker(image, systab);
   BOOLEAN install_ro = boot_volume_is_readonly(image, systab);
@@ -2713,10 +2713,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
           install_marker ? 1 : 0, install_ro ? 1 : 0);
     EFI_STATUS ist = installer_run(image, systab);
     if (!EFI_ERROR(ist)) {
-      // Normalmente não retorna (ResetSystem). Se retornar, apenas aguarde.
+      // Normalmente nÃƒÂ£o retorna (ResetSystem). Se retornar, apenas aguarde.
       uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     }
-    // Se a instalação foi cancelada ou falhou, continue para o boot normal
+    // Se a instalaÃƒÂ§ÃƒÂ£o foi cancelada ou falhou, continue para o boot normal
     // (kernel do ISO).
   }
 
@@ -2724,7 +2724,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   EFI_STATUS st = load_kernel(image, systab, &entry);
   if (EFI_ERROR(st)) {
     Print(L"[UEFI] Falha ao carregar kernel: %r\r\n", st);
-    // Não retorne ao firmware em caso de erro: isso vira "boot loader failed"
+    // NÃƒÂ£o retorne ao firmware em caso de erro: isso vira "boot loader failed"
     // no Hyper-V. Mantemos a tela para facilitar debug.
     uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     for (;;) {
@@ -2821,41 +2821,41 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     Print(L"[UEFI] Runtime disk nao detectado (fallback RAM).\r\n");
   }
 
-  // Alocar handoff e memory map abaixo de 1GiB (compatível com identity map do
+  // Alocar handoff e memory map abaixo de 1GiB (compatÃƒÂ­vel com identity map do
   // kernel atual)
   log_file_t logf = {0};
   EFI_STATUS logst = log_open(image, systab, &logf);
   if (EFI_ERROR(logst)) {
     Print(L"[UEFI] log_open falhou: %r\r\n", logst);
   } else {
-    log_write_ascii(&logf, "\r\n[noiros] boot start\r\n");
-    log_write_ascii(&logf, "[noiros] kernel entry=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] boot start\r\n");
+    log_write_ascii(&logf, "[CAPYOS] kernel entry=");
     log_write_u64_hex(&logf, (UINT64)entry);
-    log_write_ascii(&logf, "\r\n[noiros] rsdp=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] rsdp=");
     log_write_u64_hex(&logf, rsdp);
-    log_write_ascii(&logf, "\r\n[noiros] rsdp.src=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] rsdp.src=");
     log_write_ascii(&logf, rsdp_src8);
-    log_write_ascii(&logf, "\r\n[noiros] rsdp.copied=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] rsdp.copied=");
     log_write_u64_hex(&logf, rsdp_copied ? 1 : 0);
-    log_write_ascii(&logf, "\r\n[noiros] fb.base=");
+    log_write_ascii(&logf, "\r\n[CAPYOS] fb.base=");
     log_write_u64_hex(&logf, fb.base);
     log_write_ascii(&logf, "\r\n");
 
-    log_write_ascii(&logf, "[noiros] rsdp.valid=");
+    log_write_ascii(&logf, "[CAPYOS] rsdp.valid=");
     log_write_u64_hex(&logf,
                       rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp) ? 1 : 0);
     log_write_ascii(&logf, "\r\n");
     if (rsdp && rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp)) {
       const UINT8 *p = (const UINT8 *)(UINTN)rsdp;
       const acpi_rsdp_t *r = (const acpi_rsdp_t *)(UINTN)rsdp;
-      log_write_ascii(&logf, "[noiros] rsdp.rev=");
+      log_write_ascii(&logf, "[CAPYOS] rsdp.rev=");
       log_write_u64_hex(&logf, (UINT64)r->revision);
       log_write_ascii(&logf, " chk=");
       log_write_u64_hex(&logf, (UINT64)r->checksum);
       log_write_ascii(&logf, " rsdt=");
       log_write_u64_hex(&logf, (UINT64)r->rsdt);
       log_write_ascii(&logf, "\r\n");
-      log_write_ascii(&logf, "[noiros] rsdp.sum20=");
+      log_write_ascii(&logf, "[CAPYOS] rsdp.sum20=");
       log_write_u64_hex(&logf, (UINT64)sum8_bytes(p, 20));
       log_write_ascii(&logf, " bytes20=");
       log_write_bytes_hex(&logf, p, 20);
@@ -2864,7 +2864,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
         UINT32 len = r->length;
         if (len < 36 || len > 4096)
           len = 36;
-        log_write_ascii(&logf, "[noiros] rsdp.len=");
+        log_write_ascii(&logf, "[CAPYOS] rsdp.len=");
         log_write_u64_hex(&logf, (UINT64)len);
         log_write_ascii(&logf, " xsdt=");
         log_write_u64_hex(&logf, (UINT64)r->xsdt);
@@ -2877,7 +2877,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       }
     }
     // IMPORTANTE: feche o arquivo ANTES do GetMemoryMap/ExitBootServices.
-    // Qualquer I/O/alloc após GetMemoryMap pode alterar o map_key e causar
+    // Qualquer I/O/alloc apÃƒÂ³s GetMemoryMap pode alterar o map_key e causar
     // EFI_INVALID_PARAMETER.
     log_close(&logf);
   }
@@ -2970,7 +2970,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       return st;
     }
 
-    // Importante: não chame mais nada que possa alocar/IO entre GetMemoryMap e
+    // Importante: nÃƒÂ£o chame mais nada que possa alocar/IO entre GetMemoryMap e
     // ExitBootServices.
 
     /* HYBRID BOOT: Skip ExitBootServices to keep UEFI ConIn available for
@@ -2982,7 +2982,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       break;
     }
 
-    // map_key ficou inválido (firmware mudou o memory map). Libera o buffer e
+    // map_key ficou invÃƒÂ¡lido (firmware mudou o memory map). Libera o buffer e
     // tenta de novo.
     uefi_call_wrapper(systab->BootServices->FreePages, 2, map_addr, pages);
     map = NULL;
@@ -3003,7 +3003,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     }
 
     Print(L"[UEFI] ExitBootServices falhou: %r\r\n", st);
-    // Não retorne ao firmware (isso vira PXE/boot fail confuso no Hyper-V).
+    // NÃƒÂ£o retorne ao firmware (isso vira PXE/boot fail confuso no Hyper-V).
     // Mantenha a tela.
     uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     for (;;) {

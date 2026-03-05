@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Provision a disk image with GPT for NoirOS (ESP + BOOT + DATA), without sudo.
+Provision a disk image with GPT for CAPYOS (ESP + BOOT + DATA), without sudo.
 
 This script writes:
   - GPT with 3 partitions (ESP FAT32, BOOT raw, DATA raw)
   - ESP formatted as FAT32 with:
       \\EFI\\BOOT\\BOOTX64.EFI
-      \\BOOT\\NOIROS64.BIN
+      \\BOOT\\CAPYOS64.BIN
       \\BOOT\\MANIFEST.BIN
       \\BOOT\\CAPYCFG.BIN (keyboard layout + optional volume key)
   - BOOT partition (raw):
@@ -21,7 +21,7 @@ It can operate on:
 
 Usage:
   python3 tools/scripts/provision_gpt.py --img build/disk-gpt.img --size 2G \
-    --bootx64 build/boot/uefi_loader.efi --kernel build/noiros64.bin \
+    --bootx64 build/boot/uefi_loader.efi --kernel build/capyos64.bin \
     --auto-manifest --volume-key ABCD-1234-EFGH-5678 --confirm
 """
 
@@ -57,7 +57,7 @@ def run(cmd: list[str]) -> None:
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Provision GPT disk image for NoirOS (ESP/BOOT/DATA)."
+        description="Provision GPT disk image for CAPYOS (ESP/BOOT/DATA)."
     )
     ap.add_argument(
         "--img",
@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--kernel",
         type=Path,
-        help="Path to kernel (noiros64.bin) to copy into ESP/BOOT",
+        help="Path to kernel (capyos64.bin) to copy into ESP/BOOT",
     )
     ap.add_argument(
         "--manifest",
@@ -173,7 +173,7 @@ def main() -> None:
         boot_cfg = build_boot_config(args.keyboard_layout, args.volume_key)
         files = {
             "BOOTX64.EFI": args.bootx64.read_bytes(),
-            "NOIROS64.BIN": args.kernel.read_bytes(),
+            "CAPYOS64.BIN": args.kernel.read_bytes(),
             "MANIFEST.BIN": args.manifest.read_bytes(),
             "CAPYCFG.BIN": boot_cfg,
         }
@@ -192,7 +192,7 @@ def main() -> None:
             print("[warn] CAPYCFG.BIN has no volume key (manual first-boot unlock path).")
 
         write_boot_partition_raw(
-            args.img, boot_lba, boot_secs, files["MANIFEST.BIN"], files["NOIROS64.BIN"]
+            args.img, boot_lba, boot_secs, files["MANIFEST.BIN"], files["CAPYOS64.BIN"]
         )
     finally:
         if vhd_footer and orig_size is not None:

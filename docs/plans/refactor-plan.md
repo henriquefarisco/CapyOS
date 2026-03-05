@@ -51,7 +51,7 @@
 ### Fase 6 - Cobertura completa e limpeza de legado
 - adicionar smoke de `ISO -> instalar -> reboot por HDD -> login`
 - remover codigo, scripts e documentacao residuais de `BIOS/x86_32`
-- reduzir divergencias de nome historico `NoirOS` onde nao forem mais
+- reduzir divergencias de nomenclatura historica onde nao forem mais
   necessarias
 
 ## Validacao minima por fechamento

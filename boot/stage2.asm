@@ -1,4 +1,4 @@
-; stage2.asm — Minimal BIOS loader for NoirOS
+; stage2.asm â€” Minimal BIOS loader for CAPYOS
 BITS 16
 ORG 0x8000
     jmp start
@@ -162,7 +162,7 @@ start:
     call wait_space_timeout
 
     mov [boot_drive], dl
-    ; Força boot_drive para o primeiro disco HDD (0x80) para evitar uso de unidade incorreta (CD/floppy).
+    ; ForÃ§a boot_drive para o primeiro disco HDD (0x80) para evitar uso de unidade incorreta (CD/floppy).
     mov dl, 0x80
     mov [boot_drive], dl
     ; Force hard disk if BIOS reported <0x80 (e.g., CD/floppy), to avoid loading from wrong drive
@@ -282,7 +282,7 @@ start:
     mov dword [stage2_sectors_cached], DEFAULT_STAGE2_SEC
 .s2_fallback_done:
     
-    ; Debug: Check for Magic 'NOIR' at 0x8014
+    ; Debug: Check for Magic 'CAPYOS' at 0x8014
     mov esi, 0x8014
     mov eax, [esi]
     cmp eax, 0x52494F4E

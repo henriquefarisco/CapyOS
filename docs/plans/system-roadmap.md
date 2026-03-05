@@ -13,17 +13,17 @@ Status date: 2026-03-05.
 3. Land changes with measurable acceptance criteria.
 4. Keep host tests and VM smoke tests mandatory for every milestone.
 
-## 1. NoirFS roadmap
+## 1. CAPYFS roadmap
 
 ### P0 - Reliability and recoverability
 - Add filesystem superblock versioning with compatibility flags.
 - Introduce journal/WAL for metadata operations.
-- Add `fsck.noirfs` host tool to detect and repair synthetic corruption.
+- Add `fsck.CAPYFS` host tool to detect and repair synthetic corruption.
 - Add mount-time recovery replay after unclean shutdown.
 
 Acceptance targets:
 - power-loss simulation must recover without metadata corruption
-- `fsck.noirfs` must repair known corruption samples
+- `fsck.CAPYFS` must repair known corruption samples
 
 ### P1 - Scalability and feature growth
 - Replace fixed directory entry model with variable-length names + indexing.
@@ -57,7 +57,7 @@ Acceptance targets:
 ## 3. Performance roadmap
 
 ### P0 - Core path optimization
-- Profile hot paths in VFS/NoirFS and block cache.
+- Profile hot paths in VFS/CAPYFS and block cache.
 - Add read-ahead and delayed writeback.
 - Reduce synchronous flush points in metadata-heavy code paths.
 
@@ -138,7 +138,7 @@ Acceptance targets:
 ## 8. Release plan
 
 ### Milestone R1 - Hardening baseline
-- NoirFS metadata journal prototype
+- CAPYFS metadata journal prototype
 - auth/integrity hardening
 - crash recovery checks
 
@@ -161,7 +161,7 @@ Acceptance targets:
 
 1. Remove the remaining hybrid boot dependency and complete native x64 input.
 2. Add dedicated smoke coverage for `ISO -> install -> HDD boot -> login`.
-3. Add NoirFS metadata journal prototype with replay test harness.
+3. Add CAPYFS metadata journal prototype with replay test harness.
 4. Add regression tests for user DB parser/auth edge cases.
 5. Add CI profile that runs x64 host tests, `make inspect-disk` and HDD boot
    smoke in VM.

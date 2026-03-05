@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NoirOS x64 smoke test for installed-disk flow:
+CAPYOS x64 smoke test for installed-disk flow:
 
 - provisions GPT disk (ESP/BOOT/DATA) with CAPYCFG volume key
 - boots via QEMU/UEFI
@@ -34,11 +34,11 @@ from smoke_x64_session import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="NoirOS x64 installed-disk smoke test (QEMU/UEFI)"
+        description="CAPYOS x64 installed-disk smoke test (QEMU/UEFI)"
     )
     parser.add_argument(
         "--iso",
-        default="build/NoirOS-Installer-UEFI.iso",
+        default="build/CapyOS-Installer-UEFI.iso",
         help="Deprecated compatibility flag (unused).",
     )
     parser.add_argument("--qemu", default="qemu-system-x86_64", help="QEMU binary")
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--volume-key",
-        default="NOIROS-SMOKE-KEY-2026-0001",
+        default="CAPYOS-SMOKE-KEY-2026-0001",
         help="Volume key persisted in CAPYCFG.BIN",
     )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
@@ -86,7 +86,7 @@ def run_build_if_requested(repo_root: Path, parsed: argparse.Namespace) -> None:
 
 def validate_artifacts(repo_root: Path) -> tuple[Path, Path, Path]:
     bootx64 = (repo_root / "build/boot/uefi_loader.efi").resolve()
-    kernel = (repo_root / "build/noiros64.bin").resolve()
+    kernel = (repo_root / "build/capyos64.bin").resolve()
     manifest = (repo_root / "build/manifest.bin").resolve()
     for p in (bootx64, kernel, manifest):
         if not p.exists():

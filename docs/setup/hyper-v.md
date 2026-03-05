@@ -35,7 +35,7 @@ make iso-uefi
 python3 tools/scripts/provision_gpt.py \
   --img '/mnt/c/ProgramData/Microsoft/Windows/Virtual Hard Disks/CapyOSGen2.vhd' \
   --bootx64 build/boot/uefi_loader.efi \
-  --kernel build/noiros64.bin \
+  --kernel build/capyos64.bin \
   --auto-manifest \
   --allow-existing \
   --confirm
@@ -44,7 +44,7 @@ python3 tools/scripts/provision_gpt.py \
 Opcao PowerShell:
 
 ```powershell
-wsl -e bash -lc "cd /mnt/d/Projetos/CapyOS && make iso-uefi && python3 tools/scripts/provision_gpt.py --img '/mnt/c/ProgramData/Microsoft/Windows/Virtual Hard Disks/CapyOSGen2.vhd' --bootx64 build/boot/uefi_loader.efi --kernel build/noiros64.bin --auto-manifest --allow-existing --confirm"
+wsl -e bash -lc "cd /mnt/d/Projetos/CapyOS && make iso-uefi && python3 tools/scripts/provision_gpt.py --img '/mnt/c/ProgramData/Microsoft/Windows/Virtual Hard Disks/CapyOSGen2.vhd' --bootx64 build/boot/uefi_loader.efi --kernel build/capyos64.bin --auto-manifest --allow-existing --confirm"
 ```
 
 Notas:
@@ -82,7 +82,8 @@ cd /mnt/d/Projetos/CapyOS
 make iso-uefi
 ```
 
-- Anexe `build/NoirOS-Installer-UEFI.iso` como DVD SCSI na VM Gen2.
+- Anexe `build/CapyOS-Installer-UEFI.iso` como DVD SCSI na VM Gen2.
+  Esse e o nome oficial atual do artefato ISO UEFI.
 - A ISO UEFI usa El Torito apontando para `EFI/BOOT/efiboot.img`.
 - O instalador por ISO ainda nao possui smoke ponta a ponta dedicado; o fluxo
   oficialmente validado hoje continua sendo `provision_gpt.py` + boot por HDD.

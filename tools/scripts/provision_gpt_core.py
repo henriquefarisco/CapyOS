@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Core GPT and disk provisioning helpers for NoirOS images."""
+"""Core GPT and disk provisioning helpers for CAPYOS images."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ SECTOR = 512
 VHD_FOOTER_SIZE = 512
 VHD_SIG = b"conectix"
 
-# NoirOS BOOT partition type GUID (canonical form):
+# CAPYOS BOOT partition type GUID (canonical form):
 # on-disk bytes used in loader: 76 0b 98 04 42 10 4c 9b 86 1f 11 e0 29 ea c1 01
-NOIROS_BOOT_GUID = "04980b76-1042-9b4c-861f-11e029eac101"
+CAPYOS_BOOT_GUID = "04980b76-1042-9b4c-861f-11e029eac101"
 
 
 def parse_size_to_bytes(raw: str) -> int:
@@ -209,7 +209,7 @@ def partition_gpt(img: Path, esp_size: str, boot_size: str) -> None:
         )
 
     write_entry(0, "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", p1_first, p1_last, "ESP")
-    write_entry(1, NOIROS_BOOT_GUID, p2_first, p2_last, "BOOT")
+    write_entry(1, CAPYOS_BOOT_GUID, p2_first, p2_last, "BOOT")
     write_entry(2, "0fc63daf-8483-4772-8e79-3d69d8477de4", p3_first, p3_last, "DATA")
 
     entries_crc = zlib.crc32(entries) & 0xFFFFFFFF

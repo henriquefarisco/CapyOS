@@ -1,4 +1,4 @@
-/* NoirOS Hyper-V VMBus Synthetic Keyboard Driver - Complete Protocol
+/* CAPYOS Hyper-V VMBus Synthetic Keyboard Driver - Complete Protocol
  * Based on iPXE and Linux kernel VMBus implementations
  * Implements full channel negotiation and keyboard event reception
  */

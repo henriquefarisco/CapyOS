@@ -1,5 +1,5 @@
-#ifndef NOIRFS_H
-#define NOIRFS_H
+#ifndef CAPYFS_H
+#define CAPYFS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -7,12 +7,12 @@
 #include "fs/block.h"
 #include "fs/vfs.h"
 
-#define NOIRFS_MAGIC 0x4E524653u /* 'NRFS' */
-#define NOIRFS_VERSION 2
-#define NOIRFS_BLOCK_SIZE 4096
-#define NOIRFS_NAME_MAX 32
+#define CAPYFS_MAGIC 0x4E524653u /* legacy on-disk 'NRFS' magic */
+#define CAPYFS_VERSION 2
+#define CAPYFS_BLOCK_SIZE 4096
+#define CAPYFS_NAME_MAX 32
 
-struct noir_super {
+struct capy_super {
     uint32_t magic;
     uint32_t version;
     uint32_t block_size;
@@ -24,7 +24,7 @@ struct noir_super {
     uint32_t data_start;
 } __attribute__((packed));
 
-struct noir_inode_disk {
+struct capy_inode_disk {
     uint16_t mode;
     uint16_t links;
     uint32_t size;
@@ -36,24 +36,24 @@ struct noir_inode_disk {
     uint32_t indirect;
 } __attribute__((packed));
 
-struct noir_dirent_disk {
+struct capy_dirent_disk {
     uint32_t ino;
-    char name[NOIRFS_NAME_MAX];
+    char name[CAPYFS_NAME_MAX];
 } __attribute__((packed));
 
-typedef void (*noirfs_progress_cb)(const char *stage, uint32_t percent);
+typedef void (*capyfs_progress_cb)(const char *stage, uint32_t percent);
 
-int mount_noirfs(struct block_device *dev, struct super_block *sb);
-int noirfs_format(struct block_device *dev,
+int mount_capyfs(struct block_device *dev, struct super_block *sb);
+int capyfs_format(struct block_device *dev,
                   uint32_t inode_count,
                   uint32_t block_count,
-                  noirfs_progress_cb progress_cb);
+                  capyfs_progress_cb progress_cb);
 
-// Retorna o conjunto de operacoes de arquivo do NoirFS
-const struct file_ops *noirfs_file_ops(void);
+// Returns the CAPYFS file operations table.
+const struct file_ops *capyfs_file_ops(void);
 
-// Criação direta (entry point público) para o FS nativo
-int noirfs_create_pub(struct inode *dir,
+// Public VFS entry point for direct creation on the native filesystem.
+int capyfs_create_pub(struct inode *dir,
                       const char *name,
                       uint16_t mode,
                       const struct vfs_metadata *meta,

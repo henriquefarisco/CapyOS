@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot config and FAT32 helpers for NoirOS disk provisioning."""
+"""Boot config and FAT32 helpers for CAPYOS disk provisioning."""
 
 from __future__ import annotations
 
@@ -196,7 +196,7 @@ def fat32_write_volume(
 
     # allocate files
     bootx64_start, bootx64_chain = alloc(len(files["BOOTX64.EFI"]))
-    kernel_start, kernel_chain = alloc(len(files["NOIROS64.BIN"]))
+    kernel_start, kernel_chain = alloc(len(files["CAPYOS64.BIN"]))
 
     manifest_data = files.get("MANIFEST.BIN")
     manifest_start = 0
@@ -234,7 +234,7 @@ def fat32_write_volume(
     bootdir = bytearray(cluster_bytes)
     bootdir[0:32] = dirent(".", "", 0x10, bootdir_cl, 0)
     bootdir[32:64] = dirent("..", "", 0x10, root_cluster, 0)
-    bootdir[64:96] = dirent("NOIROS64", "BIN", 0x20, kernel_start, len(files["NOIROS64.BIN"]))
+    bootdir[64:96] = dirent("CAPYOS64", "BIN", 0x20, kernel_start, len(files["CAPYOS64.BIN"]))
 
     off = 96
     if manifest_data is not None:
@@ -303,7 +303,7 @@ def fat32_write_volume(
     write_cluster(bootdir_cl, bootdir)
 
     write_chain(bootx64_chain, files["BOOTX64.EFI"])
-    write_chain(kernel_chain, files["NOIROS64.BIN"])
+    write_chain(kernel_chain, files["CAPYOS64.BIN"])
     if manifest_data is not None:
         write_chain(manifest_chain, manifest_data)
     if bootcfg_data is not None:

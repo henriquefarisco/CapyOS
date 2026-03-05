@@ -43,7 +43,7 @@ repository. CapyOS now follows a single active execution track focused on
 ### 3.1 UEFI provisioning layout (GPT)
 - ESP (FAT32): `EFI/BOOT/BOOTX64.EFI`, fallback config and loader assets.
 - BOOT (raw): manifest at partition start + raw kernel payload sectors.
-- DATA: encrypted NoirFS/CFS volume used by the runtime.
+- DATA: encrypted CAPYFS volume used by the runtime.
 
 ### 3.2 Provisioning and inspection
 - Provisioning: `tools/scripts/provision_gpt.py`
@@ -56,13 +56,13 @@ repository. CapyOS now follows a single active execution track focused on
 - `fs/block`: generic block-device interface.
 - `fs/storage/*`: wrappers (offset/chunk), partition parser, base block device.
 - `fs/cache/buffer_cache.c`: buffered block cache and sync.
-- `fs/noirfs/noirfs.c`: native NoirFS implementation.
+- `fs/capyfs/capyfs.c`: native CAPYFS implementation.
 - `fs/vfs/vfs.c`: path resolution, dentries, metadata and permission checks.
 
-NoirFS uses:
+CAPYFS uses:
 - superblock + inode bitmap + block bitmap
 - inode with direct pointers + one indirect pointer
-- fixed-size dir entries (`NOIRFS_NAME_MAX`)
+- fixed-size dir entries (`CAPYFS_NAME_MAX`)
 
 Current runtime rule:
 - prefer the logical `DATA` partition handle when probe succeeds
@@ -128,4 +128,4 @@ Current runtime rule:
 1. Remove the remaining hybrid boot dependency and complete native x64 input.
 2. Add install-path smoke coverage for `ISO -> install -> HDD boot -> login`.
 3. Continue removing residual BIOS/x86 legacy code from the repository.
-4. Harden NoirFS for integrity, recovery and scalability.
+4. Harden CAPYFS for integrity, recovery and scalability.
