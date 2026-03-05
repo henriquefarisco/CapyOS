@@ -424,10 +424,29 @@ int bootwriter_write_config(struct block_device *disk,
     return -1;
 
   struct boot_config_sector cfg;
-  for (size_t i = 0; i < sizeof(cfg); ++i)
+  for (size_t i = 0; i < sizeof(cfg); ++i) {
     ((uint8_t *)&cfg)[i] = 0;
+  }
+
+  /* Preserve previously provisioned fields (e.g. volume key) when possible. */
+  struct boot_config_sector existing;
+  int has_existing = 0;
+  if (block_device_read(disk, BOOT_CONFIG_LBA, (uint8_t *)&existing) == 0 &&
+      existing.magic == BOOT_CONFIG_MAGIC) {
+    has_existing = 1;
+    for (size_t i = 0; i < sizeof(cfg); ++i) {
+      ((uint8_t *)&cfg)[i] = ((const uint8_t *)&existing)[i];
+    }
+  }
 
   cfg.magic = BOOT_CONFIG_MAGIC;
+  cfg.version = BOOT_CONFIG_VERSION;
+  if (!has_existing) {
+    cfg.flags = 0;
+  }
+  for (size_t i = 0; i < sizeof(cfg.keyboard_layout); ++i) {
+    cfg.keyboard_layout[i] = 0;
+  }
   for (size_t i = 0; i < sizeof(cfg.keyboard_layout) - 1 && layout_name[i];
        ++i) {
     cfg.keyboard_layout[i] = layout_name[i];

@@ -1,58 +1,100 @@
-# Plano de Testes do NoirCLI
+# Plano de Testes do CapyCLI
 
-Este roteiro valida o fluxo completo desde o boot até a entrega do prompt do NoirCLI. Os blocos seguem a ordem de execução real e suas dependências. Cada etapa registra resultados em `/var/log/setup.log` (configuração) e `/var/log/cli-selftest.log` (diagnósticos do shell).
+Este roteiro valida o fluxo real atualmente suportado:
 
-## 1. Kernel & subsistemas básicos
-- **Memória**: `kinit()` inicializa heap; `kmem.o` rastreia uso.
-- **GDT/IDT/ISR**: `gdt_install()`, `idt_install()`, `isr_install()` configuram vetores; interrupções mascaradas reabertas em `pic_remap()` + `sti`.
-- **PIT**: `pit_init()` ativa relógio para `print-time`.
-- **Buffer cache/VFS**: `buffer_cache_init()` e `vfs_init()` preparam acesso ao NoirFS.
-- **Dispositivos**: `ramdisk_init()` cria disco virtual; `crypt_init()` o encapsula com AES-XTS.
+`UEFI/GPT -> BOOTX64.EFI -> kernel x64 -> volume DATA cifrado -> login -> CLI`
 
-## 2. NoirFS
-- `mount_noirfs_root()` tenta montar; se falha, `noirfs_format()` formata, registra progresso no VGA e sincroniza cache.
-- `system_run_first_boot_setup()` só inicia se `/system/first-run.done` não existir.
+O objetivo nao e mais testar o legado em `ramdisk`, e sim garantir que o
+sistema instalado suba corretamente pelo disco provisionado.
 
-## 3. Assistente de Configuração
-1. **Diretórios** (`ensure_directory`) → validação imediata.
-2. **Banco de usuários** (`userdb_ensure`) → checa UID/GID e tamanho do arquivo.
-3. **Instalação de docs** → loga sucesso/aviso.
-4. **Coleta de hostname/theme/splash** usando `wizard_prompt`.
-5. **Usuário admin**:
-   - Criação de `/home/admin`.
-   - Registro via `user_record_init` + `userdb_add`.
-   - Autenticação cruzada com `userdb_authenticate`.
-   - Dump do registro no log com salt + hash.
-6. **Configuração**:
-   - Grava `config.ini`, valida leitura (`system_load_settings`).
-   - Marca primeiro boot concluído (`system_mark_first_boot_complete`).
+## 1. Precondicoes
 
-Falhas em qualquer passo abortam com mensagem direta no console.
+- Build atualizado com `make all64`
+- Artefatos de boot gerados com `make iso-uefi`
+- Disco provisionado por `tools/scripts/provision_gpt.py`
+- Auditoria basica aprovada por `make inspect-disk IMG=<imagem>`
 
-## 4. Pós-configuração (Kernel)
-- Recarrega `system_settings` para aplicar theme definitivo.
-- `system_show_splash()` opcional.
-- `system_login()` apresenta prompts e registra tentativas.
+## 2. Validacao do boot
 
-## 5. NoirCLI Diagnostics
-- `shell_self_test()` verifica:
-  - Sessão ativa e usuário autenticado.
-  - Acesso a `/` e `$HOME`.
-- `shell_run_diagnostics()` (novo):
-  - Executa comandos `list /`, `print-host`, `print-me`, `print-id`, `print-time`, `help-any`.
-  - Registra sucesso/falha em `/var/log/cli-selftest.log`.
-- Em caso de falha, mensagem de alerta é exibida antes de entregar o prompt.
+### 2.1 Firmware e loader
+- Confirmar boot UEFI em `Geracao 2` / OVMF.
+- Confirmar que `BOOTX64.EFI` abre o manifesto na particao `BOOT` ou por
+  fallback da ESP.
+- Confirmar handoff de framebuffer, mapa de memoria e metadados do disco.
 
-## 6. Execução Interativa
-- Prompt dinâmico atualizado via `shell_update_prompt()` (contém usuário, host e cwd).
-- Comandos listados em `g_commands` podem ser estendidos; `help-any` sempre reflete a lista.
+### 2.2 Runtime de storage
+- Confirmar deteccao do disco/particao `DATA`.
+- Confirmar que o kernel valida o handle logico da particao e usa fallback RAW
+  apenas em caso de erro real de probe.
+- Confirmar que o volume cifrado monta sem loop de formatacao.
 
-## Testes simultâneos/sincronização
-- **Interrupções**: teclado (IRQ1) e PIT (IRQ0) permanecem ativos durante CLI; não há desativação seletiva após o assistente.
-- **Buffer cache**: `do-sync` (automaticamente no shell) sincroniza sem pausar outros comandos; apenas `buffer_cache_sync` entra com exclusão simples.
-- **Logs**: setup e CLI diagnostics usam VFS síncrono; operações são curtas e não bloqueiam teclado/CLI.
+### 2.3 Login e shell
+- Confirmar prompt de login.
+- Autenticar com o usuario provisionado.
+- Confirmar entrega do prompt do CapyCLI.
 
-## Sugestões de melhoria futura
-- Introduzir teste automatizado para `clone/move` e manipulação de arquivos.
-- Expandir diagnósticos para rodar com usuário comum quando existentes outros perfis.
-- Implementar rotação de `/var/log/*.log` para evitar crescimento indefinido.
+## 3. Smoke funcional minimo
+
+Executar no sistema bootado:
+
+1. `help-any`
+2. `list /`
+3. `mk-dir /tmp/smoke`
+4. `mk-file /tmp/smoke/prova.txt`
+5. `open /tmp/smoke/prova.txt`
+6. `print-file /tmp/smoke/prova.txt`
+7. `find "texto" /tmp/smoke`
+8. `do-sync`
+9. `bye`
+
+Criticos:
+- nao pode haver reset espontaneo durante login ou CLI
+- o teclado deve responder durante login e shell
+- o `do-sync` nao pode quebrar o prompt nem perder a sessao
+
+## 4. Persistencia entre boots
+
+1. No boot 1, criar um arquivo de teste e sincronizar.
+2. Reiniciar com `shutdown-reboot`.
+3. No boot 2, autenticar novamente.
+4. Validar que o arquivo criado continua presente.
+5. Validar que o usuario provisionado continua autenticando.
+
+Resultado esperado:
+- nenhum reformat da particao `DATA`
+- nenhum retorno ao fluxo efemero por `ramdisk`, exceto em contingencia
+  explicitamente registrada
+
+## 5. Automacao recomendada
+
+Smoke principal:
+
+```bash
+make smoke-x64-cli
+```
+
+Auditoria de disco:
+
+```bash
+make inspect-disk IMG=build/disk-gpt.img
+```
+
+Testes de host:
+
+```bash
+make test
+```
+
+## 6. Sinais de regressao
+
+- loader encontra kernel mas o login nao sobe
+- runtime cai para fallback RAW sem falha de probe
+- volume `DATA` entra em loop de chave incorreta ou reformatacao
+- boot 2 perde arquivo criado no boot 1
+- input depende novamente de COM para completar o login
+
+## 7. Lacunas atuais
+
+- o instalador por ISO ainda nao tem smoke dedicado de ponta a ponta
+- USB HID/XHCI continua incompleto
+- o caminho `EFI ConIn` ainda mantem parte do boot em modo hibrido

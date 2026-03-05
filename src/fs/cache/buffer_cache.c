@@ -9,6 +9,9 @@ static struct buffer_head *hash_table[BUFFER_HASH_SIZE];
 static struct buffer_head *lru_head;
 static struct buffer_head *lru_tail;
 static int cache_initialized = 0;
+static uint32_t g_last_error_block_no = 0;
+static int g_last_error_valid = 0;
+static int g_last_error_code = 0;
 
 static inline uint32_t buffer_hash(struct block_device *dev, uint32_t block_no) {
     uintptr_t key = (uintptr_t)dev;
@@ -165,8 +168,9 @@ int buffer_write_back(struct buffer_head *bh) {
     if (!bh || !bh->dev || !bh->dirty || !bh->valid) {
         return 0;
     }
-    if (block_device_write(bh->dev, bh->block_no, bh->data) != 0) {
-        return -1;
+    int rc = block_device_write(bh->dev, bh->block_no, bh->data);
+    if (rc != 0) {
+        return rc;
     }
     bh->dirty = 0;
     return 0;
@@ -182,13 +186,36 @@ void buffer_release(struct buffer_head *bh) {
     }
 }
 
-void buffer_cache_sync(struct block_device *dev) {
+int buffer_cache_sync(struct block_device *dev) {
+    g_last_error_valid = 0;
+    g_last_error_block_no = 0;
+    g_last_error_code = 0;
+    int rc = 0;
     for (size_t i = 0; i < BUFFER_CACHE_MAX; ++i) {
         struct buffer_head *bh = &buffer_cache[i];
         if (bh->dev == dev) {
             if (bh->dirty && bh->valid) {
-                buffer_write_back(bh);
+                int wrc = buffer_write_back(bh);
+                if (wrc != 0) {
+                    rc = -1;
+                    if (!g_last_error_valid) {
+                        g_last_error_valid = 1;
+                        g_last_error_block_no = bh->block_no;
+                        g_last_error_code = wrc;
+                    }
+                }
             }
         }
     }
+    return rc;
 }
+
+int buffer_cache_last_error_block(uint32_t *out_block_no) {
+    if (!out_block_no || !g_last_error_valid) {
+        return -1;
+    }
+    *out_block_no = g_last_error_block_no;
+    return 0;
+}
+
+int buffer_cache_last_error_code(void) { return g_last_error_code; }

@@ -1,236 +1,145 @@
 # Plano de implantacao do MVP do CapyOS
 
-Status de referencia: 2026-02-10
+Status de referencia: 2026-03-05
 
-Objetivo do ciclo atual:
-- consolidar o caminho x86_64 para uso real em VM (especialmente Hyper-V Gen2)
-- remover dependencia de input por COM para uso diario
-- recuperar paridade dos comandos de CLI apos migracao
-- expandir cobertura de NFS/NoirFS via shell (criacao, navegacao e manipulacao)
-- mapear backlog tecnico de multithread, seguranca, criptografia e multiusuario
+Este plano parte do estado atual validado:
 
-## 1. Mapa de estado atual x esperado
+- trilha oficial unica em `UEFI/GPT/x86_64`
+- boot por HDD provisionado funcionando
+- volume `DATA` cifrado montando no runtime x64
+- login, CLI e persistencia de arquivos/usuarios validados em reboot
 
-### 1.0 Estabilidade de carga relocada no x64
+O legado `BIOS/x86_32` foi descontinuado e permanece apenas como divida de
+remocao no repositorio.
 
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Tabelas com ponteiros de funcao (ops/comandos) | caminhos criticos foram migrados para inicializacao em runtime (NoirFS ops, wrappers de bloco, crypto, ATA/NVMe, comandos CLI, layouts de teclado) | auditoria final dos modulos restantes com tabelas estaticas | kernel x64 carrega em endereco dinamico sem saltos para ponteiros invalidos |
-| Boot x64 em ISO UEFI | `make all64`, `make iso-uefi` e `make smoke-x64-cli` validados no ciclo atual | ampliar matriz de teste (QEMU + Hyper-V + cenarios com disco real) | bootstrap previsivel, login e comandos basicos funcionais em VMs alvo |
+## 1. Estado atual x proximo alvo
 
-### 1.1 Entrada de teclado e compatibilidade de drivers
+### 1.1 Boot, disco e persistencia
 
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Teclado em Hyper-V Gen2 | x64 prioriza EFI ConIn; COM nao e mais requisito primario | hardening do fallback VMBus + testes em mais hosts | login e CLI funcionam com teclado da VM, sem Putty/COM |
-| PS/2 | detectado quando presente | telemetria adicional de falha e debounce | fallback estavel em VMs legadas e hardware com PS/2 |
-| Hyper-V VMBus keyboard | caminho experimental habilitado apenas quando EFI/PS2 indisponiveis | estabilizar negociacao e watchdog-safe retries | fallback funcional para cenarios sem EFI input |
-| USB teclado (XHCI/HID) | detecta controlador XHCI, sem cadeia HID completa | enumeracao, parser HID e polling de teclado | suporte a teclado USB em hardware/VM sem EFI/PS2/VMBus |
+| Tema | Estado atual | Proximo alvo |
+|---|---|---|
+| Boot x64 por HDD | validado com `make smoke-x64-cli` | ampliar matriz de hosts e incluir cenarios de disco real |
+| Provisionamento GPT | `provision_gpt.py` e `inspect-disk` cobrem o fluxo oficial | endurecer mensagens de erro e selecao de disco |
+| Runtime de storage | handle logico da particao `DATA` e priorizado; RAW e fallback de erro | reduzir dependencia de firmware no runtime |
+| Persistencia | arquivos e usuarios sobrevivem ao reboot | ampliar cobertura de recovery e corrupcao simulada |
 
-### 1.2 CLI e experiencia de shell
+### 1.2 Login, shell e operacao
 
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Comandos legados pos-migracao | loop x64 usa shell modular novamente; aliases de compatibilidade ativos | fechar comandos planejados ainda ausentes (jobs/pipeline etc.) | comandos historicos principais funcionando com UX consistente |
-| Prompt e sessao | prompt dinamico `user@host:cwd>` com logout via `bye` | historico persistente e autocomplete | uso continuo sem reset de contexto entre comandos |
-| Documentacao in-shell | `help-any` e `help-docs` operacionais | manter doc embarcada sincronizada com release | usuario sempre encontra ajuda local e atualizada |
+| Tema | Estado atual | Proximo alvo |
+|---|---|---|
+| Login x64 | fluxo unificado com `system_login` | adicionar auditoria e lockout |
+| CLI | comandos principais operacionais no CapyCLI | historico, autocomplete, jobs e pipes |
+| Gestao de usuarios | comandos basicos disponiveis | grupos, remocao e politicas de senha |
 
-### 1.3 NFS/NoirFS no runtime x64
+### 1.3 Input e drivers
 
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Bootstrap de FS no x64 | NoirFS em RAM (ramdisk), estrutura base e users.db criados no boot | montar volume persistente real no caminho x64 | criacao/edicao/navegacao persistem entre boots |
-| CLI de arquivos e diretorios | `mk-file`, `mk-dir`, `list`, `go`, `open`, `find` funcionando no contexto atual | validacao de permissao, recovery e integridade em volume persistente | fluxo de trabalho completo de arquivos pelo CLI |
-| Sincronizacao | `do-sync` existente | writeback policy + journal/replay | sem perda de metadata apos queda abrupta |
+| Tema | Estado atual | Proximo alvo |
+|---|---|---|
+| Teclado em VMs UEFI | `EFI ConIn` e prioridade atual; PS/2 e fallback adicionais | fechar input nativo e remover modo hibrido |
+| Hyper-V keyboard | fallback experimental ainda existe | hardening e cobertura real em mais hosts |
+| USB HID/XHCI | inicializacao parcial | enumeracao e parser HID completos |
+| Rede x64 | `e1000` funcional, `tulip-2114x` em validacao, `netvsc` pendente | fechar baseline de rede no Hyper-V |
 
-### 1.4 Seguranca, criptografia e multiusuario
+### 1.4 Segurança e filesystem
 
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Auth de usuarios | `userdb_authenticate` ativo no x64 e 32-bit | politicas de senha, lockout e auditoria | login robusto e rastreavel |
-| Provisionamento do admin na formatacao | setup inicial agora coleta `Usuario administrador [admin]` e grava esse nome no `users.db` (sem forcar `admin`) | propagar preseed do UEFI installer para o runtime x64 persistente | usuario escolhido durante instalacao permanece como conta administrativa ativa |
-| Criptografia em disco | AES-XTS + PBKDF2 no fluxo 32-bit | integridade autenticada por bloco/metadata, rotacao de chaves | confidencialidade + deteccao de adulteracao |
-| Multiusuario | modelo base de UID/GID/sessao/permissoes | comandos de gestao de usuarios e grupos | administracao multiusuario completa via CLI |
+| Tema | Estado atual | Proximo alvo |
+|---|---|---|
+| Criptografia | AES-XTS + PBKDF2 no volume `DATA` | integridade autenticada e rotacao de chaves |
+| NoirFS | volume persistente operacional | journal, recovery e fsck |
+| Multiusuario | modelo base funcional | ACL, grupos e auditoria |
 
-### 1.5 Multithread, performance e estabilidade
+## 2. Fases de fechamento
 
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Multithread/scheduler | ainda nao implantado no kernel | task model, run queue, sincronizacao basica | jobs de fundo e manutencao sem bloquear shell |
-| Performance de I/O | cache e wrappers existentes | read-ahead/writeback, profiling e tuning NVMe | menor latencia em listagem/busca/copia |
-| Robustez de sistema | base funcional em single-thread | testes de estresse, lock ordering e diagnostico | menos regressao em cenarios reais de VM/hardware |
-
-### 1.6 Rede (drivers + TCP/IP)
-
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Descoberta de NIC no x64 | probing PCI ativo com match para e1000 e `tulip-2114x` (legacy/generico Hyper-V); netvsc ainda pendente | ampliar matriz de IDs suportados e implementar netvsc (VMBus) | NIC detectada e caminho de dados funcional em QEMU e Hyper-V |
-| Camada L2/L3 | parser de Ethernet/ARP/IPv4 ativo com ARP real e roteamento minimo via gateway (`next-hop`) | fila de retransmissao e politicas de timeout adaptativas | resolucao de MAC e entrega IPv4 com fluxo previsivel |
-| L4 (ICMP/UDP/TCP) | decodificacao inicial e contadores de telemetria no kernel | sockets/portas, estado TCP, checksums completos, timers e retransmissao | ping, UDP e TCP funcionais para comunicacao externa |
-| Enderecamento | configuracao estatica em runtime com `net-set <ip> <mask> <gw> <dns>` | DHCP client, DNS resolver e persistencia em config | provisionamento automatico de rede em VM/hardware |
-| Observabilidade | logs de init + self-test interno no boot + comandos `net-status`, `net-ip`, `net-gw`, `net-dns`, `hey` | traces de pacotes e counters por interface/fila | diagnostico de rede direto no sistema, sem debug externo |
-
-### 1.7 Caminho grafico e navegador (futuro)
-
-| Tema | Como esta agora | O que falta implementar | Comportamento esperado apos implantacao |
-|---|---|---|---|
-| Stack grafica | framebuffer basico e console texto no kernel | composicao 2D, gerenciamento de janelas, input pointer e toolkit UI | sessao grafica real com apps de usuario |
-| Userspace moderno | runtime atual centrado em kernel+CLI | ABI estavel, carregador ELF userspace, isolamento de processos e IPC | execucao de processos graficos isolados do kernel |
-| Aceleracao/driver GPU | sem stack 3D dedicada | DRM/KMS equivalente, memoria compartilhada, fallback software | renderizacao acelerada para UI e web engine |
-| Navegador open source | inexistente | portar engine (ex.: Chromium/CEF, Servo, WebKitGTK), TLS, DNS, sockets, sandbox e font/render stack | navegacao web grafica com seguranca e desempenho aceitaveis |
-
-## 2. Fases de entrega (branch atual em diante)
-
-## Fase A - Input e drivers para VM UEFI
+## Fase A - Hardening do boot x64
 - Entrega:
-  - consolidar prioridade EFI -> PS/2 -> VMBus -> COM
-  - remover dependencia operacional de COM no Hyper-V Gen2
-  - manter tabelas de ponteiros sensiveis inicializadas em runtime no x64
-  - manter logs de deteccao por backend
+  - remover dependencia residual de firmware no input/runtime
+  - consolidar handoff UEFI sem comportamento hibrido
+  - revisar selecao do disco alvo no instalador
 - Validacao minima:
-  - boot em Hyper-V Gen2
-  - login com teclado da VM sem Putty
-  - executar `help-any`, `list`, `bye`
-- Resultado esperado:
-  - ambiente usavel sem serial obrigatoria
+  - `make test`
+  - `make all64`
+  - `make smoke-x64-cli`
+  - boot manual em Hyper-V Gen2
 
-## Fase B - Paridade de CLI e NFS via shell
+## Fase B - Instalador ISO confiavel
 - Entrega:
-  - fluxo x64 100% pelo shell modular para comandos principais
-  - aliases de compatibilidade (`help`, `clear`, `reboot`, `halt`)
-  - navegacao/manipulacao de arquivos e diretorios via NoirFS
+  - adicionar smoke de `ISO -> instalar -> reboot por HDD -> login`
+  - alinhar prompts e persistencia da chave do volume
+  - garantir paridade entre instalador e provisionamento direto
 - Validacao minima:
-  - `mk-dir`, `go`, `mk-file`, `open`, `find`, `do-sync`
-  - logout/login sem perder consistencia de sessao
-- Resultado esperado:
-  - CLI funcional para uso cotidiano de filesystem
+  - install path automatizado em QEMU/OVMF
+  - auditoria do disco final com `make inspect-disk`
+  - reboot validando arquivo persistido
 
-## Fase C - Persistencia real no x64
+## Fase C - Filesystem e seguranca
 - Entrega:
-  - substituir bootstrap em RAM por montagem de volume persistente
-  - preparar caminho para volume cifrado no runtime x64
+  - journal/recovery do NoirFS
+  - integridade de metadata
+  - auditoria basica de login e operacoes sensiveis
 - Validacao minima:
-  - criar arquivo, reboot, validar persistencia
-  - autenticar usuario existente apos reboot
-- Resultado esperado:
-  - x64 com comportamento de sistema instalado, nao apenas ambiente efemero
+  - testes de recovery
+  - regressao de autenticacao
+  - reboot apos escrita intensa
 
-Plano incremental sugerido para Fase C:
-- C1 (mount persistente minimo):
-  - detectar particao de dados no caminho x64
-  - montar NoirFS sem criptografia (modo de transicao)
-  - manter fallback para ramdisk se mount falhar
-- C2 (auth + users.db persistentes):
-  - migrar `userdb` para volume persistente
-  - garantir login/sessao com dados reaproveitados entre boots
-- C3 (volume cifrado no x64):
-  - integrar unlock de volume no boot x64
-  - validar reboot e retomada de dados cifrados com consistencia
-
-## Fase D - Seguranca e multiusuario avancados
+## Fase D - Limpeza definitiva do legado
 - Entrega:
-  - politicas de senha e lockout configuraveis
-  - auditoria basica (login falho, operacoes sensiveis)
-  - comandos de gestao de usuarios/grupos
+  - remover codigo residual `BIOS/x86_32`
+  - remover scripts/alvos nao usados
+  - manter somente documentacao historica explicitamente marcada como arquivo
+    de release
 - Validacao minima:
-  - cenarios de permissao por owner/group/others
-  - tentativas de autenticacao invalida e rastreio
-- Resultado esperado:
-  - baseline de seguranca e operacao multiusuario
+  - pipeline oficial funcionando sem toolchain 32-bit
+  - nenhum doc principal recomendando fluxo legado
 
-## Fase E - Multithread e performance
-- Entrega:
-  - scheduler inicial + workers para I/O/flush
-  - melhorias de cache e metricas de performance
-- Validacao minima:
-  - estresse de I/O sem travar shell interativo
-  - benchmark comparativo antes/depois
-- Resultado esperado:
-  - ganho mensuravel de responsividade e throughput
+## 3. Checklist obrigatorio antes de merge
 
-## Fase F - Rede baseline (NIC + pilha TCP/IP)
-- Entrega:
-  - estabilizar probing de NIC suportadas (e1000 + legacy Hyper-V via `tulip-2114x`)
-  - manter caminho de transmissao/recepcao real no `e1000` e caminho inicial no `tulip` (hardening de RX/link pendente)
-  - manter fallback documentado para Hyper-V: `Legacy Network Adapter` enquanto netvsc nao estiver pronto
-  - manter ARP/IPv4/ICMP/UDP/TCP com parsing e contadores confiaveis
-  - introduzir comandos de diagnostico/config de rede no CLI (`net-status`, `net-ip`, `net-gw`, `net-dns`, `net-set`, `hey`)
-- Validacao minima:
-  - boot x64 detectando NIC em QEMU e Hyper-V
-  - `ping` para gateway da VM
-  - teste de transporte: UDP local + handshake TCP minimo
-  - smoke de nao regressao no boot/CLI/filesystem
-- Resultado esperado:
-  - primeira comunicacao da VM com rede externa (internet via host/NAT)
-
-## Fase G - Base para sessao grafica e navegador
-- Entrega:
-  - definir arquitetura de userspace (loader, processo, memoria virtual e IPC)
-  - implantar compositor 2D minimo com input de teclado/mouse
-  - disponibilizar API grafica basica para apps nativos
-  - preparar stack de rede/userland (DNS, TLS, sockets) necessaria para browser
-- Validacao minima:
-  - abrir sessao grafica com app de teste de janelas
-  - renderizar texto/fonte e entrada de pointer
-  - realizar requisicao HTTPS de teste em processo userspace
-- Resultado esperado:
-  - base tecnica para integrar navegador open source (Chromium/Servo/WebKit) sem acoplamento no kernel
-
-## 3. Checklist de fechamento por fase
-
-Checklist obrigatorio antes de merge:
 - codigo compilando no alvo impactado
 - documentacao atualizada
-- smoke de comandos criticos
-- evidencias de build/artefatos
+- smoke do caminho oficial executado
+- evidencias de build e teste registradas
 
-Smoke automatizado recomendado:
-
-```bash
-make smoke-x64-cli
-```
-
-Checklist obrigatorio de build (WSL):
+Checklist base:
 
 ```bash
-# 64-bit
+make test
 make all64
-make iso-uefi
-
-# 32-bit (nao regressao cruzada)
-make
-make iso
-```
-
-Para este plano, cada fechamento de fase deve incluir geracao de novas ISOs via WSL.
-
-Checklist adicional para fases com rede:
-
-```bash
-# build e smoke x64
-make all64
-make iso-uefi
 make smoke-x64-cli
+make inspect-disk IMG=build/disk-gpt.img
 ```
 
-Observacao: o smoke de rede dedicado sera adicionado junto com os comandos de
-CLI de diagnostico.
-
-## 4. Politica de branches e deploy
+## 4. Politica de branches
 
 Fluxo recomendado:
-1. desenvolvimento na branch de trabalho atual
+1. desenvolvimento na branch de trabalho
 2. merge em `develop` apos validacao tecnica
-3. promote para `main` apos smoke final de release
+3. merge em `main` apos smoke final de release
 
-Requisitos para deploy:
-- artefatos de ISO gerados no ciclo
-- changelog da fase
-- mapeamento de risco e rollback
+## 5. Atualizacao deste ciclo
 
-## 5. Referencias cruzadas
+### 5.1 Problema atacado
+- regressao de boot/persistencia apos a migracao de 32 bits para 64 bits
+- risco de o runtime cair para acesso RAW mesmo quando a particao logica
+  `DATA` ja estava valida
+- lacuna de documentacao entre o fluxo oficial e o fluxo opcional da ISO
 
-- `README.md` (estado geral do sistema)
-- `docs/system-roadmap.md` (roadmap macro por dominio)
-- `docs/noiros-cli-reference.md` (referencia de comandos)
-- `docs/HYPERV_SETUP.md` (setup de VM Hyper-V)
+### 5.2 O que foi ajustado
+- runtime x64 passou a manter o handle logico da particao `DATA` quando o
+  probe inicial tem sucesso
+- `make inspect-disk` foi incorporado ao fluxo documentado
+- documentacao principal foi alinhada para a trilha unica `UEFI/GPT/x86_64`
+
+### 5.3 Evidencia validada neste ciclo
+- `make test`: OK
+- `make all64`: OK
+- `make smoke-x64-cli`: OK com boot 1, boot 2 e persistencia
+- `make inspect-disk`: OK com GPT, `BOOT` raw, kernel ELF e `CAPYCFG.BIN`
+  consistentes
+
+## 6. Referencias cruzadas
+
+- `README.md`
+- `docs/architecture.md`
+- `docs/cli_test_plan.md`
+- `docs/system-roadmap.md`
+- `docs/noiros-cli-reference.md`
+- `docs/HYPERV_SETUP.md`

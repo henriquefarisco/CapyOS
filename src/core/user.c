@@ -404,6 +404,75 @@ int userdb_next_ids(uint32_t *out_uid, uint32_t *out_gid) {
     return 0;
 }
 
+static int append_piece(char *dst, size_t cap, size_t *idx, const char *src) {
+    if (!dst || !idx || !src || *idx >= cap) {
+        return -1;
+    }
+    size_t plen = cstring_length(src);
+    if (*idx + plen >= cap) {
+        return -1;
+    }
+    for (size_t i = 0; i < plen; ++i) {
+        dst[(*idx)++] = src[i];
+    }
+    return 0;
+}
+
+static int serialize_user_record_line(const struct user_record *user,
+                                      char *line,
+                                      size_t line_cap,
+                                      size_t *out_len) {
+    if (!user || !line || line_cap == 0) {
+        return -1;
+    }
+    char uid_buf[12];
+    char gid_buf[12];
+    char salt_hex[USER_SALT_SIZE * 2 + 1];
+    char hash_hex[USER_HASH_SIZE * 2 + 1];
+    u32_to_string(user->uid, uid_buf, sizeof(uid_buf));
+    u32_to_string(user->gid, gid_buf, sizeof(gid_buf));
+    bytes_to_hex(user->salt, USER_SALT_SIZE, salt_hex);
+    bytes_to_hex(user->hash, USER_HASH_SIZE, hash_hex);
+
+    size_t idx = 0;
+    const char *pieces[] = {
+        user->username, ":", uid_buf, ":", gid_buf, ":", user->home, ":",
+        salt_hex,       ":", hash_hex, ":", user->role, "\n"};
+    for (size_t i = 0; i < sizeof(pieces) / sizeof(pieces[0]); ++i) {
+        if (append_piece(line, line_cap, &idx, pieces[i]) != 0) {
+            return -1;
+        }
+    }
+    line[idx] = '\0';
+    if (out_len) {
+        *out_len = idx;
+    }
+    return 0;
+}
+
+static int userdb_write_blob(const char *data, size_t len) {
+    if (!data) {
+        return -1;
+    }
+    (void)vfs_unlink(USER_DB_PATH);
+    if (userdb_ensure() != 0) {
+        return -1;
+    }
+    struct file *f = vfs_open(USER_DB_PATH, VFS_OPEN_WRITE);
+    if (!f) {
+        return -1;
+    }
+    if (f->dentry && f->dentry->inode) {
+        f->position = 0;
+    }
+    long written = 0;
+    if (len > 0) {
+        written = vfs_write(f, data, len);
+    }
+    vfs_close(f);
+    return (len == 0 || written == (long)len) ? 0 : -1;
+}
+
 int userdb_add(const struct user_record *user) {
     if (!user) {
         return -1;
@@ -421,39 +490,16 @@ int userdb_add(const struct user_record *user) {
     if (f->dentry && f->dentry->inode) {
         f->position = f->dentry->inode->size;
     }
-
-    char uid_buf[12];
-    char gid_buf[12];
-    u32_to_string(user->uid, uid_buf, sizeof(uid_buf));
-    u32_to_string(user->gid, gid_buf, sizeof(gid_buf));
-
-    char salt_hex[USER_SALT_SIZE * 2 + 1];
-    char hash_hex[USER_HASH_SIZE * 2 + 1];
-    bytes_to_hex(user->salt, USER_SALT_SIZE, salt_hex);
-    bytes_to_hex(user->hash, USER_HASH_SIZE, hash_hex);
-
-    char line[USER_NAME_MAX + USER_HOME_MAX + USER_ROLE_MAX + sizeof(uid_buf) + sizeof(gid_buf) + sizeof(salt_hex) + sizeof(hash_hex) + 16];
-    size_t idx = 0;
-    const char *pieces[] = {
-        user->username, ":",
-        uid_buf, ":",
-        gid_buf, ":",
-        user->home, ":",
-        salt_hex, ":",
-        hash_hex, ":",
-        user->role, "\n"
-    };
-    for (size_t i = 0; i < sizeof(pieces)/sizeof(pieces[0]); ++i) {
-        const char *p = pieces[i];
-        size_t plen = cstring_length(p);
-        for (size_t j = 0; j < plen && idx < sizeof(line) - 1; ++j) {
-            line[idx++] = p[j];
-        }
+    char line[USER_NAME_MAX + USER_HOME_MAX + USER_ROLE_MAX + USER_SALT_SIZE * 2 +
+              USER_HASH_SIZE * 2 + 64];
+    size_t line_len = 0;
+    if (serialize_user_record_line(user, line, sizeof(line), &line_len) != 0) {
+        vfs_close(f);
+        return -1;
     }
-    line[idx] = '\0';
-    long written = vfs_write(f, line, idx);
+    long written = vfs_write(f, line, line_len);
     vfs_close(f);
-    return (written == (long)idx) ? 0 : -1;
+    return (written == (long)line_len) ? 0 : -1;
 }
 
 int userdb_authenticate(const char *username, const char *password, struct user_record *out) {
@@ -477,4 +523,74 @@ int userdb_authenticate(const char *username, const char *password, struct user_
         *out = rec;
     }
     return 0;
+}
+
+int userdb_set_password(const char *username, const char *new_password) {
+    if (!username || !new_password || username[0] == '\0' || new_password[0] == '\0') {
+        return -1;
+    }
+    size_t source_len = 0;
+    char *source = userdb_read_all(&source_len);
+    if (!source) {
+        return -1;
+    }
+
+    size_t out_cap = source_len + 512;
+    char *out = (char *)kalloc(out_cap);
+    if (!out) {
+        kfree(source);
+        return -1;
+    }
+    size_t out_len = 0;
+    int updated = 0;
+
+    size_t line_start = 0;
+    for (size_t i = 0; i <= source_len; ++i) {
+        if (i == source_len || source[i] == '\n') {
+            size_t line_len = i - line_start;
+            if (line_len > 0) {
+                struct user_record rec;
+                if (parse_user_line(&source[line_start], line_len, &rec) == 0) {
+                    if (strings_equal(rec.username, username)) {
+                        generate_salt(rec.salt, USER_SALT_SIZE);
+                        crypt_pbkdf2_sha256((const uint8_t *)new_password,
+                                            cstring_length(new_password), rec.salt,
+                                            USER_SALT_SIZE, USER_ITERATIONS,
+                                            rec.hash, USER_HASH_SIZE);
+                        updated = 1;
+                    }
+                    char line[USER_NAME_MAX + USER_HOME_MAX + USER_ROLE_MAX +
+                              USER_SALT_SIZE * 2 + USER_HASH_SIZE * 2 + 64];
+                    size_t len = 0;
+                    if (serialize_user_record_line(&rec, line, sizeof(line), &len) != 0 ||
+                        out_len + len >= out_cap) {
+                        memory_zero(rec.salt, USER_SALT_SIZE);
+                        memory_zero(rec.hash, USER_HASH_SIZE);
+                        kfree(out);
+                        kfree(source);
+                        return -1;
+                    }
+                    for (size_t k = 0; k < len; ++k) {
+                        out[out_len++] = line[k];
+                    }
+                    memory_zero(rec.salt, USER_SALT_SIZE);
+                    memory_zero(rec.hash, USER_HASH_SIZE);
+                }
+            }
+            line_start = i + 1;
+        }
+    }
+
+    if (!updated) {
+        memory_zero(out, out_cap);
+        kfree(out);
+        kfree(source);
+        return -1;
+    }
+
+    int rc = userdb_write_blob(out, out_len);
+    memory_zero(out, out_cap);
+    kfree(out);
+    kfree(source);
+    return rc;
 }

@@ -92,12 +92,6 @@ static void keyboard_irq(void) {
     return;
   }
 
-  // Handle dead keys for accents
-  if (ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"') {
-    g_dead_accent = ch;
-    return;
-  }
-
   if (g_dead_accent) {
     char accent = g_dead_accent;
     g_dead_accent = 0;
@@ -187,21 +181,35 @@ size_t keyboard_layout_count(void) {
 }
 
 const char *keyboard_layout_name(size_t index) {
-  if (index >= keyboard_layout_count()) {
+  switch (index) {
+  case 0:
+    return "us";
+  case 1:
+    return "br-abnt2";
+  default:
     return NULL;
   }
-  return g_layouts[index]->name;
 }
 
 const char *keyboard_layout_description(size_t index) {
-  if (index >= keyboard_layout_count()) {
+  switch (index) {
+  case 0:
+    return "Layout US (ANSI) padrao";
+  case 1:
+    return "Layout Brasileiro ABNT2";
+  default:
     return NULL;
   }
-  return g_layouts[index]->description;
 }
 
 const char *keyboard_current_layout(void) {
-  return current_layout ? current_layout->name : NULL;
+  if (!current_layout) {
+    return NULL;
+  }
+  if (current_layout == g_layouts[1]) {
+    return "br-abnt2";
+  }
+  return "us";
 }
 
 static int layout_name_equal(const char *a, const char *b) {
@@ -220,12 +228,15 @@ int keyboard_set_layout_by_name(const char *name) {
   if (!name) {
     return -1;
   }
-  for (size_t i = 0; i < keyboard_layout_count(); ++i) {
-    if (g_layouts[i] && g_layouts[i]->name &&
-        layout_name_equal(name, g_layouts[i]->name)) {
-      keyboard_apply_layout(g_layouts[i]);
-      return 0;
-    }
+  keyboard_init_layout_table();
+  if (g_layouts[0] && (layout_name_equal(name, "us") || layout_name_equal(name, "0"))) {
+    keyboard_apply_layout(g_layouts[0]);
+    return 0;
+  }
+  if (g_layouts[1] &&
+      (layout_name_equal(name, "br-abnt2") || layout_name_equal(name, "1"))) {
+    keyboard_apply_layout(g_layouts[1]);
+    return 0;
   }
   return -1;
 }

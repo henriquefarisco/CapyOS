@@ -36,6 +36,7 @@ int userdb_ensure(void);
 int userdb_find(const char *username, struct user_record *out);
 int userdb_add(const struct user_record *user);
 int userdb_authenticate(const char *username, const char *password, struct user_record *out);
+int userdb_set_password(const char *username, const char *new_password);
 int userdb_next_ids(uint32_t *out_uid, uint32_t *out_gid);
 
 #endif
