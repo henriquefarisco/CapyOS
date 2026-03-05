@@ -5,16 +5,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "boot/boot_config.h"
 #include "boot/handoff.h"
 #include "branding/capyos_icon_mask.h"
 #include "core/kcon.h"
+#include "core/login_runtime.h"
+#include "core/network_bootstrap.h"
 #include "core/session.h"
 #include "core/system_init.h"
 #include "core/user.h"
 #include "drivers/efi/efi_console.h"
 #include "drivers/hyperv/hyperv.h"
+#include "drivers/input/keyboard.h"
+#include "drivers/input/keyboard_layout.h"
 #include "drivers/nvme.h"
 #include "drivers/pcie.h"
+#include "drivers/storage/efi_block.h"
 #include "drivers/usb/xhci.h"
 #include "fs/block.h"
 #include "fs/buffer.h"
@@ -23,6 +29,7 @@
 #include "fs/vfs.h"
 #include "memory/kmem.h"
 #include "net/stack.h"
+#include "security/crypt.h"
 #include "shell/commands.h"
 #include "shell/core.h"
 
@@ -43,6 +50,13 @@ static inline uint8_t inb(uint16_t port) {
 }
 
 static inline void cpu_relax(void) { __asm__ volatile("pause"); }
+
+static __attribute__((noreturn)) void kernel_halt_forever(void) {
+  __asm__ volatile("cli");
+  for (;;) {
+    __asm__ volatile("hlt");
+  }
+}
 
 /* PIT timer ticks - from stubs.c */
 extern uint32_t pit_ticks(void);
@@ -604,6 +618,28 @@ static void cmd_info(void) {
   fbcon_print(" entries=");
   fbcon_print_hex64(g_h ? (uint64_t)g_h->memmap_entries : 0);
   fbcon_putc('\n');
+
+  fbcon_print("efi.blockio=");
+  fbcon_print_hex64(g_h ? g_h->efi_block_io : 0);
+  fbcon_print(" blk=");
+  fbcon_print_hex64(g_h ? (uint64_t)g_h->efi_block_size : 0);
+  fbcon_print(" last=");
+  fbcon_print_hex64(g_h ? g_h->efi_disk_last_lba : 0);
+  fbcon_print(" data.start=");
+  fbcon_print_hex64(g_h ? g_h->data_lba_start : 0);
+  fbcon_print(" data.count=");
+  fbcon_print_hex64(g_h ? g_h->data_lba_count : 0);
+  fbcon_putc('\n');
+
+  fbcon_print("efi.blockio.raw=");
+  fbcon_print_hex64(g_h ? g_h->efi_block_io_raw : 0);
+  fbcon_print(" last.raw=");
+  fbcon_print_hex64(g_h ? g_h->efi_disk_last_lba_raw : 0);
+  fbcon_print(" data.start.raw=");
+  fbcon_print_hex64(g_h ? g_h->data_lba_start_raw : 0);
+  fbcon_print(" data.count.raw=");
+  fbcon_print_hex64(g_h ? g_h->data_lba_count_raw : 0);
+  fbcon_putc('\n');
 }
 
 /* ============================================================================
@@ -618,6 +654,27 @@ static struct super_block g_shell_root_sb;
 static struct system_settings g_shell_settings;
 static int g_shell_initialized = 0;
 static int g_shell_fs_ready = 0;
+static int g_shell_persistent_storage = 0;
+static struct efi_block_device g_efi_runtime_disk;
+static struct efi_block_device g_efi_runtime_disk_alt;
+static size_t kernel_readline(char *buf, size_t maxlen, int mask);
+static void secure_memzero(void *ptr, size_t len);
+static int append_key_candidate(const char **list, size_t *count, size_t cap,
+                                const char *candidate);
+#define VOLUME_KEY_MAX 64
+#define VOLUME_KEY_HASH_HEX_LEN 64
+#define VOLUME_KEY_HASH_PATH "/system/volume.key.sha256"
+static char g_active_volume_key[VOLUME_KEY_MAX];
+static int g_active_volume_key_ready = 0;
+static char g_handoff_volume_key[VOLUME_KEY_MAX];
+static int g_handoff_volume_key_ready = 0;
+static uint8_t g_data_io_probe[NOIRFS_BLOCK_SIZE]
+    __attribute__((aligned(64)));
+
+static const uint8_t g_disk_salt[16] = {0x4e, 0x6f, 0x69, 0x72, 0x4f, 0x53,
+                                        0x2d, 0x46, 0x53, 0x2d, 0x53, 0x61,
+                                        0x6c, 0x74, 0x21, 0x00};
+static const uint32_t g_kdf_iterations = 16000;
 
 static size_t local_strlen(const char *s) {
   size_t len = 0;
@@ -641,6 +698,140 @@ static void local_copy(char *dst, size_t dst_size, const char *src) {
     }
   }
   dst[i] = '\0';
+}
+
+static int ascii_is_alnum(char c) {
+  if (c >= '0' && c <= '9') {
+    return 1;
+  }
+  if (c >= 'a' && c <= 'z') {
+    return 1;
+  }
+  if (c >= 'A' && c <= 'Z') {
+    return 1;
+  }
+  return 0;
+}
+
+static char ascii_upper(char c) {
+  if (c >= 'a' && c <= 'z') {
+    return (char)(c - 'a' + 'A');
+  }
+  return c;
+}
+
+static int normalize_volume_key_input(const char *input, char *out,
+                                      size_t out_size) {
+  if (!input || !out || out_size < 2) {
+    return -1;
+  }
+  size_t n = 0;
+  for (size_t i = 0; input[i]; ++i) {
+    char c = input[i];
+    if (c == '-' || c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+      continue;
+    }
+    if (!ascii_is_alnum(c)) {
+      return -1;
+    }
+    if (n + 1 >= out_size) {
+      return -1;
+    }
+    out[n++] = ascii_upper(c);
+  }
+  if (n < 4) {
+    return -1;
+  }
+  out[n] = '\0';
+  return 0;
+}
+
+static int load_handoff_volume_key(void) {
+  g_handoff_volume_key_ready = 0;
+  g_handoff_volume_key[0] = '\0';
+  if (!g_h || g_h->version < 3) {
+    return -1;
+  }
+  if ((g_h->boot_cfg_flags & BOOT_CONFIG_FLAG_HAS_VOLUME_KEY) == 0) {
+    return -1;
+  }
+  if (normalize_volume_key_input(g_h->boot_volume_key, g_handoff_volume_key,
+                                 sizeof(g_handoff_volume_key)) != 0) {
+    return -1;
+  }
+  g_handoff_volume_key_ready = 1;
+  return 0;
+}
+
+static int handoff_keyboard_layout(char *out, size_t out_size) {
+  if (!out || out_size < 2 || !g_h || g_h->version < 3 ||
+      !g_h->boot_keyboard_layout[0]) {
+    return -1;
+  }
+  local_copy(out, out_size, g_h->boot_keyboard_layout);
+  return 0;
+}
+
+static void format_volume_key_groups(const char *normalized, char *out,
+                                     size_t out_size) {
+  if (!normalized || !out || out_size == 0) {
+    return;
+  }
+  size_t si = 0;
+  size_t di = 0;
+  while (normalized[si] && di + 1 < out_size) {
+    if (si > 0 && (si % 4) == 0) {
+      if (di + 1 >= out_size) {
+        break;
+      }
+      out[di++] = '-';
+    }
+    out[di++] = normalized[si++];
+  }
+  out[di] = '\0';
+}
+
+static void bytes_to_hex_local(const uint8_t *src, size_t len, char *dst,
+                               size_t dst_size) {
+  static const char hex[] = "0123456789abcdef";
+  if (!src || !dst || dst_size == 0) {
+    return;
+  }
+  size_t di = 0;
+  for (size_t i = 0; i < len && (di + 2) < dst_size; ++i) {
+    dst[di++] = hex[(src[i] >> 4) & 0x0F];
+    dst[di++] = hex[src[i] & 0x0F];
+  }
+  dst[di] = '\0';
+}
+
+static int hex_value_local(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return 10 + (c - 'a');
+  }
+  if (c >= 'A' && c <= 'F') {
+    return 10 + (c - 'A');
+  }
+  return -1;
+}
+
+static int hex_to_bytes_local(const char *hex, size_t hex_len, uint8_t *dst,
+                              size_t dst_len) {
+  if (!hex || !dst || hex_len != dst_len * 2) {
+    return -1;
+  }
+  for (size_t i = 0; i < dst_len; ++i) {
+    int hi = hex_value_local(hex[i * 2]);
+    int lo = hex_value_local(hex[i * 2 + 1]);
+    if (hi < 0 || lo < 0) {
+      return -1;
+    }
+    dst[i] = (uint8_t)((hi << 4) | lo);
+  }
+  return 0;
 }
 
 static int fs_ensure_dir_recursive(const char *path) {
@@ -710,13 +901,605 @@ static int fs_write_text_file(const char *path, const char *text) {
   return (written == (long)len) ? 0 : -1;
 }
 
-static int shell_bootstrap_filesystem(void) {
-  if (g_shell_fs_ready) {
+static int fs_read_text_file(const char *path, char *out, size_t out_size) {
+  if (!path || !out || out_size < 2) {
+    return -1;
+  }
+  struct file *f = vfs_open(path, VFS_OPEN_READ);
+  if (!f) {
+    return -1;
+  }
+  long read = vfs_read(f, out, out_size - 1);
+  vfs_close(f);
+  if (read < 0) {
+    return -1;
+  }
+  out[(size_t)read] = '\0';
+  return 0;
+}
+
+static int compute_volume_key_hash(const char *normalized_key,
+                                   uint8_t out_hash[SHA256_DIGEST_SIZE]) {
+  if (!normalized_key || !out_hash) {
+    return -1;
+  }
+  struct sha256_ctx ctx;
+  sha256_init(&ctx);
+  sha256_update(&ctx, (const uint8_t *)normalized_key,
+                local_strlen(normalized_key));
+  sha256_final(&ctx, out_hash);
+  return 0;
+}
+
+static int save_volume_key_hash(const char *normalized_key) {
+  uint8_t digest[SHA256_DIGEST_SIZE];
+  char hex[VOLUME_KEY_HASH_HEX_LEN + 2];
+  if (compute_volume_key_hash(normalized_key, digest) != 0) {
+    return -1;
+  }
+  bytes_to_hex_local(digest, sizeof(digest), hex, sizeof(hex));
+  hex[VOLUME_KEY_HASH_HEX_LEN] = '\n';
+  hex[VOLUME_KEY_HASH_HEX_LEN + 1] = '\0';
+  secure_memzero(digest, sizeof(digest));
+  return fs_write_text_file(VOLUME_KEY_HASH_PATH, hex);
+}
+
+static int load_volume_key_hash(uint8_t out_hash[SHA256_DIGEST_SIZE]) {
+  char hex[VOLUME_KEY_HASH_HEX_LEN + 8];
+  if (!out_hash) {
+    return -1;
+  }
+  if (fs_read_text_file(VOLUME_KEY_HASH_PATH, hex, sizeof(hex)) != 0) {
+    return -1;
+  }
+  size_t len = 0;
+  while (hex[len] && hex[len] != '\n' && hex[len] != '\r') {
+    ++len;
+  }
+  if (len != VOLUME_KEY_HASH_HEX_LEN) {
+    return -1;
+  }
+  return hex_to_bytes_local(hex, len, out_hash, SHA256_DIGEST_SIZE);
+}
+
+static int persist_active_volume_key_hash(void) {
+  if (!g_shell_persistent_storage || !g_active_volume_key_ready) {
     return 0;
   }
+  if (fs_ensure_dir_recursive("/system") != 0) {
+    return -1;
+  }
+  uint8_t existing[SHA256_DIGEST_SIZE];
+  if (load_volume_key_hash(existing) == 0) {
+    secure_memzero(existing, sizeof(existing));
+    return 0;
+  }
+  return save_volume_key_hash(g_active_volume_key);
+}
 
-  buffer_cache_init();
-  vfs_init();
+static void secure_memzero(void *ptr, size_t len) {
+  volatile uint8_t *p = (volatile uint8_t *)ptr;
+  while (len--) {
+    *p++ = 0;
+  }
+}
+
+static int append_key_candidate(const char **list, size_t *count, size_t cap,
+                                const char *candidate) {
+  if (!list || !count || !candidate || !candidate[0] || *count >= cap) {
+    return -1;
+  }
+  for (size_t i = 0; i < *count; ++i) {
+    if (streq(list[i], candidate)) {
+      return 0;
+    }
+  }
+  list[(*count)++] = candidate;
+  return 0;
+}
+
+static struct block_device *
+open_crypt_volume_with_password(struct block_device *data_dev,
+                                const char *password) {
+  if (!data_dev || !password || !password[0]) {
+    return NULL;
+  }
+  uint8_t key1[CRYPT_KEY_SIZE];
+  uint8_t key2[CRYPT_KEY_SIZE];
+  secure_memzero(key1, sizeof(key1));
+  secure_memzero(key2, sizeof(key2));
+  crypt_derive_xts_keys(password, g_disk_salt, sizeof(g_disk_salt),
+                        g_kdf_iterations, key1, key2);
+  struct block_device *crypt_dev = crypt_init(data_dev, key1, key2);
+  secure_memzero(key1, sizeof(key1));
+  secure_memzero(key2, sizeof(key2));
+  if (!crypt_dev || crypt_dev == data_dev) {
+    return NULL;
+  }
+  return crypt_dev;
+}
+
+static int probe_block_zeroed(struct block_device *dev, uint32_t lba,
+                              uint8_t *buf) {
+  if (!dev || !buf || lba >= dev->block_count) {
+    return 1;
+  }
+  if (block_device_read(dev, lba, buf) != 0) {
+    return 0;
+  }
+  for (uint32_t i = 0; i < dev->block_size; ++i) {
+    if (buf[i] != 0) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int device_is_blank(struct block_device *dev) {
+  if (!dev || dev->block_count == 0 || dev->block_size == 0) {
+    return 1;
+  }
+  uint8_t *buf = (uint8_t *)kalloc(dev->block_size);
+  if (!buf) {
+    return 0;
+  }
+  uint32_t samples[9];
+  size_t n = 0;
+  samples[n++] = 0;
+  if (dev->block_count > 1)
+    samples[n++] = 1;
+  if (dev->block_count > 2)
+    samples[n++] = 2;
+  if (dev->block_count > 128) {
+    samples[n++] = 127;
+    samples[n++] = 128;
+    samples[n++] = 129;
+  }
+  if (dev->block_count > 256)
+    samples[n++] = 256;
+  if (dev->block_count > 4)
+    samples[n++] = dev->block_count / 2;
+  if (dev->block_count > 0)
+    samples[n++] = dev->block_count - 1;
+
+  for (size_t i = 0; i < n; ++i) {
+    if (!probe_block_zeroed(dev, samples[i], buf)) {
+      kfree(buf);
+      return 0;
+    }
+  }
+  kfree(buf);
+  return 1;
+}
+
+static int mount_root_noirfs(struct block_device *dev, const char *label) {
+  int mount_rc = mount_noirfs(dev, &g_shell_root_sb);
+  int root_rc = (mount_rc == 0) ? vfs_mount_root(&g_shell_root_sb) : -1;
+  if (mount_rc != 0 || root_rc != 0) {
+    fbcon_print("[fs] ERRO: falha ao montar CFS (Capybara File System) em ");
+    fbcon_print(label ? label : "dispositivo");
+    fbcon_print(". mount=");
+    fbcon_print_hex((uint64_t)(uint32_t)mount_rc);
+    fbcon_print(" root=");
+    fbcon_print_hex((uint64_t)(uint32_t)root_rc);
+    fbcon_putc('\n');
+    return -1;
+  }
+  return 0;
+}
+
+static int initialize_encrypted_data_volume(struct block_device *data_dev,
+                                            const char *normalized_key) {
+  if (!data_dev || !normalized_key || !normalized_key[0]) {
+    return -1;
+  }
+
+  local_copy(g_active_volume_key, sizeof(g_active_volume_key), normalized_key);
+  g_active_volume_key_ready = 1;
+
+  struct block_device *crypt_dev =
+      open_crypt_volume_with_password(data_dev, g_active_volume_key);
+  if (!crypt_dev) {
+    fbcon_print("[fs] ERRO: falha ao iniciar camada criptografica.\n");
+    return -1;
+  }
+
+  int fmt_rc = noirfs_format(crypt_dev, 128, crypt_dev->block_count, NULL);
+  if (fmt_rc != 0) {
+    fbcon_print("[fs] ERRO: falha ao formatar volume cifrado. rc=");
+    fbcon_print_hex((uint64_t)(uint32_t)fmt_rc);
+    uint32_t sync_block = 0;
+    if (buffer_cache_last_error_block(&sync_block) == 0) {
+      fbcon_print(" sync_block=");
+      fbcon_print_dec_u32(sync_block);
+      fbcon_print(" sync_code=");
+      fbcon_print_dec_u32(
+          (uint32_t)(buffer_cache_last_error_code() & 0xFFFFFFFF));
+    }
+    fbcon_print(" efi_status=");
+    fbcon_print_hex64(g_efi_runtime_disk.ctx.last_status);
+    fbcon_print(" efi_code=");
+    fbcon_print_dec_u32(
+        (uint32_t)(g_efi_runtime_disk.ctx.last_status & 0xFFFFFFFFULL));
+    fbcon_print(" lba=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_block_no);
+    fbcon_print(" media=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_media_id);
+    fbcon_print(" efi_last_err=");
+    fbcon_print_hex64(g_efi_runtime_disk.ctx.last_error_status);
+    fbcon_print(" err_lba=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_error_block_no);
+    fbcon_print(" err_media=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_error_media_id);
+    fbcon_print(" err_count=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.error_count);
+    fbcon_putc('\n');
+    crypt_free(crypt_dev);
+    return -1;
+  }
+  if (block_device_read(data_dev, 0, g_data_io_probe) == 0) {
+    uint32_t nonzero = 0;
+    for (uint32_t i = 0; i < data_dev->block_size; ++i) {
+      if (g_data_io_probe[i] != 0) {
+        ++nonzero;
+      }
+    }
+    fbcon_print("[fs] Probe RAW apos formatacao (LBA0) bytes!=0: ");
+    fbcon_print_dec_u32(nonzero);
+    fbcon_putc('\n');
+  } else {
+    fbcon_print("[fs] Aviso: probe RAW apos formatacao falhou.\n");
+  }
+  if (mount_root_noirfs(crypt_dev, "DATA cifrada") != 0) {
+    crypt_free(crypt_dev);
+    return -1;
+  }
+  fbcon_print("[fs] Volume cifrado inicializado e montado.\n");
+  return 0;
+}
+
+static int mount_encrypted_data_volume(struct block_device *data_dev) {
+  if (!data_dev) {
+    return -1;
+  }
+  fbcon_print("[fs] Probing leitura inicial da particao DATA...\n");
+  if (block_device_read(data_dev, 0, g_data_io_probe) != 0) {
+    fbcon_print("[fs] ERRO: falha de I/O ao ler DATA (caminho EFI BlockIO).\n");
+    fbcon_print("[fs] EFI ReadBlocks status=");
+    fbcon_print_hex64(g_efi_runtime_disk.ctx.last_status);
+    fbcon_print(" code=");
+    fbcon_print_dec_u32((uint32_t)(g_efi_runtime_disk.ctx.last_status &
+                                   0xFFFFFFFFULL));
+    fbcon_print(" lba=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_block_no);
+    fbcon_print(" media=");
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_media_id);
+    fbcon_putc('\n');
+    fbcon_print("[fs] A chave pode estar correta; acesso ao disco falhou antes da criptografia.\n");
+    return -1;
+  }
+  fbcon_print("[fs] Probe de leitura DATA concluido.\n");
+  (void)load_handoff_volume_key();
+
+  if (device_is_blank(data_dev)) {
+    char normalized_key[VOLUME_KEY_MAX];
+    secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
+    fbcon_print(
+        "[fs] Particao DATA vazia detectada. Inicializando volume cifrado.\n");
+    if (g_handoff_volume_key_ready) {
+      local_copy(normalized_key, sizeof(normalized_key), g_handoff_volume_key);
+      fbcon_print("[fs] Chave de volume provisionada pela instalacao ISO.\n");
+    } else {
+      fbcon_print("[fs] ERRO: nenhuma chave provisionada encontrada no boot.\n");
+      fbcon_print("[fs] Boot normal nao deve gerar/trocar chave de volume.\n");
+      fbcon_print("[fs] Reinicie pela ISO para provisionar a chave e recriar o volume com seguranca.\n");
+      return -1;
+    }
+    int init_rc = initialize_encrypted_data_volume(data_dev, normalized_key);
+    secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
+    return init_rc;
+  }
+
+  char raw_key[128];
+  char normalized_key[VOLUME_KEY_MAX];
+  char grouped_key[VOLUME_KEY_MAX + 16];
+  secure_memzero(raw_key, sizeof(raw_key));
+  secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
+  secure_memzero((uint8_t *)grouped_key, sizeof(grouped_key));
+
+  if (g_handoff_volume_key_ready) {
+    struct block_device *crypt_dev =
+        open_crypt_volume_with_password(data_dev, g_handoff_volume_key);
+    if (crypt_dev && mount_root_noirfs(crypt_dev, "DATA cifrada") == 0) {
+      local_copy(g_active_volume_key, sizeof(g_active_volume_key),
+                 g_handoff_volume_key);
+      g_active_volume_key_ready = 1;
+      fbcon_print("[fs] Volume cifrado montado automaticamente.\n");
+      return 0;
+    }
+    if (crypt_dev) {
+      crypt_free(crypt_dev);
+    }
+    fbcon_print("[fs] Aviso: chave provisionada falhou para desbloquear o volume existente.\n");
+    fbcon_print("[security] Validacao estrita por hash da chave foi desativada nesta fase.\n");
+    fbcon_print("[fs] Seguindo para modo manual de chave (somente desbloqueio).\n");
+  }
+
+  fbcon_print("[fs] Volume cifrado detectado. Informe a senha para montar.\n");
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    fbcon_print("Chave do volume: ");
+    size_t len = kernel_readline(raw_key, sizeof(raw_key), 0);
+    if (len == 0) {
+      fbcon_print("Chave vazia. Tente novamente.\n");
+      continue;
+    }
+
+    int normalized_ok =
+        (normalize_volume_key_input(raw_key, normalized_key,
+                                    sizeof(normalized_key)) == 0);
+    if (normalized_ok) {
+      format_volume_key_groups(normalized_key, grouped_key, sizeof(grouped_key));
+    }
+
+    const char *candidates[4];
+    size_t candidate_count = 0;
+    (void)append_key_candidate(candidates, &candidate_count,
+                               sizeof(candidates) / sizeof(candidates[0]),
+                               raw_key);
+    if (normalized_ok) {
+      (void)append_key_candidate(candidates, &candidate_count,
+                                 sizeof(candidates) / sizeof(candidates[0]),
+                                 normalized_key);
+      (void)append_key_candidate(candidates, &candidate_count,
+                                 sizeof(candidates) / sizeof(candidates[0]),
+                                 grouped_key);
+    }
+
+    int mounted = 0;
+    for (size_t i = 0; i < candidate_count && !mounted; ++i) {
+      struct block_device *crypt_dev =
+          open_crypt_volume_with_password(data_dev, candidates[i]);
+      if (!crypt_dev) {
+        continue;
+      }
+      if (mount_root_noirfs(crypt_dev, "DATA cifrada") == 0) {
+        mounted = 1;
+        break;
+      }
+      crypt_free(crypt_dev);
+    }
+
+    if (mounted) {
+      if (normalized_ok) {
+        local_copy(g_active_volume_key, sizeof(g_active_volume_key),
+                   normalized_key);
+      } else {
+        local_copy(g_active_volume_key, sizeof(g_active_volume_key), raw_key);
+      }
+      g_active_volume_key_ready = 1;
+      secure_memzero(raw_key, sizeof(raw_key));
+      secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
+      secure_memzero((uint8_t *)grouped_key, sizeof(grouped_key));
+      fbcon_print("[fs] Volume cifrado montado com sucesso.\n");
+      return 0;
+    }
+
+    secure_memzero(raw_key, sizeof(raw_key));
+    secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
+    secure_memzero((uint8_t *)grouped_key, sizeof(grouped_key));
+    fbcon_print("Chave incorreta ou volume invalido. ");
+    fbcon_print("Formato aceito: letras/numeros; hifens opcionais.\n");
+    if (attempt < 2) {
+      fbcon_print("[fs] Tentativas restantes para desbloqueio: ");
+      fbcon_print_dec_u32((uint32_t)(2 - attempt));
+      fbcon_putc('\n');
+    }
+  }
+  fbcon_print("[fs] Falha ao desbloquear o volume DATA apos 3 tentativas.\n");
+  return -1;
+}
+
+static int handoff_compute_effective_data_count(uint64_t data_start,
+                                                uint64_t data_count,
+                                                uint64_t disk_last_lba,
+                                                uint64_t *out_effective_count) {
+  if (!out_effective_count) {
+    return -1;
+  }
+  *out_effective_count = 0;
+  if (data_start > 0xFFFFFFFFULL || data_count > 0xFFFFFFFFULL) {
+    return -1;
+  }
+  if (data_start + data_count < data_start) {
+    return -1;
+  }
+  if (data_start > disk_last_lba) {
+    return -1;
+  }
+  uint64_t max_data_count = (disk_last_lba - data_start) + 1ULL;
+  uint64_t effective_data_count = data_count;
+  if (effective_data_count > max_data_count) {
+    effective_data_count = max_data_count;
+  }
+  if (effective_data_count == 0) {
+    return -1;
+  }
+  if (disk_last_lba > 0xFFFFFFFFULL) {
+    return -1;
+  }
+  *out_effective_count = effective_data_count;
+  return 0;
+}
+
+static int probe_blockio_lba0(struct efi_block_device *dev,
+                              uint32_t handoff_media_id, const char *tag) {
+  if (!dev || !dev->ctx.bio || !dev->ctx.bio->read_blocks ||
+      dev->dev.block_size == 0) {
+    return 0;
+  }
+  void *probe_buf = dev->ctx.bounce_aligned ? dev->ctx.bounce_aligned
+                                            : (void *)g_data_io_probe;
+  uint32_t runtime_media_id = handoff_media_id;
+  if (dev->ctx.bio->media && dev->ctx.bio->media->media_id != 0U) {
+    runtime_media_id = dev->ctx.bio->media->media_id;
+  }
+
+  EFI_STATUS_K st_probe = dev->ctx.bio->read_blocks(
+      dev->ctx.bio, handoff_media_id, 0ULL, (uint64_t)dev->dev.block_size,
+      probe_buf);
+  fbcon_print("[fs] Probe ");
+  fbcon_print(tag);
+  fbcon_print(" ReadBlocks(handoff_media) status=");
+  fbcon_print_hex64(st_probe);
+  fbcon_print(" code=");
+  fbcon_print_dec_u32((uint32_t)(st_probe & 0xFFFFFFFFULL));
+  fbcon_print(" media=");
+  fbcon_print_dec_u32(handoff_media_id);
+  fbcon_putc('\n');
+  int ok = ((st_probe & EFI_STATUS_ERROR_BIT_K) == 0);
+
+  if (runtime_media_id != handoff_media_id) {
+    st_probe = dev->ctx.bio->read_blocks(dev->ctx.bio, runtime_media_id, 0ULL,
+                                         (uint64_t)dev->dev.block_size,
+                                         probe_buf);
+    fbcon_print("[fs] Probe ");
+    fbcon_print(tag);
+    fbcon_print(" ReadBlocks(runtime_media) status=");
+    fbcon_print_hex64(st_probe);
+    fbcon_print(" code=");
+    fbcon_print_dec_u32((uint32_t)(st_probe & 0xFFFFFFFFULL));
+    fbcon_print(" media=");
+    fbcon_print_dec_u32(runtime_media_id);
+    fbcon_putc('\n');
+    if ((st_probe & EFI_STATUS_ERROR_BIT_K) == 0) {
+      ok = 1;
+    }
+  }
+  return ok;
+}
+
+static struct block_device *open_handoff_data_device(void) {
+  if (!g_h || g_h->version < 2 || g_h->efi_block_io == 0 ||
+      g_h->data_lba_count == 0) {
+    return NULL;
+  }
+  uint32_t block_size = g_h->efi_block_size ? g_h->efi_block_size : 512;
+  if (block_size == 0) {
+    return NULL;
+  }
+
+  if (g_h->data_lba_start > g_h->efi_disk_last_lba) {
+    fbcon_print(
+        "[fs] ERRO: DATA start LBA fora do disco reportado pelo handoff.\n");
+    return NULL;
+  }
+  uint64_t max_data_count = (g_h->efi_disk_last_lba - g_h->data_lba_start) + 1ULL;
+  if (g_h->data_lba_count > max_data_count) {
+    fbcon_print("[fs] aviso: DATA count do handoff excede o disco; ajustando.\n");
+  }
+  uint64_t effective_data_count = 0;
+  if (handoff_compute_effective_data_count(g_h->data_lba_start, g_h->data_lba_count,
+                                           g_h->efi_disk_last_lba,
+                                           &effective_data_count) != 0) {
+    fbcon_print("[fs] ERRO: parametros DATA invalidos no handoff.\n");
+    return NULL;
+  }
+
+  if (efi_block_device_init(&g_efi_runtime_disk, g_h->efi_block_io,
+                            g_h->efi_media_id, block_size,
+                            g_h->efi_disk_last_lba) != 0) {
+    fbcon_print("[fs] ERRO: falha ao inicializar adaptador EFI BlockIO do handoff.\n");
+    return NULL;
+  }
+  fbcon_print("[fs] EFI BlockIO selecionado ativo: blk=");
+  fbcon_print_dec_u32(g_efi_runtime_disk.dev.block_size);
+  fbcon_print(" align=");
+  fbcon_print_dec_u32(g_efi_runtime_disk.ctx.io_align);
+  fbcon_print(" media(handoff)=");
+  fbcon_print_dec_u32(g_h->efi_media_id);
+  fbcon_print(" media(runtime)=");
+  if (g_efi_runtime_disk.ctx.bio && g_efi_runtime_disk.ctx.bio->media) {
+    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.bio->media->media_id);
+  } else {
+    fbcon_print("0");
+  }
+  fbcon_print(" read=");
+  fbcon_print_hex64(
+      (uint64_t)(uintptr_t)g_efi_runtime_disk.ctx.bio->read_blocks);
+  fbcon_print(" write=");
+  fbcon_print_hex64(
+      (uint64_t)(uintptr_t)g_efi_runtime_disk.ctx.bio->write_blocks);
+  fbcon_putc('\n');
+
+  int selected_probe_ok =
+      probe_blockio_lba0(&g_efi_runtime_disk, g_h->efi_media_id, "selected");
+
+  uint64_t active_data_start = g_h->data_lba_start;
+  uint64_t active_data_count = effective_data_count;
+  int has_raw_fallback =
+      (g_h->version >= 4 && g_h->efi_block_io_raw != 0 &&
+      g_h->data_lba_count_raw != 0 &&
+      (g_h->efi_block_io_raw != g_h->efi_block_io ||
+       g_h->data_lba_start_raw != g_h->data_lba_start ||
+       g_h->data_lba_count_raw != g_h->data_lba_count ||
+       g_h->efi_media_id_raw != g_h->efi_media_id));
+  if (!selected_probe_ok && has_raw_fallback) {
+    if (!selected_probe_ok) {
+      fbcon_print(
+          "[fs] Probe do BlockIO selecionado falhou; tentando fallback RAW.\n");
+    }
+    uint64_t raw_effective_data_count = 0;
+    if (g_h->data_lba_start_raw > g_h->efi_disk_last_lba_raw) {
+      fbcon_print("[fs] aviso: fallback RAW com start LBA fora do disco.\n");
+    } else {
+      uint64_t raw_max_data_count =
+          (g_h->efi_disk_last_lba_raw - g_h->data_lba_start_raw) + 1ULL;
+      if (g_h->data_lba_count_raw > raw_max_data_count) {
+        fbcon_print(
+            "[fs] aviso: DATA count do fallback RAW excede o disco; ajustando.\n");
+      }
+      if (handoff_compute_effective_data_count(
+              g_h->data_lba_start_raw, g_h->data_lba_count_raw,
+              g_h->efi_disk_last_lba_raw, &raw_effective_data_count) == 0 &&
+          efi_block_device_init(&g_efi_runtime_disk_alt, g_h->efi_block_io_raw,
+                                g_h->efi_media_id_raw ? g_h->efi_media_id_raw
+                                                      : g_h->efi_media_id,
+                                block_size, g_h->efi_disk_last_lba_raw) == 0) {
+        fbcon_print("[fs] Tentando fallback RAW do handoff para volume DATA.\n");
+        int raw_probe_ok = probe_blockio_lba0(
+            &g_efi_runtime_disk_alt,
+            g_h->efi_media_id_raw ? g_h->efi_media_id_raw : g_h->efi_media_id,
+            "raw-fallback");
+        if (raw_probe_ok) {
+          g_efi_runtime_disk = g_efi_runtime_disk_alt;
+          g_efi_runtime_disk.dev.ctx = &g_efi_runtime_disk.ctx;
+          active_data_start = g_h->data_lba_start_raw;
+          active_data_count = raw_effective_data_count;
+          fbcon_print("[fs] Fallback RAW ativo para DATA.\n");
+        } else {
+          fbcon_print("[fs] Fallback RAW falhou no probe inicial.\n");
+        }
+      } else {
+        fbcon_print("[fs] aviso: fallback RAW invalido no handoff.\n");
+      }
+    }
+  } else if (selected_probe_ok && has_raw_fallback && g_h->data_lba_start == 0 &&
+             g_h->data_lba_start_raw != 0) {
+    fbcon_print(
+        "[fs] Handle logico DATA validado; fallback RAW mantido apenas para "
+        "erro de probe.\n");
+  }
+
+  struct block_device *slice =
+      block_offset_wrap(&g_efi_runtime_disk.dev, (uint32_t)active_data_start,
+                        (uint32_t)active_data_count);
+  if (!slice) {
+    return NULL;
+  }
+  return block_chunked_wrap(slice, NOIRFS_BLOCK_SIZE);
+}
+
+static int bootstrap_ramdisk_runtime(void) {
   ramdisk_init(512);
   struct block_device *ram = ramdisk_device();
   if (!ram) {
@@ -726,19 +1509,12 @@ static int shell_bootstrap_filesystem(void) {
 
   int fmt_rc = noirfs_format(ram, 128, ram->block_count, NULL);
   if (fmt_rc != 0) {
-    fbcon_print("[fs] ERRO: falha ao formatar NoirFS em RAM. rc=");
+    fbcon_print("[fs] ERRO: falha ao formatar CFS em RAM. rc=");
     fbcon_print_hex((uint64_t)(uint32_t)fmt_rc);
     fbcon_putc('\n');
     return -1;
   }
-  int mount_rc = mount_noirfs(ram, &g_shell_root_sb);
-  int root_rc = (mount_rc == 0) ? vfs_mount_root(&g_shell_root_sb) : -1;
-  if (mount_rc != 0 || root_rc != 0) {
-    fbcon_print("[fs] ERRO: falha ao montar NoirFS em RAM. mount=");
-    fbcon_print_hex((uint64_t)(uint32_t)mount_rc);
-    fbcon_print(" root=");
-    fbcon_print_hex((uint64_t)(uint32_t)root_rc);
-    fbcon_putc('\n');
+  if (mount_root_noirfs(ram, "RAM") != 0) {
     return -1;
   }
 
@@ -759,9 +1535,11 @@ static int shell_bootstrap_filesystem(void) {
       "  help-any, help-docs, print-version, print-envs,\n"
       "  net-status, net-ip, net-gw, net-dns,\n"
       "  net-set <ip> <mask> <gw> <dns>, hey <ip>,\n"
+      "  add-user <user> <pass> [role], set-pass <user> <pass>, list-users,\n"
       "  shutdown-reboot, shutdown-off, do-sync\n";
   if (fs_write_text_file("/docs/noiros-cli-reference.txt", cli_doc) != 0) {
-    fbcon_print("[fs] aviso: nao foi possivel gravar /docs/noiros-cli-reference.txt\n");
+    fbcon_print(
+        "[fs] aviso: nao foi possivel gravar /docs/noiros-cli-reference.txt\n");
   }
 
   if (userdb_ensure() != 0) {
@@ -779,16 +1557,73 @@ static int shell_bootstrap_filesystem(void) {
     }
   }
 
-  g_shell_fs_ready = 1;
-  fbcon_print("[fs] NoirFS em RAM pronto para CLI.\n");
+  g_shell_persistent_storage = 0;
+  fbcon_print("[fs] CFS em RAM pronto para CLI.\n");
   return 0;
 }
 
-/* Initialize shell context for command dispatch */
-static void init_shell_context(const struct user_record *user) {
+static int shell_bootstrap_filesystem(void) {
+  if (g_shell_fs_ready) {
+    return 0;
+  }
+
+  buffer_cache_init();
+  vfs_init();
+  struct block_device *data_dev = open_handoff_data_device();
+  if (data_dev && mount_encrypted_data_volume(data_dev) == 0) {
+    g_shell_persistent_storage = 1;
+    if (system_detect_first_boot() != 0) {
+      fbcon_print("[setup] Primeira inicializacao detectada.\n");
+      if (system_run_first_boot_setup() != 0) {
+        fbcon_print("[setup] ERRO: assistente inicial falhou.\n");
+        return -1;
+      }
+    }
+    if (userdb_ensure() != 0) {
+      fbcon_print("[fs] ERRO: /etc/users.db indisponivel no volume persistente.\n");
+      return -1;
+    }
+    struct vfs_stat userdb_stat;
+    if (vfs_stat_path(USER_DB_PATH, &userdb_stat) == 0 && userdb_stat.size == 0) {
+      fbcon_print("[setup] users.db vazio detectado no volume persistente.\n");
+      if (system_run_first_boot_setup() != 0) {
+        fbcon_print("[setup] ERRO: nao foi possivel reconstruir usuarios iniciais.\n");
+        return -1;
+      }
+    }
+    if (persist_active_volume_key_hash() != 0) {
+      fbcon_print("[fs] aviso: nao foi possivel persistir hash da chave do volume.\n");
+    }
+  } else {
+    if (data_dev) {
+      fbcon_print("[fs] ERRO: falha no volume persistente CFS.\n");
+      fbcon_print("[fs] Boot normal nao deve cair para RAM nem formatar automaticamente.\n");
+      fbcon_print("[fs] Valide a chave e inicialize via ISO para recuperacao.\n");
+      return -1;
+    } else {
+      if (g_h && g_h->version >= 2 && g_h->efi_system_table != 0) {
+        fbcon_print("[fs] ERRO: handoff sem volume DATA CFS em boot UEFI.\n");
+        fbcon_print("[fs] Bloqueando fallback em RAM para evitar perda de persistencia.\n");
+        return -1;
+      }
+      fbcon_print("[fs] Sem volume persistente no handoff; usando RAM.\n");
+      if (bootstrap_ramdisk_runtime() != 0) {
+        return -1;
+      }
+    }
+  }
+
+  g_shell_fs_ready = 1;
+  if (g_shell_persistent_storage) {
+    fbcon_print("[fs] CFS persistente ativo (dados cifrados).\n");
+  }
+  return 0;
+}
+
+static int prepare_shell_runtime(void) {
   if (!g_shell_initialized) {
     if (shell_bootstrap_filesystem() != 0) {
-      return;
+      return -1;
     }
     if (system_load_settings(&g_shell_settings) != 0) {
       local_copy(g_shell_settings.hostname, sizeof(g_shell_settings.hostname),
@@ -799,24 +1634,65 @@ static void init_shell_context(const struct user_record *user) {
       g_shell_settings.splash_enabled = 0;
       g_shell_settings.diagnostics_enabled = 0;
     }
+    system_apply_keyboard_layout(&g_shell_settings);
+    session_reset(&g_session_ctx);
+    session_set_active(NULL);
+    shell_context_init(&g_shell_ctx, &g_session_ctx, &g_shell_settings);
     g_shell_initialized = 1;
   }
+  return 0;
+}
 
-  struct user_record fallback;
-  user_record_clear(&fallback);
-  local_copy(fallback.username, sizeof(fallback.username), "admin");
-  fallback.uid = 0;
-  fallback.gid = 0;
-  local_copy(fallback.role, sizeof(fallback.role), "admin");
-  local_copy(fallback.home, sizeof(fallback.home), "/home/admin");
-  const struct user_record *active = user ? user : &fallback;
+/* Activate authenticated user session for shell command dispatch */
+static int init_shell_context(const struct user_record *user) {
+  if (prepare_shell_runtime() != 0 || !user || !user->username[0]) {
+    return -1;
+  }
 
-  if (session_begin(&g_session_ctx, active) != 0) {
+  if (session_begin(&g_session_ctx, user) != 0) {
     session_reset(&g_session_ctx);
     session_set_cwd(&g_session_ctx, "/");
+    return -1;
   }
   session_set_active(&g_session_ctx);
   shell_context_init(&g_shell_ctx, &g_session_ctx, &g_shell_settings);
+  return 0;
+}
+
+/* x64 relocation-safe wrappers for external callbacks used via function pointers.
+ * Keeping callbacks inside this TU avoids absolute address materialization for
+ * external symbols in the login runtime ops table. */
+static void login_session_reset(struct session_context *ctx) {
+  session_reset(ctx);
+}
+
+static void login_session_set_active(struct session_context *ctx) {
+  session_set_active(ctx);
+}
+
+static void login_shell_context_init(struct shell_context *ctx,
+                                     struct session_context *session,
+                                     const struct system_settings *settings) {
+  shell_context_init(ctx, session, settings);
+}
+
+static int login_system_login(struct session_context *session,
+                              const struct system_settings *settings) {
+  return system_login(session, settings);
+}
+
+static const struct user_record *
+login_session_user(const struct session_context *ctx) {
+  return session_user(ctx);
+}
+
+static const char *login_session_cwd(const struct session_context *ctx) {
+  return session_cwd(ctx);
+}
+
+static int
+login_shell_context_should_logout(const struct shell_context *ctx) {
+  return shell_context_should_logout(ctx);
 }
 
 /* Try to execute command through shell module system.
@@ -1001,6 +1877,8 @@ static int g_has_efi_input = 0;
 static int g_has_hyperv_input = 0;
 static uint64_t g_efi_system_table = 0;
 static int g_shift = 0;
+static char g_dead_accent = 0;
+static char g_pending_char = 0;
 
 /* VMBus keyboard polling (from vmbus_keyboard.c) */
 extern struct vmbus_keyboard *vmbus_get_keyboard(void);
@@ -1010,10 +1888,162 @@ extern int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
 /* Forward declaration */
 static char scancode_to_ascii(uint8_t sc, int shift);
 
+static int layout_name_equal(const char *a, const char *b) {
+  if (!a || !b) {
+    return 0;
+  }
+  while (*a && *b) {
+    if (*a++ != *b++) {
+      return 0;
+    }
+  }
+  return *a == *b;
+}
+
+static const struct keyboard_layout *active_layout_map(void) {
+  const char *name = keyboard_current_layout();
+  if (name && layout_name_equal(name, "br-abnt2")) {
+    return &g_keyboard_layout_br_abnt2;
+  }
+  return &g_keyboard_layout_us;
+}
+
+static int accent_is_dead(char ch) {
+  return ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"';
+}
+
+static char compose_dead_key(char accent, char base) {
+  if (accent == '\'') {
+    if (base == 'a')
+      return (char)0xA0;
+    if (base == 'e')
+      return (char)0x82;
+    if (base == 'i')
+      return (char)0xA1;
+    if (base == 'o')
+      return (char)0xA2;
+    if (base == 'u')
+      return (char)0xA3;
+    if (base == 'A')
+      return (char)0xB5;
+    if (base == 'E')
+      return (char)0x90;
+    if (base == 'I')
+      return (char)0xD6;
+    if (base == 'O')
+      return (char)0xE0;
+    if (base == 'U')
+      return (char)0xE9;
+  } else if (accent == '^') {
+    if (base == 'a')
+      return (char)0x83;
+    if (base == 'e')
+      return (char)0x88;
+    if (base == 'i')
+      return (char)0x8C;
+    if (base == 'o')
+      return (char)0x93;
+    if (base == 'u')
+      return (char)0x96;
+  } else if (accent == '~') {
+    if (base == 'a')
+      return (char)0xC6;
+    if (base == 'o')
+      return (char)0xE5;
+    if (base == 'A')
+      return (char)0xC7;
+    if (base == 'O')
+      return (char)0xE4;
+  } else if (accent == '`') {
+    if (base == 'a')
+      return (char)0x85;
+    if (base == 'A')
+      return (char)0xB7;
+  } else if (accent == '"') {
+    if (base == 'u')
+      return (char)0x81;
+    if (base == 'U')
+      return (char)0x9A;
+  }
+  return 0;
+}
+
+static int find_us_scancode_for_char(char ch, uint8_t *out_sc, int *out_shift) {
+  if (!out_sc || !out_shift) {
+    return 0;
+  }
+  for (uint8_t sc = 0; sc < 128; ++sc) {
+    if (g_keyboard_layout_us.base[sc] == ch && ch != 0) {
+      *out_sc = sc;
+      *out_shift = 0;
+      return 1;
+    }
+    if (g_keyboard_layout_us.shift[sc] == ch && ch != 0) {
+      *out_sc = sc;
+      *out_shift = 1;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int translate_efi_char_to_active_layout(char in, char *out) {
+  if (!out) {
+    return 0;
+  }
+  const struct keyboard_layout *layout = active_layout_map();
+  if (!layout || layout == &g_keyboard_layout_us) {
+    *out = in;
+    return 1;
+  }
+
+  uint8_t sc = 0;
+  int shift = 0;
+  if (!find_us_scancode_for_char(in, &sc, &shift)) {
+    *out = in;
+    return 1;
+  }
+
+  const char *mapping = shift ? layout->shift : layout->base;
+  char mapped = mapping[sc];
+  if (!mapped) {
+    *out = in;
+    return 1;
+  }
+
+  uint8_t dead_flags = layout->dead[sc];
+  int is_dead = shift ? ((dead_flags & 0x2) != 0) : ((dead_flags & 0x1) != 0);
+  if (is_dead && accent_is_dead(mapped)) {
+    g_dead_accent = mapped;
+    return 0;
+  }
+
+  if (g_dead_accent) {
+    char accent = g_dead_accent;
+    g_dead_accent = 0;
+    char composed = compose_dead_key(accent, mapped);
+    if (composed) {
+      *out = composed;
+      return 1;
+    }
+    g_pending_char = mapped;
+    *out = accent;
+    return 1;
+  }
+
+  *out = mapped;
+  return 1;
+}
+
 /* Polls one translated input character from available backends. */
 static int poll_input_char(char *out_char) {
   if (!out_char) {
     return 0;
+  }
+  if (g_pending_char) {
+    *out_char = g_pending_char;
+    g_pending_char = 0;
+    return 1;
   }
 
   char c = 0;
@@ -1021,8 +2051,11 @@ static int poll_input_char(char *out_char) {
 
   /* Prefer firmware keyboard path in UEFI VMs (Hyper-V Gen2/OVMF). */
   if (g_has_efi_input && efi_poll_char(g_efi_system_table, &c)) {
-    *out_char = c;
-    return 1;
+    if (c == '\n' || c == '\b' || c == '\t') {
+      *out_char = c;
+      return 1;
+    }
+    return translate_efi_char_to_active_layout(c, out_char);
   }
 
   /* PS/2 fallback for legacy keyboards. */
@@ -1059,13 +2092,16 @@ static int poll_input_char(char *out_char) {
     if (hvkbd) {
       uint8_t hv_sc = 0;
       int hv_break = 0;
-      if (vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break) && !hv_break) {
+      if (vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break)) {
         if (hv_sc == 0x2A || hv_sc == 0x36) {
-          g_shift = 1;
+          g_shift = hv_break ? 0 : 1;
           return 0;
         }
         if (hv_sc == 0xAA || hv_sc == 0xB6) {
           g_shift = 0;
+          return 0;
+        }
+        if (hv_break) {
           return 0;
         }
         if (hv_sc == 0x1C) {
@@ -1151,148 +2187,81 @@ static size_t kernel_readline(char *buf, size_t maxlen, int mask) {
   return kernel_input_readline(buf, maxlen, mask);
 }
 
+static void prompt_preboot_keyboard_layout(void) {
+  fbcon_print("[kbd] Layout para desbloqueio do volume:\n");
+  for (size_t i = 0; i < keyboard_layout_count(); ++i) {
+    fbcon_print("  [");
+    fbcon_print_dec_u32((uint32_t)i);
+    fbcon_print("] ");
+    fbcon_print(keyboard_layout_name(i));
+    fbcon_print(" - ");
+    fbcon_print(keyboard_layout_description(i));
+    fbcon_putc('\n');
+  }
+  fbcon_print("Escolha layout [us]: ");
+  char choice[32];
+  kernel_readline(choice, sizeof(choice), 0);
+  if (!choice[0]) {
+    (void)keyboard_set_layout_by_name("us");
+    fbcon_print("[kbd] Layout ativo: us\n");
+    return;
+  }
+  if (choice[1] == '\0' && choice[0] >= '0' &&
+      choice[0] < '0' + (char)keyboard_layout_count()) {
+    size_t idx = (size_t)(choice[0] - '0');
+    const char *name = keyboard_layout_name(idx);
+    if (name && keyboard_set_layout_by_name(name) == 0) {
+      fbcon_print("[kbd] Layout ativo: ");
+      fbcon_print(name);
+      fbcon_putc('\n');
+      return;
+    }
+  }
+  if (keyboard_set_layout_by_name(choice) == 0) {
+    fbcon_print("[kbd] Layout ativo: ");
+    fbcon_print(choice);
+    fbcon_putc('\n');
+    return;
+  }
+  fbcon_print("[kbd] Layout invalido; mantendo us.\n");
+  (void)keyboard_set_layout_by_name("us");
+}
+
 static char scancode_to_ascii(uint8_t sc, int shift) {
-  static const char base[128] = {
-      [0x01] = 27,
-      [0x02] = '1',
-      [0x03] = '2',
-      [0x04] = '3',
-      [0x05] = '4',
-      [0x06] = '5',
-      [0x07] = '6',
-      [0x08] = '7',
-      [0x09] = '8',
-      [0x0A] = '9',
-      [0x0B] = '0',
-      [0x0C] = '-',
-      [0x0D] = '=',
-      [0x0E] = '\b',
-      [0x0F] = '\t',
-      [0x10] = 'q',
-      [0x11] = 'w',
-      [0x12] = 'e',
-      [0x13] = 'r',
-      [0x14] = 't',
-      [0x15] = 'y',
-      [0x16] = 'u',
-      [0x17] = 'i',
-      [0x18] = 'o',
-      [0x19] = 'p',
-      [0x1A] = '[',
-      [0x1B] = ']',
-      [0x1C] = '\n',
-      [0x1E] = 'a',
-      [0x1F] = 's',
-      [0x20] = 'd',
-      [0x21] = 'f',
-      [0x22] = 'g',
-      [0x23] = 'h',
-      [0x24] = 'j',
-      [0x25] = 'k',
-      [0x26] = 'l',
-      [0x27] = ';',
-      [0x28] = '\'',
-      [0x29] = '`',
-      [0x2B] = '\\',
-      [0x2C] = 'z',
-      [0x2D] = 'x',
-      [0x2E] = 'c',
-      [0x2F] = 'v',
-      [0x30] = 'b',
-      [0x31] = 'n',
-      [0x32] = 'm',
-      [0x33] = ',',
-      [0x34] = '.',
-      [0x35] = '/',
-      [0x37] = '*',
-      [0x39] = ' ',
-      // keypad
-      [0x47] = '7',
-      [0x48] = '8',
-      [0x49] = '9',
-      [0x4A] = '-',
-      [0x4B] = '4',
-      [0x4C] = '5',
-      [0x4D] = '6',
-      [0x4E] = '+',
-      [0x4F] = '1',
-      [0x50] = '2',
-      [0x51] = '3',
-      [0x52] = '0',
-      [0x53] = '.',
-  };
-  static const char sh[128] = {
-      [0x01] = 27,
-      [0x02] = '!',
-      [0x03] = '@',
-      [0x04] = '#',
-      [0x05] = '$',
-      [0x06] = '%',
-      [0x07] = '^',
-      [0x08] = '&',
-      [0x09] = '*',
-      [0x0A] = '(',
-      [0x0B] = ')',
-      [0x0C] = '_',
-      [0x0D] = '+',
-      [0x0E] = '\b',
-      [0x0F] = '\t',
-      [0x10] = 'Q',
-      [0x11] = 'W',
-      [0x12] = 'E',
-      [0x13] = 'R',
-      [0x14] = 'T',
-      [0x15] = 'Y',
-      [0x16] = 'U',
-      [0x17] = 'I',
-      [0x18] = 'O',
-      [0x19] = 'P',
-      [0x1A] = '{',
-      [0x1B] = '}',
-      [0x1C] = '\n',
-      [0x1E] = 'A',
-      [0x1F] = 'S',
-      [0x20] = 'D',
-      [0x21] = 'F',
-      [0x22] = 'G',
-      [0x23] = 'H',
-      [0x24] = 'J',
-      [0x25] = 'K',
-      [0x26] = 'L',
-      [0x27] = ':',
-      [0x28] = '"',
-      [0x29] = '~',
-      [0x2B] = '|',
-      [0x2C] = 'Z',
-      [0x2D] = 'X',
-      [0x2E] = 'C',
-      [0x2F] = 'V',
-      [0x30] = 'B',
-      [0x31] = 'N',
-      [0x32] = 'M',
-      [0x33] = '<',
-      [0x34] = '>',
-      [0x35] = '?',
-      [0x37] = '*',
-      [0x39] = ' ',
-      // keypad (same)
-      [0x47] = '7',
-      [0x48] = '8',
-      [0x49] = '9',
-      [0x4A] = '-',
-      [0x4B] = '4',
-      [0x4C] = '5',
-      [0x4D] = '6',
-      [0x4E] = '+',
-      [0x4F] = '1',
-      [0x50] = '2',
-      [0x51] = '3',
-      [0x52] = '0',
-      [0x53] = '.',
-  };
-  if (sc >= 128)
+  if (sc >= 128) {
     return 0;
-  return shift ? sh[sc] : base[sc];
+  }
+
+  const struct keyboard_layout *layout = active_layout_map();
+  if (!layout) {
+    return 0;
+  }
+
+  const char *mapping = shift ? layout->shift : layout->base;
+  char ch = mapping[sc];
+  if (!ch) {
+    return 0;
+  }
+
+  uint8_t dead_flags = layout->dead[sc];
+  int is_dead = shift ? ((dead_flags & 0x2) != 0) : ((dead_flags & 0x1) != 0);
+  if (is_dead && accent_is_dead(ch)) {
+    g_dead_accent = ch;
+    return 0;
+  }
+
+  if (g_dead_accent) {
+    char accent = g_dead_accent;
+    g_dead_accent = 0;
+    char composed = compose_dead_key(accent, ch);
+    if (composed) {
+      return composed;
+    }
+    g_pending_char = ch;
+    return accent;
+  }
+
+  return ch;
 }
 
 __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
@@ -1338,6 +2307,18 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
 
   kcon_init();
   kinit();
+  keyboard_set_layout_by_name("us");
+  char handoff_layout_name[16];
+  if (handoff_keyboard_layout(handoff_layout_name, sizeof(handoff_layout_name)) ==
+          0 &&
+      keyboard_set_layout_by_name(handoff_layout_name) == 0) {
+    fbcon_print("[kbd] Layout carregado do instalador: ");
+    fbcon_print(handoff_layout_name);
+    fbcon_putc('\n');
+  }
+  if (load_handoff_volume_key() == 0) {
+    fbcon_print("[security] Chave de volume provisionada detectada.\n");
+  }
 
   fbcon_print("[pci] Scanning PCIe bus...\n");
   if (nvme_init() == 0) {
@@ -1394,14 +2375,29 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     fbcon_print("[info] EFI ConIn: indisponivel.\n");
   }
 
-  ps2_flush();
-  int has_ps2 = ps2_controller_detect();
-  fbcon_print(has_ps2 ? "[info] PS/2 detectado.\n"
-                      : "[info] PS/2 nao detectado.\n");
+  int has_ps2 = 0;
+  int has_com1 = 0;
+  if (!has_efi) {
+    ps2_flush();
+    has_ps2 = ps2_controller_detect();
+    fbcon_print(has_ps2 ? "[info] PS/2 detectado.\n"
+                        : "[info] PS/2 nao detectado.\n");
 
-  int has_com1 = com1_detect();
-  fbcon_print(has_com1 ? "[info] COM1 detectado.\n"
-                       : "[info] COM1 nao detectado.\n");
+    has_com1 = com1_detect();
+    fbcon_print(has_com1 ? "[info] COM1 detectado.\n"
+                         : "[info] COM1 nao detectado.\n");
+  } else {
+    /* On UEFI boots (notably Hyper-V Gen2), avoid legacy 0x60/0x64 probes.
+     * If those ports are trapped/absent, probing can trigger a fault and reboot
+     * when no IDT is installed yet. */
+    fbcon_print("[info] PS/2 probe ignorado (EFI ConIn ativo).\n");
+    has_com1 = com1_detect();
+    if (has_com1) {
+      fbcon_print("[info] COM1 detectado (canal auxiliar de automacao).\n");
+    } else {
+      fbcon_print("[info] COM1 nao detectado.\n");
+    }
+  }
 
   int is_hyperv = hyperv_detect();
   int has_hyperv = 0;
@@ -1455,44 +2451,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   }
   (void)has_usb;
 
-  fbcon_print("[net] Inicializando stack TCP/IP...\n");
-  int net_rc = net_stack_init();
-  struct net_stack_status net_status;
-  if (net_stack_status(&net_status) == 0) {
-    if (net_rc == 0 && net_status.nic.found) {
-      fbcon_print("[net] NIC: ");
-      fbcon_print(net_driver_name(net_status.nic.kind));
-      fbcon_print(" @ ");
-      fbcon_print_dec_u32((uint32_t)net_status.nic.bus);
-      fbcon_putc(':');
-      fbcon_print_dec_u32((uint32_t)net_status.nic.device);
-      fbcon_putc('.');
-      fbcon_print_dec_u32((uint32_t)net_status.nic.function);
-      fbcon_print(" vendor=");
-      fbcon_print_hex16(net_status.nic.vendor_id);
-      fbcon_print(" device=");
-      fbcon_print_hex16(net_status.nic.device_id);
-      fbcon_putc('\n');
-    } else {
-      fbcon_print("[net] Nenhuma NIC suportada detectada (e1000/tulip/rtl8139/virtio/hyperv).\n");
-    }
-    fbcon_print("[net] MAC: ");
-    fbcon_print_mac(net_status.ipv4.mac);
-    fbcon_print("  IPv4: ");
-    fbcon_print_ipv4(net_status.ipv4.addr);
-    fbcon_print("  GW: ");
-    fbcon_print_ipv4(net_status.ipv4.gateway);
-    fbcon_putc('\n');
-  } else {
-    fbcon_print("[net] Falha ao consultar estado da stack.\n");
-  }
-
-  if (net_stack_protocol_selftest() == 0) {
-    fbcon_print("[net] Self-test de protocolos (ARP/IPv4/ICMP/UDP/TCP): OK\n");
-  } else {
-    fbcon_print("[net] Self-test de protocolos (ARP/IPv4/ICMP/UDP/TCP): FALHOU\n");
-  }
-
   g_has_efi_input = has_efi;
   g_efi_system_table = efi_system_table;
   g_has_ps2_input = has_ps2;
@@ -1504,124 +2462,51 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     fbcon_print("\n[erro] Nenhum dispositivo de entrada disponivel.\n");
   }
 
-  /* Prepare filesystem/user database before login authentication. */
-  init_shell_context(NULL);
-  if (!g_shell_initialized) {
-    fbcon_print("[erro] Falha ao preparar runtime do shell.\n");
-    for (;;)
-      cpu_relax();
+  if (!has_efi) {
+    prompt_preboot_keyboard_layout();
   }
 
-  char line[128];
-  char user_input[USER_NAME_MAX];
-  char pass_input[64];
-  struct user_record login_user;
-  int logged_in = 0;
-
-login_prompt:
-  fbcon_print("\n");
-  fbcon_print("========================================\n");
-  fbcon_print("             CapyOS 64-bit             \n");
-  fbcon_print("========================================\n");
-  fbcon_print("\n");
-
-  if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
-    fbcon_print("[!] Sem dispositivo de entrada disponivel.\n\n");
+  /* Bring up networking after bootstrapping filesystem/user runtime. */
+  {
+    struct network_bootstrap_io net_io;
+    net_io.print = fbcon_print;
+    net_io.print_dec_u32 = fbcon_print_dec_u32;
+    net_io.print_hex16 = fbcon_print_hex16;
+    net_io.print_ipv4 = fbcon_print_ipv4;
+    net_io.print_mac = fbcon_print_mac;
+    net_io.putc = fbcon_putc;
+    network_bootstrap_run(&net_io);
   }
 
-  logged_in = 0;
-  user_record_clear(&login_user);
-  for (int attempts = 0; attempts < 3 && !logged_in; attempts++) {
-    fbcon_print("Usuario: ");
-    kernel_readline(user_input, sizeof(user_input), 0);
+  {
+    struct login_runtime_ops login_ops;
+    login_ops.has_any_input = (has_efi || has_ps2 || has_hyperv || has_com1);
+    login_ops.shell_ctx = &g_shell_ctx;
+    login_ops.session_ctx = &g_session_ctx;
+    login_ops.settings = &g_shell_settings;
+    login_ops.prepare_shell_runtime = prepare_shell_runtime;
+    login_ops.init_shell_context_user = init_shell_context;
+    login_ops.dispatch_shell_command = try_shell_command;
+    login_ops.run_shell_alias = run_shell_alias;
+    login_ops.is_equal = streq;
+    login_ops.readline = kernel_readline;
+    login_ops.session_reset = login_session_reset;
+    login_ops.session_set_active = login_session_set_active;
+    login_ops.shell_context_init = login_shell_context_init;
+    login_ops.system_login = login_system_login;
+    login_ops.session_user = login_session_user;
+    login_ops.session_cwd = login_session_cwd;
+    login_ops.shell_context_should_logout = login_shell_context_should_logout;
+    login_ops.print = fbcon_print;
+    login_ops.putc = fbcon_putc;
+    login_ops.clear_view = fbcon_clear_view;
+    login_ops.ui_banner = ui_banner;
+    login_ops.cmd_info = cmd_info;
 
-    fbcon_print("Senha: ");
-    kernel_readline(pass_input, sizeof(pass_input), 1);
-
-    if (userdb_authenticate(user_input, pass_input, &login_user) == 0) {
-      init_shell_context(&login_user);
-      if (!g_shell_initialized) {
-        fbcon_print("[erro] Falha ao inicializar shell.\n");
-        break;
-      }
-      logged_in = 1;
-      fbcon_print("\nBem-vindo, ");
-      fbcon_print(login_user.username);
-      fbcon_print("!\n\n");
-    } else {
-      fbcon_print("\nCredenciais invalidas.\n");
-      if (attempts < 2) {
-        fbcon_print("Tente novamente.\n\n");
-      }
-    }
-
-    for (size_t i = 0; i < sizeof(pass_input); ++i) {
-      pass_input[i] = '\0';
+    if (login_runtime_run(&login_ops) != 0) {
+      kernel_halt_forever();
     }
   }
-
-  if (!logged_in) {
-    fbcon_print("\nMuitas tentativas falhas. Sistema bloqueado.\n");
-    for (;;)
-      cpu_relax();
-  }
-
-  for (;;) {
-    const struct user_record *active_user = session_user(&g_session_ctx);
-    const char *name =
-        (active_user && active_user->username[0]) ? active_user->username
-                                                   : "user";
-    const char *host =
-        g_shell_settings.hostname[0] ? g_shell_settings.hostname : "capy64";
-    const char *cwd = session_cwd(&g_session_ctx);
-
-    fbcon_print(name);
-    fbcon_putc('@');
-    fbcon_print(host);
-    fbcon_putc(':');
-    fbcon_print(cwd);
-    fbcon_print("> ");
-
-    kernel_readline(line, sizeof(line), 0);
-    if (!line[0]) {
-      continue;
-    }
-
-    if (try_shell_command(line)) {
-      if (shell_context_should_logout(&g_shell_ctx)) {
-        session_reset(&g_session_ctx);
-        session_set_active(NULL);
-        fbcon_clear_view();
-        ui_banner();
-        goto login_prompt;
-      }
-      continue;
-    }
-
-    if (streq(line, "help")) {
-      (void)run_shell_alias("help-any");
-      continue;
-    }
-    if (streq(line, "clear")) {
-      (void)run_shell_alias("mess");
-      continue;
-    }
-    if (streq(line, "reboot")) {
-      (void)run_shell_alias("shutdown-reboot");
-      continue;
-    }
-    if (streq(line, "halt")) {
-      (void)run_shell_alias("shutdown-off");
-      continue;
-    }
-    if (streq(line, "info")) {
-      cmd_info();
-      continue;
-    }
-
-    fbcon_print("Comando desconhecido: ");
-    fbcon_print(line);
-    fbcon_print("\nUse 'help-any' para listar comandos.\n");
-  }
+  kernel_halt_forever();
 }
 __asm__(".section .note.GNU-stack,\"\",@progbits");

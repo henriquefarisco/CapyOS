@@ -299,7 +299,13 @@ int noirfs_format(struct block_device *dev,
     if (progress) {
         progress("Criando raiz", 95);
     }
-    buffer_cache_sync(dev);
+    if (buffer_cache_sync(dev) != 0) {
+        /* Firmware BlockIO paths can fail the first write after media-id
+         * renegotiation; retry one full sync pass before failing format. */
+        if (buffer_cache_sync(dev) != 0) {
+            return -17;
+        }
+    }
     if (progress) {
         progress("Concluido", 100);
     }

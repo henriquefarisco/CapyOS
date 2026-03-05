@@ -1,165 +1,154 @@
-﻿# NoirOS System Roadmap
+# CapyOS System Roadmap
 
-This roadmap focuses on the next improvements requested for the platform:
-Noir File System (NFS/NoirFS), end-to-end encryption, performance, security,
-multiuser model, CLI evolution and multithreading.
+This roadmap focuses on the next platform improvements after consolidating the
+single supported execution track: `UEFI/GPT/x86_64`.
 
-Status date: 2026-02-10.
+Status date: 2026-03-05.
 
 ## Guiding principles
 
 1. Preserve bootability and data safety first.
-2. Evolve 64-bit path without regressing the working 32-bit path.
+2. Evolve the x64 path and remove residual legacy debt instead of preserving
+   unsupported 32-bit runtime behavior.
 3. Land changes with measurable acceptance criteria.
 4. Keep host tests and VM smoke tests mandatory for every milestone.
 
-## 1. NFS (Noir File System) roadmap
+## 1. NoirFS roadmap
 
 ### P0 - Reliability and recoverability
 - Add filesystem superblock versioning with compatibility flags.
-- Introduce journal/WAL for metadata operations (create, rename, unlink, chmod).
-- Add `fsck.noirfs` host tool to detect and repair orphaned inodes and bitmap
-  mismatch.
+- Introduce journal/WAL for metadata operations.
+- Add `fsck.noirfs` host tool to detect and repair synthetic corruption.
 - Add mount-time recovery replay after unclean shutdown.
 
 Acceptance targets:
-- Power-loss simulation must recover without metadata corruption.
-- `fsck.noirfs` must repair known synthetic corruption cases.
+- power-loss simulation must recover without metadata corruption
+- `fsck.noirfs` must repair known corruption samples
 
 ### P1 - Scalability and feature growth
-- Replace fixed directory entry model with variable-length names + index support.
-- Introduce extent-based data mapping (reduce fragmentation and metadata overhead).
+- Replace fixed directory entry model with variable-length names + indexing.
+- Introduce extent-based data mapping.
 - Add online free-space accounting and fragmentation stats.
 - Add file quotas by user/group.
 
-Acceptance targets:
-- Create/list/read/write workloads with >100k files in test image.
-- Large file throughput must improve compared to direct+indirect baseline.
-
 ### P2 - Advanced data services
-- Snapshots (read-only first, then writable clones).
+- Snapshots.
 - Copy-on-write for metadata trees.
-- Optional compression policies per directory tree.
+- Optional compression policies.
 
-## 2. End-to-end encryption roadmap
+## 2. Encryption roadmap
 
 ### P0 - Cryptographic hardening
-- Keep AES-XTS for block confidentiality but add integrity path for metadata.
-- Add authenticated metadata blocks (MAC/tag) to detect tampering.
+- Keep AES-XTS for block confidentiality but add integrity protection for
+  metadata.
+- Add authenticated metadata blocks to detect tampering.
 - Implement constant-time compare for password hash verification.
-- Add key version field in on-disk metadata.
+- Add key versioning in on-disk metadata.
 
 ### P1 - Key management and rotation
-- Introduce key hierarchy:
-  - disk master key
-  - filesystem key-encryption keys
-  - per-user wrapped credentials
-- Add secure key rotation without full reformat.
-- Add support for multiple key slots (admin recovery scenario).
+- Introduce key hierarchy and key slots.
+- Add secure rotation without full reformat.
+- Add recovery/admin slot workflow.
 
 ### P2 - Platform trust
-- UEFI measured-boot integration (PCR-style measurements roadmap).
+- UEFI measured-boot integration.
 - Secure Boot signing workflow for `BOOTX64.EFI` and kernel payloads.
 
 ## 3. Performance roadmap
 
 ### P0 - Core path optimization
-- Profile hot paths in VFS/NoirFS and block cache (read/write/open/lookup).
-- Add read-ahead and delayed writeback policy in buffer cache.
+- Profile hot paths in VFS/NoirFS and block cache.
+- Add read-ahead and delayed writeback.
 - Reduce synchronous flush points in metadata-heavy code paths.
 
 ### P1 - Storage and I/O
 - NVMe queue depth tuning and multi-queue support.
-- Batch operations in CLI commands (`clone`, `find`, `hunt-*`).
-- Add filesystem benchmark command set for repeatable measurement.
+- Batch operations in CLI commands.
+- Add filesystem benchmark commands.
 
 ### P2 - CPU and scheduling
 - Introduce cooperative tasks first, then preemptive scheduler.
-- Move expensive maintenance jobs (flush, reclaim, journal replay) to worker
-  threads.
+- Move expensive maintenance jobs to worker threads.
 
 ## 4. Security roadmap
 
 ### P0 - Baseline hardening
-- Strengthen defaults: lockout policy, password minimum policy,
-  configurable KDF iterations.
-- Add audit logging for login failures, privilege changes and file deletions.
-- Normalize privilege checks around one central policy layer.
+- Lockout policy, password minimums and configurable KDF iterations.
+- Audit logging for login failures and privilege changes.
+- Centralize privilege checks.
 
 ### P1 - Access control evolution
-- Expand from basic mode bits to ACL support.
-- Add role policies (admin/operator/user) with command-level restrictions.
-- Add immutable/append-only file flags for critical system paths.
+- ACL support.
+- Role policies with command-level restrictions.
+- Immutable/append-only flags for critical paths.
 
 ### P2 - Defensive engineering
-- Security test suite (parser fuzzing, malformed on-disk metadata, CLI parser
-  fuzz inputs).
+- Security test suite for parsers and on-disk metadata.
 - Build-time hardening profile for release targets.
 
 ## 5. Multiuser roadmap
 
 ### P0 - User model completion
-- Implement user/group management commands (`add-user`, `del-user`,
-  `add-group`, `passwd`, etc.).
-- Ensure per-user home provisioning and ownership on creation.
-- Add password change workflow with verification and history policy.
+- Complete `add-user`, `del-user`, `add-group`, `passwd` workflows.
+- Ensure per-user home provisioning and ownership.
+- Add password change workflow with verification/history policy.
 
 ### P1 - Session isolation
 - Multiple simultaneous sessions with independent TTY contexts.
 - Session expiration and idle timeout.
-- Better ownership propagation for files created via shell commands.
+- Better ownership propagation for new files.
 
 ### P2 - Admin operations
-- Delegated admin policies (limited admin scopes).
+- Delegated admin scopes.
 - Recovery/admin bootstrap flow without weakening normal auth path.
 
 ## 6. CLI roadmap
 
 ### P0 - Usability
-- Command parser improvements for quoting edge cases and escape handling.
-- Persistent command history (per user).
+- Command parser improvements for quoting/escaping.
+- Persistent command history per user.
 - Autocomplete for commands and filesystem paths.
 
 ### P1 - Power features
-- Pipelines and redirection (`|`, `>`, `>>`, `<`).
-- Job control (`run-bg`, `run-fg`, `print-jobs`, `kill-ps`).
-- Native script runner for boot/session automation.
+- Pipelines and redirection.
+- Job control.
+- Script runner for boot/session automation.
 
 ### P2 - Observability
 - Diagnostics commands (`trace-fs`, `trace-io`, `trace-auth`).
 - Structured output mode for host automation.
 
-## 7. Multithreading and scheduler roadmap
+## 7. Scheduler roadmap
 
 ### P0 - Foundations
 - Task struct, run queue and context switch primitives.
-- Kernel timer-driven scheduler tick.
-- Basic synchronization primitives (spinlock, mutex, semaphore).
+- Timer-driven scheduler tick.
+- Basic synchronization primitives.
 
 ### P1 - Concurrency model
-- Separate worker pools for storage, crypto and CLI background jobs.
+- Worker pools for storage, crypto and CLI background jobs.
 - Lock ordering policy and deadlock detection hooks.
 - IRQ-safe queueing for deferred work.
 
 ### P2 - SMP readiness
 - Per-CPU scheduler state.
-- Inter-processor interrupts and core startup flow.
-- NUMA-aware policies (optional phase).
+- IPI and core startup flow.
+- Optional NUMA-aware policies.
 
-## 8. Release plan (proposed)
+## 8. Release plan
 
 ### Milestone R1 - Hardening baseline
-- NFS journal/WAL (metadata)
-- Auth/integrity hardening
-- Improved tests + crash recovery checks
+- NoirFS metadata journal prototype
+- auth/integrity hardening
+- crash recovery checks
 
-### Milestone R2 - 64-bit functional parity
-- NoirFS mount + auth flow in x86_64 runtime
-- Stable keyboard/input stack on Hyper-V/UEFI
-- CLI parity for core command groups
+### Milestone R2 - x64 platform hardening
+- stable storage/auth flow from provisioned disk to login
+- stable keyboard/input stack on Hyper-V/UEFI
+- dedicated smoke for ISO installer path
 
 ### Milestone R3 - Concurrency and advanced CLI
-- Scheduler + worker threads
+- scheduler + worker threads
 - job control and pipelines
 - storage performance uplift
 
@@ -168,10 +157,11 @@ Acceptance targets:
 - signed boot artifacts workflow
 - expanded ACL and auditing
 
-## 9. Suggested immediate backlog (next sprint)
+## 9. Suggested immediate backlog
 
-1. Unify one shared auth+filesystem service layer usable by both kernels.
-2. Finish USB/HID keyboard path in x86_64 and revalidate Hyper-V input fallback.
+1. Remove the remaining hybrid boot dependency and complete native x64 input.
+2. Add dedicated smoke coverage for `ISO -> install -> HDD boot -> login`.
 3. Add NoirFS metadata journal prototype with replay test harness.
 4. Add regression tests for user DB parser/auth edge cases.
-5. Add CI profile that runs BIOS + UEFI smoke boots in VM.
+5. Add CI profile that runs x64 host tests, `make inspect-disk` and HDD boot
+   smoke in VM.
