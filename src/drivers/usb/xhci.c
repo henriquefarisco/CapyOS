@@ -1,4 +1,4 @@
-/* NoirOS USB XHCI Controller Driver Implementation
+/* CAPYOS USB XHCI Controller Driver Implementation
  * Phase 1: Controller detection and initialization
  */
 #include "drivers/usb/xhci.h"

@@ -1,4 +1,4 @@
-/* NoirOS Hyper-V VMBus Interface
+/* CAPYOS Hyper-V VMBus Interface
  * Implements VMBus communication for synthetic devices on Hyper-V
  */
 #ifndef HYPERV_H

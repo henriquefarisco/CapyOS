@@ -1,61 +1,67 @@
 meta:
-  generated: 2025-12-16
+  generated: 2026-03-05
   maintainer: Henrique
-  description: "Canalização oficial de versões do NoirOS segundo o fluxo gitflow"
+  product: CapyOS
+  execution_track: UEFI/GPT/x86_64
+  description: "Canalizacao oficial de versoes do CapyOS na trilha UEFI/GPT x86_64"
 channels:
   alpha:
-    current: 0.7.3-alpha.1
-    extended: 0.7.3-alpha.1+20251216
+    current: 0.8.0-alpha.0
+    extended: 0.8.0-alpha.0+20260305
     stability: experimental
-    summary: "Boot Hyper-V em modo texto/serial, gerador de grub.cfg unificado e detecção ATA mais criteriosa"
+    summary: "Linha oficial x64 com boot por HDD provisionado, volume DATA cifrado e documentacao reorganizada"
     history:
+      - version: 0.8.0-alpha.0
+        date: 2026-03-05
+        commit: 43e97c5
+        changes:
+          - "Consolida o nome CapyOS no manifesto de versao e na documentacao principal."
+          - "Formaliza a trilha oficial UEFI/GPT/x86_64 com boot por HDD provisionado, login persistente e smoke x64."
+          - "Runtime x64 prioriza o handle logico da particao DATA e mantem fallback RAW apenas para erro real de probe."
+          - "Adiciona auditoria de disco provisionado com `make inspect-disk` ao fluxo oficial."
+          - "Reorganiza a documentacao em pastas, com indice central, indice de releases e arquivos historicos separados."
       - version: 0.7.3-alpha.1
         date: 2025-12-16
         commit: hotfix/hyperv-text-console
         changes:
-          - "GRUB forçado a texto + serial por padrão, resolvendo 'no suitable video mode found' em Hyper-V."
-          - "Ferramenta gen_grub_cfg gera arquivos consistentes para ISO e disco, com modo texto e serial."
-          - "Detecção ATA ignora canais vazios/ATAPI antes de IDENTIFY, reduzindo logs de erro."
-          - "Instalador passa a orientar sobre necessidade de bootloader no disco ou uso da ISO para boot."
-          - "Notas Hyper-V incluídas no README; novos testes de host para o gerador de grub.cfg."
+          - "GRUB em modo texto e serial por padrao para Hyper-V e VMs sem VESA."
+          - "Gerador dedicado de grub.cfg para ISO e disco."
+          - "Deteccao ATA mais criteriosa no legado."
+          - "Notas de setup Hyper-V adicionadas ao projeto."
       - version: 0.7.3-alpha.0
         date: 2025-12-15
         commit: 6a9c3c2
         changes:
-          - "Correção do layout BR-ABNT2 (dead keys, tecla /? e keypad decimal), com testes adicionais de scancode."
-          - "Hotkey F1 injeta help-docs no CLI; instalador pergunta layout antes de senhas."
-          - "Comandos shutdown-reboot e shutdown-off com sync de buffers."
-          - "Boot principal exige NoirFS montado de forma cifrada; remove prompt inseguro."
+          - "Layout BR-ABNT2 corrigido com testes adicionais."
+          - "Hotkey F1 para abrir help-docs."
+          - "Comandos shutdown com sincronizacao de buffers."
       - version: 0.7.2-alpha.0
         date: 2025-12-11
         commit: 5f08d60
         changes:
-          - "Kernel principal monta a partição 2 (MBR) com blocos de 4096B e remove qualquer tentativa de formatação interna."
-          - "Instalador NGIS valida tamanho mínimo, tipos de partição e faixa LBA; cria particionamento BOOT/DADOS com padrão seguro (BOOT 32MiB por padrão, disco 128MiB sugerido)."
-          - "Wrapper de offset e parser MBR recusam ranges inválidos, evitando corrupção ao montar a partição 2."
-          - "Pilha do kernel/instalador ampliada para 16 KiB, mitigando overflow em operações de instalação."
-          - "Alvo 'make test' com testes unitários para wrappers de bloco e parsing do MBR (host)."
+          - "Validacao extra de particionamento e wrappers de bloco."
+          - "ISO com kernel para boot auxiliar."
+          - "Comando open para edicao linha-a-linha."
       - version: 0.7.1-alpha.1
         date: 2025-10-10
         commit: f2e06f4
         changes:
-          - "Bloqueia login de usuário quando senha do NoirFS está incorreta (loop de autenticação)"
-          - "Impede reformatar volume existente; formata somente em mídia vazia"
-          - "Fluxo de primeiro uso: criação e confirmação de senha do volume"
-          - "Validação do acesso a /etc/users.db antes do prompt de login (telemetria de saúde)"
+          - "Bloqueio do login quando a senha do volume esta incorreta."
+          - "Prevencao de reformatacao indevida em midia nao vazia."
+          - "Fluxo de primeiro uso orientado para senha do volume."
       - version: 0.7.0-alpha.1
         date: 2024-05-26
         commit: 048b96f
         changes:
-          - "Shell segmentado por categorias com registro dinâmico de comandos"
-          - "Drivers de teclado com layouts desacoplados (US, BR-ABNT2)"
-          - "Reorganização completa das pastas em arquitetura modular"
+          - "CLI modularizada por categorias."
+          - "Reorganizacao inicial da arvore de fontes."
+          - "Layouts de teclado desacoplados."
       - version: 0.6.9-alpha.5
         date: 2024-04-30
-        summary: "Melhorias no sistema de arquivos NoirFS e testes iniciais de sessão"
+        summary: "Melhorias no CAPYFS e testes iniciais de sessao"
       - version: 0.6.4-alpha.2
         date: 2024-03-12
-        summary: "Introdução do NoirCLI com comandos básicos de usuário"
+        summary: "Introducao do CLI com comandos basicos de usuario"
   beta:
     current: 0.6.2-beta.3
     extended: 0.6.2-beta.3+20240401
@@ -63,10 +69,10 @@ channels:
     history:
       - version: 0.6.2-beta.3
         date: 2024-04-01
-        summary: "Melhorias de estabilidade no NoirFS e sincronização de buffers"
+        summary: "Melhorias de estabilidade no CAPYFS e sincronizacao de buffers"
       - version: 0.6.0-beta.1
         date: 2024-02-18
-        summary: "Primeira build beta com suporte a múltiplos usuários"
+        summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
     current: 0.5.4
     extended: 0.5.4+20240110
@@ -77,4 +83,4 @@ channels:
         summary: "Fixes no bootloader e melhorias de console"
       - version: 0.5.0
         date: 2023-12-05
-        summary: "Release inicial estável com shell simples"
+        summary: "Release inicial estavel com shell simples"

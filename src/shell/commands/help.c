@@ -66,7 +66,7 @@ static int cmd_help_any(struct shell_context *ctx, int argc, char **argv)
 static int cmd_help_docs(struct shell_context *ctx, int argc, char **argv)
 {
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: help-docs\nExibe a referencia de comandos documentada em /docs/noiros-cli-reference.txt.\n");
+        shell_print("Uso: help-docs\nExibe a referencia de comandos documentada em /docs/capyos-cli-reference.txt.\n");
         return 0;
     }
     (void)ctx;
@@ -74,8 +74,8 @@ static int cmd_help_docs(struct shell_context *ctx, int argc, char **argv)
 
     char *buffer = NULL;
     size_t len = 0;
-    if (shell_read_file("/docs/noiros-cli-reference.txt", &buffer, &len) != 0) {
-        shell_print("Documentacao nao encontrada em /docs/noiros-cli-reference.txt\n");
+    if (shell_read_file("/docs/capyos-cli-reference.txt", &buffer, &len) != 0) {
+        shell_print("Documentacao nao encontrada em /docs/capyos-cli-reference.txt\n");
         shell_print("Verifique instalacao ou use help-any.\n");
         return 0;
     }

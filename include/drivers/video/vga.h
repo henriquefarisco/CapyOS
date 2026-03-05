@@ -1,5 +1,5 @@
 /* VGA shim for 64-bit kernel.
- * Maps vga_write() to kcon k_puts() for NoirFS/VFS compatibility.
+ * Maps vga_write() to kcon k_puts() for CAPYFS/VFS compatibility.
  * This allows existing FS code to compile without modification.
  */
 #ifndef VGA_H

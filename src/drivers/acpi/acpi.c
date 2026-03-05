@@ -1,5 +1,5 @@
 /**
- * ACPI Driver Implementation for NoirOS
+ * ACPI Driver Implementation for CAPYOS
  * Parses ACPI tables and provides power management functions.
  */
 #include "drivers/acpi/acpi.h"

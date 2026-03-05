@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Create an EFI El Torito boot image containing NoirOS BOOTX64.EFI + kernel.
+Create an EFI El Torito boot image containing CAPYOS BOOTX64.EFI + kernel.
 
 Hyper-V Gen2 expects the UEFI El Torito entry to point to a FAT filesystem image,
 not directly to BOOTX64.EFI.
 
 This script generates a small **FAT16** image (no sudo, no external mkfs needed).
 
-It also embeds a small marker file (`NOIROS.INI`) so BOOTX64.EFI can detect
+It also embeds a small marker file (`CAPYOS.INI`) so BOOTX64.EFI can detect
 that it's running from the installer ISO and enter "installer mode".
 """
 import argparse
@@ -87,7 +87,7 @@ def fat16_write_volume(f, total_sectors, files, *, spc=2, label="EFIBOOT"):
 
     if cluster_count < 4085 or cluster_count >= 65525:
         raise SystemExit(
-            f"[err] FAT16 inválido: clusters={cluster_count}. "
+            f"[err] FAT16 invÃƒÂ¡lido: clusters={cluster_count}. "
             f"Ajuste --size/--spc (ex.: --size 8M --spc 2)."
         )
 
@@ -120,14 +120,14 @@ def fat16_write_volume(f, total_sectors, files, *, spc=2, label="EFIBOOT"):
 
     # allocate files
     bootx64_start, bootx64_chain = alloc(len(files["BOOTX64.EFI"]))
-    kernel_start, kernel_chain = alloc(len(files["NOIROS64.BIN"]))
+    kernel_start, kernel_chain = alloc(len(files["CAPYOS64.BIN"]))
     manifest_data = files.get("MANIFEST.BIN")
     manifest_start = 0
     manifest_chain = []
     if manifest_data is not None:
         manifest_start, manifest_chain = alloc(len(manifest_data))
 
-    marker_data = files.get("NOIROS.INI")
+    marker_data = files.get("CAPYOS.INI")
     marker_start = 0
     marker_chain = []
     if marker_data is not None:
@@ -151,7 +151,7 @@ def fat16_write_volume(f, total_sectors, files, *, spc=2, label="EFIBOOT"):
     root[0:32] = dirent16("EFI", "", 0x10, efi_cl, 0)
     root[32:64] = dirent16("BOOT", "", 0x10, bootdir_cl, 0)
     if marker_data is not None:
-        root[64:96] = dirent16("NOIROS", "INI", 0x20, marker_start, len(marker_data))
+        root[64:96] = dirent16("CAPYOS", "INI", 0x20, marker_start, len(marker_data))
 
     # --- EFI directory
     efi = bytearray(cluster_bytes)
@@ -169,7 +169,7 @@ def fat16_write_volume(f, total_sectors, files, *, spc=2, label="EFIBOOT"):
     bootdir = bytearray(cluster_bytes)
     bootdir[0:32] = dirent16(".", "", 0x10, bootdir_cl, 0)
     bootdir[32:64] = dirent16("..", "", 0x10, 0, 0)
-    bootdir[64:96] = dirent16("NOIROS64", "BIN", 0x20, kernel_start, len(files["NOIROS64.BIN"]))
+    bootdir[64:96] = dirent16("CAPYOS64", "BIN", 0x20, kernel_start, len(files["CAPYOS64.BIN"]))
     if manifest_data is not None:
         bootdir[96:128] = dirent16("MANIFEST", "BIN", 0x20, manifest_start, len(manifest_data))
 
@@ -198,7 +198,7 @@ def fat16_write_volume(f, total_sectors, files, *, spc=2, label="EFIBOOT"):
 
     # --- Write file chains
     write_chain(bootx64_chain, files["BOOTX64.EFI"])
-    write_chain(kernel_chain, files["NOIROS64.BIN"])
+    write_chain(kernel_chain, files["CAPYOS64.BIN"])
     if manifest_data is not None:
         write_chain(manifest_chain, manifest_data)
     if marker_data is not None:
@@ -231,7 +231,7 @@ def main() -> None:
     ap.add_argument("--spc", type=int, default=2, help="Sectors per cluster (FAT16). Default: %(default)s")
     ap.add_argument("--label", default="EFIBOOT", help="Volume label (max 11 chars). Default: %(default)s")
     ap.add_argument("--bootx64", required=True, type=Path, help="Path to BOOTX64.EFI")
-    ap.add_argument("--kernel", required=True, type=Path, help="Path to kernel (noiros64.bin)")
+    ap.add_argument("--kernel", required=True, type=Path, help="Path to kernel (capyos64.bin)")
     ap.add_argument("--manifest", type=Path, help="Optional manifest.bin to place in /boot")
     args = ap.parse_args()
 
@@ -244,8 +244,8 @@ def main() -> None:
 
     files = {
         "BOOTX64.EFI": args.bootx64.read_bytes(),
-        "NOIROS64.BIN": args.kernel.read_bytes(),
-        "NOIROS.INI": b"INSTALLER=1\n",
+        "CAPYOS64.BIN": args.kernel.read_bytes(),
+        "CAPYOS.INI": b"INSTALLER=1\n",
     }
     if args.manifest:
         files["MANIFEST.BIN"] = args.manifest.read_bytes()

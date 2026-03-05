@@ -14,7 +14,7 @@
 
 #include "fs/block.h"
 #include "fs/buffer.h"
-#include "fs/noirfs.h"
+#include "fs/capyfs.h"
 #include "fs/ramdisk.h"
 #include "fs/storage/partition.h"
 #include "fs/vfs.h"
@@ -39,7 +39,7 @@ static const uint8_t g_disk_salt[16] = {0x4e, 0x6f, 0x69, 0x72, 0x4f, 0x53,
                                         0x2d, 0x46, 0x53, 0x2d, 0x53, 0x61,
                                         0x6c, 0x74, 0x21, 0x00};
 static const uint32_t g_kdf_iterations = 16000;
-static const uint32_t NOIRFS_DATA_MIN_SECTORS =
+static const uint32_t CAPYFS_DATA_MIN_SECTORS =
     32768u; // ~16MiB em setores de 512B
 
 static void memzero(void *ptr, size_t len) {
@@ -98,12 +98,12 @@ static size_t utoa10(uint32_t v, char *dst) {
   return n;
 }
 
-static int mount_noirfs_root(struct block_device *crypt_dev) {
-  if (mount_noirfs(crypt_dev, &root_sb) != 0)
+static int mount_capyfs_root(struct block_device *crypt_dev) {
+  if (mount_capyfs(crypt_dev, &root_sb) != 0)
     return -1;
   if (vfs_mount_root(&root_sb) != 0)
     return -1;
-  vga_write("NoirFS montado em / (dados cifrados)\n");
+  vga_write("CAPYFS montado em / (dados cifrados)\n");
   return 0;
 }
 
@@ -121,8 +121,8 @@ static void format_progress(const char *stage, uint32_t percent) {
   vga_write("% ");
   vga_write(stage);
   vga_newline();
-  /* menor spin para evitar longas esperas ocupando CPU e "congelando" a saída
-     VGA em emuladores mantém um pequeno atraso visual entre atualizações de
+  /* menor spin para evitar longas esperas ocupando CPU e "congelando" a saÃƒÆ’Ã‚Â­da
+     VGA em emuladores mantÃƒÆ’Ã‚Â©m um pequeno atraso visual entre atualizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes de
      progresso, sem travar tanto o sistema */
   for (volatile uint32_t spin = 0; spin < 20000; ++spin) {
     __asm__ volatile("");
@@ -132,18 +132,18 @@ static void format_progress(const char *stage, uint32_t percent) {
 }
 
 static int format_and_mount(struct block_device *crypt_dev) {
-  vga_write("NoirFS indisponivel. Iniciando formatacao...\n");
+  vga_write("CAPYFS indisponivel. Iniciando formatacao...\n");
   format_progress_complete = 0;
   int fmt =
-      noirfs_format(crypt_dev, 128, crypt_dev->block_count, format_progress);
+      capyfs_format(crypt_dev, 128, crypt_dev->block_count, format_progress);
   if (!format_progress_complete)
     vga_write("\n");
   if (fmt != 0) {
-    vga_write("Falha ao formatar NoirFS\n");
+    vga_write("Falha ao formatar CAPYFS\n");
     return -1;
   }
-  if (mount_noirfs_root(crypt_dev) != 0) {
-    vga_write("Falha ao montar NoirFS apos formatacao\n");
+  if (mount_capyfs_root(crypt_dev) != 0) {
+    vga_write("Falha ao montar CAPYFS apos formatacao\n");
     return -1;
   }
   return 0;
@@ -359,7 +359,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     goto hang;
   }
 
-  // Particiona (sda1 BOOT, sda2 dados) - SEMPRE cria partições novas
+  // Particiona (sda1 BOOT, sda2 dados) - SEMPRE cria partiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes novas
   struct mbr_partition data_part;
 
   vga_write("Criando tabela de particoes nova (instalacao limpa)...\n");
@@ -404,7 +404,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
   vga_write("[install] Bootloader gravado e particionamento concluido.\n");
 
   /* Validacao basica da particao de dados retornada */
-  if (data_part.sector_count < NOIRFS_DATA_MIN_SECTORS) {
+  if (data_part.sector_count < CAPYFS_DATA_MIN_SECTORS) {
     vga_write("Particao de dados menor que o minimo suportado.\n");
     goto hang;
   }
@@ -415,13 +415,13 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
     vga_write("Falha ao mapear a particao de dados.\n");
     goto hang;
   }
-  struct block_device *chunked = block_chunked_wrap(part, NOIRFS_BLOCK_SIZE);
+  struct block_device *chunked = block_chunked_wrap(part, CAPYFS_BLOCK_SIZE);
   struct block_device *dev4096 = chunked ? chunked : part;
 
   // Criptografia + format/mount
   char pass1[128], pass2[128];
   while (1) {
-    vga_write("Defina a senha do volume cifrado NoirFS.\n");
+    vga_write("Defina a senha do volume cifrado CAPYFS.\n");
     tty_set_prompt("Nova senha: ");
     tty_set_echo_mask('*');
     tty_show_prompt();

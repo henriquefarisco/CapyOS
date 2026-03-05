@@ -1,4 +1,4 @@
-/* NVMe driver header for NoirOS x86_64 kernel.
+/* NVMe driver header for CAPYOS x86_64 kernel.
  * Supports NVMe 1.4 command set subset for disk I/O.
  */
 #ifndef NVME_H

@@ -4,12 +4,18 @@
 #include <stdint.h>
 
 #define BOOT_CONFIG_MAGIC 0xB001CF61
+#define BOOT_CONFIG_VERSION 2
 #define BOOT_CONFIG_LBA 1
 
+#define BOOT_CONFIG_FLAG_HAS_VOLUME_KEY 0x0001u
+
 struct boot_config_sector {
-  uint32_t magic;           // 0xB00TCFG1
+  uint32_t magic;           // BOOT_CONFIG_MAGIC
+  uint16_t version;         // BOOT_CONFIG_VERSION
+  uint16_t flags;           // BOOT_CONFIG_FLAG_*
   char keyboard_layout[16]; // "us", "br-abnt2", etc.
-  uint8_t reserved[492];    // Padding to 512 bytes
+  char volume_key[64];      // Canonical: A-Z0-9, no hyphens
+  uint8_t reserved[424];    // Padding to 512 bytes
 } __attribute__((packed));
 
 #endif

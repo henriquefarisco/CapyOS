@@ -13,7 +13,7 @@
 #include "drivers/video/vga.h"
 #include "fs/block.h"
 #include "fs/buffer.h"
-#include "fs/noirfs.h"
+#include "fs/capyfs.h"
 #include "fs/ramdisk.h"
 #include "fs/storage/partition.h"
 #include "fs/vfs.h"
@@ -36,14 +36,14 @@ static void memzero(void *ptr, size_t len) {
   }
 }
 
-static int mount_noirfs_root(struct block_device *crypt_dev) {
-  if (mount_noirfs(crypt_dev, &root_sb) != 0) {
+static int mount_capyfs_root(struct block_device *crypt_dev) {
+  if (mount_capyfs(crypt_dev, &root_sb) != 0) {
     return -1;
   }
   if (vfs_mount_root(&root_sb) != 0) {
     return -1;
   }
-  vga_write("NoirFS montado em / (dados cifrados)\n");
+  vga_write("CAPYFS montado em / (dados cifrados)\n");
   return 0;
 }
 
@@ -114,7 +114,7 @@ static void kernel_log_process_error(const char *name, const char *reason) {
 static int probe_block_zeroed(struct block_device *dev, uint32_t lba,
                               uint8_t *buf) {
   if (lba >= dev->block_count)
-    return 1; // fora do range: não conclui nada
+    return 1; // fora do range: nÃƒÆ’Ã‚Â£o conclui nada
   size_t bs = dev->block_size;
   // Buffer provided by caller
   int all_zero = 1;
@@ -139,7 +139,7 @@ static int device_is_blank(struct block_device *dev) {
   if (!buf)
     return 0; // Allocation failure, assume not blank to be safe
 
-  // Verifica múltiplos LBAs, incluindo região após o offset de formatação (128)
+  // Verifica mÃƒÆ’Ã‚Âºltiplos LBAs, incluindo regiÃƒÆ’Ã‚Â£o apÃƒÆ’Ã‚Â³s o offset de formataÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o (128)
   uint32_t samples[9];
   size_t n = 0;
   samples[n++] = 0;
@@ -162,16 +162,16 @@ static int device_is_blank(struct block_device *dev) {
   for (size_t i = 0; i < n; ++i) {
     if (!probe_block_zeroed(dev, samples[i], buf)) {
       kfree(buf);
-      return 0; // encontrou dado não-zero
+      return 0; // encontrou dado nÃƒÆ’Ã‚Â£o-zero
     }
   }
   kfree(buf);
   return 1; // todas as amostras zero
 }
 
-// Seleciona o backend correto: lê a MBR no disco cru (512B) e expõe a
-// partição de dados (tipicamente partição 2). Envolve em blocos de 4096B para
-// NoirFS.
+// Seleciona o backend correto: lÃƒÆ’Ã‚Âª a MBR no disco cru (512B) e expÃƒÆ’Ã‚Âµe a
+// partiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o de dados (tipicamente partiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o 2). Envolve em blocos de 4096B para
+// CAPYFS.
 static struct block_device *pick_root_device(struct block_device *raw_ata) {
   if (!raw_ata) {
     vga_write("[boot] ERRO: dispositivo ATA nulo\n");
@@ -189,7 +189,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
     vga_write("[boot] falha ao ler MBR do dispositivo\n");
     // Fallback to whole disk if MBR read fails
     struct block_device *chunked =
-        block_chunked_wrap(raw_ata, NOIRFS_BLOCK_SIZE);
+        block_chunked_wrap(raw_ata, CAPYFS_BLOCK_SIZE);
     return chunked ? chunked : raw_ata;
   }
 
@@ -198,7 +198,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
     vga_write("[boot] MBR sem assinatura valida (esperado 0x55AA)\n");
     vga_write("[boot] tentando usar disco inteiro como volume\n");
     struct block_device *chunked =
-        block_chunked_wrap(raw_ata, NOIRFS_BLOCK_SIZE);
+        block_chunked_wrap(raw_ata, CAPYFS_BLOCK_SIZE);
     return chunked ? chunked : raw_ata;
   }
 
@@ -254,7 +254,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
     slice =
         block_offset_wrap(raw_ata, data_part.lba_start, data_part.sector_count);
     if (slice) {
-      vga_write("[boot] usando particao 2 como volume NoirFS\n");
+      vga_write("[boot] usando particao 2 como volume CAPYFS\n");
     } else {
       vga_write("[boot] falha ao criar wrapper para particao 2\n");
     }
@@ -279,7 +279,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
     slice = raw_ata;
   }
 
-  struct block_device *chunked = block_chunked_wrap(slice, NOIRFS_BLOCK_SIZE);
+  struct block_device *chunked = block_chunked_wrap(slice, CAPYFS_BLOCK_SIZE);
   if (chunked) {
     return chunked;
   }
@@ -287,7 +287,7 @@ static struct block_device *pick_root_device(struct block_device *raw_ata) {
   return slice;
 }
 
-/* format_and_mount removido: formatação agora é tarefa do instalador (NGIS). */
+/* format_and_mount removido: formataÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o agora ÃƒÆ’Ã‚Â© tarefa do instalador (NGIS). */
 
 struct multiboot_info {
   uint32_t flags;
@@ -374,7 +374,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
       }
 
       // Fluxo de volume cifrado existente: obrigatorio autenticar, sem formatar
-      vga_write("Volume cifrado detectado. Informe a senha do NoirFS.\n");
+      vga_write("Volume cifrado detectado. Informe a senha do CAPYFS.\n");
       while (!fs_ready) {
         tty_set_prompt("Senha: ");
         tty_set_echo_mask('*');
@@ -395,7 +395,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
               "Falha ao iniciar camada criptografica (volume inseguro).\n");
           continue;
         }
-        if (mount_noirfs_root(crypt_dev) == 0) {
+        if (mount_capyfs_root(crypt_dev) == 0) {
           fs_ready = 1;
         } else {
           vga_write("Senha incorreta. Tente novamente.\n");
@@ -520,7 +520,7 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
       }
     }
   } else {
-    vga_write("Falha ao localizar ou montar volume NoirFS.\n");
+    vga_write("Falha ao localizar ou montar volume CAPYFS.\n");
     vga_write("Reinicie e inicialize a partir da ISO do instalador para "
               "preparar o disco.\n");
     while (1) {

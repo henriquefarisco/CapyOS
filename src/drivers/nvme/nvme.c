@@ -1,4 +1,4 @@
-/* NVMe driver implementation for NoirOS x86_64.
+/* NVMe driver implementation for CAPYOS x86_64.
  * Minimal implementation supporting single namespace read/write.
  */
 #include "drivers/nvme.h"

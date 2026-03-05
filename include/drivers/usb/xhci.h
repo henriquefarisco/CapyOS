@@ -1,4 +1,4 @@
-/* NoirOS USB XHCI Controller Driver
+/* CAPYOS USB XHCI Controller Driver
  * Implements eXtensible Host Controller Interface for USB 3.0/2.0/1.1
  */
 #ifndef XHCI_H
