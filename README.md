@@ -19,6 +19,23 @@ Nota de compatibilidade de build:
   (por exemplo `CAPYOS64.BIN` na ESP e `CAPYOS.LOG` no diagnostico UEFI), para
   manter compatibilidade com FAT/EFI e com o fluxo de boot atual.
 
+## Licenca, autoria e uso
+
+Este repositorio usa a licenca Open Source `Apache-2.0`.
+
+- texto integral da licenca: `LICENSE`
+- atribuicao oficial e desenvolvedor principal: `NOTICE`
+- politica de branding do projeto: `BRANDING.md`
+- declaracao de uso licito: `LAWFUL_USE.md`
+
+Desenvolvedor principal: `Henrique Schwarz Souza Farisco`.
+
+Observacao importante:
+- para manter o repositorio como Open Source, a licenca nao inclui uma
+  clausula geral de proibicao de uso ilegal
+- essa diretriz aparece como posicionamento do projeto em `LAWFUL_USE.md`,
+  sem alterar os termos da licenca
+
 ## Documentacao
 
 - indice principal: `docs/README.md`
