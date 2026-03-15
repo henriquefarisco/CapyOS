@@ -17,6 +17,7 @@ else
   OBJCOPY64 := $(CROSS64)-objcopy
 endif
 CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -fpie -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -Iinclude -I$(BUILD_GEN)
+DEPFLAGS64 := -MMD -MP
 LDFLAGS64 := -nostdlib
 
 # Toolchain EFI (gnu-efi)
@@ -84,8 +85,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/filesystem_content.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_manage.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_search.o
+CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
+UEFI_LOADER_DEP = $(BUILD)/boot/uefi_loader.d
 
 all: all64
 
@@ -101,11 +104,11 @@ $(BUILD)/boot:
 
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
-	$(CC64) $(CFLAGS64) -c $< -o $@
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
 
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
 	@mkdir -p $(dir $@)
-	$(CC64) $(CFLAGS64) -c $< -o $@
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
 
 $(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
 	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(CAPYOS64_OBJS)
@@ -116,7 +119,7 @@ all64: $(CAPYOS_ELF64)
 # UEFI loader (stub) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compila sÃƒÆ’Ã‚Â³ quando iso-uefi for chamado e gnu-efi estiver presente
 $(UEFI_LOADER_ELF): $(EFI_LOADER_SRC) | $(BUILD) $(BUILD)/boot
 	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
-	$(EFI_CC) $(EFI_CFLAGS) -c $(EFI_LOADER_SRC) -o $(BUILD)/boot/uefi_loader.o
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(UEFI_LOADER_DEP) -c $(EFI_LOADER_SRC) -o $(BUILD)/boot/uefi_loader.o
 	$(EFI_LD) $(EFI_LDFLAGS) -o $(UEFI_LOADER_ELF) $(BUILD)/boot/uefi_loader.o $(EFI_LIBS)
 
 $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
@@ -244,4 +247,6 @@ $(TEST_BIN): $(TEST_SRCS) | $(BUILD)
 clean:
 	rm -rf $(BUILD)
 .PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test smoke-x64-cli smoke-x64-cli-nvme smoke-x64-iso inspect-disk
+
+-include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEP)
 

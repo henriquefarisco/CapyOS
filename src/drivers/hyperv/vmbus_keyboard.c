@@ -350,6 +350,14 @@ static uint32_t g_msg_conn_id =
     VMBUS_MESSAGE_CONNECTION_ID; /* Connection ID for messages */
 static struct vmbus_keyboard g_kbd = {0};
 
+static void vmbus_reset_connection_state(void) {
+  g_vmbus_connected = 0;
+  g_msg_conn_id = VMBUS_MESSAGE_CONNECTION_ID;
+  g_kbd.child_relid = 0;
+  g_kbd.connection_id = 0;
+  g_kbd.is_dedicated_interrupt = 0;
+}
+
 /* ============================================================================
  * Hypercall Interface
  * ============================================================================
@@ -628,25 +636,11 @@ static int hv_wait_message(void *buf, uint32_t maxlen, int timeout_loops) {
   if (!g_simp_page || !buf)
     return -1;
 
-  /* Debug: print SIMP page address */
-  fbcon_print("[vmbus] wait_msg: SIMP=");
-  fbcon_print_hex((uint64_t)(uintptr_t)g_simp_page);
-  fbcon_print(" loops=");
-  fbcon_print_hex(timeout_loops);
-  fbcon_print("\n");
-
   /* Compiler barrier only - mfence can cause faults in early boot */
   __asm__ volatile("" ::: "memory");
 
   /* SIMP has 16 message slots, each 256 bytes */
   for (int i = 0; i < timeout_loops; i++) {
-    /* Print progress every 10000 iterations */
-    if (i == 0 || i == 100 || i == 1000 || i == 10000) {
-      fbcon_print("[vmbus] loop i=");
-      fbcon_print_hex(i);
-      fbcon_print("\n");
-    }
-
     for (int slot = 0; slot < 16; slot++) {
       volatile struct hv_message *msg =
           (volatile struct hv_message *)(g_simp_page + slot * 256);
@@ -667,8 +661,6 @@ static int hv_wait_message(void *buf, uint32_t maxlen, int timeout_loops) {
         /* Clear message (acknowledge) */
         msg->type = 0;
         __asm__ volatile("" ::: "memory");
-
-        fbcon_print("[vmbus] msg received!\n");
         return (int)len;
       }
     }
@@ -678,7 +670,9 @@ static int hv_wait_message(void *buf, uint32_t maxlen, int timeout_loops) {
       cpu_relax();
   }
 
-  fbcon_print("[vmbus] loop done, no msg\n");
+  fbcon_print("[vmbus] wait_msg timeout loops=");
+  fbcon_print_hex(timeout_loops);
+  fbcon_print("\n");
   return 0; /* Timeout */
 }
 
@@ -798,6 +792,9 @@ static int vmbus_init_synic(void) {
 int vmbus_init(void) {
   if (!hyperv_detect())
     return -1;
+  if (g_vmbus_initialized) {
+    return 0;
+  }
 
   if (hyperv_init_hypercall() != 0) {
     fbcon_print("[vmbus] Falha no hypercall.\n");
@@ -836,6 +833,11 @@ static int vmbus_negotiate_version(void) {
   };
   int num_versions = sizeof(versions) / sizeof(versions[0]);
   int ret;
+
+  if (g_vmbus_connected) {
+    return 0;
+  }
+  vmbus_reset_connection_state();
 
   for (int v = 0; v < num_versions; v++) {
     uint32_t version = versions[v];
@@ -915,6 +917,13 @@ static int vmbus_request_offers(void) {
   int found_kbd = 0;
   int ret;
 
+  if (g_kbd.child_relid != 0 && g_kbd.connection_id != 0) {
+    return 0;
+  }
+  g_kbd.child_relid = 0;
+  g_kbd.connection_id = 0;
+  g_kbd.is_dedicated_interrupt = 0;
+
   req.msgtype = CHANNELMSG_REQUESTOFFERS;
 
   fbcon_print("[vmbus] REQUEST_OFFERS...\n");
@@ -977,6 +986,8 @@ static void vmbus_keyboard_reset_buffers(struct vmbus_keyboard *kbd) {
   kbd->recv_ring_size = 0;
   kbd->send_ring = NULL;
   kbd->recv_ring = NULL;
+  kbd->open_id = 0;
+  kbd->gpadl_handle = 0;
   kbd->protocol_accepted = 0;
   kbd->connected = 0;
   kbd->initialized = 0;
@@ -1233,13 +1244,17 @@ int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
   uint8_t packet[128];
 
   if (!kbd || !kbd->initialized || !kbd->connected) {
-    return 0;
+    return -1;
   }
 
   for (;;) {
     uint32_t packet_len = 0;
     int ret = vmbus_read_raw_packet(kbd, packet, sizeof(packet), &packet_len);
-    if (ret <= 0) {
+    if (ret < 0) {
+      vmbus_keyboard_reset_buffers(kbd);
+      return -1;
+    }
+    if (ret == 0) {
       return 0;
     }
     ret = vmbus_keyboard_process_packet(kbd, packet, packet_len, scancode,
@@ -1248,7 +1263,8 @@ int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
       return 1;
     }
     if (ret < 0) {
-      return 0;
+      vmbus_keyboard_reset_buffers(kbd);
+      return -1;
     }
   }
 }
@@ -1265,25 +1281,30 @@ struct vmbus_keyboard *vmbus_get_keyboard(void) {
 int hyperv_keyboard_init(void) {
   if (!hyperv_detect())
     return -1;
+  if (g_kbd.initialized && g_kbd.connected) {
+    return 0;
+  }
 
   fbcon_print("[vmbus] === Driver VMBus Hyper-V ===\n");
 
-  if (vmbus_init() != 0) {
+  if (!g_vmbus_initialized && vmbus_init() != 0) {
     fbcon_print("[vmbus] Falha na inicializacao.\n");
     return -2;
   }
 
-  if (vmbus_negotiate_version() != 0) {
+  if (!g_vmbus_connected && vmbus_negotiate_version() != 0) {
     fbcon_print("[vmbus] Falha na negociacao de versao.\n");
     return -3;
   }
 
-  if (vmbus_request_offers() != 0) {
+  if ((g_kbd.child_relid == 0 || g_kbd.connection_id == 0) &&
+      vmbus_request_offers() != 0) {
     fbcon_print("[vmbus] Teclado nao encontrado.\n");
     return -4;
   }
 
   if (vmbus_keyboard_init(&g_kbd) != 0) {
+    fbcon_print("[vmbus] Falha ao preparar canal do teclado.\n");
     return -5;
   }
 

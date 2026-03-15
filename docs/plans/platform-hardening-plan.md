@@ -92,7 +92,8 @@ runtime nativo).
 - deixar `EFI ConIn` apenas como fallback temporario e opcional
 - remover a necessidade de manter Boot Services por causa do teclado
 
-Status: iniciado neste branch com politica explicita de backends, probe PS/2
+Status: concluido nesta branch para a trilha `Hyper-V Gen2`, com politica
+explicita de backends, probe PS/2
 tambem em boot hibrido, separacao entre backend detectado e backend funcional
 e aposentadoria controlada do fallback EFI apos confirmacao de input nativo.
 Nesta fatia, o teclado VMBus ganhou abertura minima de canal, negociacao de
@@ -100,7 +101,27 @@ protocolo 1.0 e polling por ring buffer. Em `Hyper-V Gen2`, a subida
 automatica do `VMBus keyboard` foi recolocada em modo conservador durante o
 boot hibrido: o kernel adia esse backend enquanto `Boot Services` ainda estao
 ativos e mantem `EFI ConIn` como caminho principal ate o runtime nativo dessa
-trilha ficar estavel.
+trilha ficar estavel. Na branch de continuidade deste trabalho, o runtime de
+input passou a carregar estado explicito de `Hyper-V deferred` e um hook de
+promocao controlada para o `VMBus keyboard` em ambiente ja nativo. Esse hook
+ja foi ligado no pos-`ExitBootServices` e no loop de input quando o runtime ja
+esta fora do firmware, preparando o proximo corte sem reabrir a regressao do
+boot hibrido. O driver `VMBus` tambem recebeu endurecimento de reentrada para
+inicializacao tardia e a promocao controlada passou a usar retentativa
+limitada com backoff curto no runtime nativo, evitando que uma primeira falha
+precoce apos `ExitBootServices` congele permanentemente o backend em
+`deferred-failed`. Nesta continuacao, o runtime tambem passou a detectar
+degradacao do canal `VMBus` durante o polling de teclado, recuar para o
+fallback nativo remanescente e reagendar a promocao controlada sem exigir
+reboot. A preferencia entre `PS/2` e `VMBus` tambem ficou mais precisa: a
+primeira promocao continua conservadora quando `PS/2` ainda esta presente, mas
+depois que o `VMBus` confirma input real no runtime ele passa a ser lembrado
+como backend preferido nas promocoes seguintes. Nesta rodada, o runtime tambem
+ganhou contadores de eventos/promocoes/degradacoes do `VMBus` e estacionamento
+automatico do `PS/2` quando o backend sintetico ja acumulou janela minima de
+estabilidade, com reativacao automatica do fallback se o canal degradar. A
+validacao manual final em `Hyper-V Gen2` fechou essa frente com boot, format,
+login e teclado funcionando corretamente.
 
 ### Marco D - Saida do modo hibrido
 - fechar `ExitBootServices` no fluxo principal
