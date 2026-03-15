@@ -95,9 +95,10 @@ make smoke-x64-iso
 - Esse smoke cobre instalacao, reboot pelo disco, login e persistencia.
 - A trilha `Hyper-V Gen2` ja foi validada nesta etapa; a checagem segue manual
   quando o objetivo for repetir a certificacao nesse backend.
-- Durante o boot hibrido em `Hyper-V Gen2`, o kernel agora mantem `EFI ConIn`
-  como caminho principal e adia a subida automatica do `VMBus keyboard` ate o
-  runtime nativo dessa trilha ficar estavel.
+- Durante o boot hibrido em `Hyper-V Gen2`, o kernel mantem `EFI ConIn` como
+  caminho principal. Depois do `ExitBootServices`, o `VMBus keyboard` e
+  promovido de forma controlada, com retentativa limitada e fallback
+  automatico se o canal degradar.
 
 ## 5) Troubleshooting rapido
 
@@ -109,7 +110,7 @@ make smoke-x64-iso
 - Teclado inconsistente:
   - confirmar que a VM esta usando Geracao 2
   - validar layout no sistema com `config-keyboard show`
-  - lembrar que o runtime ainda depende de `EFI ConIn` em parte dos cenarios
+  - usar `info` para inspecionar `input.mode`, `ps2=` e `hyperv=`
 
 ## 6) Escopo descontinuado
 

@@ -7,10 +7,14 @@
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/input/keyboard_layout.h"
+#include "drivers/timer/pit.h"
 #include "drivers/usb/xhci.h"
 
-extern int hyperv_keyboard_init(void);
-extern struct vmbus_keyboard *vmbus_get_keyboard(void);
+enum {
+  HYPERV_PROMOTION_RETRY_DELAY_TICKS = 100u,
+  HYPERV_PROMOTION_MAX_ATTEMPTS = 3u,
+  HYPERV_STABLE_PARK_PS2_EVENTS = 8u,
+};
 
 static int g_has_com1 = -1;
 static int g_has_ps2_active = -1;
@@ -378,6 +382,7 @@ void x64_input_probe_backends(struct x64_input_probe_result *result,
   result->has_ps2 = 0;
   result->has_hyperv = 0;
   result->has_hyperv_ready = 0;
+  result->has_hyperv_deferred = 0;
   result->has_com1 = 0;
   result->has_usb = 0;
   result->efi_system_table = 0;
@@ -415,6 +420,7 @@ void x64_input_probe_backends(struct x64_input_probe_result *result,
   if (is_hyperv) {
     runtime_print(print, "[hyperv] Hyper-V detectado.\n");
     if (boot_services_active) {
+      result->has_hyperv_deferred = 1;
       runtime_print(
           print,
           "[hyperv] VMBus keyboard adiado em runtime hibrido; mantendo EFI/PS/2 ate o caminho nativo ficar estavel.\n");
@@ -481,6 +487,26 @@ static void append_backend(struct x64_input_runtime *runtime,
   runtime->order[runtime->order_count++] = backend;
 }
 
+static void prepend_backend(struct x64_input_runtime *runtime,
+                            enum x64_input_backend backend) {
+  if (!runtime || runtime->order_count >= 4u ||
+      backend == X64_INPUT_BACKEND_NONE) {
+    return;
+  }
+
+  for (uint32_t i = 0; i < runtime->order_count; ++i) {
+    if (runtime->order[i] == backend) {
+      return;
+    }
+  }
+
+  for (uint32_t i = runtime->order_count; i > 0u; --i) {
+    runtime->order[i] = runtime->order[i - 1u];
+  }
+  runtime->order[0] = backend;
+  runtime->order_count++;
+}
+
 static void refresh_primary_backend(struct x64_input_runtime *runtime) {
   if (!runtime) {
     return;
@@ -519,6 +545,42 @@ static void retire_firmware_backend(struct x64_input_runtime *runtime) {
   remove_backend(runtime, X64_INPUT_BACKEND_EFI);
 }
 
+static void park_ps2_fallback(struct x64_input_runtime *runtime) {
+  if (!runtime || !runtime->has_ps2 || runtime->ps2_fallback_parked) {
+    return;
+  }
+  remove_backend(runtime, X64_INPUT_BACKEND_PS2);
+  runtime->ps2_fallback_parked = 1;
+}
+
+static void restore_ps2_fallback(struct x64_input_runtime *runtime) {
+  if (!runtime || !runtime->has_ps2 || !runtime->ps2_fallback_parked) {
+    return;
+  }
+  prepend_backend(runtime, X64_INPUT_BACKEND_PS2);
+  refresh_primary_backend(runtime);
+  runtime->ps2_fallback_parked = 0;
+}
+
+static void defer_hyperv_backend(struct x64_input_runtime *runtime) {
+  if (!runtime || !runtime->has_hyperv) {
+    return;
+  }
+
+  runtime->has_hyperv = 0;
+  runtime->hyperv_confirmed = 0;
+  runtime->hyperv_deferred = 1;
+  runtime->hyperv_promotion_attempted = 1;
+  runtime->hyperv_promotion_attempts = 0u;
+  runtime->hyperv_degrade_count++;
+  runtime->hyperv_retry_tick = pit_ticks() + HYPERV_PROMOTION_RETRY_DELAY_TICKS;
+  if (!runtime->has_ps2) {
+    runtime->native_confirmed = 0;
+  }
+  remove_backend(runtime, X64_INPUT_BACKEND_HYPERV);
+  restore_ps2_fallback(runtime);
+}
+
 void x64_input_runtime_init(struct x64_input_runtime *runtime,
                             const struct x64_input_config *config) {
   if (!runtime || !config) {
@@ -535,6 +597,15 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->has_efi = config->has_efi ? 1 : 0;
   runtime->has_ps2 = config->has_ps2 ? 1 : 0;
   runtime->has_hyperv = config->has_hyperv ? 1 : 0;
+  runtime->hyperv_confirmed = 0;
+  runtime->hyperv_preferred = 0;
+  runtime->ps2_fallback_parked = 0;
+  runtime->hyperv_deferred = config->hyperv_deferred ? 1 : 0;
+  runtime->hyperv_promotion_attempted = config->has_hyperv ? 1 : 0;
+  runtime->hyperv_promotion_attempts = 0u;
+  runtime->hyperv_event_count = 0u;
+  runtime->hyperv_degrade_count = 0u;
+  runtime->hyperv_retry_tick = 0u;
   runtime->has_com1 = config->has_com1 ? 1 : 0;
   runtime->efi_system_table = config->efi_system_table;
   runtime->native_confirmed = 0;
@@ -637,10 +708,19 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
     case X64_INPUT_BACKEND_HYPERV:
       if (runtime->has_hyperv) {
         struct vmbus_keyboard *hvkbd = vmbus_get_keyboard();
-        if (hvkbd) {
+        if (!hvkbd) {
+          defer_hyperv_backend(runtime);
+          return 0;
+        }
+        {
           uint8_t hv_sc = 0;
           int hv_break = 0;
-          if (vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break)) {
+          int hv_ret = vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break);
+          if (hv_ret < 0) {
+            defer_hyperv_backend(runtime);
+            return 0;
+          }
+          if (hv_ret > 0) {
             if (hv_sc == 0x2A || hv_sc == 0x36) {
               runtime->shift_active = hv_break ? 0 : 1;
               break;
@@ -719,6 +799,17 @@ void x64_input_note_backend(struct x64_input_runtime *runtime,
       retire_firmware_backend(runtime);
     }
   }
+  if (backend == X64_INPUT_BACKEND_HYPERV) {
+    runtime->hyperv_confirmed = 1;
+    runtime->hyperv_preferred = 1;
+    runtime->hyperv_event_count++;
+    prepend_backend(runtime, X64_INPUT_BACKEND_HYPERV);
+    refresh_primary_backend(runtime);
+    if (runtime->has_ps2 &&
+        runtime->hyperv_event_count >= HYPERV_STABLE_PARK_PS2_EVENTS) {
+      park_ps2_fallback(runtime);
+    }
+  }
 }
 
 const char *x64_input_backend_name(enum x64_input_backend backend) {
@@ -773,6 +864,23 @@ const char *x64_input_firmware_state(const struct x64_input_runtime *runtime) {
   return runtime->firmware_retired ? "retired" : "off";
 }
 
+const char *x64_input_hyperv_state(const struct x64_input_runtime *runtime) {
+  if (!runtime) {
+    return "unknown";
+  }
+  if (runtime->has_hyperv) {
+    return runtime->hyperv_confirmed ? "active" : "ready";
+  }
+  if (runtime->hyperv_deferred) {
+    if (runtime->hyperv_promotion_attempts >= HYPERV_PROMOTION_MAX_ATTEMPTS) {
+      return "deferred-failed";
+    }
+    return runtime->hyperv_promotion_attempted ? "deferred-retrying"
+                                               : "deferred";
+  }
+  return "off";
+}
+
 int x64_input_has_firmware_backend(const struct x64_input_runtime *runtime) {
   return runtime && runtime->has_efi;
 }
@@ -786,4 +894,61 @@ int x64_input_has_native_backend(const struct x64_input_runtime *runtime) {
 
 void x64_input_retire_firmware_backend(struct x64_input_runtime *runtime) {
   retire_firmware_backend(runtime);
+}
+
+int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
+                                       int boot_services_active,
+                                       void (*print)(const char *)) {
+  uint64_t now = 0;
+
+  if (!runtime || !runtime->hyperv_deferred || runtime->has_hyperv ||
+      boot_services_active) {
+    return 0;
+  }
+  if (runtime->hyperv_promotion_attempts >= HYPERV_PROMOTION_MAX_ATTEMPTS) {
+    return -1;
+  }
+  now = pit_ticks();
+  if (runtime->hyperv_promotion_attempted && now < runtime->hyperv_retry_tick) {
+    return 0;
+  }
+
+  runtime->hyperv_promotion_attempted = 1;
+  runtime->hyperv_promotion_attempts++;
+  if (runtime->hyperv_promotion_attempts == 1u) {
+    runtime_print(
+        print,
+        "[hyperv] Runtime nativo detectado; tentando promocao controlada do VMBus keyboard.\n");
+  } else {
+    runtime_print(print,
+                  "[hyperv] Retentando promocao controlada do VMBus keyboard.\n");
+  }
+
+  if (hyperv_keyboard_init() != 0) {
+    if (runtime->hyperv_promotion_attempts >= HYPERV_PROMOTION_MAX_ATTEMPTS) {
+      runtime_print(
+          print,
+          "[hyperv] Promocao do VMBus keyboard falhou no limite de tentativas; mantendo backend atual.\n");
+    } else {
+      runtime->hyperv_retry_tick = now + HYPERV_PROMOTION_RETRY_DELAY_TICKS;
+      runtime_print(
+          print,
+          "[hyperv] Promocao do VMBus keyboard falhou; reagendando tentativa em runtime nativo.\n");
+    }
+    return -1;
+  }
+
+  runtime->has_hyperv = 1;
+  runtime->hyperv_confirmed = 0;
+  runtime->hyperv_deferred = 0;
+  runtime->hyperv_retry_tick = 0u;
+  runtime->prefer_native = 1;
+  if (!runtime->has_ps2 || runtime->hyperv_preferred) {
+    prepend_backend(runtime, X64_INPUT_BACKEND_HYPERV);
+  } else {
+    append_backend(runtime, X64_INPUT_BACKEND_HYPERV);
+  }
+  refresh_primary_backend(runtime);
+  runtime_print(print, "[hyperv] Teclado VMBus promovido em runtime nativo.\n");
+  return 1;
 }
