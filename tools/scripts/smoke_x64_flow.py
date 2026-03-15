@@ -49,6 +49,39 @@ def wait_for_vm_exit(session: SmokeSession, timeout: float) -> None:
     raise TimeoutError("timeout waiting VM process to exit")
 
 
+def complete_iso_install(
+    session: SmokeSession,
+    timeout: float,
+    keyboard_layout: str,
+) -> None:
+    mk = session.marker()
+    session.wait_for("Pressione 'I' para iniciar", timeout=timeout * 4, start_at=mk)
+    session.send_text("I", newline=False)
+
+    mk = session.marker()
+    session.wait_for("Layout preferido [1]:", timeout=timeout, start_at=mk)
+    if keyboard_layout == "br-abnt2":
+        session.send_line("2")
+    else:
+        session.send_line("")
+
+    mk = session.marker()
+    session.wait_for("Pressione ENTER para continuar...", timeout=timeout, start_at=mk)
+    session.send_line("")
+
+    mk = session.marker()
+    session.wait_for("Confirmar instalacao? [S/n]:", timeout=timeout, start_at=mk)
+    session.send_line("")
+
+    mk = session.marker()
+    session.wait_for(
+        "Instalacao concluida. Reiniciando...",
+        timeout=timeout * 8,
+        start_at=mk,
+    )
+    wait_for_vm_exit(session, timeout=timeout * 2)
+
+
 def trigger_reboot(session: SmokeSession, timeout: float) -> bool:
     shutdown_attempts = (
         ("shutdown-off", "Desligando..."),
@@ -89,8 +122,9 @@ def maybe_run_first_boot_setup(
     keyboard_layout: str,
 ) -> None:
     mk = session.marker()
+    layout_prompts = ["Layout do teclado [us]:", "Escolha layout [us]:"]
     found = session.wait_for_any(
-        ["Layout do teclado [us]:", "Usuario:"],
+        layout_prompts + ["Usuario:"],
         timeout=timeout * 4,
         start_at=mk,
     )
@@ -102,7 +136,12 @@ def maybe_run_first_boot_setup(
     wait_and_send(session, "Hostname [capyos-node]:", "smoke-node", timeout)
     wait_and_send(session, "Tema [capyos]:", "capyos", timeout)
     wait_and_send(session, "Ativar splash animado? [S/n]:", "n", timeout)
-    wait_and_send(session, "Usuario administrador [admin]:", user, timeout)
+    wait_and_send(
+        session,
+        "Usuario administrador [admin]:",
+        "" if user == "admin" else user,
+        timeout,
+    )
     while True:
         wait_and_send(session, "Defina a senha para o usuario", password, timeout)
         wait_and_send(session, "Confirme a senha:", password, timeout)

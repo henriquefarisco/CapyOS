@@ -7,6 +7,7 @@
 #define EFIAPI __attribute__((ms_abi))
 
 typedef uint64_t EFI_STATUS_K;
+typedef void *EFI_HANDLE_K;
 
 typedef struct {
   uint16_t ScanCode;
@@ -20,6 +21,45 @@ typedef struct EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
       struct EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This, EFI_INPUT_KEY *Key);
   void *WaitForKey;
 } EFI_SIMPLE_TEXT_INPUT_PROTOCOL;
+
+typedef EFI_STATUS_K(EFIAPI *efi_get_memory_map_fn)(
+    uint64_t *MemoryMapSize, void *MemoryMap, uint64_t *MapKey,
+    uint64_t *DescriptorSize, uint32_t *DescriptorVersion);
+typedef EFI_STATUS_K(EFIAPI *efi_exit_boot_services_fn)(EFI_HANDLE_K ImageHandle,
+                                                        uint64_t MapKey);
+
+typedef struct {
+  uint8_t Hdr[24];
+  void *RaiseTPL;
+  void *RestoreTPL;
+  void *AllocatePages;
+  void *FreePages;
+  efi_get_memory_map_fn GetMemoryMap;
+  void *AllocatePool;
+  void *FreePool;
+  void *CreateEvent;
+  void *SetTimer;
+  void *WaitForEvent;
+  void *SignalEvent;
+  void *CloseEvent;
+  void *CheckEvent;
+  void *InstallProtocolInterface;
+  void *ReinstallProtocolInterface;
+  void *UninstallProtocolInterface;
+  void *HandleProtocol;
+  void *Reserved;
+  void *RegisterProtocolNotify;
+  void *LocateHandle;
+  void *LocateDevicePath;
+  void *InstallConfigurationTable;
+  void *LoadImage;
+  void *StartImage;
+  void *Exit;
+  void *UnloadImage;
+  efi_exit_boot_services_fn ExitBootServices;
+  void *GetNextMonotonicCount;
+  void *Stall;
+} EFI_BOOT_SERVICES_K;
 
 /* EFI_SYSTEM_TABLE layout per UEFI 2.x spec:
  * Offset 0:  EFI_TABLE_HEADER Hdr (24 bytes)
@@ -36,10 +76,19 @@ typedef struct {
   uint32_t _pad1;
   uint64_t ConsoleInHandle;
   EFI_SIMPLE_TEXT_INPUT_PROTOCOL *ConIn;
+  uint64_t ConsoleOutHandle;
+  uint64_t ConOut;
+  uint64_t StandardErrorHandle;
+  uint64_t StdErr;
+  uint64_t RuntimeServices;
+  EFI_BOOT_SERVICES_K *BootServices;
 } EFI_SYSTEM_TABLE_K;
 
 /* EFI_NOT_READY = EFIERR(6) = 0x8000000000000006 on 64-bit */
 #define EFI_ERROR_BIT_K (1ULL << 63)
+#define EFI_SUCCESS_K 0ULL
+#define EFI_INVALID_PARAMETER_K (EFI_ERROR_BIT_K | 2ULL)
+#define EFI_BUFFER_TOO_SMALL_K (EFI_ERROR_BIT_K | 5ULL)
 
 /* Kernel wrapper for EFI input - returns 1 if key available, 0 otherwise */
 static inline int efi_poll_char(uint64_t system_table_addr, char *out_char) {

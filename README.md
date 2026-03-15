@@ -155,9 +155,10 @@ Impacto pratico:
 
 ## Lacunas importantes
 
-- o caminho de instalacao via ISO UEFI ainda precisa de matriz de validacao dedicada; o smoke oficial atual cobre provisionamento GPT direto + boot por HDD.
+- o caminho oficial via ISO UEFI agora tem smoke dedicado de instalacao, reboot, login e persistencia, e ja foi validado em `Hyper-V Gen2`; cobertura mais ampla de hardware real fica como hardening futuro, nao como bloqueio desta implantacao.
 - driver USB HID completo (enumeracao + input) ainda nao finalizado.
 - caminho VMBus keyboard continua experimental e depende de hardening.
+- no `Hyper-V Gen2`, a inicializacao automatica do `VMBus keyboard` fica adiada durante o boot hibrido para evitar regressao de estabilidade; o caminho atual permanece em `EFI ConIn` nesse cenario.
 - netvsc (adaptador sintetico Hyper-V) ainda nao esta pronto; usar legado para validacao de rede no Hyper-V.
 - driver `tulip-2114x` precisa de hardening adicional de RX/link para cobertura total de adaptadores genericos.
 - scheduler/multithread ainda nao entrou no kernel runtime.
@@ -192,22 +193,25 @@ make iso-uefi
 make test
 ```
 
-### Smoke automatizado x64 (QEMU + UEFI)
+### Smoke automatizado x64 (UEFI local)
 
-O repositorio inclui um smoke test de login + CLI para o kernel x64:
+O repositorio inclui dois smokes automatizados para os artefatos oficiais UEFI:
 
 ```bash
 make smoke-x64-cli
+make smoke-x64-iso
 ```
 
-Ele valida, em fluxo automatizado:
+Eles validam, em fluxo automatizado:
 - boot pelo HDD provisionado
+- instalacao pela ISO oficial, reboot pelo HDD, login e persistencia
 - login no boot 1
 - comandos `help-any -help`, `mk-dir`, `go`, `mk-file`, `open`, `print-file`, `find`, `list`
 - reboot, login no boot 2 e persistencia do arquivo criado
 
-Script base:
+Scripts base:
 - `tools/scripts/smoke_x64_cli.py`
+- `tools/scripts/smoke_x64_iso_install.py`
 
 ### Auditoria de disco provisionado
 
@@ -220,12 +224,13 @@ make inspect-disk IMG=build/disk-gpt.img
 ## Validacao recomendada apos mudancas
 
 1. Build 64-bit e ISO UEFI.
-2. Boot em VM UEFI (QEMU/Hyper-V Gen2) e validar:
+2. Rodar `make smoke-x64-iso` para validar o artefato oficial de instalacao.
+3. Boot em VM UEFI/Hyper-V Gen2 e validar:
 - login
 - comandos `list/go/mk-dir/mk-file/open/find`
 - logout (`bye`)
 - aliases (`help`, `clear`, `reboot`, `halt`)
-3. Auditar a imagem GPT/ESP/BOOT e validar boot por HDD provisionado.
+4. Auditar a imagem GPT/ESP/BOOT e validar boot por HDD provisionado.
 
 ## Roadmap tecnico (macro)
 

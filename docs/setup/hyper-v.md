@@ -75,7 +75,7 @@ make smoke-x64-cli
 
 ## 4) Uso da ISO
 
-Uso recomendado apenas para instalacao/provisionamento inicial:
+Este e o artefato oficial para distribuicao e instalacao inicial:
 
 ```bash
 cd /mnt/d/Projetos/CapyOS
@@ -85,8 +85,19 @@ make iso-uefi
 - Anexe `build/CapyOS-Installer-UEFI.iso` como DVD SCSI na VM Gen2.
   Esse e o nome oficial atual do artefato ISO UEFI.
 - A ISO UEFI usa El Torito apontando para `EFI/BOOT/efiboot.img`.
-- O instalador por ISO ainda nao possui smoke ponta a ponta dedicado; o fluxo
-  oficialmente validado hoje continua sendo `provision_gpt.py` + boot por HDD.
+- O repositorio agora inclui smoke ponta a ponta da ISO oficial:
+
+```bash
+cd /mnt/d/Projetos/CapyOS
+make smoke-x64-iso
+```
+
+- Esse smoke cobre instalacao, reboot pelo disco, login e persistencia.
+- A trilha `Hyper-V Gen2` ja foi validada nesta etapa; a checagem segue manual
+  quando o objetivo for repetir a certificacao nesse backend.
+- Durante o boot hibrido em `Hyper-V Gen2`, o kernel agora mantem `EFI ConIn`
+  como caminho principal e adia a subida automatica do `VMBus keyboard` ate o
+  runtime nativo dessa trilha ficar estavel.
 
 ## 5) Troubleshooting rapido
 
