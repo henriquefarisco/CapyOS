@@ -29,6 +29,7 @@
 
 /* Class codes */
 #define PCI_CLASS_STORAGE    0x01
+#define PCI_SUBCLASS_SATA    0x06  /* SATA controller */
 #define PCI_SUBCLASS_NVME    0x08  /* NVMe controller */
 
 /* Maximum scan limits */

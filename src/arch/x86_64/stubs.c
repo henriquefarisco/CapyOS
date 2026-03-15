@@ -2,21 +2,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-void gdt_init(void) {}
-void idt_install(void) {}
-void pic_remap(uint8_t a, uint8_t b) {
-  (void)a;
-  (void)b;
-}
-void pic_set_mask(uint8_t a, uint8_t b) {
-  (void)a;
-  (void)b;
-}
-void irq_install_handler(int irq, void (*handler)(void)) {
-  (void)irq;
-  (void)handler;
-}
-
 /* Memory functions for freestanding environment */
 void *memcpy(void *dest, const void *src, size_t n) {
   uint8_t *d = (uint8_t *)dest;
@@ -86,10 +71,6 @@ void vga_write(const char *s) {
 }
 
 void vga_newline(void) { fbcon_putc('\n'); }
-
-/* PIT timer stub */
-static uint32_t g_fake_ticks = 0;
-uint32_t pit_ticks(void) { return g_fake_ticks++; }
 
 /* ACPI stub */
 void acpi_shutdown(void) {

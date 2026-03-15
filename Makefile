@@ -35,8 +35,14 @@ LINKER64_SCRIPT = $(SRC_DIR)/arch/x86_64/linker64.ld
 # Build 64-bit: entry64 + kernel_main64 + drivers + core + fs + shell + security
 CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/entry64.o \
+	$(BUILD)/x86_64/arch/x86_64/interrupts.o \
+	$(BUILD)/x86_64/arch/x86_64/interrupts_asm.o \
+	$(BUILD)/x86_64/arch/x86_64/input_runtime.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
+	$(BUILD)/x86_64/arch/x86_64/platform_timer.o \
+	$(BUILD)/x86_64/arch/x86_64/storage_runtime.o \
 	$(BUILD)/x86_64/arch/x86_64/stubs.o \
+	$(BUILD)/x86_64/arch/x86_64/timebase.o \
 	$(BUILD)/x86_64/arch/x86_64/kmem64.o \
 	$(BUILD)/x86_64/core/kcon.o \
 	$(BUILD)/x86_64/core/login_runtime.o \
@@ -54,6 +60,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/input/keyboard/core.o \
 	$(BUILD)/x86_64/drivers/input/keyboard/layouts/us.o \
 	$(BUILD)/x86_64/drivers/input/keyboard/layouts/br_abnt2.o \
+	$(BUILD)/x86_64/drivers/storage/ahci.o \
 	$(BUILD)/x86_64/drivers/storage/efi_block.o \
 	$(BUILD)/x86_64/drivers/storage/ramdisk.o \
 	$(BUILD)/x86_64/net/stack.o \
@@ -158,7 +165,7 @@ LEGACY_DISABLED_MSG = "[legacy] Caminho BIOS/x86_32 foi removido. Use apenas UEF
 .PHONY: legacy-disabled
 legacy-disabled:
 	@echo $(LEGACY_DISABLED_MSG)
-	@echo "[legacy] Alvos suportados: all64, iso-uefi, disk-gpt, provision-vhd, inspect-disk, smoke-x64-cli, test"
+	@echo "[legacy] Alvos suportados: all64, iso-uefi, disk-gpt, provision-vhd, inspect-disk, smoke-x64-cli, smoke-x64-iso, test"
 	@exit 2
 
 # Ferramentas host para testes auxiliares (mantidas para compatibilidade de testes).
@@ -211,7 +218,15 @@ test: $(TEST_BIN)
 
 smoke-x64-cli: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia)..."
-	python3 tools/scripts/smoke_x64_cli.py
+	python3 tools/scripts/smoke_x64_cli.py $(SMOKE_X64_CLI_ARGS)
+
+smoke-x64-cli-nvme: all64 iso-uefi manifest64
+	@echo "Executando smoke test x64 (first-boot + login + persistencia) com NVMe..."
+	python3 tools/scripts/smoke_x64_cli.py --storage-bus nvme --log build/ci/smoke_x64_cli_nvme.log --disk build/ci/smoke_x64_cli_nvme.img $(SMOKE_X64_CLI_NVME_ARGS)
+
+smoke-x64-iso: all64 iso-uefi manifest64
+	@echo "Executando smoke test da ISO oficial (instalacao + reboot + persistencia)..."
+	python3 tools/scripts/smoke_x64_iso_install.py $(SMOKE_X64_ISO_ARGS)
 
 # Host-side GPT/ESP/BOOT audit for installed disks or disk images.
 # Usage:
@@ -228,5 +243,5 @@ $(TEST_BIN): $(TEST_SRCS) | $(BUILD)
 
 clean:
 	rm -rf $(BUILD)
-.PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test smoke-x64-cli inspect-disk
+.PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test smoke-x64-cli smoke-x64-cli-nvme smoke-x64-iso inspect-disk
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-CAPYOS x64 smoke test for installed-disk flow:
+CAPYOS x64 smoke test for the official ISO install flow:
 
-- provisions GPT disk (ESP/BOOT/DATA) with CAPYCFG volume key
-- boots via QEMU/UEFI
+- boots the release ISO in UEFI mode
+- completes the installer wizard on a blank disk
+- reboots from the installed disk
 - runs first-boot setup when required
 - validates login + core CLI
-- writes a marker file, reboots (fresh VM session), validates persistence
+- writes a marker file, reboots, validates persistence
 """
 
 from __future__ import annotations
@@ -14,10 +15,10 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from smoke_x64_flow import (
+    complete_iso_install,
     login,
     maybe_run_first_boot_setup,
     smoke_first_boot,
@@ -34,13 +35,9 @@ from smoke_x64_session import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="CAPYOS x64 installed-disk smoke test (QEMU/UEFI)"
+        description="CAPYOS x64 ISO install smoke test (QEMU/UEFI)"
     )
-    parser.add_argument(
-        "--iso",
-        default="build/CapyOS-Installer-UEFI.iso",
-        help="Deprecated compatibility flag (unused).",
-    )
+    parser.add_argument("--iso", default="build/CapyOS-Installer-UEFI.iso", help="Official installer ISO path")
     parser.add_argument("--qemu", default="qemu-system-x86_64", help="QEMU binary")
     parser.add_argument("--ovmf", default=None, help="Path to OVMF_CODE.fd")
     parser.add_argument("--memory", type=int, default=1024, help="Guest memory in MB")
@@ -48,38 +45,53 @@ def parse_args() -> argparse.Namespace:
         "--storage-bus",
         choices=("sata", "nvme"),
         default="sata",
-        help="Storage bus used by QEMU for the provisioned disk image",
+        help="Storage bus used by the install target disk",
     )
     parser.add_argument(
-        "--step-timeout", type=float, default=60.0, help="Timeout per interaction step in seconds"
+        "--step-timeout",
+        type=float,
+        default=60.0,
+        help="Timeout per interaction step in seconds",
     )
     parser.add_argument(
         "--build",
         action="store_true",
         help="Run make all64 && make iso-uefi && make manifest64 first",
     )
-    parser.add_argument("--log", default="build/ci/smoke_x64_cli.log", help="Base log file path")
+    parser.add_argument("--log", default="build/ci/smoke_x64_iso_install.log", help="Base log file path")
     parser.add_argument(
         "--disk",
-        default="build/ci/smoke_x64_cli.img",
-        help="Provisioned GPT disk image path",
+        default="build/ci/smoke_x64_iso_install.img",
+        help="Blank install target disk path",
     )
-    parser.add_argument("--disk-size", default="2G", help="Disk size for GPT provisioning")
-    parser.add_argument("--keep-disk", action="store_true", help="Do not delete provisioned disk image")
+    parser.add_argument("--disk-size", default="2G", help="Install target disk size")
+    parser.add_argument("--keep-disk", action="store_true", help="Do not delete the target disk image")
     parser.add_argument("--user", default="admin", help="Admin username for first-boot + login")
     parser.add_argument("--password", default="admin", help="Admin password for first-boot + login")
     parser.add_argument(
         "--keyboard-layout",
         default="us",
-        help="Keyboard layout persisted in CAPYCFG.BIN",
-    )
-    parser.add_argument(
-        "--volume-key",
-        default="CAPYOS-SMOKE-KEY-2026-0001",
-        help="Volume key persisted in CAPYCFG.BIN",
+        choices=("us", "br-abnt2"),
+        help="Keyboard layout selected in the installer and first boot",
     )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
     return parser.parse_args()
+
+
+def parse_size(size: str) -> int:
+    raw = size.strip().upper()
+    mul = 1
+    if raw.endswith("K"):
+        mul = 1024
+        raw = raw[:-1]
+    elif raw.endswith("M"):
+        mul = 1024 * 1024
+        raw = raw[:-1]
+    elif raw.endswith("G"):
+        mul = 1024 * 1024 * 1024
+        raw = raw[:-1]
+    value = int(raw, 10)
+    return value * mul
 
 
 def run_build_if_requested(repo_root: Path, parsed: argparse.Namespace) -> None:
@@ -90,48 +102,59 @@ def run_build_if_requested(repo_root: Path, parsed: argparse.Namespace) -> None:
     run_command(["make", "manifest64"], cwd=repo_root)
 
 
-def validate_artifacts(repo_root: Path) -> tuple[Path, Path, Path]:
-    bootx64 = (repo_root / "build/boot/uefi_loader.efi").resolve()
-    kernel = (repo_root / "build/capyos64.bin").resolve()
-    manifest = (repo_root / "build/manifest.bin").resolve()
-    for p in (bootx64, kernel, manifest):
-        if not p.exists():
-            raise FileNotFoundError(f"required artifact missing: {p}")
-    return bootx64, kernel, manifest
+def validate_artifacts(repo_root: Path, parsed: argparse.Namespace) -> Path:
+    iso_path = (repo_root / parsed.iso).resolve()
+    if not iso_path.exists():
+        raise FileNotFoundError(f"required ISO missing: {iso_path}")
+    return iso_path
 
 
-def provision_disk(
-    repo_root: Path,
-    disk_path: Path,
-    parsed: argparse.Namespace,
-    bootx64: Path,
-    kernel: Path,
-    manifest: Path,
-) -> None:
+def prepare_target_disk(disk_path: Path, disk_size: str) -> None:
     disk_path.parent.mkdir(parents=True, exist_ok=True)
-    run_command(
-        [
-            "python3",
-            "tools/scripts/provision_gpt.py",
-            "--img",
-            str(disk_path),
-            "--size",
-            parsed.disk_size,
-            "--bootx64",
-            str(bootx64),
-            "--kernel",
-            str(kernel),
-            "--manifest",
-            str(manifest),
-            "--keyboard-layout",
-            parsed.keyboard_layout,
-            "--volume-key",
-            parsed.volume_key,
-            "--allow-existing",
-            "--confirm",
-        ],
-        cwd=repo_root,
+    size_bytes = parse_size(disk_size)
+    with disk_path.open("wb") as fp:
+        fp.truncate(size_bytes)
+
+
+def run_installer_boot(
+    qemu_bin: str,
+    ovmf_code: str,
+    ovmf_vars_runtime: Path,
+    iso_path: Path,
+    disk_path: Path,
+    installer_log: Path,
+    installer_debugcon_log: Path,
+    parsed: argparse.Namespace,
+) -> None:
+    print("[info] boot #0: official ISO installer")
+    port = choose_free_port()
+    cmd = make_qemu_cmd(
+        qemu_bin=qemu_bin,
+        ovmf_code=ovmf_code,
+        ovmf_vars_runtime=ovmf_vars_runtime,
+        disk_path=disk_path,
+        serial_port=port,
+        memory_mb=parsed.memory,
+        storage_bus=parsed.storage_bus,
+        debugcon_log=installer_debugcon_log,
+        iso_path=iso_path,
+        boot_from="cdrom",
     )
+    session = SmokeSession(
+        cmd=cmd,
+        serial_port=port,
+        log_path=installer_log,
+        verbose=parsed.verbose,
+    )
+    session.start()
+    try:
+        complete_iso_install(
+            session=session,
+            timeout=parsed.step_timeout,
+            keyboard_layout=parsed.keyboard_layout,
+        )
+    finally:
+        session.stop()
 
 
 def run_boot1(
@@ -144,7 +167,7 @@ def run_boot1(
     parsed: argparse.Namespace,
     marker: str,
 ) -> None:
-    print("[info] boot #1: first-boot setup + login + write marker")
+    print("[info] boot #1: first boot from installed disk")
     port = choose_free_port()
     cmd = make_qemu_cmd(
         qemu_bin=qemu_bin,
@@ -192,7 +215,7 @@ def run_boot2(
     parsed: argparse.Namespace,
     marker: str,
 ) -> None:
-    print("[info] boot #2: login + persistence validation")
+    print("[info] boot #2: persistence validation")
     port = choose_free_port()
     cmd = make_qemu_cmd(
         qemu_bin=qemu_bin,
@@ -243,8 +266,10 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     log_base = (repo_root / parsed.log).resolve()
     disk_path = (repo_root / parsed.disk).resolve()
+    installer_log = log_base.with_name(log_base.stem + ".installer" + log_base.suffix)
     boot1_log = log_base.with_name(log_base.stem + ".boot1" + log_base.suffix)
     boot2_log = log_base.with_name(log_base.stem + ".boot2" + log_base.suffix)
+    installer_debugcon_log = log_base.with_name(log_base.stem + ".installer.debugcon.log")
     boot1_debugcon_log = log_base.with_name(log_base.stem + ".boot1.debugcon.log")
     boot2_debugcon_log = log_base.with_name(log_base.stem + ".boot2.debugcon.log")
     marker = "persist-ok"
@@ -263,13 +288,23 @@ def main() -> int:
     ovmf_vars_runtime: Path | None = None
     try:
         run_build_if_requested(repo_root, parsed)
-        bootx64, kernel, manifest = validate_artifacts(repo_root)
-        provision_disk(repo_root, disk_path, parsed, bootx64, kernel, manifest)
+        iso_path = validate_artifacts(repo_root, parsed)
+        prepare_target_disk(disk_path, parsed.disk_size)
 
         ovmf_vars_runtime = log_base.with_name(log_base.stem + ".OVMF_VARS.runtime.fd")
         ovmf_vars_runtime.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ovmf_vars_template, ovmf_vars_runtime)
 
+        run_installer_boot(
+            qemu_bin=qemu_bin,
+            ovmf_code=ovmf_code,
+            ovmf_vars_runtime=ovmf_vars_runtime,
+            iso_path=iso_path,
+            disk_path=disk_path,
+            installer_log=installer_log,
+            installer_debugcon_log=installer_debugcon_log,
+            parsed=parsed,
+        )
         run_boot1(
             qemu_bin=qemu_bin,
             ovmf_code=ovmf_code,
@@ -291,7 +326,8 @@ def main() -> int:
             marker=marker,
         )
     except Exception as exc:
-        print(f"[err] smoke failed: {exc}", file=sys.stderr)
+        print(f"[err] ISO smoke failed: {exc}", file=sys.stderr)
+        print_log_tail(installer_log)
         print_log_tail(boot1_log)
         print_log_tail(boot2_log)
         return 1
@@ -307,7 +343,7 @@ def main() -> int:
             except Exception:
                 pass
 
-    print("[ok] smoke x64 CLI + persistence passed.")
+    print("[ok] smoke x64 ISO install + persistence passed.")
     return 0
 
 

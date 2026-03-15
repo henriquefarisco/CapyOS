@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "arch/x86_64/input_runtime.h"
+#include "arch/x86_64/interrupts.h"
+#include "arch/x86_64/platform_timer.h"
+#include "arch/x86_64/storage_runtime.h"
+#include "arch/x86_64/timebase.h"
 #include "boot/boot_config.h"
 #include "boot/handoff.h"
 #include "branding/capyos_icon_mask.h"
@@ -57,9 +62,6 @@ static __attribute__((noreturn)) void kernel_halt_forever(void) {
     __asm__ volatile("hlt");
   }
 }
-
-/* PIT timer ticks - from stubs.c */
-extern uint32_t pit_ticks(void);
 
 static int range_ok(uint64_t addr, uint64_t size) {
   if (addr == 0 || size == 0)
@@ -232,6 +234,10 @@ static fbcon_t g_con;
 static const struct boot_handoff *g_h = NULL;
 static int g_serial_mirror = 0;
 static int g_com1_ready = 0;
+static struct x64_input_runtime g_input_runtime;
+static int g_exit_boot_services_attempted = 0;
+static int g_exit_boot_services_done = 0;
+static EFI_STATUS_K g_exit_boot_services_status = EFI_SUCCESS_K;
 
 /* Forward declaration; COM1 implementation is defined later in this file. */
 static void com1_putc(char c);
@@ -588,6 +594,9 @@ static void ui_banner(void) {
   fbcon_putc('\n');
 }
 
+static uint32_t handoff_runtime_flags(void);
+static int handoff_boot_services_active(void);
+
 static void cmd_info(void) {
   fbcon_print("handoff.magic=");
   fbcon_print_hex64(g_h ? (uint64_t)g_h->magic : 0);
@@ -640,6 +649,24 @@ static void cmd_info(void) {
   fbcon_print(" data.count.raw=");
   fbcon_print_hex64(g_h ? g_h->data_lba_count_raw : 0);
   fbcon_putc('\n');
+
+  fbcon_print("runtime.flags=");
+  fbcon_print_hex64(handoff_runtime_flags());
+  fbcon_print(" bootsvc=");
+  fbcon_print_hex64(handoff_boot_services_active() ? 1 : 0);
+  fbcon_print(" gdt.idt=");
+  fbcon_print(x64_platform_tables_status());
+  fbcon_print(" timer=");
+  fbcon_print(x64_platform_timer_status());
+  fbcon_putc('\n');
+
+  fbcon_print("input.mode=");
+  fbcon_print(x64_input_priority_mode(&g_input_runtime));
+  fbcon_print(" primary=");
+  fbcon_print(x64_input_primary_backend_name(&g_input_runtime));
+  fbcon_print(" last=");
+  fbcon_print(x64_input_last_backend_name(&g_input_runtime));
+  fbcon_putc('\n');
 }
 
 /* ============================================================================
@@ -655,8 +682,6 @@ static struct system_settings g_shell_settings;
 static int g_shell_initialized = 0;
 static int g_shell_fs_ready = 0;
 static int g_shell_persistent_storage = 0;
-static struct efi_block_device g_efi_runtime_disk;
-static struct efi_block_device g_efi_runtime_disk_alt;
 static size_t kernel_readline(char *buf, size_t maxlen, int mask);
 static void secure_memzero(void *ptr, size_t len);
 static int append_key_candidate(const char **list, size_t *count, size_t cap,
@@ -770,6 +795,260 @@ static int handoff_keyboard_layout(char *out, size_t out_size) {
   }
   local_copy(out, out_size, g_h->boot_keyboard_layout);
   return 0;
+}
+
+static uint32_t handoff_runtime_flags(void) {
+  return g_h ? g_h->runtime_flags : 0U;
+}
+
+static int handoff_has_runtime_flag(uint32_t flag) {
+  return (handoff_runtime_flags() & flag) != 0U;
+}
+
+static int handoff_uses_legacy_runtime_contract(void) {
+  return g_h && g_h->version < 5;
+}
+
+static int handoff_boot_services_active(void) {
+  if (!g_h || g_h->efi_system_table == 0) {
+    return 0;
+  }
+  if (handoff_has_runtime_flag(BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE)) {
+    return 1;
+  }
+  return handoff_uses_legacy_runtime_contract();
+}
+
+static int handoff_has_firmware_input(void) {
+  if (!g_h || g_h->efi_system_table == 0) {
+    return 0;
+  }
+  if (handoff_has_runtime_flag(BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT)) {
+    return 1;
+  }
+  return handoff_uses_legacy_runtime_contract();
+}
+
+static int handoff_has_firmware_block_io(void) {
+  if (!g_h || g_h->efi_block_io == 0) {
+    return 0;
+  }
+  if (handoff_has_runtime_flag(BOOT_HANDOFF_RUNTIME_FIRMWARE_BLOCK_IO)) {
+    return 1;
+  }
+  return handoff_uses_legacy_runtime_contract();
+}
+
+static int handoff_has_exit_boot_services_contract(void) {
+  return g_h && g_h->version >= 6 && g_h->efi_system_table != 0 &&
+         g_h->efi_image_handle != 0 && g_h->efi_map_key != 0 &&
+         g_h->memmap != 0 && g_h->memmap_size != 0 && g_h->memmap_capacity != 0;
+}
+
+static void print_platform_runtime_mode(void) {
+  uint32_t flags = handoff_runtime_flags();
+  fbcon_print("[boot] Runtime mode: ");
+  if (handoff_has_runtime_flag(BOOT_HANDOFF_RUNTIME_HYBRID_BOOT)) {
+    fbcon_print("hybrid");
+  } else if (handoff_uses_legacy_runtime_contract()) {
+    fbcon_print("legacy-implicit");
+  } else {
+    fbcon_print("native");
+  }
+  fbcon_print(" flags=");
+  fbcon_print_hex64((uint64_t)flags);
+  fbcon_putc('\n');
+  fbcon_print("[boot] Boot services: ");
+  fbcon_print(handoff_boot_services_active() ? "ativos" : "inativos");
+  fbcon_putc('\n');
+  fbcon_print("[boot] Firmware input: ");
+  fbcon_print(handoff_has_firmware_input() ? "ativo" : "inativo");
+  fbcon_print("  Firmware block I/O: ");
+  fbcon_print(handoff_has_firmware_block_io() ? "ativo" : "inativo");
+  fbcon_putc('\n');
+  fbcon_print("[boot] ExitBootServices contract: ");
+  fbcon_print(handoff_has_exit_boot_services_contract() ? "presente" : "ausente");
+  if (handoff_has_exit_boot_services_contract()) {
+    fbcon_print(" image=");
+    fbcon_print_hex64(g_h->efi_image_handle);
+    fbcon_print(" map_key=");
+    fbcon_print_hex64(g_h->efi_map_key);
+  }
+  fbcon_putc('\n');
+}
+
+static void print_platform_tables_status(void) {
+  fbcon_print("[cpu] Native GDT/IDT: ");
+  fbcon_print(x64_platform_tables_status());
+  if (x64_platform_tables_active()) {
+    fbcon_print(" (faults/IRQs basicos armados)");
+  } else {
+    fbcon_print(" (mantendo descritores do firmware)");
+  }
+  fbcon_putc('\n');
+}
+
+static void print_platform_timer_status(void) {
+  fbcon_print("[irq] Timer path: ");
+  fbcon_print(x64_platform_timer_status());
+  fbcon_print(" @ ");
+  fbcon_print_dec_u32(x64_platform_timer_hz());
+  fbcon_print(" Hz");
+  if (x64_platform_timer_active()) {
+    fbcon_print(" (IRQ0 ativo)");
+  } else {
+    fbcon_print(" (fallback monotonic)");
+  }
+  fbcon_putc('\n');
+}
+
+static void print_input_runtime_status(void) {
+  fbcon_print("[input] Mode: ");
+  fbcon_print(x64_input_priority_mode(&g_input_runtime));
+  fbcon_print(" primary=");
+  fbcon_print(x64_input_primary_backend_name(&g_input_runtime));
+  fbcon_print(" last=");
+  fbcon_print(x64_input_last_backend_name(&g_input_runtime));
+  fbcon_print(" native=");
+  fbcon_print(x64_input_has_native_backend(&g_input_runtime) ? "ready" : "no");
+  fbcon_print(" firmware=");
+  fbcon_print(x64_input_firmware_state(&g_input_runtime));
+  fbcon_putc('\n');
+}
+
+static void print_storage_runtime_status(void) {
+  fbcon_print("[storage] Runtime backend: ");
+  fbcon_print(x64_storage_runtime_backend_name());
+  fbcon_print(" data=");
+  fbcon_print(x64_storage_runtime_data_path());
+  fbcon_print(" firmware=");
+  fbcon_print(x64_storage_runtime_uses_firmware() ? "on" : "off");
+  fbcon_print(" native=");
+  fbcon_print(x64_storage_runtime_native_candidate_name());
+  fbcon_print("/");
+  fbcon_print(x64_storage_runtime_native_data_path());
+  fbcon_print(" ready=");
+  fbcon_print(x64_storage_runtime_has_native_candidate() ? "yes" : "no");
+  fbcon_putc('\n');
+}
+
+static void print_active_efi_runtime_trace(void) {
+  const struct efi_block_device *efi_disk = x64_storage_runtime_active_efi();
+
+  fbcon_print(" efi_status=");
+  fbcon_print_hex64(efi_disk ? efi_disk->ctx.last_status : 0);
+  fbcon_print(" efi_code=");
+  fbcon_print_dec_u32(
+      efi_disk ? (uint32_t)(efi_disk->ctx.last_status & 0xFFFFFFFFULL) : 0);
+  fbcon_print(" lba=");
+  fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.last_block_no : 0);
+  fbcon_print(" media=");
+  fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.last_media_id : 0);
+  fbcon_print(" efi_last_err=");
+  fbcon_print_hex64(efi_disk ? efi_disk->ctx.last_error_status : 0);
+  fbcon_print(" err_lba=");
+  fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.last_error_block_no : 0);
+  fbcon_print(" err_media=");
+  fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.last_error_media_id : 0);
+  fbcon_print(" err_count=");
+  fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.error_count : 0);
+}
+
+static void print_timebase_status(void) {
+  uint64_t hz = x64_timebase_hz();
+  uint32_t mhz = (uint32_t)(hz / 1000000ULL);
+  fbcon_print("[time] Source: ");
+  fbcon_print(x64_timebase_source());
+  fbcon_print(" @ ");
+  fbcon_print_dec_u32(mhz);
+  fbcon_print(" MHz\n");
+}
+
+static EFI_STATUS_K kernel_exit_boot_services(void) {
+  EFI_SYSTEM_TABLE_K *st = NULL;
+  EFI_BOOT_SERVICES_K *bs = NULL;
+  uint64_t map_key = 0;
+  uint64_t desc_size = 0;
+  uint32_t desc_ver = 0;
+
+  if (!handoff_has_exit_boot_services_contract()) {
+    return EFI_INVALID_PARAMETER_K;
+  }
+
+  st = (EFI_SYSTEM_TABLE_K *)(uintptr_t)g_h->efi_system_table;
+  bs = st ? st->BootServices : NULL;
+  if (!st || !bs || !bs->GetMemoryMap || !bs->ExitBootServices) {
+    return EFI_INVALID_PARAMETER_K;
+  }
+
+  for (uint32_t attempt = 0; attempt < 4u; ++attempt) {
+    uint64_t map_size = g_h->memmap_capacity;
+    EFI_STATUS_K st_map =
+        bs->GetMemoryMap(&map_size, (void *)(uintptr_t)g_h->memmap, &map_key,
+                         &desc_size, &desc_ver);
+    if (st_map == EFI_BUFFER_TOO_SMALL_K || map_size > g_h->memmap_capacity) {
+      return EFI_BUFFER_TOO_SMALL_K;
+    }
+    if (st_map != EFI_SUCCESS_K) {
+      return st_map;
+    }
+
+    {
+      EFI_STATUS_K st_exit = bs->ExitBootServices(
+          (EFI_HANDLE_K)(uintptr_t)g_h->efi_image_handle, map_key);
+      if (st_exit == EFI_SUCCESS_K) {
+        ((struct boot_handoff *)g_h)->memmap_size = map_size;
+        ((struct boot_handoff *)g_h)->memmap_desc_size = (uint32_t)desc_size;
+        ((struct boot_handoff *)g_h)->memmap_entries =
+            desc_size ? (uint32_t)(map_size / desc_size) : 0;
+        ((struct boot_handoff *)g_h)->efi_map_key = map_key;
+        ((struct boot_handoff *)g_h)->runtime_flags &=
+            ~(BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE |
+              BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT |
+              BOOT_HANDOFF_RUNTIME_FIRMWARE_BLOCK_IO |
+              BOOT_HANDOFF_RUNTIME_HYBRID_BOOT);
+        return EFI_SUCCESS_K;
+      }
+      if (st_exit != EFI_INVALID_PARAMETER_K) {
+        return st_exit;
+      }
+    }
+  }
+
+  return EFI_INVALID_PARAMETER_K;
+}
+
+static void maybe_exit_boot_services_after_native_runtime(void) {
+  if (g_exit_boot_services_done || g_exit_boot_services_attempted) {
+    return;
+  }
+  if (!handoff_boot_services_active() ||
+      !handoff_has_exit_boot_services_contract()) {
+    return;
+  }
+  if (!x64_input_has_native_backend(&g_input_runtime) ||
+      !x64_storage_runtime_has_device() || x64_storage_runtime_uses_firmware()) {
+    return;
+  }
+
+  g_exit_boot_services_attempted = 1;
+  fbcon_print("[boot] Tentando ExitBootServices no kernel...\n");
+  g_exit_boot_services_status = kernel_exit_boot_services();
+  if (g_exit_boot_services_status != EFI_SUCCESS_K) {
+    fbcon_print("[boot] ExitBootServices falhou/adiado. status=");
+    fbcon_print_hex64(g_exit_boot_services_status);
+    fbcon_putc('\n');
+    return;
+  }
+
+  g_exit_boot_services_done = 1;
+  x64_input_retire_firmware_backend(&g_input_runtime);
+  x64_platform_tables_init(1);
+  fbcon_print("[boot] ExitBootServices concluido no kernel.\n");
+  print_platform_runtime_mode();
+  print_platform_tables_status();
+  print_platform_timer_status();
+  print_input_runtime_status();
 }
 
 static void format_volume_key_groups(const char *normalized, char *out,
@@ -1116,23 +1395,7 @@ static int initialize_encrypted_data_volume(struct block_device *data_dev,
       fbcon_print_dec_u32(
           (uint32_t)(buffer_cache_last_error_code() & 0xFFFFFFFF));
     }
-    fbcon_print(" efi_status=");
-    fbcon_print_hex64(g_efi_runtime_disk.ctx.last_status);
-    fbcon_print(" efi_code=");
-    fbcon_print_dec_u32(
-        (uint32_t)(g_efi_runtime_disk.ctx.last_status & 0xFFFFFFFFULL));
-    fbcon_print(" lba=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_block_no);
-    fbcon_print(" media=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_media_id);
-    fbcon_print(" efi_last_err=");
-    fbcon_print_hex64(g_efi_runtime_disk.ctx.last_error_status);
-    fbcon_print(" err_lba=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_error_block_no);
-    fbcon_print(" err_media=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_error_media_id);
-    fbcon_print(" err_count=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.error_count);
+    print_active_efi_runtime_trace();
     fbcon_putc('\n');
     crypt_free(crypt_dev);
     return -1;
@@ -1164,17 +1427,27 @@ static int mount_encrypted_data_volume(struct block_device *data_dev) {
   }
   fbcon_print("[fs] Probing leitura inicial da particao DATA...\n");
   if (block_device_read(data_dev, 0, g_data_io_probe) != 0) {
-    fbcon_print("[fs] ERRO: falha de I/O ao ler DATA (caminho EFI BlockIO).\n");
-    fbcon_print("[fs] EFI ReadBlocks status=");
-    fbcon_print_hex64(g_efi_runtime_disk.ctx.last_status);
-    fbcon_print(" code=");
-    fbcon_print_dec_u32((uint32_t)(g_efi_runtime_disk.ctx.last_status &
-                                   0xFFFFFFFFULL));
-    fbcon_print(" lba=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_block_no);
-    fbcon_print(" media=");
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.last_media_id);
-    fbcon_putc('\n');
+    fbcon_print("[fs] ERRO: falha de I/O ao ler DATA (backend ");
+    fbcon_print(x64_storage_runtime_backend_name());
+    fbcon_print("/");
+    fbcon_print(x64_storage_runtime_data_path());
+    fbcon_print(").\n");
+    if (x64_storage_runtime_uses_firmware()) {
+      fbcon_print("[fs] EFI ReadBlocks status=");
+      {
+        const struct efi_block_device *efi_disk = x64_storage_runtime_active_efi();
+        fbcon_print_hex64(efi_disk ? efi_disk->ctx.last_status : 0);
+        fbcon_print(" code=");
+        fbcon_print_dec_u32(
+            efi_disk ? (uint32_t)(efi_disk->ctx.last_status & 0xFFFFFFFFULL)
+                     : 0);
+        fbcon_print(" lba=");
+        fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.last_block_no : 0);
+        fbcon_print(" media=");
+        fbcon_print_dec_u32(efi_disk ? efi_disk->ctx.last_media_id : 0);
+      }
+      fbcon_putc('\n');
+    }
     fbcon_print("[fs] A chave pode estar correta; acesso ao disco falhou antes da criptografia.\n");
     return -1;
   }
@@ -1299,206 +1572,6 @@ static int mount_encrypted_data_volume(struct block_device *data_dev) {
   return -1;
 }
 
-static int handoff_compute_effective_data_count(uint64_t data_start,
-                                                uint64_t data_count,
-                                                uint64_t disk_last_lba,
-                                                uint64_t *out_effective_count) {
-  if (!out_effective_count) {
-    return -1;
-  }
-  *out_effective_count = 0;
-  if (data_start > 0xFFFFFFFFULL || data_count > 0xFFFFFFFFULL) {
-    return -1;
-  }
-  if (data_start + data_count < data_start) {
-    return -1;
-  }
-  if (data_start > disk_last_lba) {
-    return -1;
-  }
-  uint64_t max_data_count = (disk_last_lba - data_start) + 1ULL;
-  uint64_t effective_data_count = data_count;
-  if (effective_data_count > max_data_count) {
-    effective_data_count = max_data_count;
-  }
-  if (effective_data_count == 0) {
-    return -1;
-  }
-  if (disk_last_lba > 0xFFFFFFFFULL) {
-    return -1;
-  }
-  *out_effective_count = effective_data_count;
-  return 0;
-}
-
-static int probe_blockio_lba0(struct efi_block_device *dev,
-                              uint32_t handoff_media_id, const char *tag) {
-  if (!dev || !dev->ctx.bio || !dev->ctx.bio->read_blocks ||
-      dev->dev.block_size == 0) {
-    return 0;
-  }
-  void *probe_buf = dev->ctx.bounce_aligned ? dev->ctx.bounce_aligned
-                                            : (void *)g_data_io_probe;
-  uint32_t runtime_media_id = handoff_media_id;
-  if (dev->ctx.bio->media && dev->ctx.bio->media->media_id != 0U) {
-    runtime_media_id = dev->ctx.bio->media->media_id;
-  }
-
-  EFI_STATUS_K st_probe = dev->ctx.bio->read_blocks(
-      dev->ctx.bio, handoff_media_id, 0ULL, (uint64_t)dev->dev.block_size,
-      probe_buf);
-  fbcon_print("[fs] Probe ");
-  fbcon_print(tag);
-  fbcon_print(" ReadBlocks(handoff_media) status=");
-  fbcon_print_hex64(st_probe);
-  fbcon_print(" code=");
-  fbcon_print_dec_u32((uint32_t)(st_probe & 0xFFFFFFFFULL));
-  fbcon_print(" media=");
-  fbcon_print_dec_u32(handoff_media_id);
-  fbcon_putc('\n');
-  int ok = ((st_probe & EFI_STATUS_ERROR_BIT_K) == 0);
-
-  if (runtime_media_id != handoff_media_id) {
-    st_probe = dev->ctx.bio->read_blocks(dev->ctx.bio, runtime_media_id, 0ULL,
-                                         (uint64_t)dev->dev.block_size,
-                                         probe_buf);
-    fbcon_print("[fs] Probe ");
-    fbcon_print(tag);
-    fbcon_print(" ReadBlocks(runtime_media) status=");
-    fbcon_print_hex64(st_probe);
-    fbcon_print(" code=");
-    fbcon_print_dec_u32((uint32_t)(st_probe & 0xFFFFFFFFULL));
-    fbcon_print(" media=");
-    fbcon_print_dec_u32(runtime_media_id);
-    fbcon_putc('\n');
-    if ((st_probe & EFI_STATUS_ERROR_BIT_K) == 0) {
-      ok = 1;
-    }
-  }
-  return ok;
-}
-
-static struct block_device *open_handoff_data_device(void) {
-  if (!g_h || g_h->version < 2 || g_h->efi_block_io == 0 ||
-      g_h->data_lba_count == 0) {
-    return NULL;
-  }
-  uint32_t block_size = g_h->efi_block_size ? g_h->efi_block_size : 512;
-  if (block_size == 0) {
-    return NULL;
-  }
-
-  if (g_h->data_lba_start > g_h->efi_disk_last_lba) {
-    fbcon_print(
-        "[fs] ERRO: DATA start LBA fora do disco reportado pelo handoff.\n");
-    return NULL;
-  }
-  uint64_t max_data_count = (g_h->efi_disk_last_lba - g_h->data_lba_start) + 1ULL;
-  if (g_h->data_lba_count > max_data_count) {
-    fbcon_print("[fs] aviso: DATA count do handoff excede o disco; ajustando.\n");
-  }
-  uint64_t effective_data_count = 0;
-  if (handoff_compute_effective_data_count(g_h->data_lba_start, g_h->data_lba_count,
-                                           g_h->efi_disk_last_lba,
-                                           &effective_data_count) != 0) {
-    fbcon_print("[fs] ERRO: parametros DATA invalidos no handoff.\n");
-    return NULL;
-  }
-
-  if (efi_block_device_init(&g_efi_runtime_disk, g_h->efi_block_io,
-                            g_h->efi_media_id, block_size,
-                            g_h->efi_disk_last_lba) != 0) {
-    fbcon_print("[fs] ERRO: falha ao inicializar adaptador EFI BlockIO do handoff.\n");
-    return NULL;
-  }
-  fbcon_print("[fs] EFI BlockIO selecionado ativo: blk=");
-  fbcon_print_dec_u32(g_efi_runtime_disk.dev.block_size);
-  fbcon_print(" align=");
-  fbcon_print_dec_u32(g_efi_runtime_disk.ctx.io_align);
-  fbcon_print(" media(handoff)=");
-  fbcon_print_dec_u32(g_h->efi_media_id);
-  fbcon_print(" media(runtime)=");
-  if (g_efi_runtime_disk.ctx.bio && g_efi_runtime_disk.ctx.bio->media) {
-    fbcon_print_dec_u32(g_efi_runtime_disk.ctx.bio->media->media_id);
-  } else {
-    fbcon_print("0");
-  }
-  fbcon_print(" read=");
-  fbcon_print_hex64(
-      (uint64_t)(uintptr_t)g_efi_runtime_disk.ctx.bio->read_blocks);
-  fbcon_print(" write=");
-  fbcon_print_hex64(
-      (uint64_t)(uintptr_t)g_efi_runtime_disk.ctx.bio->write_blocks);
-  fbcon_putc('\n');
-
-  int selected_probe_ok =
-      probe_blockio_lba0(&g_efi_runtime_disk, g_h->efi_media_id, "selected");
-
-  uint64_t active_data_start = g_h->data_lba_start;
-  uint64_t active_data_count = effective_data_count;
-  int has_raw_fallback =
-      (g_h->version >= 4 && g_h->efi_block_io_raw != 0 &&
-      g_h->data_lba_count_raw != 0 &&
-      (g_h->efi_block_io_raw != g_h->efi_block_io ||
-       g_h->data_lba_start_raw != g_h->data_lba_start ||
-       g_h->data_lba_count_raw != g_h->data_lba_count ||
-       g_h->efi_media_id_raw != g_h->efi_media_id));
-  if (!selected_probe_ok && has_raw_fallback) {
-    if (!selected_probe_ok) {
-      fbcon_print(
-          "[fs] Probe do BlockIO selecionado falhou; tentando fallback RAW.\n");
-    }
-    uint64_t raw_effective_data_count = 0;
-    if (g_h->data_lba_start_raw > g_h->efi_disk_last_lba_raw) {
-      fbcon_print("[fs] aviso: fallback RAW com start LBA fora do disco.\n");
-    } else {
-      uint64_t raw_max_data_count =
-          (g_h->efi_disk_last_lba_raw - g_h->data_lba_start_raw) + 1ULL;
-      if (g_h->data_lba_count_raw > raw_max_data_count) {
-        fbcon_print(
-            "[fs] aviso: DATA count do fallback RAW excede o disco; ajustando.\n");
-      }
-      if (handoff_compute_effective_data_count(
-              g_h->data_lba_start_raw, g_h->data_lba_count_raw,
-              g_h->efi_disk_last_lba_raw, &raw_effective_data_count) == 0 &&
-          efi_block_device_init(&g_efi_runtime_disk_alt, g_h->efi_block_io_raw,
-                                g_h->efi_media_id_raw ? g_h->efi_media_id_raw
-                                                      : g_h->efi_media_id,
-                                block_size, g_h->efi_disk_last_lba_raw) == 0) {
-        fbcon_print("[fs] Tentando fallback RAW do handoff para volume DATA.\n");
-        int raw_probe_ok = probe_blockio_lba0(
-            &g_efi_runtime_disk_alt,
-            g_h->efi_media_id_raw ? g_h->efi_media_id_raw : g_h->efi_media_id,
-            "raw-fallback");
-        if (raw_probe_ok) {
-          g_efi_runtime_disk = g_efi_runtime_disk_alt;
-          g_efi_runtime_disk.dev.ctx = &g_efi_runtime_disk.ctx;
-          active_data_start = g_h->data_lba_start_raw;
-          active_data_count = raw_effective_data_count;
-          fbcon_print("[fs] Fallback RAW ativo para DATA.\n");
-        } else {
-          fbcon_print("[fs] Fallback RAW falhou no probe inicial.\n");
-        }
-      } else {
-        fbcon_print("[fs] aviso: fallback RAW invalido no handoff.\n");
-      }
-    }
-  } else if (selected_probe_ok && has_raw_fallback && g_h->data_lba_start == 0 &&
-             g_h->data_lba_start_raw != 0) {
-    fbcon_print(
-        "[fs] Handle logico DATA validado; fallback RAW mantido apenas para "
-        "erro de probe.\n");
-  }
-
-  struct block_device *slice =
-      block_offset_wrap(&g_efi_runtime_disk.dev, (uint32_t)active_data_start,
-                        (uint32_t)active_data_count);
-  if (!slice) {
-    return NULL;
-  }
-  return block_chunked_wrap(slice, CAPYFS_BLOCK_SIZE);
-}
-
 static int bootstrap_ramdisk_runtime(void) {
   ramdisk_init(512);
   struct block_device *ram = ramdisk_device();
@@ -1569,7 +1642,19 @@ static int shell_bootstrap_filesystem(void) {
 
   buffer_cache_init();
   vfs_init();
-  struct block_device *data_dev = open_handoff_data_device();
+  struct block_device *data_dev = NULL;
+  {
+    struct x64_storage_runtime_io storage_io;
+    storage_io.print = fbcon_print;
+    storage_io.print_hex64 = fbcon_print_hex64;
+    storage_io.print_dec_u32 = fbcon_print_dec_u32;
+    storage_io.putc = fbcon_putc;
+    data_dev =
+        x64_storage_runtime_open_handoff_data_device(g_h, &storage_io,
+                                                     g_data_io_probe);
+  }
+  maybe_exit_boot_services_after_native_runtime();
+  print_storage_runtime_status();
   if (data_dev && mount_encrypted_data_volume(data_dev) == 0) {
     g_shell_persistent_storage = 1;
     if (system_detect_first_boot() != 0) {
@@ -1601,7 +1686,7 @@ static int shell_bootstrap_filesystem(void) {
       fbcon_print("[fs] Valide a chave e inicialize via ISO para recuperacao.\n");
       return -1;
     } else {
-      if (g_h && g_h->version >= 2 && g_h->efi_system_table != 0) {
+      if (g_h && g_h->version >= 2 && handoff_has_firmware_block_io()) {
         fbcon_print("[fs] ERRO: handoff sem volume DATA CAPYFS em boot UEFI.\n");
         fbcon_print("[fs] Bloqueando fallback em RAM para evitar perda de persistencia.\n");
         return -1;
@@ -1751,14 +1836,6 @@ static void com1_init(void) {
   outb(COM1_PORT + 4, 0x0B); /* IRQs enabled, RTS/DSR set */
 }
 
-static int com1_poll_char(char *ch) {
-  if (inb(COM1_PORT + 5) & 0x01) {
-    *ch = (char)inb(COM1_PORT);
-    return 1;
-  }
-  return 0;
-}
-
 static void com1_putc(char c) {
   for (uint32_t spin = 0; spin < 200000; ++spin) {
     if (inb(COM1_PORT + 5) & 0x20) {
@@ -1777,367 +1854,11 @@ static void com1_puts(const char *s) {
   }
 }
 
-/* COM1 loopback self-test: enable loopback mode, send a byte, verify reception.
- * Returns 1 if COM1 is working (connected), 0 otherwise (disconnected/garbage).
- * This avoids polling garbage data on Hyper-V where COM1 may not be configured.
- */
-static int g_has_com1 = -1; /* -1 = not checked, 0 = no, 1 = yes */
-
-static int com1_detect(void) {
-  if (g_has_com1 >= 0)
-    return g_has_com1;
-
-  /* Enable loopback mode (bit 4 of MCR) */
-  outb(COM1_PORT + 4, 0x1E);
-
-  /* Send test byte 0xAE */
-  outb(COM1_PORT, 0xAE);
-
-  /* Wait briefly and check if we receive it back */
-  for (int i = 0; i < 10000; i++) {
-    if (inb(COM1_PORT + 5) & 0x01) {
-      uint8_t received = inb(COM1_PORT);
-      /* Disable loopback, restore normal mode */
-      outb(COM1_PORT + 4, 0x0B);
-      if (received == 0xAE) {
-        g_has_com1 = 1;
-        return 1;
-      }
-      break;
-    }
-    cpu_relax();
-  }
-
-  /* Disable loopback, no working COM1 */
-  outb(COM1_PORT + 4, 0x0B);
-  g_has_com1 = 0;
-  return 0;
-}
-
-static int ps2_poll_scancode(uint8_t *out_sc) {
-  if (!out_sc)
-    return 0;
-  if (inb(0x64) & 0x01) {
-    *out_sc = inb(0x60);
-    return 1;
-  }
-  return 0;
-}
-
-static void ps2_flush(void) {
-  uint8_t d;
-  for (uint32_t i = 0; i < 1024; i++) {
-    if (!ps2_poll_scancode(&d))
-      break;
-  }
-}
-
-/* PS/2 controller detection:
- * Send 0xAA (self-test) command and check for 0x55 response.
- * Returns 1 if PS/2 controller is present, 0 otherwise.
- * Hyper-V Gen2 has no PS/2 controller - this detects that. */
-static int g_has_ps2 = -1; /* -1 = not checked, 0 = no, 1 = yes */
-
-static int ps2_controller_detect(void) {
-  if (g_has_ps2 >= 0)
-    return g_has_ps2;
-
-  /* Wait for input buffer to be ready */
-  for (int i = 0; i < 10000; i++) {
-    if (!(inb(0x64) & 0x02))
-      break;
-    cpu_relax();
-  }
-
-  /* Send self-test command 0xAA */
-  outb(0x64, 0xAA);
-
-  /* Wait for output buffer to have data */
-  for (int i = 0; i < 100000; i++) {
-    if (inb(0x64) & 0x01) {
-      uint8_t response = inb(0x60);
-      if (response == 0x55) {
-        g_has_ps2 = 1;
-        return 1;
-      }
-      /* Got some response but not 0x55 - no PS/2 */
-      break;
-    }
-    cpu_relax();
-  }
-
-  g_has_ps2 = 0;
-  return 0;
-}
-
-/* Global input state for readline */
-static int g_has_ps2_input = 0;
-static int g_has_com1_input = 0;
-static int g_has_efi_input = 0;
-static int g_has_hyperv_input = 0;
-static uint64_t g_efi_system_table = 0;
-static int g_shift = 0;
-static char g_dead_accent = 0;
-static char g_pending_char = 0;
-
-/* VMBus keyboard polling (from vmbus_keyboard.c) */
-extern struct vmbus_keyboard *vmbus_get_keyboard(void);
-extern int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
-                               int *is_break);
-
-/* Forward declaration */
-static char scancode_to_ascii(uint8_t sc, int shift);
-
-static int layout_name_equal(const char *a, const char *b) {
-  if (!a || !b) {
-    return 0;
-  }
-  while (*a && *b) {
-    if (*a++ != *b++) {
-      return 0;
-    }
-  }
-  return *a == *b;
-}
-
-static const struct keyboard_layout *active_layout_map(void) {
-  const char *name = keyboard_current_layout();
-  if (name && layout_name_equal(name, "br-abnt2")) {
-    return &g_keyboard_layout_br_abnt2;
-  }
-  return &g_keyboard_layout_us;
-}
-
-static int accent_is_dead(char ch) {
-  return ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"';
-}
-
-static char compose_dead_key(char accent, char base) {
-  if (accent == '\'') {
-    if (base == 'a')
-      return (char)0xA0;
-    if (base == 'e')
-      return (char)0x82;
-    if (base == 'i')
-      return (char)0xA1;
-    if (base == 'o')
-      return (char)0xA2;
-    if (base == 'u')
-      return (char)0xA3;
-    if (base == 'A')
-      return (char)0xB5;
-    if (base == 'E')
-      return (char)0x90;
-    if (base == 'I')
-      return (char)0xD6;
-    if (base == 'O')
-      return (char)0xE0;
-    if (base == 'U')
-      return (char)0xE9;
-  } else if (accent == '^') {
-    if (base == 'a')
-      return (char)0x83;
-    if (base == 'e')
-      return (char)0x88;
-    if (base == 'i')
-      return (char)0x8C;
-    if (base == 'o')
-      return (char)0x93;
-    if (base == 'u')
-      return (char)0x96;
-  } else if (accent == '~') {
-    if (base == 'a')
-      return (char)0xC6;
-    if (base == 'o')
-      return (char)0xE5;
-    if (base == 'A')
-      return (char)0xC7;
-    if (base == 'O')
-      return (char)0xE4;
-  } else if (accent == '`') {
-    if (base == 'a')
-      return (char)0x85;
-    if (base == 'A')
-      return (char)0xB7;
-  } else if (accent == '"') {
-    if (base == 'u')
-      return (char)0x81;
-    if (base == 'U')
-      return (char)0x9A;
-  }
-  return 0;
-}
-
-static int find_us_scancode_for_char(char ch, uint8_t *out_sc, int *out_shift) {
-  if (!out_sc || !out_shift) {
-    return 0;
-  }
-  for (uint8_t sc = 0; sc < 128; ++sc) {
-    if (g_keyboard_layout_us.base[sc] == ch && ch != 0) {
-      *out_sc = sc;
-      *out_shift = 0;
-      return 1;
-    }
-    if (g_keyboard_layout_us.shift[sc] == ch && ch != 0) {
-      *out_sc = sc;
-      *out_shift = 1;
-      return 1;
-    }
-  }
-  return 0;
-}
-
-static int translate_efi_char_to_active_layout(char in, char *out) {
-  if (!out) {
-    return 0;
-  }
-  const struct keyboard_layout *layout = active_layout_map();
-  if (!layout || layout == &g_keyboard_layout_us) {
-    *out = in;
-    return 1;
-  }
-
-  uint8_t sc = 0;
-  int shift = 0;
-  if (!find_us_scancode_for_char(in, &sc, &shift)) {
-    *out = in;
-    return 1;
-  }
-
-  const char *mapping = shift ? layout->shift : layout->base;
-  char mapped = mapping[sc];
-  if (!mapped) {
-    *out = in;
-    return 1;
-  }
-
-  uint8_t dead_flags = layout->dead[sc];
-  int is_dead = shift ? ((dead_flags & 0x2) != 0) : ((dead_flags & 0x1) != 0);
-  if (is_dead && accent_is_dead(mapped)) {
-    g_dead_accent = mapped;
-    return 0;
-  }
-
-  if (g_dead_accent) {
-    char accent = g_dead_accent;
-    g_dead_accent = 0;
-    char composed = compose_dead_key(accent, mapped);
-    if (composed) {
-      *out = composed;
-      return 1;
-    }
-    g_pending_char = mapped;
-    *out = accent;
-    return 1;
-  }
-
-  *out = mapped;
-  return 1;
-}
-
-/* Polls one translated input character from available backends. */
-static int poll_input_char(char *out_char) {
-  if (!out_char) {
-    return 0;
-  }
-  if (g_pending_char) {
-    *out_char = g_pending_char;
-    g_pending_char = 0;
-    return 1;
-  }
-
-  char c = 0;
-  uint8_t sc = 0;
-
-  /* Prefer firmware keyboard path in UEFI VMs (Hyper-V Gen2/OVMF). */
-  if (g_has_efi_input && efi_poll_char(g_efi_system_table, &c)) {
-    if (c == '\n' || c == '\b' || c == '\t') {
-      *out_char = c;
-      return 1;
-    }
-    return translate_efi_char_to_active_layout(c, out_char);
-  }
-
-  /* PS/2 fallback for legacy keyboards. */
-  if (g_has_ps2_input && ps2_poll_scancode(&sc)) {
-    if (sc == 0x2A || sc == 0x36) {
-      g_shift = 1;
-      return 0;
-    }
-    if (sc == 0xAA || sc == 0xB6) {
-      g_shift = 0;
-      return 0;
-    }
-    if (sc & 0x80) {
-      return 0;
-    }
-    if (sc == 0x1C) {
-      *out_char = '\n';
-      return 1;
-    }
-    if (sc == 0x0E) {
-      *out_char = '\b';
-      return 1;
-    }
-    c = scancode_to_ascii(sc, g_shift);
-    if (c) {
-      *out_char = c;
-      return 1;
-    }
-  }
-
-  /* Hyper-V synthetic keyboard path (kept optional while driver matures). */
-  if (g_has_hyperv_input) {
-    struct vmbus_keyboard *hvkbd = vmbus_get_keyboard();
-    if (hvkbd) {
-      uint8_t hv_sc = 0;
-      int hv_break = 0;
-      if (vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break)) {
-        if (hv_sc == 0x2A || hv_sc == 0x36) {
-          g_shift = hv_break ? 0 : 1;
-          return 0;
-        }
-        if (hv_sc == 0xAA || hv_sc == 0xB6) {
-          g_shift = 0;
-          return 0;
-        }
-        if (hv_break) {
-          return 0;
-        }
-        if (hv_sc == 0x1C) {
-          *out_char = '\n';
-          return 1;
-        }
-        if (hv_sc == 0x0E) {
-          *out_char = '\b';
-          return 1;
-        }
-        c = scancode_to_ascii(hv_sc, g_shift);
-        if (c) {
-          *out_char = c;
-          return 1;
-        }
-      }
-    }
-  }
-
-  /* COM1 remains only as last-resort fallback/debug channel. */
-  if (g_has_com1_input && com1_poll_char(&c)) {
-    if (c == '\r') {
-      c = '\n';
-    }
-    *out_char = c;
-    return 1;
-  }
-
-  return 0;
-}
-
 int kernel_input_getc(char *out_char) {
   if (!out_char)
     return 0;
   for (;;) {
-    if (poll_input_char(out_char)) {
+    if (x64_input_poll_char(&g_input_runtime, out_char)) {
       return 1;
     }
     cpu_relax();
@@ -2227,43 +1948,6 @@ static void prompt_preboot_keyboard_layout(void) {
   (void)keyboard_set_layout_by_name("us");
 }
 
-static char scancode_to_ascii(uint8_t sc, int shift) {
-  if (sc >= 128) {
-    return 0;
-  }
-
-  const struct keyboard_layout *layout = active_layout_map();
-  if (!layout) {
-    return 0;
-  }
-
-  const char *mapping = shift ? layout->shift : layout->base;
-  char ch = mapping[sc];
-  if (!ch) {
-    return 0;
-  }
-
-  uint8_t dead_flags = layout->dead[sc];
-  int is_dead = shift ? ((dead_flags & 0x2) != 0) : ((dead_flags & 0x1) != 0);
-  if (is_dead && accent_is_dead(ch)) {
-    g_dead_accent = ch;
-    return 0;
-  }
-
-  if (g_dead_accent) {
-    char accent = g_dead_accent;
-    g_dead_accent = 0;
-    char composed = compose_dead_key(accent, ch);
-    if (composed) {
-      return composed;
-    }
-    g_pending_char = ch;
-    return accent;
-  }
-
-  return ch;
-}
-
 __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('H');
   dbgcon_putc('O');
@@ -2304,9 +1988,16 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   ui_banner();
   fbcon_print("CapyOS x86_64 kernel (early)\n");
   fbcon_print("Boot OK. Inicializando drivers...\n\n");
+  print_platform_runtime_mode();
+  x64_platform_tables_init(!handoff_boot_services_active());
+  print_platform_tables_status();
 
   kcon_init();
   kinit();
+  x64_timebase_init();
+  print_timebase_status();
+  x64_platform_timer_init(!handoff_boot_services_active());
+  print_platform_timer_status();
   keyboard_set_layout_by_name("us");
   char handoff_layout_name[16];
   if (handoff_keyboard_layout(handoff_layout_name, sizeof(handoff_layout_name)) ==
@@ -2360,109 +2051,37 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   com1_init();
   com1_puts("[COM1] CapyOS 64-bit serial console ready\r\n");
 
-  int has_efi = 0;
-  uint64_t efi_system_table = 0;
-  if (g_h && g_h->efi_system_table) {
-    EFI_SYSTEM_TABLE_K *st =
-        (EFI_SYSTEM_TABLE_K *)(uintptr_t)g_h->efi_system_table;
-    efi_system_table = g_h->efi_system_table;
-    if (st && st->ConIn && st->ConIn->ReadKeyStroke) {
-      has_efi = 1;
-    }
-    fbcon_print("[info] EFI ConIn: ");
-    fbcon_print(has_efi ? "disponivel.\n" : "indisponivel.\n");
-  } else {
-    fbcon_print("[info] EFI ConIn: indisponivel.\n");
-  }
-
-  int has_ps2 = 0;
-  int has_com1 = 0;
-  if (!has_efi) {
-    ps2_flush();
-    has_ps2 = ps2_controller_detect();
-    fbcon_print(has_ps2 ? "[info] PS/2 detectado.\n"
-                        : "[info] PS/2 nao detectado.\n");
-
-    has_com1 = com1_detect();
-    fbcon_print(has_com1 ? "[info] COM1 detectado.\n"
-                         : "[info] COM1 nao detectado.\n");
-  } else {
-    /* On UEFI boots (notably Hyper-V Gen2), avoid legacy 0x60/0x64 probes.
-     * If those ports are trapped/absent, probing can trigger a fault and reboot
-     * when no IDT is installed yet. */
-    fbcon_print("[info] PS/2 probe ignorado (EFI ConIn ativo).\n");
-    has_com1 = com1_detect();
-    if (has_com1) {
-      fbcon_print("[info] COM1 detectado (canal auxiliar de automacao).\n");
-    } else {
-      fbcon_print("[info] COM1 nao detectado.\n");
-    }
-  }
-
   int is_hyperv = hyperv_detect();
-  int has_hyperv = 0;
-  extern int hyperv_keyboard_init(void);
-  if (is_hyperv) {
-    fbcon_print("[hyperv] Hyper-V detectado.\n");
-    if (!has_efi && !has_ps2) {
-      fbcon_print("[hyperv] Tentando teclado VMBus (experimental)...\n");
-      if (hyperv_keyboard_init() == 0) {
-        has_hyperv = 1;
-        fbcon_print("[hyperv] Teclado VMBus ativo.\n");
-      } else {
-        fbcon_print("[hyperv] Falha no VMBus keyboard; usando fallback.\n");
-      }
-    } else {
-      fbcon_print("[hyperv] Entrada por EFI/PS/2 ativa, VMBus opcional.\n");
-    }
-  }
+  struct x64_input_probe_result input_probe;
+  x64_input_probe_backends(&input_probe, handoff_has_firmware_input(),
+                           handoff_boot_services_active(),
+                           g_h->efi_system_table, is_hyperv, fbcon_print);
 
-  /* If no keyboard backend is available, keep COM1 as emergency channel even
-   * when loopback detection fails (common in some VM serial backends). */
-  if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
-    has_com1 = 1;
-    fbcon_print("[info] COM1 habilitado em modo de emergencia.\n");
-  }
+  int has_efi = input_probe.has_efi;
+  int has_ps2 = input_probe.has_ps2;
+  int has_com1 = input_probe.has_com1;
+  int has_hyperv = input_probe.has_hyperv_ready;
 
   g_com1_ready = has_com1 ? 1 : 0;
   g_serial_mirror = has_com1 ? 1 : 0;
 
-  int has_usb = 0;
-  struct xhci_controller xhci = {0};
-  if (!has_ps2 && !has_efi && !has_hyperv && !is_hyperv) {
-    fbcon_print("[usb] Buscando controlador XHCI...\n");
-    if (xhci_find(&xhci) == 0) {
-      fbcon_print("[usb] XHCI encontrado.\n");
-      if (xhci_init(&xhci) == 0) {
-        fbcon_print("[usb] XHCI inicializado.\n");
-        if (xhci_start(&xhci) == 0) {
-          fbcon_print("[usb] XHCI rodando.\n");
-          has_usb = 1;
-          fbcon_print("[usb] Enumeracao HID pendente para teclado.\n");
-        } else {
-          fbcon_print("[usb] Falha ao iniciar XHCI.\n");
-        }
-      } else {
-        fbcon_print("[usb] Falha ao inicializar XHCI.\n");
-      }
-    } else {
-      fbcon_print("[usb] XHCI nao encontrado via PCIe.\n");
-    }
+  {
+    struct x64_input_config input_config;
+    input_config.prefer_native = handoff_boot_services_active() ? 0 : 1;
+    input_config.has_efi = has_efi;
+    input_config.has_ps2 = has_ps2;
+    input_config.has_hyperv = has_hyperv;
+    input_config.has_com1 = has_com1;
+    input_config.efi_system_table = input_probe.efi_system_table;
+    x64_input_runtime_init(&g_input_runtime, &input_config);
   }
-  (void)has_usb;
+  print_input_runtime_status();
 
-  g_has_efi_input = has_efi;
-  g_efi_system_table = efi_system_table;
-  g_has_ps2_input = has_ps2;
-  g_has_hyperv_input = has_hyperv;
-  g_has_com1_input = has_com1;
-  g_shift = 0;
-
-  if (!has_efi && !has_ps2 && !has_hyperv && !has_com1) {
+  if (!x64_input_has_any(&g_input_runtime)) {
     fbcon_print("\n[erro] Nenhum dispositivo de entrada disponivel.\n");
   }
 
-  if (!has_efi) {
+  if (!x64_input_has_firmware_backend(&g_input_runtime)) {
     prompt_preboot_keyboard_layout();
   }
 
@@ -2480,7 +2099,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
 
   {
     struct login_runtime_ops login_ops;
-    login_ops.has_any_input = (has_efi || has_ps2 || has_hyperv || has_com1);
+    login_ops.has_any_input = x64_input_has_any(&g_input_runtime);
     login_ops.shell_ctx = &g_shell_ctx;
     login_ops.session_ctx = &g_session_ctx;
     login_ops.settings = &g_shell_settings;
