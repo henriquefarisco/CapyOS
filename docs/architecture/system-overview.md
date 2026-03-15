@@ -35,8 +35,9 @@ repository. CapyOS now follows a single active execution track focused on
   from disk`.
 - The loader still operates in a hybrid firmware-dependent mode for some input
   scenarios and does not fully finalize `ExitBootServices`.
-- The ISO installer path exists, but it still lacks a dedicated end-to-end
-  smoke that covers install -> reboot from HDD -> login -> persistence.
+- The ISO installer path now has a dedicated end-to-end smoke that covers
+  install -> reboot from HDD -> login -> persistence, and the Gen2 path has
+  already been validated; broader hardware coverage remains future hardening.
 
 ## 3. Disk layout
 
@@ -116,7 +117,8 @@ Current runtime rule:
 
 ## 9. Known architectural gaps
 
-- The ISO installer still needs a dedicated smoke for the real install path.
+- The ISO installer smoke now exists for the real install path; remaining work
+  is broader hardware coverage and continued native-input hardening.
 - USB keyboard path is incomplete (XHCI enumeration/HID missing).
 - Hyper-V synthetic keyboard path still needs stable VMBus flow.
 - The x64 boot path still depends on firmware input in hybrid mode.
@@ -126,6 +128,6 @@ Current runtime rule:
 ## 10. Immediate architecture priorities
 
 1. Remove the remaining hybrid boot dependency and complete native x64 input.
-2. Add install-path smoke coverage for `ISO -> install -> HDD boot -> login`.
+2. Continue broadening hardware coverage for the official `ISO -> install -> HDD boot -> login` path.
 3. Continue removing residual BIOS/x86 legacy code from the repository.
 4. Harden CAPYFS for integrity, recovery and scalability.

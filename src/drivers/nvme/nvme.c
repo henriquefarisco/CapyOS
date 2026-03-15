@@ -29,6 +29,8 @@ static void dbg_hex64(uint64_t v) {
   dbg_hex32((uint32_t)v);
 }
 
+static inline void cpu_relax(void) { __asm__ volatile("pause"); }
+
 /* Memory barrier */
 static inline void mb(void) { __asm__ volatile("mfence" ::: "memory"); }
 
@@ -56,8 +58,11 @@ static inline void mmio_write64(volatile void *addr, uint64_t val) {
 }
 
 /* Simple aligned memory allocation (we'll use a static buffer for now) */
-#define NVME_QUEUE_DEPTH 16
+#define NVME_QUEUE_DEPTH 64
 #define NVME_PAGE_SIZE 4096
+#define NVME_READY_TIMEOUT_SPINS 5000000
+#define NVME_ADMIN_TIMEOUT_SPINS 20000000
+#define NVME_IO_TIMEOUT_SPINS 20000000
 
 /* Static buffers for queues (page-aligned) */
 static struct nvme_sqe g_admin_sq[NVME_QUEUE_DEPTH]
@@ -75,7 +80,7 @@ static int g_nvme_initialized = 0;
 /* Wait for controller ready */
 static int nvme_wait_ready(struct nvme_device *dev, int expected) {
   volatile uint8_t *base = dev->bar;
-  for (int i = 0; i < 1000000; i++) {
+  for (int i = 0; i < NVME_READY_TIMEOUT_SPINS; i++) {
     uint32_t csts = mmio_read32(base + NVME_CSTS);
     if (((csts & NVME_CSTS_RDY) != 0) == expected) {
       return 0;
@@ -84,6 +89,7 @@ static int nvme_wait_ready(struct nvme_device *dev, int expected) {
       dbg_puts("[nvme] controller fatal status\n");
       return -1;
     }
+    cpu_relax();
   }
   dbg_puts("[nvme] timeout waiting for ready\n");
   return -1;
@@ -118,7 +124,7 @@ static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
   nvme_ring_sq_doorbell(dev, 0, dev->admin_sq_tail);
 
   /* Poll for completion */
-  for (int i = 0; i < 1000000; i++) {
+  for (int i = 0; i < NVME_ADMIN_TIMEOUT_SPINS; i++) {
     struct nvme_cqe *entry = &dev->admin_cq[dev->admin_cq_head];
     uint16_t status = entry->status;
     int phase = status & 1;
@@ -144,6 +150,7 @@ static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
       }
       return 0;
     }
+    cpu_relax();
   }
 
   dbg_puts("[nvme] admin cmd timeout\n");
@@ -333,7 +340,7 @@ static int nvme_io_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
 
   nvme_ring_sq_doorbell(dev, 1, dev->io_sq_tail);
 
-  for (int i = 0; i < 1000000; i++) {
+  for (int i = 0; i < NVME_IO_TIMEOUT_SPINS; i++) {
     struct nvme_cqe *entry = &dev->io_cq[dev->io_cq_head];
     uint16_t status = entry->status;
     int phase = status & 1;
@@ -357,6 +364,7 @@ static int nvme_io_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
       }
       return 0;
     }
+    cpu_relax();
   }
 
   dbg_puts("[nvme] I/O cmd timeout\n");
@@ -380,6 +388,9 @@ int nvme_read_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
     cmd.cdw12 = 0; /* NLB = 0 means 1 block */
 
     if (nvme_io_cmd(dev, &cmd, &cqe) != 0) {
+      dbg_puts("[nvme] read failed lba=");
+      dbg_hex64(lba + i);
+      dbg_putc('\n');
       return -1;
     }
 
@@ -406,6 +417,9 @@ int nvme_write_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
     cmd.cdw12 = 0; /* NLB = 0 means 1 block */
 
     if (nvme_io_cmd(dev, &cmd, &cqe) != 0) {
+      dbg_puts("[nvme] write failed lba=");
+      dbg_hex64(lba + i);
+      dbg_putc('\n');
       return -1;
     }
   }

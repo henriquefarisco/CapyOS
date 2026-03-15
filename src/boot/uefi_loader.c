@@ -2899,6 +2899,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->memmap = 0;
   handoff->memmap_desc_size = 0;
   handoff->memmap_entries = 0;
+  handoff->memmap_size = 0;
+  handoff->memmap_capacity = 0;
   handoff->efi_block_io = 0;
   handoff->efi_disk_last_lba = 0;
   handoff->data_lba_start = 0;
@@ -2910,7 +2912,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->data_lba_start_raw = 0;
   handoff->data_lba_count_raw = 0;
   handoff->efi_media_id_raw = 0;
-  handoff->_pad_raw = 0;
+  handoff->runtime_flags = 0;
   handoff->boot_cfg_flags = 0;
   for (UINTN i = 0; i < sizeof(handoff->boot_keyboard_layout); ++i) {
     handoff->boot_keyboard_layout[i] = 0;
@@ -2918,6 +2920,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   for (UINTN i = 0; i < sizeof(handoff->boot_volume_key); ++i) {
     handoff->boot_volume_key[i] = 0;
   }
+  handoff->efi_image_handle = 0;
+  handoff->efi_map_key = 0;
   if (g_runtime_boot_cfg_valid && g_runtime_boot_cfg.magic == BOOT_CONFIG_MAGIC) {
     handoff->boot_cfg_flags = (UINT32)g_runtime_boot_cfg.flags;
     for (UINTN i = 0; i < sizeof(handoff->boot_keyboard_layout) - 1 &&
@@ -3021,8 +3025,18 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->memmap = (UINT64)(UINTN)map;
   handoff->memmap_desc_size = (UINT32)desc_sz;
   handoff->memmap_entries = (UINT32)(map_sz / desc_sz);
+  handoff->memmap_size = (UINT64)map_sz;
+  handoff->memmap_capacity = (UINT64)(pages << 12);
   handoff->efi_system_table = (UINT64)(UINTN)systab;
+  handoff->efi_image_handle = (UINT64)(UINTN)image;
+  handoff->efi_map_key = (UINT64)map_key;
+  handoff->runtime_flags = BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE |
+                           BOOT_HANDOFF_RUNTIME_HYBRID_BOOT;
+  if (systab && systab->ConIn && systab->ConIn->ReadKeyStroke) {
+    handoff->runtime_flags |= BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT;
+  }
   if (!EFI_ERROR(runtime_st) && runtime_disk && runtime_disk->Media) {
+    handoff->runtime_flags |= BOOT_HANDOFF_RUNTIME_FIRMWARE_BLOCK_IO;
     handoff->efi_block_io = (UINT64)(UINTN)runtime_disk;
     handoff->efi_disk_last_lba = (UINT64)runtime_disk->Media->LastBlock;
     handoff->data_lba_start = runtime_data_lba;

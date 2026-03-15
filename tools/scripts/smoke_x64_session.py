@@ -17,6 +17,7 @@ OVMF_CANDIDATES = (
     ("/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd"),
     ("/usr/share/edk2-ovmf/x64/OVMF_CODE.fd", "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd"),
 )
+SERIAL_CHAR_DELAY = 0.002
 
 
 class SmokeSession:
@@ -144,10 +145,18 @@ class SmokeSession:
         return data.decode("latin-1", errors="replace")
 
     def send_line(self, line: str) -> None:
+        self.send_text(line, newline=True)
+
+    def send_text(self, text: str, newline: bool = False) -> None:
         if self.sock is None:
             raise RuntimeError("serial socket is not connected")
-        payload = line.encode("ascii", errors="ignore") + b"\r"
-        self.sock.sendall(payload)
+        payload = text.encode("ascii", errors="ignore")
+        if newline:
+            payload += b"\r"
+        for i, byte in enumerate(payload):
+            self.sock.sendall(bytes([byte]))
+            if i + 1 < len(payload):
+                time.sleep(SERIAL_CHAR_DELAY)
 
     def wait_for(self, pattern: str, timeout: float, start_at: int = 0) -> None:
         deadline = time.monotonic() + timeout
@@ -210,21 +219,23 @@ def make_qemu_cmd(
     disk_path: Path,
     serial_port: int,
     memory_mb: int,
+    storage_bus: str = "sata",
+    debugcon_log: Path | None = None,
+    iso_path: Path | None = None,
+    boot_from: str = "disk",
 ) -> list[str]:
-    return [
+    cmd = [
         qemu_bin,
         "-machine",
         "q35,accel=tcg",
         "-m",
         str(memory_mb),
         "-boot",
-        "c",
+        "d" if boot_from == "cdrom" else "c",
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
         "-drive",
         f"if=pflash,format=raw,file={ovmf_vars_runtime}",
-        "-drive",
-        f"format=raw,file={disk_path}",
         "-serial",
         f"tcp:127.0.0.1:{serial_port},server,nowait",
         "-display",
@@ -233,3 +244,30 @@ def make_qemu_cmd(
         "none",
         "-no-reboot",
     ]
+
+    if debugcon_log is not None:
+        cmd.extend(
+            [
+                "-global",
+                "isa-debugcon.iobase=0xe9",
+                "-debugcon",
+                f"file:{debugcon_log}",
+            ]
+        )
+
+    if storage_bus == "nvme":
+        cmd.extend(
+            [
+                "-drive",
+                f"if=none,id=disk0,format=raw,file={disk_path}",
+                "-device",
+                "nvme,serial=CAPYOSNVME01,drive=disk0",
+            ]
+        )
+    else:
+        cmd.extend(["-drive", f"format=raw,file={disk_path}"])
+
+    if iso_path is not None:
+        cmd.extend(["-drive", f"file={iso_path},media=cdrom,readonly=on"])
+
+    return cmd

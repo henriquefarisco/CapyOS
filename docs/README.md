@@ -19,6 +19,8 @@ Escopo atual:
   - referencia dos comandos do CapyCLI
 - `plans/mvp-implementation-plan.md`
   - plano operacional do ciclo atual
+- `plans/platform-hardening-plan.md`
+  - detalha o fechamento da etapa de hardening da plataforma x64
 - `plans/refactor-plan.md`
   - fechamento da migracao para a trilha unica x64
 - `plans/system-roadmap.md`
