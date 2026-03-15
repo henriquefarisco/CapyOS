@@ -7,3 +7,4 @@ QEMU.sh
 scripts.py
 __pycache__/
 *.pyc
+.codex/

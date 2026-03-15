@@ -596,6 +596,7 @@ static void ui_banner(void) {
 
 static uint32_t handoff_runtime_flags(void);
 static int handoff_boot_services_active(void);
+static const char *input_ps2_fallback_state(void);
 
 static void cmd_info(void) {
   fbcon_print("handoff.magic=");
@@ -666,6 +667,22 @@ static void cmd_info(void) {
   fbcon_print(x64_input_primary_backend_name(&g_input_runtime));
   fbcon_print(" last=");
   fbcon_print(x64_input_last_backend_name(&g_input_runtime));
+  fbcon_print(" ps2=");
+  fbcon_print(input_ps2_fallback_state());
+  fbcon_print(" hyperv=");
+  fbcon_print(x64_input_hyperv_state(&g_input_runtime));
+  fbcon_putc('\n');
+
+  fbcon_print("input.hyperv.pref=");
+  fbcon_print(g_input_runtime.hyperv_preferred ? "1" : "0");
+  fbcon_print(" confirmed=");
+  fbcon_print(g_input_runtime.hyperv_confirmed ? "1" : "0");
+  fbcon_print(" events=");
+  fbcon_print_dec_u32(g_input_runtime.hyperv_event_count);
+  fbcon_print(" attempts=");
+  fbcon_print_dec_u32(g_input_runtime.hyperv_promotion_attempts);
+  fbcon_print(" degrades=");
+  fbcon_print_dec_u32(g_input_runtime.hyperv_degrade_count);
   fbcon_putc('\n');
 }
 
@@ -902,6 +919,13 @@ static void print_platform_timer_status(void) {
   fbcon_putc('\n');
 }
 
+static const char *input_ps2_fallback_state(void) {
+  if (!g_input_runtime.has_ps2) {
+    return "off";
+  }
+  return g_input_runtime.ps2_fallback_parked ? "parked" : "active";
+}
+
 static void print_input_runtime_status(void) {
   fbcon_print("[input] Mode: ");
   fbcon_print(x64_input_priority_mode(&g_input_runtime));
@@ -913,7 +937,26 @@ static void print_input_runtime_status(void) {
   fbcon_print(x64_input_has_native_backend(&g_input_runtime) ? "ready" : "no");
   fbcon_print(" firmware=");
   fbcon_print(x64_input_firmware_state(&g_input_runtime));
+  fbcon_print(" ps2=");
+  fbcon_print(input_ps2_fallback_state());
+  fbcon_print(" hyperv=");
+  fbcon_print(x64_input_hyperv_state(&g_input_runtime));
   fbcon_putc('\n');
+  if (g_input_runtime.hyperv_preferred || g_input_runtime.hyperv_event_count ||
+      g_input_runtime.hyperv_promotion_attempts ||
+      g_input_runtime.hyperv_degrade_count) {
+    fbcon_print("[input] Hyper-V metrics: pref=");
+    fbcon_print(g_input_runtime.hyperv_preferred ? "yes" : "no");
+    fbcon_print(" confirmed=");
+    fbcon_print(g_input_runtime.hyperv_confirmed ? "yes" : "no");
+    fbcon_print(" events=");
+    fbcon_print_dec_u32(g_input_runtime.hyperv_event_count);
+    fbcon_print(" attempts=");
+    fbcon_print_dec_u32(g_input_runtime.hyperv_promotion_attempts);
+    fbcon_print(" degrades=");
+    fbcon_print_dec_u32(g_input_runtime.hyperv_degrade_count);
+    fbcon_putc('\n');
+  }
 }
 
 static void print_storage_runtime_status(void) {
@@ -1044,6 +1087,10 @@ static void maybe_exit_boot_services_after_native_runtime(void) {
   g_exit_boot_services_done = 1;
   x64_input_retire_firmware_backend(&g_input_runtime);
   x64_platform_tables_init(1);
+  if (g_input_runtime.hyperv_deferred) {
+    (void)x64_input_try_enable_hyperv_native(
+        &g_input_runtime, handoff_boot_services_active(), fbcon_print);
+  }
   fbcon_print("[boot] ExitBootServices concluido no kernel.\n");
   print_platform_runtime_mode();
   print_platform_tables_status();
@@ -1858,8 +1905,22 @@ int kernel_input_getc(char *out_char) {
   if (!out_char)
     return 0;
   for (;;) {
+    int hyperv_was_ready = g_input_runtime.has_hyperv;
+    if (!handoff_boot_services_active() && g_input_runtime.hyperv_deferred) {
+      if (x64_input_try_enable_hyperv_native(
+              &g_input_runtime, handoff_boot_services_active(), fbcon_print) !=
+          0) {
+        print_input_runtime_status();
+      }
+    }
     if (x64_input_poll_char(&g_input_runtime, out_char)) {
       return 1;
+    }
+    if (hyperv_was_ready && !g_input_runtime.has_hyperv &&
+        g_input_runtime.hyperv_deferred) {
+      fbcon_print(
+          "[hyperv] Backend VMBus degradado; mantendo fallback atual e reagendando promocao controlada.\n");
+      print_input_runtime_status();
     }
     cpu_relax();
   }
@@ -2071,6 +2132,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     input_config.has_efi = has_efi;
     input_config.has_ps2 = has_ps2;
     input_config.has_hyperv = has_hyperv;
+    input_config.hyperv_deferred = input_probe.has_hyperv_deferred;
     input_config.has_com1 = has_com1;
     input_config.efi_system_table = input_probe.efi_system_table;
     x64_input_runtime_init(&g_input_runtime, &input_config);

@@ -16,6 +16,7 @@ struct x64_input_config {
   int has_efi;
   int has_ps2;
   int has_hyperv;
+  int hyperv_deferred;
   int has_com1;
   uint64_t efi_system_table;
 };
@@ -29,6 +30,15 @@ struct x64_input_runtime {
   int has_efi;
   int has_ps2;
   int has_hyperv;
+  int hyperv_confirmed;
+  int hyperv_preferred;
+  int ps2_fallback_parked;
+  int hyperv_deferred;
+  int hyperv_promotion_attempted;
+  uint32_t hyperv_promotion_attempts;
+  uint32_t hyperv_event_count;
+  uint32_t hyperv_degrade_count;
+  uint64_t hyperv_retry_tick;
   int has_com1;
   uint64_t efi_system_table;
   int native_confirmed;
@@ -43,6 +53,7 @@ struct x64_input_probe_result {
   int has_ps2;
   int has_hyperv;
   int has_hyperv_ready;
+  int has_hyperv_deferred;
   int has_com1;
   int has_usb;
   uint64_t efi_system_table;
@@ -68,8 +79,12 @@ const char *x64_input_primary_backend_name(const struct x64_input_runtime *runti
 const char *x64_input_last_backend_name(const struct x64_input_runtime *runtime);
 const char *x64_input_priority_mode(const struct x64_input_runtime *runtime);
 const char *x64_input_firmware_state(const struct x64_input_runtime *runtime);
+const char *x64_input_hyperv_state(const struct x64_input_runtime *runtime);
 int x64_input_has_firmware_backend(const struct x64_input_runtime *runtime);
 int x64_input_has_native_backend(const struct x64_input_runtime *runtime);
 void x64_input_retire_firmware_backend(struct x64_input_runtime *runtime);
+int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
+                                       int boot_services_active,
+                                       void (*print)(const char *));
 
 #endif /* ARCH_X86_64_INPUT_RUNTIME_H */

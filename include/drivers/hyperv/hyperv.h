@@ -115,23 +115,17 @@ struct synth_kbd_event {
 #define KBD_FLAG_UNICODE 0x4      /* Unicode key */
 #define KBD_SCANCODE_MASK 0xFF    /* Scancode bits */
 
-/* VMBus keyboard state */
-struct vmbus_keyboard {
-  int initialized;
-  int connected;
-  uint32_t channel_id;
-  void *ring_buffer;
-  uint32_t ring_size;
-  volatile struct vmbus_ring_buffer *send_ring;
-  volatile struct vmbus_ring_buffer *recv_ring;
-};
+/* O estado real do teclado VMBus vive no driver; consumidores usam apenas ponteiro opaco. */
+struct vmbus_keyboard;
 
 /* Function prototypes */
 int hyperv_detect(void);
 int vmbus_init(void);
+int hyperv_keyboard_init(void);
 int vmbus_keyboard_init(struct vmbus_keyboard *kbd);
 int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
                         int *is_break);
+struct vmbus_keyboard *vmbus_get_keyboard(void);
 
 /* MSR helpers */
 static inline void wrmsr(uint32_t msr, uint64_t value) {

@@ -126,9 +126,9 @@ Observacao sobre o x64:
 
 Prioridade atual de entrada no x64:
 
-1. `EFI ConIn` (principal em VMs UEFI, incluindo Hyper-V Gen2)
+1. `EFI ConIn` (principal durante boot hibrido em VMs UEFI)
 2. PS/2
-3. Hyper-V VMBus keyboard (experimental)
+3. Hyper-V VMBus keyboard (promocao controlada em runtime nativo)
 4. COM1 (ultimo fallback)
 
 Impacto pratico:
@@ -149,7 +149,7 @@ Impacto pratico:
 | Login e sessao | Funcional no x64 com persistencia em disco | Parcial |
 | CLI modular | Comandos principais ativos | Estavel |
 | Rede x64 | Stack com ARP/IPv4/ICMP ativo, `e1000` funcional e `tulip` em validacao | Parcial |
-| Teclado em Hyper-V | Via EFI ConIn sem exigir COM (x64) | Parcial |
+| Teclado em Hyper-V | `EFI ConIn` no bootstrap com promocao controlada de `VMBus` em runtime nativo | Parcial |
 | USB HID teclado x64 | Enumeracao XHCI ainda incompleta | Em desenvolvimento |
 | Multithread/scheduler | Ainda nao implantado | Pendente |
 
@@ -157,8 +157,7 @@ Impacto pratico:
 
 - o caminho oficial via ISO UEFI agora tem smoke dedicado de instalacao, reboot, login e persistencia, e ja foi validado em `Hyper-V Gen2`; cobertura mais ampla de hardware real fica como hardening futuro, nao como bloqueio desta implantacao.
 - driver USB HID completo (enumeracao + input) ainda nao finalizado.
-- caminho VMBus keyboard continua experimental e depende de hardening.
-- no `Hyper-V Gen2`, a inicializacao automatica do `VMBus keyboard` fica adiada durante o boot hibrido para evitar regressao de estabilidade; o caminho atual permanece em `EFI ConIn` nesse cenario.
+- no `Hyper-V Gen2`, o `VMBus keyboard` sobe por promocao controlada em runtime nativo, com retentativa limitada, fallback automatico e estacionamento do `PS/2` depois de estabilidade.
 - netvsc (adaptador sintetico Hyper-V) ainda nao esta pronto; usar legado para validacao de rede no Hyper-V.
 - driver `tulip-2114x` precisa de hardening adicional de RX/link para cobertura total de adaptadores genericos.
 - scheduler/multithread ainda nao entrou no kernel runtime.
