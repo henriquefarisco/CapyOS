@@ -9,11 +9,12 @@ from pathlib import Path
 SECTOR = 512
 
 BOOT_CONFIG_MAGIC = 0xB001CF61
-BOOT_CONFIG_VERSION = 2
+BOOT_CONFIG_VERSION = 3
 BOOT_CONFIG_FLAG_HAS_VOLUME_KEY = 0x0001
 BOOT_CONFIG_LAYOUT_LEN = 16
+BOOT_CONFIG_LANGUAGE_LEN = 16
 BOOT_CONFIG_KEY_LEN = 64
-BOOT_CONFIG_RESERVED_LEN = 424
+BOOT_CONFIG_RESERVED_LEN = 408
 
 
 def normalize_keyboard_layout(raw: str | None) -> str:
@@ -28,6 +29,28 @@ def normalize_keyboard_layout(raw: str | None) -> str:
         if not (ch.isalnum() or ch in "-_"):
             raise SystemExit(f"[err] invalid keyboard layout: {layout!r}")
     return layout
+
+
+def normalize_language(raw: str | None) -> str:
+    language = (raw or "en").strip()
+    if not language:
+        language = "en"
+    lowered = language.lower().replace("_", "-")
+    if lowered == "pt":
+        lowered = "pt-br"
+    if lowered in ("en", "en-us"):
+        language = "en"
+    elif lowered in ("pt-br", "pt"):
+        language = "pt-BR"
+    elif lowered in ("es", "es-es"):
+        language = "es"
+    else:
+        raise SystemExit(f"[err] unsupported language: {language!r}")
+    if len(language) >= BOOT_CONFIG_LANGUAGE_LEN:
+        raise SystemExit(
+            f"[err] language too long: {language!r} (max {BOOT_CONFIG_LANGUAGE_LEN - 1})"
+        )
+    return language
 
 
 def normalize_volume_key(raw: str | None) -> str:
@@ -55,17 +78,21 @@ def normalize_volume_key(raw: str | None) -> str:
     return key
 
 
-def build_boot_config(layout: str | None, volume_key: str | None) -> bytes:
+def build_boot_config(
+    layout: str | None, language: str | None, volume_key: str | None
+) -> bytes:
     layout_norm = normalize_keyboard_layout(layout)
+    language_norm = normalize_language(language)
     key_norm = normalize_volume_key(volume_key)
     flags = BOOT_CONFIG_FLAG_HAS_VOLUME_KEY if key_norm else 0
 
     payload = struct.pack(
-        "<IHH16s64s424s",
+        "<IHH16s16s64s408s",
         BOOT_CONFIG_MAGIC,
         BOOT_CONFIG_VERSION,
         flags,
         layout_norm.encode("ascii").ljust(BOOT_CONFIG_LAYOUT_LEN, b"\x00"),
+        language_norm.encode("ascii").ljust(BOOT_CONFIG_LANGUAGE_LEN, b"\x00"),
         key_norm.encode("ascii").ljust(BOOT_CONFIG_KEY_LEN, b"\x00"),
         b"\x00" * BOOT_CONFIG_RESERVED_LEN,
     )

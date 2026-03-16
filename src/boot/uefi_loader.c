@@ -639,6 +639,36 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
 #define GPT_ENTRIES_LBA 2ULL
 #define GPT_ENTRIES_SECTORS ((GPT_NUM_ENTRIES * GPT_ENTRY_SIZE) / 512U) // 32
 
+typedef enum {
+  INSTALLER_LANG_EN = 0,
+  INSTALLER_LANG_PT_BR = 1,
+  INSTALLER_LANG_ES = 2,
+} installer_language_t;
+
+static const CHAR16 *installer_language_code(installer_language_t language) {
+  switch (language) {
+  case INSTALLER_LANG_PT_BR:
+    return L"pt-BR";
+  case INSTALLER_LANG_ES:
+    return L"es";
+  case INSTALLER_LANG_EN:
+  default:
+    return L"en";
+  }
+}
+
+static const CHAR16 *installer_language_name(installer_language_t language) {
+  switch (language) {
+  case INSTALLER_LANG_PT_BR:
+    return L"Portugues (Brasil)";
+  case INSTALLER_LANG_ES:
+    return L"Espanol";
+  case INSTALLER_LANG_EN:
+  default:
+    return L"English";
+  }
+}
+
 static UINT64 align_up_u64(UINT64 v, UINT64 a) {
   if (a == 0)
     return v;
@@ -2214,14 +2244,14 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
    * ============================================================ */
   Print(L"\r\n");
   Print(L"========================================\r\n");
-  Print(L"   CapyOS 64-bit - Assistente de Instalacao\r\n");
+  Print(L"      CapyOS 64-bit - Installer Wizard\r\n");
   Print(L"========================================\r\n");
   Print(L"\r\n");
-  Print(L"Disco destino: %lu MiB\r\n", (disk_bytes / (1024ULL * 1024ULL)));
+  Print(L"Target disk: %lu MiB\r\n", (disk_bytes / (1024ULL * 1024ULL)));
   Print(L"\r\n");
-  Print(L"[AVISO] TODOS OS DADOS SERAO APAGADOS!\r\n");
+  Print(L"[WARNING] ALL DATA ON THE TARGET DISK WILL BE ERASED!\r\n");
   Print(L"\r\n");
-  Print(L"Pressione 'I' para iniciar ou outra tecla para cancelar: ");
+  Print(L"Press 'I' to start or any other key to cancel: ");
 
   EFI_INPUT_KEY key;
   UINTN idx = 0;
@@ -2229,21 +2259,60 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
                     &st->ConIn->WaitForKey, &idx);
   stt = uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2, st->ConIn, &key);
   if (EFI_ERROR(stt) || (key.UnicodeChar != L'I' && key.UnicodeChar != L'i')) {
-    Print(L"\r\n[UEFI] Instalacao cancelada.\r\n");
+    Print(L"\r\n[UEFI] Installation cancelled.\r\n");
     return EFI_ABORTED;
   }
   Print(L"\r\n\r\n");
 
-  /* --- Step 1: Keyboard layout preference --- */
+  /* --- Step 1: Installer/system language --- */
+  installer_language_t install_language = INSTALLER_LANG_EN;
+  CHAR16 language_in[32];
+  Print(L"=== Language ===\r\n\r\n");
+  Print(L"  [1] English\r\n");
+  Print(L"  [2] Portugues (Brasil)\r\n");
+  Print(L"  [3] Espanol\r\n\r\n");
+  Print(L"Select language [1]: ");
+  uefi_readline(st, language_in, 32, FALSE);
+  if (language_in[0] == L'2' || language_in[0] == L'p' ||
+      language_in[0] == L'P') {
+    install_language = INSTALLER_LANG_PT_BR;
+  } else if (language_in[0] == L'3' || language_in[0] == L'e' ||
+             language_in[0] == L'E') {
+    install_language = INSTALLER_LANG_ES;
+  }
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"Idioma selecionado: %s\r\n\r\n",
+          installer_language_name(install_language));
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"Idioma seleccionado: %s\r\n\r\n",
+          installer_language_name(install_language));
+  } else {
+    Print(L"Selected language: %s\r\n\r\n",
+          installer_language_name(install_language));
+  }
+
+  /* --- Step 2: Keyboard layout preference --- */
   CHAR16 keyboard_layout[16];
   keyboard_layout[0] = L'u';
   keyboard_layout[1] = L's';
   keyboard_layout[2] = 0;
   CHAR16 layout_in[32];
-  Print(L"=== Layout de Teclado ===\r\n\r\n");
-  Print(L"  [1] us        (US English)\r\n");
-  Print(L"  [2] br-abnt2  (Portugues Brasil)\r\n\r\n");
-  Print(L"Layout preferido [1]: ");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"=== Layout de Teclado ===\r\n\r\n");
+    Print(L"  [1] us        (US English)\r\n");
+    Print(L"  [2] br-abnt2  (Portugues Brasil)\r\n\r\n");
+    Print(L"Layout preferido [1]: ");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"=== Layout del Teclado ===\r\n\r\n");
+    Print(L"  [1] us        (US English)\r\n");
+    Print(L"  [2] br-abnt2  (Portugues Brasil)\r\n\r\n");
+    Print(L"Layout preferido [1]: ");
+  } else {
+    Print(L"=== Keyboard Layout ===\r\n\r\n");
+    Print(L"  [1] us        (US English)\r\n");
+    Print(L"  [2] br-abnt2  (Portuguese Brazil)\r\n\r\n");
+    Print(L"Preferred layout [1]: ");
+  }
   uefi_readline(st, layout_in, 32, FALSE);
   if (layout_in[0] == L'2' || layout_in[0] == L'b' || layout_in[0] == L'B') {
     keyboard_layout[0] = L'b';
@@ -2256,75 +2325,184 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     keyboard_layout[7] = L'2';
     keyboard_layout[8] = 0;
   }
-  Print(L"Layout selecionado: %s\r\n\r\n", keyboard_layout);
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"Layout selecionado: %s\r\n\r\n", keyboard_layout);
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"Layout seleccionado: %s\r\n\r\n", keyboard_layout);
+  } else {
+    Print(L"Selected layout: %s\r\n\r\n", keyboard_layout);
+  }
 
-  /* --- Step 2: Admin account policy --- */
-  Print(L"=== Conta Administrativa ===\r\n\r\n");
-  Print(L"O usuario administrador sera criado no primeiro boot do disco.\r\n");
-  Print(L"Esta etapa de instalacao nao persiste usuario/senha de login.\r\n\r\n");
+  /* --- Step 3: Admin account policy --- */
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"=== Conta Administrativa ===\r\n\r\n");
+    Print(L"O usuario administrador sera criado no primeiro boot do disco.\r\n");
+    Print(L"Esta etapa de instalacao nao persiste usuario/senha de login.\r\n\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"=== Cuenta Administrativa ===\r\n\r\n");
+    Print(L"El usuario administrador sera creado en el primer arranque del disco.\r\n");
+    Print(L"Esta etapa no guarda usuario ni contrasena de inicio de sesion.\r\n\r\n");
+  } else {
+    Print(L"=== Administrator Account ===\r\n\r\n");
+    Print(L"The administrator user will be created on the disk first boot.\r\n");
+    Print(L"This installer step does not persist the login user or password.\r\n\r\n");
+  }
 
-  /* --- Step 3: Volume key guidance --- */
+  /* --- Step 4: Volume key guidance --- */
   CHAR16 recovery_key[64];
   char recovery_key_norm[64];
   generate_recovery_key(st, recovery_key, sizeof(recovery_key) / sizeof(recovery_key[0]));
   if (normalize_key_char16(recovery_key, recovery_key_norm,
                            sizeof(recovery_key_norm)) != 0) {
     Print(L"[UEFI] Falha ao gerar chave de volume.\r\n");
-    return EFI_ABORTED;
+    return EFI_DEVICE_ERROR;
   }
-  Print(L"\r\n=== Chave do Volume Cifrado ===\r\n\r\n");
-  Print(L"Chave gerada automaticamente para o volume:\r\n");
-  Print(L"  %s\r\n\r\n", recovery_key);
-  Print(L"Guarde essa chave em local seguro.\r\n");
-  Print(
-      L"No primeiro boot ela sera usada para montar/inicializar o volume cifrado.\r\n");
-  Print(L"Formato aceito no sistema: letras/numeros, hifens opcionais.\r\n");
-  Print(L"\r\nValidacao manual da chave esta desativada nesta fase.\r\n");
-  Print(L"Pressione ENTER para continuar...");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"\r\n=== Chave do Volume Cifrado ===\r\n\r\n");
+    Print(L"Chave gerada automaticamente para o volume:\r\n");
+    Print(L"  %s\r\n\r\n", recovery_key);
+    Print(L"Guarde essa chave em local seguro.\r\n");
+    Print(L"No primeiro boot ela sera usada para montar/inicializar o volume cifrado.\r\n");
+    Print(L"Formato aceito no sistema: letras/numeros, hifens opcionais.\r\n");
+    Print(L"\r\nValidacao manual da chave esta desativada nesta fase.\r\n");
+    Print(L"Pressione ENTER para continuar...");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"\r\n=== Clave del Volumen Cifrado ===\r\n\r\n");
+    Print(L"Clave generada automaticamente para el volumen:\r\n");
+    Print(L"  %s\r\n\r\n", recovery_key);
+    Print(L"Guarda esta clave en un lugar seguro.\r\n");
+    Print(L"En el primer arranque sera usada para montar/inicializar el volumen cifrado.\r\n");
+    Print(L"Formato aceptado: letras/numeros, guiones opcionales.\r\n");
+    Print(L"\r\nLa validacion manual de la clave esta deshabilitada en esta fase.\r\n");
+    Print(L"Presiona ENTER para continuar...");
+  } else {
+    Print(L"\r\n=== Encrypted Volume Key ===\r\n\r\n");
+    Print(L"Automatically generated key for the volume:\r\n");
+    Print(L"  %s\r\n\r\n", recovery_key);
+    Print(L"Store this key in a safe place.\r\n");
+    Print(L"It will be used on the first boot to mount/initialize the encrypted volume.\r\n");
+    Print(L"Accepted format: letters/numbers, hyphens optional.\r\n");
+    Print(L"\r\nManual key validation is disabled at this stage.\r\n");
+    Print(L"Press ENTER to continue...");
+  }
   CHAR16 continue_line[8];
   uefi_readline(st, continue_line, sizeof(continue_line) / sizeof(continue_line[0]),
                 FALSE);
-  Print(L"[info] Layout selecionado para o setup: %s\r\n\r\n", keyboard_layout);
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[info] Layout selecionado para o setup: %s\r\n", keyboard_layout);
+    Print(L"[info] Idioma padrao do sistema: %s\r\n\r\n",
+          installer_language_code(install_language));
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[info] Layout seleccionado para el setup: %s\r\n", keyboard_layout);
+    Print(L"[info] Idioma predeterminado del sistema: %s\r\n\r\n",
+          installer_language_code(install_language));
+  } else {
+    Print(L"[info] Selected setup layout: %s\r\n", keyboard_layout);
+    Print(L"[info] System default language: %s\r\n\r\n",
+          installer_language_code(install_language));
+  }
 
-  /* --- Step 4: Confirm installation --- */
-  Print(L"=== Confirmacao Final ===\r\n\r\n");
-  Print(L"Layout teclado: %s\r\n", keyboard_layout);
-  Print(L"Usuario administrador: definido no primeiro boot\r\n");
-  Print(L"Disco: %lu MiB (sera APAGADO)\r\n",
-        (disk_bytes / (1024ULL * 1024ULL)));
-  Print(L"\r\nConfirmar instalacao? [S/n]: ");
+  /* --- Step 5: Confirm installation --- */
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"=== Confirmacao Final ===\r\n\r\n");
+    Print(L"Layout teclado: %s\r\n", keyboard_layout);
+    Print(L"Idioma padrao: %s\r\n", installer_language_code(install_language));
+    Print(L"Usuario administrador: definido no primeiro boot\r\n");
+    Print(L"Disco: %lu MiB (sera APAGADO)\r\n",
+          (disk_bytes / (1024ULL * 1024ULL)));
+    Print(L"\r\nConfirmar instalacao? [S/n]: ");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"=== Confirmacion Final ===\r\n\r\n");
+    Print(L"Layout teclado: %s\r\n", keyboard_layout);
+    Print(L"Idioma predeterminado: %s\r\n",
+          installer_language_code(install_language));
+    Print(L"Usuario administrador: definido en el primer arranque\r\n");
+    Print(L"Disco: %lu MiB (sera BORRADO)\r\n",
+          (disk_bytes / (1024ULL * 1024ULL)));
+    Print(L"\r\nConfirmar instalacion? [S/n]: ");
+  } else {
+    Print(L"=== Final Confirmation ===\r\n\r\n");
+    Print(L"Keyboard layout: %s\r\n", keyboard_layout);
+    Print(L"Default language: %s\r\n", installer_language_code(install_language));
+    Print(L"Administrator user: defined on first boot\r\n");
+    Print(L"Disk: %lu MiB (WILL BE ERASED)\r\n",
+          (disk_bytes / (1024ULL * 1024ULL)));
+    Print(L"\r\nConfirm installation? [Y/n]: ");
+  }
   CHAR16 confirm[8];
   uefi_readline(st, confirm, 8, FALSE);
   if (confirm[0] == L'n' || confirm[0] == L'N') {
-    Print(L"[UEFI] Instalacao cancelada pelo usuario.\r\n");
+    if (install_language == INSTALLER_LANG_PT_BR) {
+      Print(L"[UEFI] Instalacao cancelada pelo usuario.\r\n");
+    } else if (install_language == INSTALLER_LANG_ES) {
+      Print(L"[UEFI] Instalacion cancelada por el usuario.\r\n");
+    } else {
+      Print(L"[UEFI] Installation cancelled by the user.\r\n");
+    }
     return EFI_ABORTED;
   }
   Print(L"\r\n");
 
   // Clean install policy: wipe entire target disk before creating a new GPT.
   UINT64 full_disk_sectors = (UINT64)disk->Media->LastBlock + 1ULL;
-  Print(L"[UEFI] Limpando disco inteiro...\r\n");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[UEFI] Limpando disco inteiro...\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[UEFI] Limpiando el disco completo...\r\n");
+  } else {
+    Print(L"[UEFI] Wiping the full disk...\r\n");
+  }
   stt = wipe_blocks(disk, 0, full_disk_sectors);
   if (EFI_ERROR(stt)) {
-    Print(L"[UEFI] Falha ao limpar disco: %r\r\n", stt);
+    if (install_language == INSTALLER_LANG_PT_BR) {
+      Print(L"[UEFI] Falha ao limpar disco: %r\r\n", stt);
+    } else if (install_language == INSTALLER_LANG_ES) {
+      Print(L"[UEFI] Fallo al limpiar el disco: %r\r\n", stt);
+    } else {
+      Print(L"[UEFI] Failed to wipe the disk: %r\r\n", stt);
+    }
     return stt;
   }
 
   UINT64 esp_lba = 0, esp_secs = 0, boot_lba = 0, boot_secs = 0;
   UINT64 data_lba = 0, data_secs = 0;
-  Print(L"[UEFI] Gravando GPT...\r\n");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[UEFI] Gravando GPT...\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[UEFI] Escribiendo GPT...\r\n");
+  } else {
+    Print(L"[UEFI] Writing GPT...\r\n");
+  }
   stt = gpt_write_layout(st, disk, INSTALL_ESP_SIZE_MIB, INSTALL_BOOT_SIZE_MIB,
                          &esp_lba, &esp_secs, &boot_lba, &boot_secs, &data_lba,
                          &data_secs);
   if (EFI_ERROR(stt)) {
-    Print(L"[UEFI] GPT falhou: %r\r\n", stt);
+    if (install_language == INSTALLER_LANG_PT_BR) {
+      Print(L"[UEFI] GPT falhou: %r\r\n", stt);
+    } else if (install_language == INSTALLER_LANG_ES) {
+      Print(L"[UEFI] GPT fallo: %r\r\n", stt);
+    } else {
+      Print(L"[UEFI] GPT failed: %r\r\n", stt);
+    }
     return stt;
   }
 
-  Print(L"[UEFI] Preparando particao DATA para primeiro boot...\r\n");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[UEFI] Preparando particao DATA para primeiro boot...\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[UEFI] Preparando la particion DATA para el primer arranque...\r\n");
+  } else {
+    Print(L"[UEFI] Preparing DATA partition for first boot...\r\n");
+  }
   stt = scrub_data_partition_for_first_boot(disk, data_lba, data_secs);
   if (EFI_ERROR(stt)) {
-    Print(L"[UEFI] Falha ao preparar DATA: %r\r\n", stt);
+    if (install_language == INSTALLER_LANG_PT_BR) {
+      Print(L"[UEFI] Falha ao preparar DATA: %r\r\n", stt);
+    } else if (install_language == INSTALLER_LANG_ES) {
+      Print(L"[UEFI] Fallo al preparar DATA: %r\r\n", stt);
+    } else {
+      Print(L"[UEFI] Failed to prepare DATA: %r\r\n", stt);
+    }
     return stt;
   }
 
@@ -2334,7 +2512,13 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   UINT32 cksum = checksum32_words((const UINT8 *)kernel_buf, kernel_sz);
   build_manifest(&mf, 1, ksec, cksum);
 
-  Print(L"[UEFI] Criando ESP (FAT32) e copiando arquivos...\r\n");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[UEFI] Criando ESP (FAT32) e copiando arquivos...\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[UEFI] Creando ESP (FAT32) y copiando archivos...\r\n");
+  } else {
+    Print(L"[UEFI] Creating ESP (FAT32) and copying files...\r\n");
+  }
   struct boot_config_sector boot_cfg;
   bootcfg_clear(&boot_cfg);
   boot_cfg.magic = BOOT_CONFIG_MAGIC;
@@ -2342,6 +2526,8 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   boot_cfg.flags = BOOT_CONFIG_FLAG_HAS_VOLUME_KEY;
   char16_to_ascii(boot_cfg.keyboard_layout, sizeof(boot_cfg.keyboard_layout),
                   keyboard_layout);
+  char16_to_ascii(boot_cfg.language, sizeof(boot_cfg.language),
+                  installer_language_code(install_language));
   for (UINTN i = 0; i + 1 < sizeof(boot_cfg.volume_key) && recovery_key_norm[i];
        ++i) {
     boot_cfg.volume_key[i] = recovery_key_norm[i];
@@ -2359,7 +2545,7 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
       persisted_len != key_len ||
       !ascii_streq(boot_cfg.volume_key, recovery_key_norm)) {
     Print(L"[UEFI] ERRO: chave de volume nao persistivel no BOOT config.\r\n");
-    return EFI_ABORTED;
+    return EFI_CRC_ERROR;
   }
 
   stt = fat32_write_volume(disk, esp_lba, esp_secs, (const UINT8 *)bootx64_buf,
@@ -2370,21 +2556,45 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if (stt == EFI_CRC_ERROR) {
       Print(L"[UEFI] ERRO: chave em CAPYCFG.BIN diverge da chave provisionada.\r\n");
     }
-    Print(L"[UEFI] FAT32/ESP falhou: %r\r\n", stt);
+    if (install_language == INSTALLER_LANG_PT_BR) {
+      Print(L"[UEFI] FAT32/ESP falhou: %r\r\n", stt);
+    } else if (install_language == INSTALLER_LANG_ES) {
+      Print(L"[UEFI] FAT32/ESP fallo: %r\r\n", stt);
+    } else {
+      Print(L"[UEFI] FAT32/ESP failed: %r\r\n", stt);
+    }
     return stt;
   }
 
-  Print(L"[UEFI] Gravando BOOT (manifest+kernel)...\r\n");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[UEFI] Gravando BOOT (manifest+kernel)...\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[UEFI] Escribiendo BOOT (manifest+kernel)...\r\n");
+  } else {
+    Print(L"[UEFI] Writing BOOT (manifest+kernel)...\r\n");
+  }
   stt = write_boot_partition_raw(disk, boot_lba, boot_secs, &mf,
                                  (const UINT8 *)kernel_buf, kernel_sz);
   if (EFI_ERROR(stt)) {
-    Print(L"[UEFI] BOOT raw falhou: %r\r\n", stt);
+    if (install_language == INSTALLER_LANG_PT_BR) {
+      Print(L"[UEFI] BOOT raw falhou: %r\r\n", stt);
+    } else if (install_language == INSTALLER_LANG_ES) {
+      Print(L"[UEFI] BOOT raw fallo: %r\r\n", stt);
+    } else {
+      Print(L"[UEFI] BOOT raw failed: %r\r\n", stt);
+    }
     return stt;
   }
 
   uefi_call_wrapper(disk->FlushBlocks, 1, disk);
 
-  Print(L"[UEFI] Instalacao concluida. Reiniciando...\r\n");
+  if (install_language == INSTALLER_LANG_PT_BR) {
+    Print(L"[UEFI] Instalacao concluida. Reiniciando...\r\n");
+  } else if (install_language == INSTALLER_LANG_ES) {
+    Print(L"[UEFI] Instalacion completada. Reiniciando...\r\n");
+  } else {
+    Print(L"[UEFI] Installation complete. Rebooting...\r\n");
+  }
   uefi_call_wrapper(st->RuntimeServices->ResetSystem, 4, EfiResetCold,
                     EFI_SUCCESS, 0, NULL);
   return EFI_SUCCESS;
@@ -2713,11 +2923,23 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
           install_marker ? 1 : 0, install_ro ? 1 : 0);
     EFI_STATUS ist = installer_run(image, systab);
     if (!EFI_ERROR(ist)) {
-      // Normalmente nÃƒÂ£o retorna (ResetSystem). Se retornar, apenas aguarde.
-      uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
+      Print(L"[UEFI] Instalador concluiu; aguardando reinicio do firmware.\r\n");
+      for (;;) {
+        uefi_call_wrapper(systab->BootServices->Stall, 1, 1000 * 1000);
+      }
     }
-    // Se a instalaÃƒÂ§ÃƒÂ£o foi cancelada ou falhou, continue para o boot normal
-    // (kernel do ISO).
+    if (ist == EFI_ABORTED) {
+      Print(L"[UEFI] Instalador cancelado pelo usuario; retornando ao firmware "
+            L"para a proxima opcao de boot.\r\n");
+      uefi_call_wrapper(systab->BootServices->Stall, 1, 1500 * 1000);
+      return ist;
+    }
+
+    Print(L"[UEFI] Falha no instalador: %r\r\n", ist);
+    Print(L"[UEFI] Permanecendo na tela para diagnostico.\r\n");
+    for (;;) {
+      uefi_call_wrapper(systab->BootServices->Stall, 1, 1000 * 1000);
+    }
   }
 
   EFI_PHYSICAL_ADDRESS entry = 0;
@@ -2917,6 +3139,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   for (UINTN i = 0; i < sizeof(handoff->boot_keyboard_layout); ++i) {
     handoff->boot_keyboard_layout[i] = 0;
   }
+  for (UINTN i = 0; i < sizeof(handoff->boot_language); ++i) {
+    handoff->boot_language[i] = 0;
+  }
   for (UINTN i = 0; i < sizeof(handoff->boot_volume_key); ++i) {
     handoff->boot_volume_key[i] = 0;
   }
@@ -2928,6 +3153,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
                      g_runtime_boot_cfg.keyboard_layout[i];
          ++i) {
       handoff->boot_keyboard_layout[i] = g_runtime_boot_cfg.keyboard_layout[i];
+    }
+    for (UINTN i = 0; i < sizeof(handoff->boot_language) - 1 &&
+                     g_runtime_boot_cfg.language[i];
+         ++i) {
+      handoff->boot_language[i] = g_runtime_boot_cfg.language[i];
     }
     for (UINTN i = 0; i < sizeof(handoff->boot_volume_key) - 1 &&
                      g_runtime_boot_cfg.volume_key[i];

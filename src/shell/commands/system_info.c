@@ -1,6 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
+#include "core/localization.h"
 #include "core/version.h"
 #include "drivers/timer/pit.h"
 
@@ -156,6 +157,9 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     shell_newline();
     shell_print("HOST=");
     shell_print(ctx->settings ? ctx->settings->hostname : "capyos");
+    shell_newline();
+    shell_print("LANG=");
+    shell_print(session_language(ctx->session));
     shell_newline();
     shell_print("CHANNEL=");
     shell_print(CAPYOS_VERSION_CHANNEL);

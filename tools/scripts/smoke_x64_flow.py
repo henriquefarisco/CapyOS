@@ -26,6 +26,20 @@ def run_cmd(
     session.wait_for("> ", timeout=timeout, start_at=mk)
 
 
+def run_cmd_expect_prompt(
+    session: SmokeSession,
+    cmd: str,
+    timeout: float,
+    prompt: str,
+    expect: str | None = None,
+) -> None:
+    mk = session.marker()
+    session.send_line(cmd)
+    if expect:
+        session.wait_for(expect, timeout=timeout, start_at=mk)
+    session.wait_for(prompt, timeout=timeout, start_at=mk)
+
+
 def run_open_write(
     session: SmokeSession, filename: str, lines: list[str], timeout: float
 ) -> None:
@@ -55,37 +69,47 @@ def complete_iso_install(
     keyboard_layout: str,
 ) -> None:
     mk = session.marker()
-    session.wait_for("Pressione 'I' para iniciar", timeout=timeout * 4, start_at=mk)
+    session.wait_for("Press 'I' to start", timeout=timeout * 4, start_at=mk)
     session.send_text("I", newline=False)
 
     mk = session.marker()
-    session.wait_for("Layout preferido [1]:", timeout=timeout, start_at=mk)
+    session.wait_for("Select language [1]:", timeout=timeout, start_at=mk)
+    session.send_line("")
+
+    mk = session.marker()
+    session.wait_for("Preferred layout [1]:", timeout=timeout, start_at=mk)
     if keyboard_layout == "br-abnt2":
         session.send_line("2")
     else:
         session.send_line("")
 
     mk = session.marker()
-    session.wait_for("Pressione ENTER para continuar...", timeout=timeout, start_at=mk)
+    session.wait_for("Press ENTER to continue...", timeout=timeout, start_at=mk)
     session.send_line("")
 
     mk = session.marker()
-    session.wait_for("Confirmar instalacao? [S/n]:", timeout=timeout, start_at=mk)
+    session.wait_for("Confirm installation? [Y/n]:", timeout=timeout, start_at=mk)
     session.send_line("")
 
     mk = session.marker()
     session.wait_for(
-        "Instalacao concluida. Reiniciando...",
+        "Installation complete. Rebooting...",
         timeout=timeout * 8,
         start_at=mk,
     )
     wait_for_vm_exit(session, timeout=timeout * 2)
 
 
+def cancel_iso_install(session: SmokeSession, timeout: float) -> None:
+    mk = session.marker()
+    session.wait_for("Press 'I' to start", timeout=timeout * 4, start_at=mk)
+    session.send_text("x", newline=False)
+
+
 def trigger_reboot(session: SmokeSession, timeout: float) -> bool:
     shutdown_attempts = (
-        ("shutdown-off", "Desligando..."),
         ("shutdown-reboot", "Reiniciando..."),
+        ("shutdown-off", "Desligando..."),
     )
     for cmd, marker in shutdown_attempts:
         for _ in range(4):
@@ -122,50 +146,141 @@ def maybe_run_first_boot_setup(
     keyboard_layout: str,
 ) -> None:
     mk = session.marker()
-    layout_prompts = ["Layout do teclado [us]:", "Escolha layout [us]:"]
+    layout_prompts = [
+        "Keyboard layout [us]:",
+        "Layout do teclado [us]:",
+        "Escolha layout [us]:",
+        "Layout del teclado [us]:",
+    ]
     found = session.wait_for_any(
-        layout_prompts + ["Usuario:"],
+        layout_prompts + ["Usuario:", "User:", "Usuario: ", "User: "],
         timeout=timeout * 4,
         start_at=mk,
     )
-    if found == "Usuario:":
+    if found in ("Usuario:", "User:", "Usuario: ", "User: "):
         return
 
     # first-boot wizard path
     session.send_line("" if keyboard_layout == "us" else keyboard_layout)
     wait_and_send(session, "Hostname [capyos-node]:", "smoke-node", timeout)
-    wait_and_send(session, "Tema [capyos]:", "capyos", timeout)
-    wait_and_send(session, "Ativar splash animado? [S/n]:", "n", timeout)
-    wait_and_send(
-        session,
-        "Usuario administrador [admin]:",
-        "" if user == "admin" else user,
-        timeout,
+    mk = session.marker()
+    session.wait_for_any(["Theme [capyos]:", "Tema [capyos]:"], timeout=timeout, start_at=mk)
+    session.send_line("capyos")
+    mk = session.marker()
+    session.wait_for_any(
+        ["Enable animated splash? [Y/n]:", "Ativar splash animado? [S/n]:"],
+        timeout=timeout,
+        start_at=mk,
     )
+    session.send_line("n")
+    mk = session.marker()
+    session.wait_for_any(
+        ["Administrator user [admin]:", "Usuario administrador [admin]:"],
+        timeout=timeout,
+        start_at=mk,
+    )
+    session.send_line("" if user == "admin" else user)
     while True:
-        wait_and_send(session, "Defina a senha para o usuario", password, timeout)
-        wait_and_send(session, "Confirme a senha:", password, timeout)
+        mk = session.marker()
+        session.wait_for_any(
+            ["Set the password for user", "Defina a senha para o usuario"],
+            timeout=timeout,
+            start_at=mk,
+        )
+        session.send_line(password)
+        mk = session.marker()
+        session.wait_for_any(
+            ["Confirm password:", "Confirme a senha:"],
+            timeout=timeout,
+            start_at=mk,
+        )
+        session.send_line(password)
 
         mk = session.marker()
         outcome = session.wait_for_any(
-            ["As senhas nao coincidem.", "Usuario:"],
+            ["Passwords do not match.", "As senhas nao coincidem.", "Usuario:", "User:"],
             timeout=timeout * 4,
             start_at=mk,
         )
-        if outcome == "Usuario:":
+        if outcome in ("Usuario:", "User:"):
             break
 
 
 def login(session: SmokeSession, timeout: float, user: str, password: str) -> None:
-    wait_and_send(session, "Usuario:", user, timeout)
-    wait_and_send(session, "Senha:", password, timeout)
+    if "User:" not in session.tail(1600) and "Usuario:" not in session.tail(1600):
+        mk = session.marker()
+        session.wait_for_any(["Usuario:", "User:"], timeout=timeout, start_at=mk)
+    session.send_line(user)
+    if "Password:" not in session.tail(1600) and "Senha:" not in session.tail(1600):
+        mk = session.marker()
+        session.wait_for_any(["Senha:", "Password:"], timeout=timeout, start_at=mk)
+    session.send_line(password)
     mk = session.marker()
-    session.wait_for("Bem-vindo", timeout=timeout, start_at=mk)
-    session.wait_for("> ", timeout=timeout, start_at=mk)
+    session.wait_for_any(
+        ["Bem-vindo", "Welcome", "Bienvenido"],
+        timeout=timeout,
+        start_at=mk,
+    )
+    session.wait_for(f"{user}@smoke-node>~> ", timeout=timeout, start_at=mk)
 
 
-def smoke_first_boot(session: SmokeSession, timeout: float, user: str, marker: str) -> None:
-    run_cmd(session, "mypath", timeout=timeout, expect="/")
+def assert_shell_identity(session: SmokeSession, timeout: float, user: str) -> None:
+    home = f"/home/{user}"
+    run_cmd(session, "print-me", timeout=timeout, expect=user)
+    run_cmd(session, "mypath", timeout=timeout, expect=home)
+    run_cmd(session, "print-envs", timeout=timeout, expect=f"USER={user}")
+    run_cmd(session, "print-envs", timeout=timeout, expect=f"HOME={home}")
+    run_cmd(session, "print-envs", timeout=timeout, expect=f"PWD={home}")
+
+
+def smoke_first_boot(
+    session: SmokeSession, timeout: float, user: str, password: str, marker: str
+) -> None:
+    deep_home = f"/home/{user}/docs/projetos/capy"
+    assert_shell_identity(session, timeout=timeout, user=user)
+    run_cmd(session, "config-theme show", timeout=timeout, expect="Current theme: capyos")
+    run_cmd(session, "config-theme ocean", timeout=timeout, expect="theme updated")
+    run_cmd(session, "config-splash show", timeout=timeout, expect="Current splash: disabled")
+    run_cmd(
+        session,
+        "config-splash on",
+        timeout=timeout,
+        expect="splash enabled for the next boot",
+    )
+    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
+    run_cmd(session, "add-user smokeuser smoke user", timeout=timeout, expect="usuario=smokeuser")
+    mk = session.marker()
+    session.send_line("bye")
+    session.wait_for("Logging out", timeout=timeout, start_at=mk)
+    login(session=session, timeout=timeout, user="smokeuser", password="smoke")
+    assert_shell_identity(session, timeout=timeout, user="smokeuser")
+    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
+    mk = session.marker()
+    session.send_line("bye")
+    session.wait_for("Logging out", timeout=timeout, start_at=mk)
+    login(session=session, timeout=timeout, user=user, password=password)
+    assert_shell_identity(session, timeout=timeout, user=user)
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="splash=enabled")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="language=en")
+    run_cmd(session, f"mk-dir {deep_home}", timeout=timeout, expect="[ok]")
+    run_cmd_expect_prompt(
+        session,
+        f"go {deep_home}",
+        timeout=timeout,
+        prompt=f"{user}@smoke-node>~/.../projetos/capy> ",
+        expect="[ok]",
+    )
+    run_cmd(session, "mypath", timeout=timeout, expect=deep_home)
+    run_cmd_expect_prompt(
+        session,
+        f"go /home/{user}",
+        timeout=timeout,
+        prompt=f"{user}@smoke-node>~> ",
+        expect="[ok]",
+    )
     smoke_dir = "/tmp/smoke-persist"
     smoke_file = "smoke.txt"
     run_cmd(session, f"mk-dir {smoke_dir}", timeout=timeout, expect="[ok]")
@@ -189,6 +304,14 @@ def smoke_second_boot(
 ) -> None:
     smoke_file = "/tmp/smoke-persist/smoke.txt"
     login(session, timeout=timeout, user=user, password=password)
+    assert_shell_identity(session, timeout=timeout, user=user)
+    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
+    run_cmd(session, "config-theme show", timeout=timeout, expect="Current theme: ocean")
+    run_cmd(session, "config-splash show", timeout=timeout, expect="Current splash: enabled")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="splash=enabled")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="language=en")
     marker_expect = f"marker:{marker}"
     marker_ok = False
     last_error: Exception | None = None
@@ -209,8 +332,11 @@ def smoke_second_boot(
             raise last_error
         raise RuntimeError("persistence marker validation failed")
     run_cmd(session, "list-users", timeout=timeout, expect=user)
+    run_cmd(session, "list-users", timeout=timeout, expect="smokeuser")
 
     mk = session.marker()
     session.send_line("bye")
-    session.wait_for("Encerrando sessao", timeout=timeout, start_at=mk)
-    session.wait_for("Usuario:", timeout=timeout, start_at=mk)
+    session.wait_for("Logging out", timeout=timeout, start_at=mk)
+    login(session=session, timeout=timeout, user="smokeuser", password="smoke")
+    assert_shell_identity(session, timeout=timeout, user="smokeuser")
+    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")

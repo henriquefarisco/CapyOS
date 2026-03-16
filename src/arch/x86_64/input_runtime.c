@@ -6,6 +6,7 @@
 #include "drivers/efi/efi_console.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/input/keyboard.h"
+#include "drivers/input/keyboard_compose.h"
 #include "drivers/input/keyboard_layout.h"
 #include "drivers/timer/pit.h"
 #include "drivers/usb/xhci.h"
@@ -108,66 +109,6 @@ static const struct keyboard_layout *active_layout_map(void) {
   return &g_keyboard_layout_us;
 }
 
-static int accent_is_dead(char ch) {
-  return ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"';
-}
-
-static char compose_dead_key(char accent, char base) {
-  if (accent == '\'') {
-    if (base == 'a')
-      return (char)0xA0;
-    if (base == 'e')
-      return (char)0x82;
-    if (base == 'i')
-      return (char)0xA1;
-    if (base == 'o')
-      return (char)0xA2;
-    if (base == 'u')
-      return (char)0xA3;
-    if (base == 'A')
-      return (char)0xB5;
-    if (base == 'E')
-      return (char)0x90;
-    if (base == 'I')
-      return (char)0xD6;
-    if (base == 'O')
-      return (char)0xE0;
-    if (base == 'U')
-      return (char)0xE9;
-  } else if (accent == '^') {
-    if (base == 'a')
-      return (char)0x83;
-    if (base == 'e')
-      return (char)0x88;
-    if (base == 'i')
-      return (char)0x8C;
-    if (base == 'o')
-      return (char)0x93;
-    if (base == 'u')
-      return (char)0x96;
-  } else if (accent == '~') {
-    if (base == 'a')
-      return (char)0xC6;
-    if (base == 'o')
-      return (char)0xE5;
-    if (base == 'A')
-      return (char)0xC7;
-    if (base == 'O')
-      return (char)0xE4;
-  } else if (accent == '`') {
-    if (base == 'a')
-      return (char)0x85;
-    if (base == 'A')
-      return (char)0xB7;
-  } else if (accent == '"') {
-    if (base == 'u')
-      return (char)0x81;
-    if (base == 'U')
-      return (char)0x9A;
-  }
-  return 0;
-}
-
 static int find_us_scancode_for_char(char ch, uint8_t *out_sc, int *out_shift) {
   if (!out_sc || !out_shift) {
     return 0;
@@ -202,23 +143,38 @@ static char scancode_to_ascii(struct x64_input_runtime *runtime, uint8_t sc,
 
   uint8_t dead_flags = layout->dead[sc];
   int is_dead = shift ? ((dead_flags & 0x2) != 0) : ((dead_flags & 0x1) != 0);
-  if (is_dead && accent_is_dead(ch)) {
-    runtime->dead_accent = ch;
+  if (!keyboard_compose_step(&runtime->dead_accent, &runtime->pending_char, ch,
+                             is_dead, &ch)) {
+    return 0;
+  }
+  return ch;
+}
+
+static uint8_t normalize_extended_scancode(uint8_t scancode) {
+  if (scancode == 0x35u) {
+    return 0x73u;
+  }
+  return scancode;
+}
+
+static int decode_prefixed_scancode(int *prefix_flag, uint8_t raw_scancode,
+                                    uint8_t *out_scancode, int *out_break) {
+  if (!prefix_flag || !out_scancode || !out_break) {
+    return 0;
+  }
+  if (raw_scancode == 0xE0u) {
+    *prefix_flag = 1;
     return 0;
   }
 
-  if (runtime->dead_accent) {
-    char accent = runtime->dead_accent;
-    runtime->dead_accent = 0;
-    char composed = compose_dead_key(accent, ch);
-    if (composed) {
-      return composed;
-    }
-    runtime->pending_char = ch;
-    return accent;
+  *out_break = (raw_scancode & 0x80u) ? 1 : 0;
+  raw_scancode &= 0x7Fu;
+  if (*prefix_flag) {
+    raw_scancode = normalize_extended_scancode(raw_scancode);
   }
-
-  return ch;
+  *prefix_flag = 0;
+  *out_scancode = raw_scancode;
+  return 1;
 }
 
 static int translate_efi_char_to_active_layout(struct x64_input_runtime *runtime,
@@ -237,6 +193,10 @@ static int translate_efi_char_to_active_layout(struct x64_input_runtime *runtime
     *out = in;
     return 1;
   }
+  if ((in == '/' || in == '?') && layout == &g_keyboard_layout_br_abnt2) {
+    *out = in;
+    return 1;
+  }
 
   if (!find_us_scancode_for_char(in, &sc, &shift)) {
     *out = in;
@@ -251,26 +211,8 @@ static int translate_efi_char_to_active_layout(struct x64_input_runtime *runtime
 
   dead_flags = layout->dead[sc];
   is_dead = shift ? ((dead_flags & 0x2) != 0) : ((dead_flags & 0x1) != 0);
-  if (is_dead && accent_is_dead(mapped)) {
-    runtime->dead_accent = mapped;
-    return 0;
-  }
-
-  if (runtime->dead_accent) {
-    char accent = runtime->dead_accent;
-    runtime->dead_accent = 0;
-    char composed = compose_dead_key(accent, mapped);
-    if (composed) {
-      *out = composed;
-      return 1;
-    }
-    runtime->pending_char = mapped;
-    *out = accent;
-    return 1;
-  }
-
-  *out = mapped;
-  return 1;
+  return keyboard_compose_step(&runtime->dead_accent, &runtime->pending_char,
+                               mapped, is_dead, out);
 }
 
 static void ps2_flush(void) {
@@ -611,6 +553,8 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->native_confirmed = 0;
   runtime->firmware_retired = 0;
   runtime->shift_active = 0;
+  runtime->ps2_extended_prefix = 0;
+  runtime->hyperv_extended_prefix = 0;
   runtime->dead_accent = 0;
   runtime->pending_char = 0;
 
@@ -646,6 +590,7 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
 int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
   char c = 0;
   uint8_t sc = 0;
+  int key_break = 0;
 
   if (!runtime || !out_char) {
     return 0;
@@ -676,15 +621,15 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
       break;
     case X64_INPUT_BACKEND_PS2:
       if (runtime->has_ps2 && ps2_poll_scancode(&sc)) {
+        if (!decode_prefixed_scancode(&runtime->ps2_extended_prefix, sc, &sc,
+                                      &key_break)) {
+          break;
+        }
         if (sc == 0x2A || sc == 0x36) {
-          runtime->shift_active = 1;
+          runtime->shift_active = key_break ? 0 : 1;
           break;
         }
-        if (sc == 0xAA || sc == 0xB6) {
-          runtime->shift_active = 0;
-          break;
-        }
-        if (sc & 0x80u) {
+        if (key_break) {
           break;
         }
         if (sc == 0x1C) {
@@ -715,18 +660,19 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
         {
           uint8_t hv_sc = 0;
           int hv_break = 0;
-          int hv_ret = vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break);
+          int hv_extended = 0;
+          int hv_ret =
+              vmbus_keyboard_poll(hvkbd, &hv_sc, &hv_break, &hv_extended);
           if (hv_ret < 0) {
             defer_hyperv_backend(runtime);
             return 0;
           }
           if (hv_ret > 0) {
+            if (hv_extended) {
+              hv_sc = normalize_extended_scancode(hv_sc);
+            }
             if (hv_sc == 0x2A || hv_sc == 0x36) {
               runtime->shift_active = hv_break ? 0 : 1;
-              break;
-            }
-            if (hv_sc == 0xAA || hv_sc == 0xB6) {
-              runtime->shift_active = 0;
               break;
             }
             if (hv_break) {

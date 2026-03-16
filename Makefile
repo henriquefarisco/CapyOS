@@ -46,10 +46,12 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/timebase.o \
 	$(BUILD)/x86_64/arch/x86_64/kmem64.o \
 	$(BUILD)/x86_64/core/kcon.o \
+	$(BUILD)/x86_64/core/localization.o \
 	$(BUILD)/x86_64/core/login_runtime.o \
 	$(BUILD)/x86_64/core/network_bootstrap.o \
 	$(BUILD)/x86_64/core/system_init.o \
 	$(BUILD)/x86_64/core/user.o \
+	$(BUILD)/x86_64/core/user_prefs.o \
 	$(BUILD)/x86_64/core/session.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
@@ -191,12 +193,12 @@ HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include -DUNIT_TEST
 HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/test_csprng.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/test_csprng.c tests/test_localization.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
                tests/test_efi_block.c src/drivers/storage/efi_block.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c \
-               src/security/csprng.c src/security/crypt.c
+               src/security/csprng.c src/security/crypt.c src/core/localization.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

@@ -51,6 +51,9 @@ Contexto operacional atual:
 | `hey` | `hey <ip|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
+| `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`) e grava em `/system/config.ini`. |
+| `config-splash` | `config-splash [show|on|off]` | Alterna a animacao de splash do boot e grava em `/system/config.ini`. |
+| `config-language` | `config-language [list|show|pt-BR|en|es]` | Alterna o idioma do usuario atual e grava no perfil do `home`. |
 | `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |
 | `shutdown-off` | `shutdown-off` | Desliga (`halt`) apos sincronizar buffers. |
 | `type` | `type <caminho>` | Informa tipo basico (arquivo ou diretorio). |
@@ -85,6 +88,34 @@ Contexto operacional atual:
 - `go`, `kill-file`, `move` e demais comandos aceitam aspas e barras finais.
 - Use `config-keyboard list` para conferir os layouts disponiveis.
 
+### Temas visuais
+
+- `config-theme list` apresenta os temas disponiveis.
+- `config-theme show` exibe o tema ativo.
+- `config-theme ocean` aplica o tema azul/ciano e salva o padrao.
+- `config-theme forest` aplica o tema verde/floresta e salva o padrao.
+- `config-theme capyos` retorna ao tema padrao do sistema.
+
+### Splash de inicializacao
+
+- `config-splash show` exibe se o splash esta habilitado ou desabilitado.
+- `config-splash on` habilita a animacao de splash no proximo boot.
+- `config-splash off` desabilita a animacao e prioriza logs de inicializacao.
+- A configuracao e gravada em `/system/config.ini` como `splash=enabled` ou
+  `splash=disabled`.
+
+### Idioma por usuario
+
+- `config-language list` mostra os idiomas suportados: `pt-BR`, `en`, `es`.
+- `config-language show` exibe o idioma ativo da sessao autenticada.
+- `config-language en` muda o idioma do usuario atual para ingles.
+- `config-language es` muda o idioma do usuario atual para espanhol.
+- `config-language pt-BR` retorna ao idioma padrao em portugues do Brasil.
+- A configuracao e gravada no perfil do usuario em
+  `/home/<usuario>/.config/capyos/user.ini`.
+- O idioma passa a ser aplicado automaticamente apos o login e persiste entre
+  reboots.
+
 ## Comandos planejados (nao implementados)
 
 Estes comandos estao documentados apenas como referencia futura e retornarao
@@ -109,3 +140,5 @@ erro caso executados na versao atual:
 - Logs de processo ficam em `/var/log/setup.log` e `/var/log/cli-selftest.log`.
 - Diretorios `/home/<usuario>`, `/tmp` e `/var/log` receberam permissoes
   ajustadas para permitir criacao de arquivos pelo usuario administrador.
+- `print-envs` agora tambem expõe `LANG=<idioma>` para facilitar auditoria da
+  sessao atual.

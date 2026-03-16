@@ -1,6 +1,7 @@
 /* system_init.c: system setup helpers (config, first-run, users, theme). */
 #include "core/system_init.h"
 
+#include "core/localization.h"
 #include "core/session.h"
 #include "core/user.h"
 #include "drivers/console/tty.h"
@@ -71,6 +72,35 @@ static int strings_equal(const char *a, const char *b) {
   return a[i] == b[i];
 }
 
+static char g_boot_default_keyboard_layout[16] = "us";
+static char g_boot_default_language[16] = "en";
+
+static const char *normalize_keyboard_layout_name(const char *input) {
+  if (!input || !input[0]) {
+    return "us";
+  }
+  if (strings_equal(input, "br-abnt2")) {
+    return "br-abnt2";
+  }
+  if (strings_equal(input, "us")) {
+    return "us";
+  }
+  return "us";
+}
+
+static const char *system_language_or_default(const char *language) {
+  const char *normalized = localization_normalize_language(language);
+  return normalized ? normalized : "en";
+}
+
+void system_set_boot_defaults(const char *keyboard_layout, const char *language) {
+  cstring_copy(g_boot_default_keyboard_layout,
+               sizeof(g_boot_default_keyboard_layout),
+               normalize_keyboard_layout_name(keyboard_layout));
+  cstring_copy(g_boot_default_language, sizeof(g_boot_default_language),
+               system_language_or_default(language));
+}
+
 static void system_settings_set_defaults(struct system_settings *settings) {
   if (!settings) {
     return;
@@ -78,7 +108,9 @@ static void system_settings_set_defaults(struct system_settings *settings) {
   cstring_copy(settings->hostname, sizeof(settings->hostname), "capyos-node");
   cstring_copy(settings->theme, sizeof(settings->theme), "capyos");
   cstring_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout),
-               "us");
+               g_boot_default_keyboard_layout);
+  cstring_copy(settings->language, sizeof(settings->language),
+               g_boot_default_language);
   settings->splash_enabled = 1;
   settings->diagnostics_enabled = 0;
 }
@@ -295,9 +327,11 @@ static void log_dependency_wait(const char *dependency, const char *target) {
 }
 
 static int verify_config_file(const char *hostname, const char *theme,
-                              const char *keyboard, int splash_enabled) {
+                              const char *keyboard, const char *language,
+                              int splash_enabled) {
   const char *splash_value = splash_enabled ? "enabled" : "disabled";
   const char *keyboard_value = keyboard ? keyboard : "us";
+  const char *language_value = system_language_or_default(language);
   struct file *f = vfs_open("/system/config.ini", VFS_OPEN_READ);
   if (!f) {
     vga_write("Falha ao reabrir configuracao em /system/config.ini.\n");
@@ -315,6 +349,7 @@ static int verify_config_file(const char *hostname, const char *theme,
   int hostname_ok = 0;
   int theme_ok = 0;
   int keyboard_ok = 0;
+  int language_ok = 0;
   int splash_ok = 0;
 
   size_t start = 0;
@@ -332,6 +367,10 @@ static int verify_config_file(const char *hostname, const char *theme,
                    config_line_equals(&buffer[start], len, "keyboard",
                                       keyboard_value)) {
           keyboard_ok = 1;
+        } else if (!language_ok &&
+                   config_line_equals(&buffer[start], len, "language",
+                                      language_value)) {
+          language_ok = 1;
         } else if (!splash_ok && config_line_equals(&buffer[start], len,
                                                     "splash", splash_value)) {
           splash_ok = 1;
@@ -341,7 +380,8 @@ static int verify_config_file(const char *hostname, const char *theme,
     }
   }
 
-  if (!hostname_ok || !theme_ok || !keyboard_ok || !splash_ok) {
+  if (!hostname_ok || !theme_ok || !keyboard_ok || !language_ok ||
+      !splash_ok) {
     vga_write("Falha ao validar conteudo de /system/config.ini.\n");
     return -1;
   }
@@ -367,6 +407,10 @@ static int write_settings_file(const struct system_settings *settings) {
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
   buffer_append(config_buffer, sizeof(config_buffer), "keyboard=");
   buffer_append(config_buffer, sizeof(config_buffer), settings->keyboard_layout);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "language=");
+  buffer_append(config_buffer, sizeof(config_buffer),
+                system_language_or_default(settings->language));
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
   buffer_append(config_buffer, sizeof(config_buffer), "splash=");
   buffer_append(config_buffer, sizeof(config_buffer), splash_value);
@@ -450,21 +494,321 @@ static size_t wizard_prompt(const char *prompt, char *buffer, size_t buffer_len,
   return len;
 }
 
+enum system_ui_text_id {
+  SYS_UI_PASSWORD_CONFIRM_PROMPT = 0,
+  SYS_UI_PASSWORD_EMPTY,
+  SYS_UI_PASSWORD_MISMATCH,
+  SYS_UI_LAYOUTS_AVAILABLE,
+  SYS_UI_LAYOUT_PROMPT,
+  SYS_UI_LAYOUT_APPLIED_PREFIX,
+  SYS_UI_LAYOUT_UNKNOWN,
+  SYS_UI_HOSTNAME_PROMPT,
+  SYS_UI_HOSTNAME_DEFINED_PREFIX,
+  SYS_UI_THEMES_AVAILABLE,
+  SYS_UI_THEME_PROMPT,
+  SYS_UI_THEME_SELECTED_PREFIX,
+  SYS_UI_SPLASH_PROMPT,
+  SYS_UI_SPLASH_ENABLED,
+  SYS_UI_SPLASH_DISABLED,
+  SYS_UI_ADMIN_USER_PROMPT,
+  SYS_UI_ADMIN_USER_INVALID,
+  SYS_UI_ADMIN_HOME_CREATE_FAIL,
+  SYS_UI_ADMIN_HOME_UNAVAILABLE,
+  SYS_UI_ADMIN_HOME_PERM_WARNING,
+  SYS_UI_ADMIN_EXISTS,
+  SYS_UI_ADMIN_HOME_REBUILD_PREFIX,
+  SYS_UI_ADMIN_HOME_REBUILD_FAIL,
+  SYS_UI_ADMIN_PASSWORD_PROMPT_PREFIX,
+  SYS_UI_ADMIN_REGISTER_FAIL,
+  SYS_UI_ADMIN_RECORD_BUILD_FAIL,
+  SYS_UI_ADMIN_SAVE_FAIL,
+  SYS_UI_ADMIN_AUTH_REBUILD_FAIL,
+  SYS_UI_ADMIN_USERDB_REBUILD_FAIL,
+  SYS_UI_ADMIN_VALIDATED,
+  SYS_UI_CONFIG_WRITE_FAIL,
+  SYS_UI_CONFIG_VALIDATED,
+  SYS_UI_FIRST_BOOT_COMPLETE_FAIL,
+  SYS_UI_LOGIN_TITLE,
+  SYS_UI_LOGIN_HOST_PREFIX,
+  SYS_UI_LOGIN_USERNAME_PROMPT,
+  SYS_UI_LOGIN_PASSWORD_PROMPT,
+  SYS_UI_LOGIN_CREDENTIALS_REQUIRED,
+  SYS_UI_LOGIN_INVALID,
+};
+
+static const char *system_ui_text(const char *language,
+                                  enum system_ui_text_id id) {
+  const char *normalized = system_language_or_default(language);
+  if (strings_equal(normalized, "en")) {
+    switch (id) {
+    case SYS_UI_PASSWORD_CONFIRM_PROMPT:
+      return "Confirm password: ";
+    case SYS_UI_PASSWORD_EMPTY:
+      return "Password cannot be empty.";
+    case SYS_UI_PASSWORD_MISMATCH:
+      return "Passwords do not match.";
+    case SYS_UI_LAYOUTS_AVAILABLE:
+      return "Available keyboard layouts:";
+    case SYS_UI_LAYOUT_PROMPT:
+      return "Keyboard layout [us]: ";
+    case SYS_UI_LAYOUT_APPLIED_PREFIX:
+      return "   Layout applied: ";
+    case SYS_UI_LAYOUT_UNKNOWN:
+      return "Unknown layout. Choose a valid index or name.";
+    case SYS_UI_HOSTNAME_PROMPT:
+      return "Hostname [capyos-node]: ";
+    case SYS_UI_HOSTNAME_DEFINED_PREFIX:
+      return "   Hostname set: ";
+    case SYS_UI_THEMES_AVAILABLE:
+      return "Available themes: capyos, ocean, forest.";
+    case SYS_UI_THEME_PROMPT:
+      return "Theme [capyos]: ";
+    case SYS_UI_THEME_SELECTED_PREFIX:
+      return "   Selected theme: ";
+    case SYS_UI_SPLASH_PROMPT:
+      return "Enable animated splash? [Y/n]: ";
+    case SYS_UI_SPLASH_ENABLED:
+      return "   Animated splash: enabled";
+    case SYS_UI_SPLASH_DISABLED:
+      return "   Animated splash: disabled";
+    case SYS_UI_ADMIN_USER_PROMPT:
+      return "Administrator user [admin]: ";
+    case SYS_UI_ADMIN_USER_INVALID:
+      return "Invalid username; using default 'admin'.";
+    case SYS_UI_ADMIN_HOME_CREATE_FAIL:
+      return "Failed to create the administrator home directory.";
+    case SYS_UI_ADMIN_HOME_UNAVAILABLE:
+      return "Administrator home directory unavailable.";
+    case SYS_UI_ADMIN_HOME_PERM_WARNING:
+      return "Warning: could not adjust administrator home permissions.";
+    case SYS_UI_ADMIN_EXISTS:
+      return "   Administrator user already exists. Validating current record.";
+    case SYS_UI_ADMIN_HOME_REBUILD_PREFIX:
+      return "   Home directory missing. Recreating in ";
+    case SYS_UI_ADMIN_HOME_REBUILD_FAIL:
+      return "   Failed to rebuild the administrator home directory.";
+    case SYS_UI_ADMIN_PASSWORD_PROMPT_PREFIX:
+      return "Set the password for user ";
+    case SYS_UI_ADMIN_REGISTER_FAIL:
+      return "Could not register the administrator user.";
+    case SYS_UI_ADMIN_RECORD_BUILD_FAIL:
+      return "Failed to build the administrator record.";
+    case SYS_UI_ADMIN_SAVE_FAIL:
+      return "Failed to save the administrator user.";
+    case SYS_UI_ADMIN_AUTH_REBUILD_FAIL:
+      return "Administrator authentication test failed. Rebuilding user database.";
+    case SYS_UI_ADMIN_USERDB_REBUILD_FAIL:
+      return "Could not rebuild /etc/users.db.";
+    case SYS_UI_ADMIN_VALIDATED:
+      return "   Administrator user validated successfully.";
+    case SYS_UI_CONFIG_WRITE_FAIL:
+      return "Failed to write initial configuration.";
+    case SYS_UI_CONFIG_VALIDATED:
+      return "   /system/config.ini validated successfully.";
+    case SYS_UI_FIRST_BOOT_COMPLETE_FAIL:
+      return "Could not mark setup completion.";
+    case SYS_UI_LOGIN_TITLE:
+      return "== CapyOS Login ==";
+    case SYS_UI_LOGIN_HOST_PREFIX:
+      return "Host: ";
+    case SYS_UI_LOGIN_USERNAME_PROMPT:
+      return "User: ";
+    case SYS_UI_LOGIN_PASSWORD_PROMPT:
+      return "Password: ";
+    case SYS_UI_LOGIN_CREDENTIALS_REQUIRED:
+      return "Credentials required.";
+    case SYS_UI_LOGIN_INVALID:
+      return "Invalid username or password.";
+    default:
+      return "";
+    }
+  }
+  if (strings_equal(normalized, "es")) {
+    switch (id) {
+    case SYS_UI_PASSWORD_CONFIRM_PROMPT:
+      return "Confirma la contrasena: ";
+    case SYS_UI_PASSWORD_EMPTY:
+      return "La contrasena no puede estar vacia.";
+    case SYS_UI_PASSWORD_MISMATCH:
+      return "Las contrasenas no coinciden.";
+    case SYS_UI_LAYOUTS_AVAILABLE:
+      return "Layouts de teclado disponibles:";
+    case SYS_UI_LAYOUT_PROMPT:
+      return "Layout del teclado [us]: ";
+    case SYS_UI_LAYOUT_APPLIED_PREFIX:
+      return "   Layout aplicado: ";
+    case SYS_UI_LAYOUT_UNKNOWN:
+      return "Layout desconocido. Elige un indice o nombre valido.";
+    case SYS_UI_HOSTNAME_PROMPT:
+      return "Hostname [capyos-node]: ";
+    case SYS_UI_HOSTNAME_DEFINED_PREFIX:
+      return "   Hostname definido: ";
+    case SYS_UI_THEMES_AVAILABLE:
+      return "Temas disponibles: capyos, ocean, forest.";
+    case SYS_UI_THEME_PROMPT:
+      return "Tema [capyos]: ";
+    case SYS_UI_THEME_SELECTED_PREFIX:
+      return "   Tema seleccionado: ";
+    case SYS_UI_SPLASH_PROMPT:
+      return "Activar splash animado? [S/n]: ";
+    case SYS_UI_SPLASH_ENABLED:
+      return "   Splash animado: habilitado";
+    case SYS_UI_SPLASH_DISABLED:
+      return "   Splash animado: deshabilitado";
+    case SYS_UI_ADMIN_USER_PROMPT:
+      return "Usuario administrador [admin]: ";
+    case SYS_UI_ADMIN_USER_INVALID:
+      return "Nombre de usuario invalido; usando 'admin'.";
+    case SYS_UI_ADMIN_HOME_CREATE_FAIL:
+      return "Fallo al crear el directorio home del administrador.";
+    case SYS_UI_ADMIN_HOME_UNAVAILABLE:
+      return "Directorio home del administrador no disponible.";
+    case SYS_UI_ADMIN_HOME_PERM_WARNING:
+      return "Aviso: no fue posible ajustar los permisos del home.";
+    case SYS_UI_ADMIN_EXISTS:
+      return "   El usuario administrador ya existe. Validando registro actual.";
+    case SYS_UI_ADMIN_HOME_REBUILD_PREFIX:
+      return "   Home ausente. Recreando en ";
+    case SYS_UI_ADMIN_HOME_REBUILD_FAIL:
+      return "   Fallo al reconstruir el home del administrador.";
+    case SYS_UI_ADMIN_PASSWORD_PROMPT_PREFIX:
+      return "Define la contrasena para el usuario ";
+    case SYS_UI_ADMIN_REGISTER_FAIL:
+      return "No fue posible registrar el usuario administrador.";
+    case SYS_UI_ADMIN_RECORD_BUILD_FAIL:
+      return "Error al montar el registro del administrador.";
+    case SYS_UI_ADMIN_SAVE_FAIL:
+      return "Error al guardar el usuario administrador.";
+    case SYS_UI_ADMIN_AUTH_REBUILD_FAIL:
+      return "La validacion del administrador fallo. Reconstruyendo la base de usuarios.";
+    case SYS_UI_ADMIN_USERDB_REBUILD_FAIL:
+      return "No fue posible reconstruir /etc/users.db.";
+    case SYS_UI_ADMIN_VALIDATED:
+      return "   Usuario administrador validado correctamente.";
+    case SYS_UI_CONFIG_WRITE_FAIL:
+      return "Fallo al grabar la configuracion inicial.";
+    case SYS_UI_CONFIG_VALIDATED:
+      return "   /system/config.ini validado correctamente.";
+    case SYS_UI_FIRST_BOOT_COMPLETE_FAIL:
+      return "No fue posible registrar el fin de la configuracion.";
+    case SYS_UI_LOGIN_TITLE:
+      return "== Inicio de sesion CapyOS ==";
+    case SYS_UI_LOGIN_HOST_PREFIX:
+      return "Host: ";
+    case SYS_UI_LOGIN_USERNAME_PROMPT:
+      return "Usuario: ";
+    case SYS_UI_LOGIN_PASSWORD_PROMPT:
+      return "Contrasena: ";
+    case SYS_UI_LOGIN_CREDENTIALS_REQUIRED:
+      return "Credenciales obligatorias.";
+    case SYS_UI_LOGIN_INVALID:
+      return "Usuario o contrasena invalidos.";
+    default:
+      return "";
+    }
+  }
+
+  switch (id) {
+  case SYS_UI_PASSWORD_CONFIRM_PROMPT:
+    return "Confirme a senha: ";
+  case SYS_UI_PASSWORD_EMPTY:
+    return "Senha nao pode ser vazia.";
+  case SYS_UI_PASSWORD_MISMATCH:
+    return "As senhas nao coincidem.";
+  case SYS_UI_LAYOUTS_AVAILABLE:
+    return "Layouts de teclado disponiveis:";
+  case SYS_UI_LAYOUT_PROMPT:
+    return "Layout do teclado [us]: ";
+  case SYS_UI_LAYOUT_APPLIED_PREFIX:
+    return "   Layout aplicado: ";
+  case SYS_UI_LAYOUT_UNKNOWN:
+    return "Layout desconhecido. Escolha um indice ou nome valido.";
+  case SYS_UI_HOSTNAME_PROMPT:
+    return "Hostname [capyos-node]: ";
+  case SYS_UI_HOSTNAME_DEFINED_PREFIX:
+    return "   Hostname definido: ";
+  case SYS_UI_THEMES_AVAILABLE:
+    return "Temas disponiveis: capyos, ocean, forest.";
+  case SYS_UI_THEME_PROMPT:
+    return "Tema [capyos]: ";
+  case SYS_UI_THEME_SELECTED_PREFIX:
+    return "   Tema selecionado: ";
+  case SYS_UI_SPLASH_PROMPT:
+    return "Ativar splash animado? [S/n]: ";
+  case SYS_UI_SPLASH_ENABLED:
+    return "   Splash animado: habilitado";
+  case SYS_UI_SPLASH_DISABLED:
+    return "   Splash animado: desabilitado";
+  case SYS_UI_ADMIN_USER_PROMPT:
+    return "Usuario administrador [admin]: ";
+  case SYS_UI_ADMIN_USER_INVALID:
+    return "Nome de usuario invalido; usando padrao 'admin'.";
+  case SYS_UI_ADMIN_HOME_CREATE_FAIL:
+    return "Falha ao criar diretorio pessoal do administrador.";
+  case SYS_UI_ADMIN_HOME_UNAVAILABLE:
+    return "Diretorio pessoal do administrador indisponivel.";
+  case SYS_UI_ADMIN_HOME_PERM_WARNING:
+    return "Aviso: nao foi possivel ajustar permissoes do diretorio pessoal.";
+  case SYS_UI_ADMIN_EXISTS:
+    return "   Usuario administrador ja existente. Validando registro atual.";
+  case SYS_UI_ADMIN_HOME_REBUILD_PREFIX:
+    return "   Diretorio pessoal ausente. Recriando em ";
+  case SYS_UI_ADMIN_HOME_REBUILD_FAIL:
+    return "   Falha ao reconstruir diretorio pessoal do administrador.";
+  case SYS_UI_ADMIN_PASSWORD_PROMPT_PREFIX:
+    return "Defina a senha para o usuario ";
+  case SYS_UI_ADMIN_REGISTER_FAIL:
+    return "Nao foi possivel registrar o usuario administrador.";
+  case SYS_UI_ADMIN_RECORD_BUILD_FAIL:
+    return "Erro ao montar registro do administrador.";
+  case SYS_UI_ADMIN_SAVE_FAIL:
+    return "Erro ao salvar usuario administrador.";
+  case SYS_UI_ADMIN_AUTH_REBUILD_FAIL:
+    return "Falha no teste de autenticacao do administrador. Recriando base de usuarios.";
+  case SYS_UI_ADMIN_USERDB_REBUILD_FAIL:
+    return "Nao foi possivel reconstruir /etc/users.db.";
+  case SYS_UI_ADMIN_VALIDATED:
+    return "   Usuario administrador validado com sucesso.";
+  case SYS_UI_CONFIG_WRITE_FAIL:
+    return "Falha ao gravar configuracao inicial.";
+  case SYS_UI_CONFIG_VALIDATED:
+    return "   /system/config.ini validado com sucesso.";
+  case SYS_UI_FIRST_BOOT_COMPLETE_FAIL:
+    return "Nao foi possivel registrar conclusao da configuracao.";
+  case SYS_UI_LOGIN_TITLE:
+    return "== CapyOS Login ==";
+  case SYS_UI_LOGIN_HOST_PREFIX:
+    return "Host: ";
+  case SYS_UI_LOGIN_USERNAME_PROMPT:
+    return "Usuario: ";
+  case SYS_UI_LOGIN_PASSWORD_PROMPT:
+    return "Senha: ";
+  case SYS_UI_LOGIN_CREDENTIALS_REQUIRED:
+    return "Credenciais obrigatorias.";
+  case SYS_UI_LOGIN_INVALID:
+    return "Usuario ou senha invalidos.";
+  default:
+    return "";
+  }
+}
+
 static int prompt_password_pair(const char *label, char *password,
-                                size_t password_len) {
+                                size_t password_len,
+                                const char *language) {
   for (int tries = 0; tries < 3; ++tries) {
     char confirm[TTY_BUFFER_MAX];
     memory_zero(password, password_len);
     memory_zero(confirm, sizeof(confirm));
     size_t plen = wizard_prompt(label, password, password_len, 1);
-    size_t clen =
-        wizard_prompt("Confirme a senha: ", confirm, sizeof(confirm), 1);
+    size_t clen = wizard_prompt(
+        system_ui_text(language, SYS_UI_PASSWORD_CONFIRM_PROMPT), confirm,
+        sizeof(confirm), 1);
     if (plen == 0 || clen == 0) {
-      print_line("Senha nao pode ser vazia.");
+      print_line(system_ui_text(language, SYS_UI_PASSWORD_EMPTY));
       continue;
     }
     if (plen != clen) {
-      print_line("As senhas nao coincidem.");
+      print_line(system_ui_text(language, SYS_UI_PASSWORD_MISMATCH));
       continue;
     }
     int match = 1;
@@ -476,7 +820,7 @@ static int prompt_password_pair(const char *label, char *password,
     }
     memory_zero(confirm, sizeof(confirm));
     if (!match) {
-      print_line("As senhas nao coincidem.");
+      print_line(system_ui_text(language, SYS_UI_PASSWORD_MISMATCH));
       continue;
     }
     return 0;
@@ -525,6 +869,10 @@ static const char *g_cli_reference_text =
     "  net-dns              - exibe DNS atual\n"
     "  net-set <ip> <mask> <gw> <dns> - aplica IPv4 estatico\n"
     "  hey <destino>        - ping (ICMP echo)\n"
+    "  config-theme [tema]  - altera tema visual\n"
+    "  config-splash [modo] - altera splash no boot\n"
+    "  config-language [idioma] - altera idioma do usuario\n"
+    "  config-keyboard [layout] - altera layout do teclado\n"
     "  mess                 - limpa tela\n"
     "  bye                  - encerra sessao\n"
     "\n"
@@ -724,6 +1072,15 @@ static const char *validate_theme(const char *input) {
   return "capyos";
 }
 
+void __attribute__((weak)) system_platform_apply_theme(const char *theme) {
+  (void)theme;
+}
+
+void __attribute__((weak))
+system_platform_sync_theme(const struct system_settings *settings) {
+  (void)settings;
+}
+
 int system_mark_first_boot_complete(void) {
   if (ensure_directory("/system") != 0) {
     return -1;
@@ -733,9 +1090,18 @@ int system_mark_first_boot_complete(void) {
 
 /* Implementacao da configuracao inicial. */
 static int first_boot_setup_impl(void) {
-  print_line("=== Assistente CapyOS - Configuracao Inicial ===");
-  print_line(
-      "Este assistente prepara usuarios, configuracao e estrutura basica.");
+  const char *setup_language = system_language_or_default(g_boot_default_language);
+  if (strings_equal(setup_language, "en")) {
+    print_line("=== CapyOS Initial Setup ===");
+    print_line("This wizard prepares users, settings, and the base system structure.");
+  } else if (strings_equal(setup_language, "es")) {
+    print_line("=== Configuracion Inicial de CapyOS ===");
+    print_line("Este asistente prepara usuarios, configuracion y la estructura basica.");
+  } else {
+    print_line("=== Assistente CapyOS - Configuracao Inicial ===");
+    print_line(
+        "Este assistente prepara usuarios, configuracao e estrutura basica.");
+  }
   vga_newline();
 
   g_setup_debug = 1; // habilita logs detalhados durante a preparacao inicial
@@ -872,7 +1238,7 @@ static int first_boot_setup_impl(void) {
   log_process_finalize(proc_docs);
   log_process_finalize_success(proc_docs);
 
-  print_line("Layouts de teclado disponiveis:");
+  print_line(system_ui_text(setup_language, SYS_UI_LAYOUTS_AVAILABLE));
   for (size_t i = 0; i < keyboard_layout_count(); ++i) {
     char idxbuf[4];
     idxbuf[0] = '[';
@@ -892,7 +1258,8 @@ static int first_boot_setup_impl(void) {
   memory_zero(layout_choice, sizeof(layout_choice));
   while (1) {
     size_t llen =
-        wizard_prompt("Layout do teclado [us]: ", layout_choice,
+        wizard_prompt(system_ui_text(setup_language, SYS_UI_LAYOUT_PROMPT),
+                      layout_choice,
                       sizeof(layout_choice), 0);
     if (llen == 0) {
       cstring_copy(layout_choice, sizeof(layout_choice), "us");
@@ -905,12 +1272,13 @@ static int first_boot_setup_impl(void) {
     if (keyboard_set_layout_by_name(layout_choice) == 0) {
       char msg[96];
       msg[0] = '\0';
-      buffer_append(msg, sizeof(msg), "   Layout aplicado: ");
+      buffer_append(msg, sizeof(msg),
+                    system_ui_text(setup_language, SYS_UI_LAYOUT_APPLIED_PREFIX));
       buffer_append(msg, sizeof(msg), layout_choice);
       print_line(msg);
       break;
     }
-    print_line("Layout desconhecido. Escolha um indice ou nome valido.");
+    print_line(system_ui_text(setup_language, SYS_UI_LAYOUT_UNKNOWN));
   }
 
   char hostname[TTY_BUFFER_MAX];
@@ -925,47 +1293,54 @@ static int first_boot_setup_impl(void) {
   log_process_begin(proc_settings);
   log_process_begin_success(proc_settings);
   size_t hlen =
-      wizard_prompt("Hostname [capyos-node]: ", hostname, sizeof(hostname), 0);
+      wizard_prompt(system_ui_text(setup_language, SYS_UI_HOSTNAME_PROMPT),
+                    hostname, sizeof(hostname), 0);
   if (hlen == 0) {
     cstring_copy(hostname, sizeof(hostname), "capyos-node");
   }
   char host_msg[128];
   host_msg[0] = '\0';
-  buffer_append(host_msg, sizeof(host_msg), "   Hostname definido: ");
+  buffer_append(host_msg, sizeof(host_msg),
+                system_ui_text(setup_language, SYS_UI_HOSTNAME_DEFINED_PREFIX));
   buffer_append(host_msg, sizeof(host_msg), hostname);
   print_line(host_msg);
 
-  print_line("Temas disponiveis: capyos, ocean, forest.");
+  print_line(system_ui_text(setup_language, SYS_UI_THEMES_AVAILABLE));
   size_t tlen =
-      wizard_prompt("Tema [capyos]: ", theme_input, sizeof(theme_input), 0);
+      wizard_prompt(system_ui_text(setup_language, SYS_UI_THEME_PROMPT),
+                    theme_input, sizeof(theme_input), 0);
   if (tlen == 0) {
     cstring_copy(theme_input, sizeof(theme_input), "capyos");
   }
   const char *theme = validate_theme(theme_input);
   char theme_msg[128];
   theme_msg[0] = '\0';
-  buffer_append(theme_msg, sizeof(theme_msg), "   Tema selecionado: ");
+  buffer_append(theme_msg, sizeof(theme_msg),
+                system_ui_text(setup_language, SYS_UI_THEME_SELECTED_PREFIX));
   buffer_append(theme_msg, sizeof(theme_msg), theme);
   print_line(theme_msg);
 
-  size_t slen = wizard_prompt("Ativar splash animado? [S/n]: ", splash_answer,
-                              sizeof(splash_answer), 0);
+  size_t slen = wizard_prompt(
+      system_ui_text(setup_language, SYS_UI_SPLASH_PROMPT), splash_answer,
+      sizeof(splash_answer), 0);
   int splash_enabled = 1;
   if (slen > 0 && (splash_answer[0] == 'n' || splash_answer[0] == 'N')) {
     splash_enabled = 0;
   }
-  print_line(splash_enabled ? "   Splash animado: habilitado"
-                            : "   Splash animado: desabilitado");
+  print_line(splash_enabled
+                 ? system_ui_text(setup_language, SYS_UI_SPLASH_ENABLED)
+                 : system_ui_text(setup_language, SYS_UI_SPLASH_DISABLED));
 
   char admin_username[USER_NAME_MAX];
   memory_zero(admin_username, sizeof(admin_username));
-  size_t ulen = wizard_prompt("Usuario administrador [admin]: ", admin_username,
-                              sizeof(admin_username), 0);
+  size_t ulen =
+      wizard_prompt(system_ui_text(setup_language, SYS_UI_ADMIN_USER_PROMPT),
+                    admin_username, sizeof(admin_username), 0);
   if (ulen == 0) {
     cstring_copy(admin_username, sizeof(admin_username), "admin");
   }
   if (!validate_admin_username(admin_username)) {
-    print_line("Nome de usuario invalido; usando padrao 'admin'.");
+    print_line(system_ui_text(setup_language, SYS_UI_ADMIN_USER_INVALID));
     cstring_copy(admin_username, sizeof(admin_username), "admin");
   }
 
@@ -982,57 +1357,59 @@ static int first_boot_setup_impl(void) {
   memory_zero(admin_home, sizeof(admin_home));
   build_home_path(admin_username, admin_home, sizeof(admin_home));
   if (ensure_directory(admin_home) != 0) {
-    print_line("Falha ao criar diretorio pessoal do administrador.");
+    print_line(system_ui_text(setup_language, SYS_UI_ADMIN_HOME_CREATE_FAIL));
     memory_zero(admin_password, sizeof(admin_password));
     return -1;
   }
   if (verify_directory_exists(admin_home) != 0) {
-    print_line("Diretorio pessoal do administrador indisponivel.");
+    print_line(system_ui_text(setup_language, SYS_UI_ADMIN_HOME_UNAVAILABLE));
     memory_zero(admin_password, sizeof(admin_password));
     return -1;
   }
   struct vfs_metadata home_meta = {admin_uid, admin_gid, 0700};
   if (vfs_set_metadata(admin_home, &home_meta) != 0) {
-    print_line(
-        "Aviso: nao foi possivel ajustar permissoes do diretorio pessoal.");
+    print_line(system_ui_text(setup_language, SYS_UI_ADMIN_HOME_PERM_WARNING));
   }
   sync_root_device();
 
   int admin_ready = 0;
   struct user_record existing;
   if (userdb_find(admin_username, &existing) == 0) {
-    print_line(
-        "   Usuario administrador ja existente. Validando registro atual.");
+    print_line(system_ui_text(setup_language, SYS_UI_ADMIN_EXISTS));
     if (verify_directory_exists(existing.home) != 0) {
       char rebuild_msg[128];
       rebuild_msg[0] = '\0';
       buffer_append(rebuild_msg, sizeof(rebuild_msg),
-                    "   Diretorio pessoal ausente. Recriando em ");
+                    system_ui_text(setup_language,
+                                   SYS_UI_ADMIN_HOME_REBUILD_PREFIX));
       buffer_append(rebuild_msg, sizeof(rebuild_msg), existing.home);
       buffer_append(rebuild_msg, sizeof(rebuild_msg), ".");
       print_line(rebuild_msg);
       if (ensure_directory(existing.home) != 0 ||
           verify_directory_exists(existing.home) != 0) {
-        print_line("   Falha ao reconstruir diretorio pessoal do administrador.");
+        print_line(
+            system_ui_text(setup_language, SYS_UI_ADMIN_HOME_REBUILD_FAIL));
         return -1;
       }
     }
     admin_uid = existing.uid;
     admin_gid = existing.gid;
+    (void)user_prefs_save_language(&existing, setup_language);
     admin_ready = 1;
   }
 
   char password_prompt[96];
   password_prompt[0] = '\0';
   buffer_append(password_prompt, sizeof(password_prompt),
-                "Defina a senha para o usuario ");
+                system_ui_text(setup_language,
+                               SYS_UI_ADMIN_PASSWORD_PROMPT_PREFIX));
   buffer_append(password_prompt, sizeof(password_prompt), admin_username);
   buffer_append(password_prompt, sizeof(password_prompt), ": ");
 
   while (!admin_ready) {
     if (prompt_password_pair(password_prompt, admin_password,
-                             sizeof(admin_password)) != 0) {
-      print_line("Nao foi possivel registrar o usuario administrador.");
+                             sizeof(admin_password), setup_language) != 0) {
+      print_line(system_ui_text(setup_language, SYS_UI_ADMIN_REGISTER_FAIL));
       memory_zero(admin_password, sizeof(admin_password));
       continue;
     }
@@ -1040,13 +1417,14 @@ static int first_boot_setup_impl(void) {
     struct user_record admin;
     if (user_record_init(admin_username, admin_password, "admin", admin_uid,
                          admin_gid, admin_home, &admin) != 0) {
-      print_line("Erro ao montar registro do administrador.");
+      print_line(
+          system_ui_text(setup_language, SYS_UI_ADMIN_RECORD_BUILD_FAIL));
       memory_zero(admin_password, sizeof(admin_password));
       continue;
     }
 
     if (userdb_add(&admin) != 0) {
-      print_line("Erro ao salvar usuario administrador.");
+      print_line(system_ui_text(setup_language, SYS_UI_ADMIN_SAVE_FAIL));
       memory_zero(admin_password, sizeof(admin_password));
       continue;
     }
@@ -1055,11 +1433,12 @@ static int first_boot_setup_impl(void) {
 
     struct user_record verify_rec;
     if (userdb_authenticate(admin_username, admin_password, &verify_rec) != 0) {
-      print_line("Falha no teste de autenticacao do administrador. Recriando "
-                 "base de usuarios.");
+      print_line(
+          system_ui_text(setup_language, SYS_UI_ADMIN_AUTH_REBUILD_FAIL));
       vfs_unlink(USER_DB_PATH);
       if (userdb_ensure() != 0) {
-        print_line("Nao foi possivel reconstruir /etc/users.db.");
+        print_line(
+            system_ui_text(setup_language, SYS_UI_ADMIN_USERDB_REBUILD_FAIL));
         memory_zero(admin_password, sizeof(admin_password));
         return -1;
       }
@@ -1068,9 +1447,10 @@ static int first_boot_setup_impl(void) {
       continue;
     }
 
+    (void)user_prefs_save_language(&verify_rec, setup_language);
     admin_uid = admin.uid;
     admin_gid = admin.gid;
-    print_line("   Usuario administrador validado com sucesso.");
+    print_line(system_ui_text(setup_language, SYS_UI_ADMIN_VALIDATED));
     memory_zero(admin_password, sizeof(admin_password));
     admin_ready = 1;
   }
@@ -1098,6 +1478,9 @@ static int first_boot_setup_impl(void) {
   buffer_append(config_buffer, sizeof(config_buffer), "keyboard=");
   buffer_append(config_buffer, sizeof(config_buffer), keyboard_value);
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "language=");
+  buffer_append(config_buffer, sizeof(config_buffer), setup_language);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
   buffer_append(config_buffer, sizeof(config_buffer), "splash=");
   buffer_append(config_buffer, sizeof(config_buffer), splash_value);
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
@@ -1107,18 +1490,20 @@ static int first_boot_setup_impl(void) {
   log_process_begin(proc_config);
   log_process_begin_success(proc_config);
   if (write_text_file("/system/config.ini", config_buffer) != 0) {
-    print_line("Falha ao gravar configuracao inicial.");
+    print_line(system_ui_text(setup_language, SYS_UI_CONFIG_WRITE_FAIL));
     return -1;
   }
   sync_root_device();
-  if (verify_config_file(hostname, theme, keyboard_value, splash_enabled) !=
+  if (verify_config_file(hostname, theme, keyboard_value, setup_language,
+                         splash_enabled) !=
       0) {
     return -1;
   }
-  print_line("   /system/config.ini validado com sucesso.");
+  print_line(system_ui_text(setup_language, SYS_UI_CONFIG_VALIDATED));
 
   if (system_mark_first_boot_complete() != 0) {
-    print_line("Nao foi possivel registrar conclusao da configuracao.");
+    print_line(
+        system_ui_text(setup_language, SYS_UI_FIRST_BOOT_COMPLETE_FAIL));
     return -1;
   }
   sync_root_device();
@@ -1202,6 +1587,9 @@ static void apply_config_line(struct system_settings *settings,
   } else if (strings_equal(key, "keyboard")) {
     cstring_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout),
                  value);
+  } else if (strings_equal(key, "language")) {
+    cstring_copy(settings->language, sizeof(settings->language),
+                 system_language_or_default(value));
   } else if (strings_equal(key, "splash")) {
     if (value[0] == 'd' || value[0] == 'D') {
       settings->splash_enabled = 0;
@@ -1253,19 +1641,39 @@ int system_load_settings(struct system_settings *out) {
 }
 
 int system_save_settings(const struct system_settings *settings) {
+  struct session_context *previous_session = NULL;
+  const struct user_record *previous_user = NULL;
+  int rc = 0;
   if (!settings) {
     return -1;
   }
+
+  previous_session = session_active();
+  previous_user = previous_session ? session_user(previous_session) : NULL;
+  if (previous_user && previous_user->username[0]) {
+    struct vfs_metadata meta;
+    meta.uid = previous_user->uid;
+    meta.gid = previous_user->gid;
+    meta.perm = 0644;
+    (void)vfs_set_metadata("/system/config.ini", &meta);
+  }
+  session_set_active(NULL);
+
   if (write_settings_file(settings) != 0) {
-    return -1;
+    rc = -1;
+    goto done;
   }
   sync_root_device();
   if (verify_config_file(settings->hostname, settings->theme,
-                         settings->keyboard_layout,
+                         settings->keyboard_layout, settings->language,
                          settings->splash_enabled) != 0) {
-    return -1;
+    rc = -1;
+    goto done;
   }
-  return 0;
+
+done:
+  session_set_active(previous_session);
+  return rc;
 }
 
 int system_save_keyboard_layout(const char *layout) {
@@ -1282,6 +1690,23 @@ int system_save_keyboard_layout(const char *layout) {
   return system_save_settings(&settings);
 }
 
+int system_save_theme(const char *theme) {
+  struct system_settings settings;
+  const char *validated = validate_theme(theme);
+  system_settings_set_defaults(&settings);
+  system_load_settings(&settings);
+  cstring_copy(settings.theme, sizeof(settings.theme), validated);
+  return system_save_settings(&settings);
+}
+
+int system_save_splash_enabled(int enabled) {
+  struct system_settings settings;
+  system_settings_set_defaults(&settings);
+  system_load_settings(&settings);
+  settings.splash_enabled = enabled ? 1 : 0;
+  return system_save_settings(&settings);
+}
+
 void system_apply_keyboard_layout(const struct system_settings *settings) {
   const char *layout = (settings && settings->keyboard_layout[0])
                            ? settings->keyboard_layout
@@ -1295,6 +1720,8 @@ void system_apply_keyboard_layout(const struct system_settings *settings) {
 
 int system_login(struct session_context *session,
                  const struct system_settings *settings) {
+  const char *language =
+      settings ? system_language_or_default(settings->language) : "en";
   if (!session) {
     return -1;
   }
@@ -1302,11 +1729,12 @@ int system_login(struct session_context *session,
   log_process_begin(proc_login);
   log_process_begin_success(proc_login);
   vga_newline();
-  print_line("== CapyOS Login ==");
+  print_line(system_ui_text(language, SYS_UI_LOGIN_TITLE));
   if (settings) {
     char host_msg[128];
     host_msg[0] = '\0';
-    buffer_append(host_msg, sizeof(host_msg), "Host: ");
+    buffer_append(host_msg, sizeof(host_msg),
+                  system_ui_text(language, SYS_UI_LOGIN_HOST_PREFIX));
     buffer_append(host_msg, sizeof(host_msg), settings->hostname);
     print_line(host_msg);
   }
@@ -1318,10 +1746,14 @@ int system_login(struct session_context *session,
     memory_zero(username, sizeof(username));
     memory_zero(password, sizeof(password));
     log_process_progress(proc_login);
-    size_t ulen = wizard_prompt("Usuario: ", username, sizeof(username), 0);
-    size_t plen = wizard_prompt("Senha: ", password, sizeof(password), 1);
+    size_t ulen = wizard_prompt(
+        system_ui_text(language, SYS_UI_LOGIN_USERNAME_PROMPT), username,
+        sizeof(username), 0);
+    size_t plen = wizard_prompt(
+        system_ui_text(language, SYS_UI_LOGIN_PASSWORD_PROMPT), password,
+        sizeof(password), 1);
     if (ulen == 0 || plen == 0) {
-      print_line("Credenciais obrigatorias.");
+      print_line(system_ui_text(language, SYS_UI_LOGIN_CREDENTIALS_REQUIRED));
       continue;
     }
     char attempt_msg[160];
@@ -1333,10 +1765,12 @@ int system_login(struct session_context *session,
 
     if (userdb_authenticate(username, password, &record) == 0) {
       memory_zero(password, sizeof(password));
-      session_begin(session, &record);
+      session_begin(session, &record, language);
       char welcome[160];
+      language = session_language(session);
       welcome[0] = '\0';
-      buffer_append(welcome, sizeof(welcome), "Bem-vindo, ");
+      buffer_append(welcome, sizeof(welcome),
+                    localization_text_for(language, LOC_TEXT_WELCOME_PREFIX));
       buffer_append(welcome, sizeof(welcome), record.username);
       buffer_append(welcome, sizeof(welcome), ".");
       print_line(welcome);
@@ -1353,7 +1787,7 @@ int system_login(struct session_context *session,
       return 0;
     }
     memory_zero(password, sizeof(password));
-    print_line("Usuario ou senha invalidos.");
+    print_line(system_ui_text(language, SYS_UI_LOGIN_INVALID));
     char fail_msg[160];
     fail_msg[0] = '\0';
     buffer_append(fail_msg, sizeof(fail_msg), "Login falhou: usuario=");
@@ -1366,6 +1800,8 @@ void system_apply_theme(const struct system_settings *settings) {
   const char *theme = settings ? settings->theme : NULL;
   if (!theme) {
     vga_set_color(7, 0);
+    system_platform_apply_theme("capyos");
+    system_platform_sync_theme(settings);
     return;
   }
   if (strings_equal(theme, "ocean")) {
@@ -1374,7 +1810,10 @@ void system_apply_theme(const struct system_settings *settings) {
     vga_set_color(10, 2); // green on greenish
   } else {
     vga_set_color(7, 0); // default capyos
+    theme = "capyos";
   }
+  system_platform_apply_theme(theme);
+  system_platform_sync_theme(settings);
 }
 
 void system_show_splash(const struct system_settings *settings) {

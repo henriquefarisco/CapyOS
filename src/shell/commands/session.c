@@ -1,6 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
+#include "core/localization.h"
 #include "drivers/video/vga.h"
 
 static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {
@@ -14,14 +15,21 @@ static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_bye(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "bye",
-                          "Encerra a sessao atual e retorna a tela de login.")) {
+    const char *language = ctx && ctx->session ? session_language(ctx->session) : "pt-BR";
+    if (shell_help_requested(argc, argv)) {
+        if (shell_string_equal(language, "en")) {
+            shell_print("Usage: bye\nEnds the current session and returns to the login screen.\n");
+        } else if (shell_string_equal(language, "es")) {
+            shell_print("Uso: bye\nCierra la sesion actual y vuelve a la pantalla de inicio de sesion.\n");
+        } else {
+            shell_print("Uso: bye\nEncerra a sessao atual e retorna a tela de login.\n");
+        }
         return 0;
     }
     (void)argc;
     (void)argv;
     shell_request_logout(ctx);
-    shell_print("Encerrando sessao...\n");
+    shell_print(localization_text_for(language, LOC_TEXT_LOGOUT_MESSAGE));
     return 0;
 }
 

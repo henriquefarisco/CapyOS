@@ -6,6 +6,7 @@
 #include "arch/x86/hw/io.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
+#include "drivers/input/keyboard_compose.h"
 #include "drivers/input/keyboard_layout.h"
 #include "security/csprng.h"
 
@@ -14,6 +15,7 @@ static int g_layouts_initialized = 0;
 
 static const struct keyboard_layout *current_layout = NULL;
 static int shift_on = 0;
+static int extended_prefix = 0;
 static char g_dead_accent = 0; // '\'', '`', '^', '~', '"' for diaeresis
 static keyboard_hotkey_callback g_help_hotkey = NULL;
 
@@ -42,23 +44,38 @@ static int is_dead_key(uint8_t sc, char ch, int shift_active) {
   if (!dead) {
     return 0;
   }
-  return ch == '\'' || ch == '`' || ch == '^' || ch == '~' || ch == '"';
+  return keyboard_compose_is_dead_accent(ch);
+}
+
+static uint8_t normalize_extended_scancode(uint8_t scancode) {
+  if (scancode == 0x35u) {
+    return 0x73u;
+  }
+  return scancode;
 }
 
 static void keyboard_irq(void) {
   uint8_t sc = inb(0x60);
+  int is_break = 0;
   csprng_feed_entropy((uint32_t)sc);
 
-  if (sc == 0x2A || sc == 0x36) {
-    shift_on = 1;
-    return;
-  }
-  if (sc == 0xAA || sc == 0xB6) {
-    shift_on = 0;
+  if (sc == 0xE0u) {
+    extended_prefix = 1;
     return;
   }
 
-  if (sc & 0x80) {
+  is_break = (sc & 0x80u) ? 1 : 0;
+  sc &= 0x7Fu;
+  if (extended_prefix) {
+    sc = normalize_extended_scancode(sc);
+    extended_prefix = 0;
+  }
+
+  if (sc == 0x2A || sc == 0x36) {
+    shift_on = is_break ? 0 : 1;
+    return;
+  }
+  if (is_break) {
     return;
   }
 
@@ -84,85 +101,19 @@ static void keyboard_irq(void) {
 
   const char *mapping = shift_on ? current_layout->shift : current_layout->base;
   char ch = mapping[sc];
+  char pending = 0;
   if (!ch)
     return;
 
-  if (is_dead_key(sc, ch, shift_on)) {
-    g_dead_accent = ch;
+  if (!keyboard_compose_step(&g_dead_accent, &pending, ch,
+                             is_dead_key(sc, ch, shift_on), &ch)) {
     return;
   }
 
-  if (g_dead_accent) {
-    char accent = g_dead_accent;
-    g_dead_accent = 0;
-    // Compose minimal PT-BR set; return 0 for fallback
-    char composed = 0;
-    if (accent == '\'') {
-      if (ch == 'a')
-        composed = (char)0xA0; // á
-      else if (ch == 'e')
-        composed = (char)0x82; // é
-      else if (ch == 'i')
-        composed = (char)0xA1; // í
-      else if (ch == 'o')
-        composed = (char)0xA2; // ó
-      else if (ch == 'u')
-        composed = (char)0xA3; // ú
-      else if (ch == 'A')
-        composed = (char)0xB5; // Á
-      else if (ch == 'E')
-        composed = (char)0x90; // É
-      else if (ch == 'I')
-        composed = (char)0xD6; // Í
-      else if (ch == 'O')
-        composed = (char)0xE0; // Ó
-      else if (ch == 'U')
-        composed = (char)0xE9; // Ú
-    } else if (accent == '^') {
-      if (ch == 'a')
-        composed = (char)0x83; // â
-      else if (ch == 'e')
-        composed = (char)0x88; // ê
-      else if (ch == 'i')
-        composed = (char)0x8C; // î
-      else if (ch == 'o')
-        composed = (char)0x93; // ô
-      else if (ch == 'u')
-        composed = (char)0x96; // û
-    } else if (accent == '~') {
-      if (ch == 'a')
-        composed = (char)0xC6; // ã
-      else if (ch == 'o')
-        composed = (char)0xE5; // õ
-      else if (ch == 'A')
-        composed = (char)0xC7; // Ã
-      else if (ch == 'O')
-        composed = (char)0xE4; // Õ
-    } else if (accent == '`') {
-      if (ch == 'a')
-        composed = (char)0x85; // à
-      else if (ch == 'A')
-        composed = (char)0xB7; // À
-    } else if (accent == '"') {
-      // diaeresis limited
-      if (ch == 'u')
-        composed = (char)0x81; // ü
-      else if (ch == 'U')
-        composed = (char)0x9A; // Ü
-    }
-
-    if (composed) {
-      tty_handle_char(composed);
-      return;
-    } else {
-      // Fallback: print accent then base char
-      tty_handle_char(accent);
-      tty_handle_char(ch);
-      return;
-    }
-  }
-
   tty_handle_char(ch);
+  if (pending) {
+    tty_handle_char(pending);
+  }
 }
 
 void keyboard_init(void) {

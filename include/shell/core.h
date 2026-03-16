@@ -67,6 +67,11 @@ int shell_path_is_dir(const char *path);
 int shell_path_is_file(const char *path);
 int shell_join_path(const char *dir, const char *name, char *out, size_t out_len);
 const char *shell_basename(const char *path);
+void shell_format_prompt_path(const struct user_record *user, const char *cwd,
+                              char *out, size_t out_len);
+void shell_build_prompt(const struct user_record *user,
+                        const struct system_settings *settings,
+                        const char *cwd, char *out, size_t out_len);
 void shell_format_perm(uint16_t perm, char out[5]);
 void shell_fill_metadata(struct shell_context *ctx, uint16_t mode, struct vfs_metadata *meta);
 

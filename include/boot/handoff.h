@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define BOOT_HANDOFF_MAGIC 0x48464F4E /* "NOFH" */
-#define BOOT_HANDOFF_VERSION 6
+#define BOOT_HANDOFF_VERSION 7
 
 #define BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE 0x00000001u
 #define BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT 0x00000002u
@@ -46,6 +46,7 @@ struct boot_handoff {
   uint32_t runtime_flags;
   uint32_t boot_cfg_flags;
   char boot_keyboard_layout[16];
+  char boot_language[16];
   char boot_volume_key[64];
   uint64_t efi_image_handle;
   uint64_t efi_map_key;

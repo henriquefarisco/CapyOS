@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-CAPYOS x64 smoke test for the official ISO install flow:
+Smoke test for the ISO cancel path:
 
-- boots the release ISO in UEFI mode
-- completes the installer wizard on a blank disk
-- reboots from the installed disk
-- runs first-boot setup when required
-- validates login + core CLI
-- writes a marker file, reboots, validates persistence
+- boots the official ISO and installs to a blank disk
+- boots the ISO again with the installed disk still attached
+- cancels the installer prompt
+- validates that firmware continues to the installed disk instead of booting the
+  ISO kernel path
 """
 
 from __future__ import annotations
@@ -18,11 +17,10 @@ import sys
 from pathlib import Path
 
 from smoke_x64_flow import (
+    cancel_iso_install,
     complete_iso_install,
     login,
     maybe_run_first_boot_setup,
-    smoke_first_boot,
-    smoke_second_boot,
 )
 from smoke_x64_session import (
     SmokeSession,
@@ -35,9 +33,13 @@ from smoke_x64_session import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="CAPYOS x64 ISO install smoke test (QEMU/UEFI)"
+        description="CAPYOS x64 smoke for ISO cancel -> next boot device"
     )
-    parser.add_argument("--iso", default="build/CapyOS-Installer-UEFI.iso", help="Official installer ISO path")
+    parser.add_argument(
+        "--iso",
+        default="build/CapyOS-Installer-UEFI.iso",
+        help="Official installer ISO path",
+    )
     parser.add_argument("--qemu", default="qemu-system-x86_64", help="QEMU binary")
     parser.add_argument("--ovmf", default=None, help="Path to OVMF_CODE.fd")
     parser.add_argument("--memory", type=int, default=1024, help="Guest memory in MB")
@@ -58,10 +60,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run make all64 && make iso-uefi && make manifest64 first",
     )
-    parser.add_argument("--log", default="build/ci/smoke_x64_iso_install.log", help="Base log file path")
+    parser.add_argument(
+        "--log",
+        default="build/ci/smoke_x64_iso_cancel.log",
+        help="Base log file path",
+    )
     parser.add_argument(
         "--disk",
-        default="build/ci/smoke_x64_iso_install.img",
+        default="build/ci/smoke_x64_iso_cancel.img",
         help="Blank install target disk path",
     )
     parser.add_argument("--disk-size", default="2G", help="Install target disk size")
@@ -90,8 +96,7 @@ def parse_size(size: str) -> int:
     elif raw.endswith("G"):
         mul = 1024 * 1024 * 1024
         raw = raw[:-1]
-    value = int(raw, 10)
-    return value * mul
+    return int(raw, 10) * mul
 
 
 def run_build_if_requested(repo_root: Path, parsed: argparse.Namespace) -> None:
@@ -111,22 +116,22 @@ def validate_artifacts(repo_root: Path, parsed: argparse.Namespace) -> Path:
 
 def prepare_target_disk(disk_path: Path, disk_size: str) -> None:
     disk_path.parent.mkdir(parents=True, exist_ok=True)
-    size_bytes = parse_size(disk_size)
     with disk_path.open("wb") as fp:
-        fp.truncate(size_bytes)
+        fp.truncate(parse_size(disk_size))
 
 
-def run_installer_boot(
+def boot_with_session(
+    *,
     qemu_bin: str,
     ovmf_code: str,
     ovmf_vars_runtime: Path,
-    iso_path: Path,
     disk_path: Path,
-    installer_log: Path,
-    installer_debugcon_log: Path,
+    log_path: Path,
+    debugcon_log: Path,
     parsed: argparse.Namespace,
-) -> None:
-    print("[info] boot #0: official ISO installer")
+    iso_path: Path | None = None,
+    boot_from: str = "disk",
+) -> SmokeSession:
     port = choose_free_port()
     cmd = make_qemu_cmd(
         qemu_bin=qemu_bin,
@@ -136,121 +141,18 @@ def run_installer_boot(
         serial_port=port,
         memory_mb=parsed.memory,
         storage_bus=parsed.storage_bus,
-        debugcon_log=installer_debugcon_log,
+        debugcon_log=debugcon_log,
         iso_path=iso_path,
-        boot_from="cdrom",
+        boot_from=boot_from,
     )
     session = SmokeSession(
         cmd=cmd,
         serial_port=port,
-        log_path=installer_log,
+        log_path=log_path,
         verbose=parsed.verbose,
     )
     session.start()
-    try:
-        complete_iso_install(
-            session=session,
-            timeout=parsed.step_timeout,
-            keyboard_layout=parsed.keyboard_layout,
-        )
-    finally:
-        session.stop()
-
-
-def run_boot1(
-    qemu_bin: str,
-    ovmf_code: str,
-    ovmf_vars_runtime: Path,
-    disk_path: Path,
-    boot1_log: Path,
-    boot1_debugcon_log: Path,
-    parsed: argparse.Namespace,
-    marker: str,
-) -> None:
-    print("[info] boot #1: first boot from installed disk")
-    port = choose_free_port()
-    cmd = make_qemu_cmd(
-        qemu_bin=qemu_bin,
-        ovmf_code=ovmf_code,
-        ovmf_vars_runtime=ovmf_vars_runtime,
-        disk_path=disk_path,
-        serial_port=port,
-        memory_mb=parsed.memory,
-        storage_bus=parsed.storage_bus,
-        debugcon_log=boot1_debugcon_log,
-    )
-    session = SmokeSession(
-        cmd=cmd,
-        serial_port=port,
-        log_path=boot1_log,
-        verbose=parsed.verbose,
-    )
-    session.start()
-    try:
-        maybe_run_first_boot_setup(
-            session=session,
-            timeout=parsed.step_timeout,
-            user=parsed.user,
-            password=parsed.password,
-            keyboard_layout=parsed.keyboard_layout,
-        )
-        login(session=session, timeout=parsed.step_timeout, user=parsed.user, password=parsed.password)
-        smoke_first_boot(
-            session=session,
-            timeout=parsed.step_timeout,
-            user=parsed.user,
-            password=parsed.password,
-            marker=marker,
-        )
-    finally:
-        session.stop()
-
-
-def run_boot2(
-    qemu_bin: str,
-    ovmf_code: str,
-    ovmf_vars_runtime: Path,
-    disk_path: Path,
-    boot2_log: Path,
-    boot2_debugcon_log: Path,
-    parsed: argparse.Namespace,
-    marker: str,
-) -> None:
-    print("[info] boot #2: persistence validation")
-    port = choose_free_port()
-    cmd = make_qemu_cmd(
-        qemu_bin=qemu_bin,
-        ovmf_code=ovmf_code,
-        ovmf_vars_runtime=ovmf_vars_runtime,
-        disk_path=disk_path,
-        serial_port=port,
-        memory_mb=parsed.memory,
-        storage_bus=parsed.storage_bus,
-        debugcon_log=boot2_debugcon_log,
-    )
-    session = SmokeSession(
-        cmd=cmd,
-        serial_port=port,
-        log_path=boot2_log,
-        verbose=parsed.verbose,
-    )
-    session.start()
-    try:
-        mk = session.marker()
-        session.wait_for_any(
-            ["Usuario:", "User:"],
-            timeout=parsed.step_timeout * 4,
-            start_at=mk,
-        )
-        smoke_second_boot(
-            session=session,
-            timeout=parsed.step_timeout,
-            user=parsed.user,
-            password=parsed.password,
-            marker=marker,
-        )
-    finally:
-        session.stop()
+    return session
 
 
 def print_log_tail(log_path: Path) -> None:
@@ -267,17 +169,13 @@ def print_log_tail(log_path: Path) -> None:
 
 def main() -> int:
     parsed = parse_args()
-
     repo_root = Path(__file__).resolve().parents[2]
     log_base = (repo_root / parsed.log).resolve()
     disk_path = (repo_root / parsed.disk).resolve()
     installer_log = log_base.with_name(log_base.stem + ".installer" + log_base.suffix)
-    boot1_log = log_base.with_name(log_base.stem + ".boot1" + log_base.suffix)
-    boot2_log = log_base.with_name(log_base.stem + ".boot2" + log_base.suffix)
+    cancel_log = log_base.with_name(log_base.stem + ".cancel" + log_base.suffix)
     installer_debugcon_log = log_base.with_name(log_base.stem + ".installer.debugcon.log")
-    boot1_debugcon_log = log_base.with_name(log_base.stem + ".boot1.debugcon.log")
-    boot2_debugcon_log = log_base.with_name(log_base.stem + ".boot2.debugcon.log")
-    marker = "persist-ok"
+    cancel_debugcon_log = log_base.with_name(log_base.stem + ".cancel.debugcon.log")
 
     qemu_bin = shutil.which(parsed.qemu)
     if not qemu_bin:
@@ -300,41 +198,60 @@ def main() -> int:
         ovmf_vars_runtime.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ovmf_vars_template, ovmf_vars_runtime)
 
-        run_installer_boot(
+        print("[info] boot #0: install from ISO")
+        install_session = boot_with_session(
             qemu_bin=qemu_bin,
             ovmf_code=ovmf_code,
             ovmf_vars_runtime=ovmf_vars_runtime,
+            disk_path=disk_path,
+            log_path=installer_log,
+            debugcon_log=installer_debugcon_log,
+            parsed=parsed,
             iso_path=iso_path,
-            disk_path=disk_path,
-            installer_log=installer_log,
-            installer_debugcon_log=installer_debugcon_log,
-            parsed=parsed,
+            boot_from="cdrom",
         )
-        run_boot1(
+        try:
+            complete_iso_install(
+                session=install_session,
+                timeout=parsed.step_timeout,
+                keyboard_layout=parsed.keyboard_layout,
+            )
+        finally:
+            install_session.stop()
+
+        print("[info] boot #1: cancel ISO and expect firmware fallback to disk")
+        cancel_session = boot_with_session(
             qemu_bin=qemu_bin,
             ovmf_code=ovmf_code,
             ovmf_vars_runtime=ovmf_vars_runtime,
             disk_path=disk_path,
-            boot1_log=boot1_log,
-            boot1_debugcon_log=boot1_debugcon_log,
+            log_path=cancel_log,
+            debugcon_log=cancel_debugcon_log,
             parsed=parsed,
-            marker=marker,
+            iso_path=iso_path,
+            boot_from="cdrom",
         )
-        run_boot2(
-            qemu_bin=qemu_bin,
-            ovmf_code=ovmf_code,
-            ovmf_vars_runtime=ovmf_vars_runtime,
-            disk_path=disk_path,
-            boot2_log=boot2_log,
-            boot2_debugcon_log=boot2_debugcon_log,
-            parsed=parsed,
-            marker=marker,
-        )
+        try:
+            cancel_iso_install(cancel_session, timeout=parsed.step_timeout)
+            maybe_run_first_boot_setup(
+                session=cancel_session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+                keyboard_layout=parsed.keyboard_layout,
+            )
+            login(
+                session=cancel_session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+            )
+        finally:
+            cancel_session.stop()
     except Exception as exc:
-        print(f"[err] ISO smoke failed: {exc}", file=sys.stderr)
+        print(f"[err] ISO cancel smoke failed: {exc}", file=sys.stderr)
         print_log_tail(installer_log)
-        print_log_tail(boot1_log)
-        print_log_tail(boot2_log)
+        print_log_tail(cancel_log)
         return 1
     finally:
         if ovmf_vars_runtime is not None:
@@ -348,7 +265,7 @@ def main() -> int:
             except Exception:
                 pass
 
-    print("[ok] smoke x64 ISO install + persistence passed.")
+    print("[ok] smoke x64 ISO cancel -> disk fallback passed.")
     return 0
 
 

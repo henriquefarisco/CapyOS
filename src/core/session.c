@@ -43,16 +43,22 @@ void session_reset(struct session_context *ctx) {
         return;
     }
     memory_zero(ctx, sizeof(*ctx));
+    user_preferences_set_defaults(&ctx->prefs);
     ctx->cwd[0] = '/';
     ctx->cwd[1] = '\0';
 }
 
-int session_begin(struct session_context *ctx, const struct user_record *user) {
+int session_begin(struct session_context *ctx, const struct user_record *user,
+                  const char *default_language) {
     if (!ctx || !user) {
         return -1;
     }
     session_reset(ctx);
     ctx->user = *user;
+    if (user_prefs_load(user, &ctx->prefs) <= 0 && default_language) {
+        cstring_copy(ctx->prefs.language, sizeof(ctx->prefs.language),
+                     default_language);
+    }
     if (user->home[0]) {
         if (session_set_cwd(ctx, user->home) != 0) {
             session_set_cwd(ctx, "/");
@@ -68,6 +74,13 @@ const struct user_record *session_user(const struct session_context *ctx) {
         return NULL;
     }
     return &ctx->user;
+}
+
+const char *session_language(const struct session_context *ctx) {
+    if (!ctx) {
+        return "pt-BR";
+    }
+    return user_preferences_language(&ctx->prefs);
 }
 
 const char *session_cwd(const struct session_context *ctx) {

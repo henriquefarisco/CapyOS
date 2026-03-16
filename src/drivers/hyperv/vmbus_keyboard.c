@@ -1098,7 +1098,8 @@ static int vmbus_keyboard_process_packet(struct vmbus_keyboard *kbd,
                                          const uint8_t *packet,
                                          uint32_t packet_len,
                                          uint8_t *scancode,
-                                         int *is_break) {
+                                         int *is_break,
+                                         int *is_extended) {
   struct vmpacket_descriptor desc;
   uint32_t offset = 0;
   uint32_t payload_len = 0;
@@ -1150,6 +1151,9 @@ static int vmbus_keyboard_process_packet(struct vmbus_keyboard *kbd,
     if (is_break) {
       *is_break = (event.info & SYNTH_KBD_INFO_BREAK) ? 1 : 0;
     }
+    if (is_extended) {
+      *is_extended = (event.info & SYNTH_KBD_INFO_E0) ? 1 : 0;
+    }
     return 1;
   }
 
@@ -1187,7 +1191,8 @@ static int vmbus_keyboard_wait_protocol(struct vmbus_keyboard *kbd) {
       cpu_relax();
       continue;
     }
-    ret = vmbus_keyboard_process_packet(kbd, packet, packet_len, NULL, NULL);
+    ret =
+        vmbus_keyboard_process_packet(kbd, packet, packet_len, NULL, NULL, NULL);
     if (ret == 2) {
       return 0;
     }
@@ -1240,7 +1245,7 @@ int vmbus_keyboard_init(struct vmbus_keyboard *kbd) {
 }
 
 int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
-                        int *is_break) {
+                        int *is_break, int *is_extended) {
   uint8_t packet[128];
 
   if (!kbd || !kbd->initialized || !kbd->connected) {
@@ -1258,7 +1263,7 @@ int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
       return 0;
     }
     ret = vmbus_keyboard_process_packet(kbd, packet, packet_len, scancode,
-                                        is_break);
+                                        is_break, is_extended);
     if (ret == 1) {
       return 1;
     }

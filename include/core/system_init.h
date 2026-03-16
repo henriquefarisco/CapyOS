@@ -13,13 +13,17 @@ struct system_settings {
     char hostname[32];
     char theme[16];
     char keyboard_layout[16];
+    char language[16];
     int splash_enabled;
     int diagnostics_enabled; /* 0 = skip CLI self-tests/diagnostics (default) */
 };
 
+void system_set_boot_defaults(const char *keyboard_layout, const char *language);
 int system_load_settings(struct system_settings *out);
 int system_save_settings(const struct system_settings *settings);
 int system_save_keyboard_layout(const char *layout);
+int system_save_theme(const char *theme);
+int system_save_splash_enabled(int enabled);
 int system_login(struct session_context *session, const struct system_settings *settings);
 void system_apply_theme(const struct system_settings *settings);
 void system_apply_keyboard_layout(const struct system_settings *settings);

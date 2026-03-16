@@ -90,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         help="Keyboard layout persisted in BOOT/CAPYCFG.BIN (default: us)",
     )
     ap.add_argument(
+        "--language",
+        default="en",
+        help="Installer/system default language persisted in BOOT/CAPYCFG.BIN (default: en)",
+    )
+    ap.add_argument(
         "--volume-key",
         default=None,
         help="Volume key persisted in BOOT/CAPYCFG.BIN (letters/numbers, hyphens optional)",
@@ -170,7 +175,9 @@ def main() -> None:
         if not args.manifest or not args.manifest.exists():
             raise SystemExit("[err] manifest.bin missing. Use --manifest or --auto-manifest.")
 
-        boot_cfg = build_boot_config(args.keyboard_layout, args.volume_key)
+        boot_cfg = build_boot_config(
+            args.keyboard_layout, args.language, args.volume_key
+        )
         files = {
             "BOOTX64.EFI": args.bootx64.read_bytes(),
             "CAPYOS64.BIN": args.kernel.read_bytes(),

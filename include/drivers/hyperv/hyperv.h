@@ -124,7 +124,7 @@ int vmbus_init(void);
 int hyperv_keyboard_init(void);
 int vmbus_keyboard_init(struct vmbus_keyboard *kbd);
 int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
-                        int *is_break);
+                        int *is_break, int *is_extended);
 struct vmbus_keyboard *vmbus_get_keyboard(void);
 
 /* MSR helpers */

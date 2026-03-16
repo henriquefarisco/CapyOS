@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#include "drivers/input/keyboard_compose.h"
 #include "drivers/input/keyboard_layout.h"
 
 extern const struct keyboard_layout g_keyboard_layout_br_abnt2;
@@ -46,10 +47,76 @@ static int test_br_abnt2_accents_and_symbols(void) {
     return fails;
 }
 
+static int test_dead_key_composition_runtime_style(void) {
+    int fails = 0;
+    char dead = 0;
+    char pending = 0;
+    char out = 0;
+
+    if (keyboard_compose_step(&dead, &pending, '\'', 1, &out) != 0 || dead != '\'') {
+        printf("[kbd] dead key agudo nao armou corretamente\n");
+        fails++;
+    }
+
+    out = 0;
+    if (!keyboard_compose_step(&dead, &pending, 'a', 0, &out) || out != (char)0xA0 || pending != 0) {
+        printf("[kbd] composicao agudo+a falhou (out=%d pending=%d)\n", (int)out, (int)pending);
+        fails++;
+    }
+
+    dead = 0;
+    pending = 0;
+    out = 0;
+    keyboard_compose_step(&dead, &pending, '\'', 1, &out);
+    out = 0;
+    if (!keyboard_compose_step(&dead, &pending, ' ', 0, &out) || out != '\'' || pending != 0) {
+        printf("[kbd] agudo+espaco deveria emitir apenas o acento\n");
+        fails++;
+    }
+
+    dead = 0;
+    pending = 0;
+    out = 0;
+    keyboard_compose_step(&dead, &pending, '\'', 1, &out);
+    out = 0;
+    if (!keyboard_compose_step(&dead, &pending, '\'', 1, &out) || out != '\'' || dead != 0 || pending != 0) {
+        printf("[kbd] agudo repetido deveria emitir acento literal\n");
+        fails++;
+    }
+
+    dead = 0;
+    pending = 0;
+    out = 0;
+    keyboard_compose_step(&dead, &pending, '\'', 1, &out);
+    out = 0;
+    if (!keyboard_compose_step(&dead, &pending, '~', 1, &out) || out != '\'' || dead != '~' || pending != 0) {
+        printf("[kbd] troca de dead key deveria emitir a anterior e armar a nova\n");
+        fails++;
+    }
+    out = 0;
+    if (!keyboard_compose_step(&dead, &pending, 'a', 0, &out) || out != (char)0xC6) {
+        printf("[kbd] dead key trocada nao compôs para til+a\n");
+        fails++;
+    }
+
+    dead = 0;
+    pending = 0;
+    out = 0;
+    keyboard_compose_step(&dead, &pending, '\'', 1, &out);
+    out = 0;
+    if (!keyboard_compose_step(&dead, &pending, 'x', 0, &out) || out != '\'' || pending != 'x') {
+        printf("[kbd] fallback de acento deveria emitir acento e guardar base\n");
+        fails++;
+    }
+
+    return fails;
+}
+
 int run_keyboard_layout_tests(void) {
     int fails = 0;
     fails += test_br_abnt2_numpad_digits();
     fails += test_br_abnt2_accents_and_symbols();
+    fails += test_dead_key_composition_runtime_style();
     if (fails == 0) {
         printf("[tests] keyboard layouts OK\n");
     }

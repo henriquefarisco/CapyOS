@@ -2,6 +2,7 @@
 #include "shell/core.h"
 
 #include "core/user.h"
+#include "core/user_prefs.h"
 #include "fs/vfs.h"
 #include "memory/kmem.h"
 
@@ -74,9 +75,18 @@ static int ensure_directory(const char *path, const struct vfs_metadata *meta) {
     if (d->refcount) {
       d->refcount--;
     }
+    if (ok && meta) {
+      (void)vfs_set_metadata(path, meta);
+    }
     return ok ? 0 : -1;
   }
-  return vfs_create(path, VFS_MODE_DIR, meta);
+  if (vfs_create(path, VFS_MODE_DIR, meta) != 0) {
+    return -1;
+  }
+  if (meta) {
+    (void)vfs_set_metadata(path, meta);
+  }
+  return 0;
 }
 
 static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
@@ -116,41 +126,51 @@ static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
 
   uint32_t uid = 1000;
   uint32_t gid = 1000;
+  struct session_context *previous_session = session_active();
+  const char *default_language =
+      (ctx && ctx->settings && ctx->settings->language[0])
+          ? ctx->settings->language
+          : "en";
+  int rc = -1;
   if (userdb_next_ids(&uid, &gid) != 0) {
     shell_print_error("Falha ao reservar UID/GID.");
     return -1;
   }
 
   struct vfs_metadata home_root_meta = {0, 0, 0755};
+  session_set_active(NULL);
   if (ensure_directory("/home", &home_root_meta) != 0) {
     shell_print_error("Falha ao preparar diretorio /home.");
-    return -1;
+    goto done;
   }
 
   char home[USER_HOME_MAX];
   build_home_path(username, home, sizeof(home));
   if (!home[0]) {
     shell_print_error("Falha ao montar caminho de home.");
-    return -1;
+    goto done;
   }
 
   struct vfs_metadata home_meta = {uid, gid, 0700};
   if (ensure_directory(home, &home_meta) != 0) {
     shell_print_error("Falha ao criar diretorio home do usuario.");
-    return -1;
+    goto done;
   }
 
   struct user_record user;
   if (user_record_init(username, password, role, uid, gid, home, &user) != 0) {
     shell_print_error("Falha ao montar registro do usuario.");
-    return -1;
+    goto done;
   }
   if (userdb_add(&user) != 0) {
     shell_print_error("Falha ao gravar usuario em /etc/users.db.");
-    return -1;
+    goto done;
   }
 
   (void)vfs_set_metadata(home, &home_meta);
+  if (user_prefs_save_language(&user, default_language) != 0) {
+    shell_print("Aviso: nao foi possivel inicializar preferencias do usuario; sera usado o idioma padrao do sistema.\n");
+  }
 
   shell_print_ok("usuario criado");
   shell_print("usuario=");
@@ -160,7 +180,11 @@ static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
   shell_print(" role=");
   shell_print(role);
   shell_newline();
-  return 0;
+  rc = 0;
+
+done:
+  session_set_active(previous_session);
+  return rc;
 }
 
 static int cmd_set_pass(struct shell_context *ctx, int argc, char **argv) {

@@ -35,6 +35,7 @@ struct login_runtime_ops {
   void (*print)(const char *text);
   void (*putc)(char c);
   void (*clear_view)(void);
+  void (*show_splash)(const struct system_settings *settings);
   void (*ui_banner)(void);
   void (*cmd_info)(void);
 };

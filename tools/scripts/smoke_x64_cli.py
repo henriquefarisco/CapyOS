@@ -74,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         help="Keyboard layout persisted in CAPYCFG.BIN",
     )
     parser.add_argument(
+        "--language",
+        default="en",
+        help="System default language persisted in CAPYCFG.BIN",
+    )
+    parser.add_argument(
         "--volume-key",
         default="CAPYOS-SMOKE-KEY-2026-0001",
         help="Volume key persisted in CAPYCFG.BIN",
@@ -125,6 +130,8 @@ def provision_disk(
             str(manifest),
             "--keyboard-layout",
             parsed.keyboard_layout,
+            "--language",
+            parsed.language,
             "--volume-key",
             parsed.volume_key,
             "--allow-existing",
@@ -176,6 +183,7 @@ def run_boot1(
             session=session,
             timeout=parsed.step_timeout,
             user=parsed.user,
+            password=parsed.password,
             marker=marker,
         )
     finally:
@@ -213,7 +221,11 @@ def run_boot2(
     session.start()
     try:
         mk = session.marker()
-        session.wait_for("Usuario:", timeout=parsed.step_timeout * 4, start_at=mk)
+        session.wait_for_any(
+            ["Usuario:", "User:"],
+            timeout=parsed.step_timeout * 4,
+            start_at=mk,
+        )
         smoke_second_boot(
             session=session,
             timeout=parsed.step_timeout,

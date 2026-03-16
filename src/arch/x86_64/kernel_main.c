@@ -210,6 +210,16 @@ static const uint8_t font8x8_basic[128][8] __attribute__((used)) = {
     {0x00, 0x10, 0x38, 0x6C, 0xC6, 0xC6, 0xFE, 0x00}, // 0x7F
 };
 
+enum fbcon_accent_style {
+  FBCON_ACCENT_NONE = 0,
+  FBCON_ACCENT_ACUTE,
+  FBCON_ACCENT_GRAVE,
+  FBCON_ACCENT_CIRCUMFLEX,
+  FBCON_ACCENT_TILDE,
+  FBCON_ACCENT_DIAERESIS,
+  FBCON_ACCENT_CEDILLA,
+};
+
 typedef struct {
   uint32_t *fb;
   uint32_t width;
@@ -238,14 +248,235 @@ static struct x64_input_runtime g_input_runtime;
 static int g_exit_boot_services_attempted = 0;
 static int g_exit_boot_services_done = 0;
 static EFI_STATUS_K g_exit_boot_services_status = EFI_SUCCESS_K;
+static uint32_t g_theme_splash_bg = 0x000A1713;
+static uint32_t g_theme_splash_icon = 0x0000A651;
+static uint32_t g_theme_splash_bar_border = 0x00213A31;
+static uint32_t g_theme_splash_bar_bg = 0x0012221C;
+static uint32_t g_theme_splash_bar_fill = 0x0000C364;
 
 /* Forward declaration; COM1 implementation is defined later in this file. */
 static void com1_putc(char c);
+static int streq(const char *a, const char *b);
+static void ui_draw_bars(void);
+static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
+                               uint32_t color);
+
+void system_platform_apply_theme(const char *theme) {
+  if (!theme || streq(theme, "capyos")) {
+    g_con.bg = 0x00102030;
+    g_con.fg = 0x00F0F0F0;
+    g_theme_splash_bg = 0x000A1713;
+    g_theme_splash_icon = 0x0000A651;
+    g_theme_splash_bar_border = 0x00213A31;
+    g_theme_splash_bar_bg = 0x0012221C;
+    g_theme_splash_bar_fill = 0x0000C364;
+    return;
+  }
+
+  if (streq(theme, "ocean")) {
+    g_con.bg = 0x000A1B3A;
+    g_con.fg = 0x00DDF6FF;
+    g_theme_splash_bg = 0x00041024;
+    g_theme_splash_icon = 0x0035B7FF;
+    g_theme_splash_bar_border = 0x0021476A;
+    g_theme_splash_bar_bg = 0x000C213A;
+    g_theme_splash_bar_fill = 0x005FD5FF;
+    return;
+  }
+
+  if (streq(theme, "forest")) {
+    g_con.bg = 0x000F2415;
+    g_con.fg = 0x00E9F8E7;
+    g_theme_splash_bg = 0x000A1710;
+    g_theme_splash_icon = 0x002FAE5B;
+    g_theme_splash_bar_border = 0x00284A31;
+    g_theme_splash_bar_bg = 0x0015231A;
+    g_theme_splash_bar_fill = 0x0048D778;
+    return;
+  }
+
+  system_platform_apply_theme("capyos");
+}
+
+void system_platform_sync_theme(const struct system_settings *settings) {
+  (void)settings;
+  if (!g_con.fb || g_con.width == 0 || g_con.height == 0) {
+    return;
+  }
+  fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_con.bg);
+  ui_draw_bars();
+  g_con.col = 0;
+  g_con.row = 0;
+}
+
+static void fbcon_copy_glyph(uint8_t dst[8], const uint8_t *src) {
+  for (uint32_t i = 0; i < 8u; ++i) {
+    dst[i] = src[i];
+  }
+}
+
+static void fbcon_apply_accent(uint8_t glyph[8], enum fbcon_accent_style accent) {
+  if (!glyph) {
+    return;
+  }
+
+  switch (accent) {
+  case FBCON_ACCENT_ACUTE:
+    glyph[0] |= 0x18;
+    glyph[1] |= 0x0C;
+    break;
+  case FBCON_ACCENT_GRAVE:
+    glyph[0] |= 0x18;
+    glyph[1] |= 0x30;
+    break;
+  case FBCON_ACCENT_CIRCUMFLEX:
+    glyph[0] |= 0x18;
+    glyph[1] |= 0x24;
+    break;
+  case FBCON_ACCENT_TILDE:
+    glyph[0] |= 0x36;
+    glyph[1] |= 0x6C;
+    break;
+  case FBCON_ACCENT_DIAERESIS:
+    glyph[0] |= 0x24;
+    break;
+  case FBCON_ACCENT_CEDILLA:
+    glyph[7] |= 0x18;
+    break;
+  default:
+    break;
+  }
+}
+
+static int fbcon_lookup_extended_glyph(uint8_t uc, uint8_t *base,
+                                       enum fbcon_accent_style *accent) {
+  if (!base || !accent) {
+    return 0;
+  }
+
+  switch (uc) {
+  case 0x80:
+    *base = 'C';
+    *accent = FBCON_ACCENT_CEDILLA;
+    return 1;
+  case 0x81:
+    *base = 'u';
+    *accent = FBCON_ACCENT_DIAERESIS;
+    return 1;
+  case 0x82:
+    *base = 'e';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0x83:
+    *base = 'a';
+    *accent = FBCON_ACCENT_CIRCUMFLEX;
+    return 1;
+  case 0x85:
+    *base = 'a';
+    *accent = FBCON_ACCENT_GRAVE;
+    return 1;
+  case 0x87:
+    *base = 'c';
+    *accent = FBCON_ACCENT_CEDILLA;
+    return 1;
+  case 0x88:
+    *base = 'e';
+    *accent = FBCON_ACCENT_CIRCUMFLEX;
+    return 1;
+  case 0x8C:
+    *base = 'i';
+    *accent = FBCON_ACCENT_CIRCUMFLEX;
+    return 1;
+  case 0x90:
+    *base = 'E';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0x93:
+    *base = 'o';
+    *accent = FBCON_ACCENT_CIRCUMFLEX;
+    return 1;
+  case 0x96:
+    *base = 'u';
+    *accent = FBCON_ACCENT_CIRCUMFLEX;
+    return 1;
+  case 0x9A:
+    *base = 'U';
+    *accent = FBCON_ACCENT_DIAERESIS;
+    return 1;
+  case 0xA0:
+    *base = 'a';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xA1:
+    *base = 'i';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xA2:
+    *base = 'o';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xA3:
+    *base = 'u';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xB5:
+    *base = 'A';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xB7:
+    *base = 'A';
+    *accent = FBCON_ACCENT_GRAVE;
+    return 1;
+  case 0xC6:
+    *base = 'a';
+    *accent = FBCON_ACCENT_TILDE;
+    return 1;
+  case 0xC7:
+    *base = 'A';
+    *accent = FBCON_ACCENT_TILDE;
+    return 1;
+  case 0xD6:
+    *base = 'I';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xE0:
+    *base = 'O';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  case 0xE4:
+    *base = 'O';
+    *accent = FBCON_ACCENT_TILDE;
+    return 1;
+  case 0xE5:
+    *base = 'o';
+    *accent = FBCON_ACCENT_TILDE;
+    return 1;
+  case 0xE9:
+    *base = 'U';
+    *accent = FBCON_ACCENT_ACUTE;
+    return 1;
+  default:
+    *base = '?';
+    *accent = FBCON_ACCENT_NONE;
+    return 0;
+  }
+}
 
 static inline const uint8_t *font_glyph(uint8_t uc) {
+  static uint8_t extended_glyph[8];
   const uint8_t (*font)[8];
+  uint8_t base = '?';
+  enum fbcon_accent_style accent = FBCON_ACCENT_NONE;
   __asm__ __volatile__("lea font8x8_basic(%%rip), %0" : "=r"(font));
-  return font[(uc < 128) ? uc : '?'];
+  if (uc < 128) {
+    return font[uc];
+  }
+  if (fbcon_lookup_extended_glyph(uc, &base, &accent)) {
+    fbcon_copy_glyph(extended_glyph, font[base]);
+    fbcon_apply_accent(extended_glyph, accent);
+    return extended_glyph;
+  }
+  return font['?'];
 }
 
 static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
@@ -518,12 +749,6 @@ static void ui_boot_splash(void) {
     return;
   }
 
-  const uint32_t splash_bg = 0x000A1713;
-  const uint32_t icon_color = 0x0000A651;
-  const uint32_t bar_border = 0x00213A31;
-  const uint32_t bar_bg = 0x0012221C;
-  const uint32_t bar_fill = 0x0000C364;
-
   uint32_t scale = (g_con.height / 4u) / CAPYOS_ICON_H;
   if (scale == 0) {
     scale = 1;
@@ -554,9 +779,9 @@ static void ui_boot_splash(void) {
   uint32_t bar_x = (g_con.width > bar_w) ? (g_con.width - bar_w) / 2u : 0;
   uint32_t bar_y = icon_y + icon_h + (scale * 10u);
 
-  fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, splash_bg);
-  ui_draw_capyos_icon(icon_x, icon_y, scale, icon_color);
-  fbcon_fill_rect_px(bar_x, bar_y, bar_w, bar_h, bar_border);
+  fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_theme_splash_bg);
+  ui_draw_capyos_icon(icon_x, icon_y, scale, g_theme_splash_icon);
+  fbcon_fill_rect_px(bar_x, bar_y, bar_w, bar_h, g_theme_splash_bar_border);
 
   uint32_t inner_x = bar_x;
   uint32_t inner_y = bar_y;
@@ -572,10 +797,11 @@ static void ui_boot_splash(void) {
   }
 
   for (uint32_t step = 0; step <= 14; ++step) {
-    fbcon_fill_rect_px(inner_x, inner_y, inner_w, inner_h, bar_bg);
+    fbcon_fill_rect_px(inner_x, inner_y, inner_w, inner_h, g_theme_splash_bar_bg);
     uint32_t fill_w = (inner_w * step) / 14u;
     if (fill_w > 0u) {
-      fbcon_fill_rect_px(inner_x, inner_y, fill_w, inner_h, bar_fill);
+      fbcon_fill_rect_px(inner_x, inner_y, fill_w, inner_h,
+                         g_theme_splash_bar_fill);
     }
     splash_spin_delay(2200000u);
   }
@@ -811,6 +1037,15 @@ static int handoff_keyboard_layout(char *out, size_t out_size) {
     return -1;
   }
   local_copy(out, out_size, g_h->boot_keyboard_layout);
+  return 0;
+}
+
+static int handoff_language(char *out, size_t out_size) {
+  if (!out || out_size < 2 || !g_h || g_h->version < 7 ||
+      !g_h->boot_language[0]) {
+    return -1;
+  }
+  local_copy(out, out_size, g_h->boot_language);
   return 0;
 }
 
@@ -1763,9 +1998,12 @@ static int prepare_shell_runtime(void) {
       local_copy(g_shell_settings.theme, sizeof(g_shell_settings.theme), "capyos");
       local_copy(g_shell_settings.keyboard_layout,
                  sizeof(g_shell_settings.keyboard_layout), "us");
+      local_copy(g_shell_settings.language, sizeof(g_shell_settings.language),
+                 "en");
       g_shell_settings.splash_enabled = 0;
       g_shell_settings.diagnostics_enabled = 0;
     }
+    system_apply_theme(&g_shell_settings);
     system_apply_keyboard_layout(&g_shell_settings);
     session_reset(&g_session_ctx);
     session_set_active(NULL);
@@ -1777,11 +2015,16 @@ static int prepare_shell_runtime(void) {
 
 /* Activate authenticated user session for shell command dispatch */
 static int init_shell_context(const struct user_record *user) {
+  struct user_record session_user_copy;
+
   if (prepare_shell_runtime() != 0 || !user || !user->username[0]) {
     return -1;
   }
 
-  if (session_begin(&g_session_ctx, user) != 0) {
+  session_user_copy = *user;
+
+  if (session_begin(&g_session_ctx, &session_user_copy,
+                    g_shell_settings.language) != 0) {
     session_reset(&g_session_ctx);
     session_set_cwd(&g_session_ctx, "/");
     return -1;
@@ -1811,6 +2054,13 @@ static void login_shell_context_init(struct shell_context *ctx,
 static int login_system_login(struct session_context *session,
                               const struct system_settings *settings) {
   return system_login(session, settings);
+}
+
+static void login_show_splash(const struct system_settings *settings) {
+  if (!settings || !settings->splash_enabled) {
+    return;
+  }
+  ui_boot_splash();
 }
 
 static const struct user_record *
@@ -2042,8 +2292,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                    : 0;
   g_con.col = 0;
   g_con.row = 0;
-
-  ui_boot_splash();
+  system_platform_apply_theme("capyos");
   fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_con.bg);
   ui_draw_bars();
   ui_banner();
@@ -2061,6 +2310,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   print_platform_timer_status();
   keyboard_set_layout_by_name("us");
   char handoff_layout_name[16];
+  char handoff_language_name[16];
+  local_copy(handoff_layout_name, sizeof(handoff_layout_name), "us");
+  local_copy(handoff_language_name, sizeof(handoff_language_name), "en");
   if (handoff_keyboard_layout(handoff_layout_name, sizeof(handoff_layout_name)) ==
           0 &&
       keyboard_set_layout_by_name(handoff_layout_name) == 0) {
@@ -2068,6 +2320,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     fbcon_print(handoff_layout_name);
     fbcon_putc('\n');
   }
+  if (handoff_language(handoff_language_name, sizeof(handoff_language_name)) ==
+      0) {
+    fbcon_print("[i18n] Idioma padrao provisionado: ");
+    fbcon_print(handoff_language_name);
+    fbcon_putc('\n');
+  }
+  system_set_boot_defaults(handoff_layout_name, handoff_language_name);
   if (load_handoff_volume_key() == 0) {
     fbcon_print("[security] Chave de volume provisionada detectada.\n");
   }
@@ -2181,6 +2440,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     login_ops.print = fbcon_print;
     login_ops.putc = fbcon_putc;
     login_ops.clear_view = fbcon_clear_view;
+    login_ops.show_splash = login_show_splash;
     login_ops.ui_banner = ui_banner;
     login_ops.cmd_info = cmd_info;
 

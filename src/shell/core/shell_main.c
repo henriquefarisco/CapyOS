@@ -256,6 +256,36 @@ void shell_trim_trailing_slash(char *path)
     }
 }
 
+static void shell_copy_slice(char *dst, size_t dst_size, const char *src, size_t len)
+{
+    size_t out = 0;
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    while (out + 1 < dst_size && out < len) {
+        dst[out] = src[out];
+        ++out;
+    }
+    dst[out] = '\0';
+}
+
+static void shell_append_text(char *dst, size_t dst_size, const char *src)
+{
+    size_t pos = shell_cstring_length(dst);
+    size_t idx = 0;
+    if (!dst || dst_size == 0 || !src) {
+        return;
+    }
+    while (src[idx] && pos + 1 < dst_size) {
+        dst[pos++] = src[idx++];
+    }
+    dst[pos] = '\0';
+}
+
 int shell_resolve_path(struct shell_context *ctx, const char *input, char *out, size_t out_len)
 {
     if (!ctx || !ctx->session) {
@@ -318,6 +348,110 @@ const char *shell_basename(const char *path)
         }
     }
     return last;
+}
+
+void shell_format_prompt_path(const struct user_record *user, const char *cwd,
+                              char *out, size_t out_len)
+{
+    const char *path = (cwd && cwd[0]) ? cwd : "/";
+    const char *home = (user && user->home[0]) ? user->home : NULL;
+    const char *display = path;
+    char segments[16][VFS_NAME_MAX];
+    size_t seg_count = 0;
+
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    if (home) {
+        size_t home_len = shell_cstring_length(home);
+        size_t path_len = shell_cstring_length(path);
+        if (path[0] == '/' && home_len > 0) {
+            if (path_len == home_len && path[home_len] == '\0') {
+                shell_append_text(out, out_len, "~");
+                return;
+            }
+            if (home_len < path_len && path[home_len] == '/') {
+                shell_append_text(out, out_len, "~/");
+                display = path + home_len + 1;
+            }
+        }
+    }
+
+    if (display[0] == '\0') {
+        shell_append_text(out, out_len, out[0] ? "~" : "/");
+        return;
+    }
+
+    if (display[0] == '/' && display[1] == '\0') {
+        shell_append_text(out, out_len, "/");
+        return;
+    }
+
+    while (*display == '/') {
+        ++display;
+    }
+
+    while (*display && seg_count < (sizeof(segments) / sizeof(segments[0]))) {
+        const char *start = display;
+        size_t len = 0;
+        while (display[len] && display[len] != '/') {
+            ++len;
+        }
+        shell_copy_slice(segments[seg_count], sizeof(segments[seg_count]), start, len);
+        ++seg_count;
+        display += len;
+        while (*display == '/') {
+            ++display;
+        }
+    }
+
+    if (seg_count == 0) {
+        shell_append_text(out, out_len, out[0] ? "~" : "/");
+        return;
+    }
+
+    if (out[0] == '\0' && path[0] == '/') {
+        shell_append_text(out, out_len, "/");
+    }
+
+    if (seg_count > 2) {
+        shell_append_text(out, out_len, ".../");
+    }
+
+    {
+        size_t start = (seg_count > 2) ? (seg_count - 2) : 0;
+        for (size_t i = start; i < seg_count; ++i) {
+            shell_append_text(out, out_len, segments[i]);
+            if (i + 1 < seg_count) {
+                shell_append_text(out, out_len, "/");
+            }
+        }
+    }
+}
+
+void shell_build_prompt(const struct user_record *user,
+                        const struct system_settings *settings,
+                        const char *cwd, char *out, size_t out_len)
+{
+    const char *username = (user && user->username[0]) ? user->username : "user";
+    const char *hostname =
+        (settings && settings->hostname[0]) ? settings->hostname : "capyos";
+    char prompt_path[96];
+
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    shell_format_prompt_path(user, cwd, prompt_path, sizeof(prompt_path));
+    shell_append_text(out, out_len, username);
+    shell_append_text(out, out_len, "@");
+    shell_append_text(out, out_len, hostname);
+    shell_append_text(out, out_len, ">");
+    shell_append_text(out, out_len, prompt_path[0] ? prompt_path : "/");
+    shell_append_text(out, out_len, "> ");
 }
 
 void shell_format_perm(uint16_t perm, char out[5])
@@ -416,19 +550,9 @@ void shell_paginate_content(const char *content)
 void shell_update_prompt(struct shell_context *ctx)
 {
     const struct user_record *user = session_user(ctx->session);
-    const char *username = user ? user->username : "user";
-    const char *hostname = ctx->settings ? ctx->settings->hostname : "capyos";
     char prompt[TTY_PROMPT_MAX];
-    size_t idx = 0;
-    const char *parts[] = { username, "@", hostname, "> " };
-    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); ++i) {
-        const char *part = parts[i];
-        size_t plen = shell_cstring_length(part);
-        for (size_t j = 0; j < plen && idx < sizeof(prompt) - 1; ++j) {
-            prompt[idx++] = part[j];
-        }
-    }
-    prompt[idx] = '\0';
+    const char *cwd = ctx && ctx->session ? session_cwd(ctx->session) : "/";
+    shell_build_prompt(user, ctx ? ctx->settings : NULL, cwd, prompt, sizeof(prompt));
     tty_set_prompt(prompt);
 }
 
