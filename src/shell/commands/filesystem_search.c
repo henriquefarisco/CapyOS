@@ -1,6 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
+#include "core/localization.h"
 #include "drivers/video/vga.h"
 #include "memory/kmem.h"
 
@@ -9,6 +10,68 @@ enum hunt_target {
     HUNT_DIRS,
     HUNT_ANY
 };
+
+enum fs_search_text_id {
+    FS_SEARCH_HELP_HUNT_FILE = 0,
+    FS_SEARCH_HELP_HUNT_DIR,
+    FS_SEARCH_HELP_HUNT_ANY,
+    FS_SEARCH_HELP_FIND,
+    FS_SEARCH_INVALID_PATH,
+    FS_SEARCH_TARGET_MISSING,
+    FS_SEARCH_NO_RESULTS,
+    FS_SEARCH_SCAN_FAILED,
+    FS_SEARCH_REQUIRE_TERM,
+    FS_SEARCH_FIND_FAILED,
+};
+
+static const char *fs_search_text(const char *language,
+                                  enum fs_search_text_id id) {
+    switch (id) {
+    case FS_SEARCH_HELP_HUNT_FILE:
+        return localization_select(language,
+                                   "Busca arquivos cujo nome corresponde ao padrao.",
+                                   "Searches files whose name matches the pattern.",
+                                   "Busca archivos cuyo nombre coincide con el patron.");
+    case FS_SEARCH_HELP_HUNT_DIR:
+        return localization_select(language,
+                                   "Busca diretorios cujo nome corresponde ao padrao.",
+                                   "Searches directories whose name matches the pattern.",
+                                   "Busca directorios cuyo nombre coincide con el patron.");
+    case FS_SEARCH_HELP_HUNT_ANY:
+        return localization_select(language,
+                                   "Busca arquivos ou diretorios cujo nome corresponde ao padrao.",
+                                   "Searches files or directories whose name matches the pattern.",
+                                   "Busca archivos o directorios cuyo nombre coincide con el patron.");
+    case FS_SEARCH_HELP_FIND:
+        return localization_select(
+            language,
+            "Procura por texto dentro de arquivos iniciando do caminho informado.",
+            "Searches for text inside files starting from the provided path.",
+            "Busca texto dentro de archivos a partir de la ruta indicada.");
+    case FS_SEARCH_INVALID_PATH:
+        return localization_select(language, "caminho invalido", "invalid path",
+                                   "ruta invalida");
+    case FS_SEARCH_TARGET_MISSING:
+        return localization_select(language, "alvo inexistente",
+                                   "target does not exist",
+                                   "objetivo inexistente");
+    case FS_SEARCH_NO_RESULTS:
+        return localization_select(language, "(nenhum resultado)\n",
+                                   "(no results)\n",
+                                   "(sin resultados)\n");
+    case FS_SEARCH_SCAN_FAILED:
+        return localization_select(language, "falha na varredura",
+                                   "scan failed",
+                                   "fallo en el barrido");
+    case FS_SEARCH_REQUIRE_TERM:
+        return localization_select(language, "informe termo", "provide term",
+                                   "indica termino");
+    case FS_SEARCH_FIND_FAILED:
+    default:
+        return localization_select(language, "falha na busca", "search failed",
+                                   "fallo en la busqueda");
+    }
+}
 
 struct hunt_ctx {
     struct shell_context *shell;
@@ -72,8 +135,9 @@ static int hunt_callback(const char *name, uint16_t mode, void *userdata) {
     return 0;
 }
 
-static int shell_hunt_walk(struct shell_context *ctx, const char *path, const char *pattern,
-                           enum hunt_target target, int depth, int *matches) {
+static int shell_hunt_walk(struct shell_context *ctx, const char *path,
+                           const char *pattern, enum hunt_target target,
+                           int depth, int *matches) {
     struct hunt_ctx state;
     state.shell = ctx;
     state.pattern = pattern;
@@ -127,8 +191,8 @@ static int search_callback(const char *name, uint16_t mode, void *userdata) {
     return 0;
 }
 
-static int shell_search_text(struct shell_context *ctx, const char *path, const char *pattern,
-                             int depth, int *matches) {
+static int shell_search_text(struct shell_context *ctx, const char *path,
+                             const char *pattern, int depth, int *matches) {
     struct search_ctx state;
     state.shell = ctx;
     state.pattern = pattern;
@@ -142,14 +206,18 @@ static int shell_search_text(struct shell_context *ctx, const char *path, const 
     return 0;
 }
 
-static int shell_run_hunt(struct shell_context *ctx, enum hunt_target target, int argc, char **argv) {
+static int shell_run_hunt(struct shell_context *ctx, enum hunt_target target,
+                          int argc, char **argv) {
+    const char *language = shell_current_language();
     const char *pattern = (argc > 1) ? argv[1] : "";
     const char *start = (argc > 2) ? argv[2] : ".";
     char base[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, start, base, sizeof(base)) != 0) {
-        shell_print_error("caminho invalido");
-        shell_suggest_help(target == HUNT_FILES ? "hunt-file" :
-                           target == HUNT_DIRS ? "hunt-dir" : "hunt-any");
+        shell_print_error(fs_search_text(language, FS_SEARCH_INVALID_PATH));
+        shell_suggest_help(target == HUNT_FILES ? "hunt-file"
+                                                : target == HUNT_DIRS
+                                                      ? "hunt-dir"
+                                                      : "hunt-any");
         return -1;
     }
     shell_trim_trailing_slash(base);
@@ -157,9 +225,11 @@ static int shell_run_hunt(struct shell_context *ctx, enum hunt_target target, in
     int is_dir = shell_path_is_dir(base);
     int is_file = shell_path_is_file(base);
     if (!is_dir && !is_file) {
-        shell_print_error("alvo inexistente");
-        shell_suggest_help(target == HUNT_FILES ? "hunt-file" :
-                           target == HUNT_DIRS ? "hunt-dir" : "hunt-any");
+        shell_print_error(fs_search_text(language, FS_SEARCH_TARGET_MISSING));
+        shell_suggest_help(target == HUNT_FILES ? "hunt-file"
+                                                : target == HUNT_DIRS
+                                                      ? "hunt-dir"
+                                                      : "hunt-any");
         return -1;
     }
     if (is_file && (target == HUNT_FILES || target == HUNT_ANY)) {
@@ -167,11 +237,9 @@ static int shell_run_hunt(struct shell_context *ctx, enum hunt_target target, in
             shell_print(base);
             shell_newline();
             matches++;
-        } else {
-            shell_print("(nenhum resultado)\n");
         }
         if (matches == 0) {
-            shell_print("(nenhum resultado)\n");
+            shell_print(fs_search_text(language, FS_SEARCH_NO_RESULTS));
         }
         return 0;
     }
@@ -184,47 +252,51 @@ static int shell_run_hunt(struct shell_context *ctx, enum hunt_target target, in
             }
         }
         if (shell_hunt_walk(ctx, base, pattern, target, 0, &matches) != 0) {
-            shell_print_error("falha na varredura");
+            shell_print_error(fs_search_text(language, FS_SEARCH_SCAN_FAILED));
             return -1;
         }
     }
     if (matches == 0) {
-        shell_print("(nenhum resultado)\n");
+        shell_print(fs_search_text(language, FS_SEARCH_NO_RESULTS));
     }
     return 0;
 }
 
 static int cmd_hunt_file(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "hunt-file <padrao> [caminho]",
-                          "Busca arquivos cujo nome corresponde ao padrao.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "hunt-file <pattern> [path]",
+                          fs_search_text(language, FS_SEARCH_HELP_HUNT_FILE))) {
         return 0;
     }
     return shell_run_hunt(ctx, HUNT_FILES, argc, argv);
 }
 
 static int cmd_hunt_dir(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "hunt-dir <padrao> [caminho]",
-                          "Busca diretorios cujo nome corresponde ao padrao.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "hunt-dir <pattern> [path]",
+                          fs_search_text(language, FS_SEARCH_HELP_HUNT_DIR))) {
         return 0;
     }
     return shell_run_hunt(ctx, HUNT_DIRS, argc, argv);
 }
 
 static int cmd_hunt_any(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "hunt-any <padrao> [caminho]",
-                          "Busca arquivos ou diretorios cujo nome corresponde ao padrao.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "hunt-any <pattern> [path]",
+                          fs_search_text(language, FS_SEARCH_HELP_HUNT_ANY))) {
         return 0;
     }
     return shell_run_hunt(ctx, HUNT_ANY, argc, argv);
 }
 
 static int cmd_find(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "find \"texto\" [caminho]",
-                          "Procura por texto dentro de arquivos iniciando do caminho informado.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "find \"text\" [path]",
+                          fs_search_text(language, FS_SEARCH_HELP_FIND))) {
         return 0;
     }
     if (argc < 2) {
-        shell_print_error("informe termo");
+        shell_print_error(fs_search_text(language, FS_SEARCH_REQUIRE_TERM));
         shell_suggest_help("find");
         return -1;
     }
@@ -232,23 +304,23 @@ static int cmd_find(struct shell_context *ctx, int argc, char **argv) {
     const char *start = (argc > 2) ? argv[2] : ".";
     char base[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, start, base, sizeof(base)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_search_text(language, FS_SEARCH_INVALID_PATH));
         shell_suggest_help("find");
         return -1;
     }
     shell_trim_trailing_slash(base);
     if (!shell_path_is_dir(base)) {
-        shell_print_error("alvo inexistente");
+        shell_print_error(fs_search_text(language, FS_SEARCH_TARGET_MISSING));
         shell_suggest_help("find");
         return -1;
     }
     int matches = 0;
     if (shell_search_text(ctx, base, pattern, 0, &matches) != 0) {
-        shell_print_error("falha na busca");
+        shell_print_error(fs_search_text(language, FS_SEARCH_FIND_FAILED));
         return -1;
     }
     if (matches == 0) {
-        shell_print("(nenhum resultado)\n");
+        shell_print(fs_search_text(language, FS_SEARCH_NO_RESULTS));
     }
     return 0;
 }

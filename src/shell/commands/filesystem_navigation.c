@@ -1,11 +1,70 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
+#include "core/localization.h"
 #include "drivers/video/vga.h"
 
 struct list_ctx {
     int count;
 };
+
+enum fs_nav_text_id {
+    FS_NAV_HELP_LIST = 0,
+    FS_NAV_HELP_GO,
+    FS_NAV_HELP_MYPATH,
+    FS_NAV_INVALID_PATH,
+    FS_NAV_CANNOT_LIST,
+    FS_NAV_EMPTY,
+    FS_NAV_REQUIRE_DESTINATION,
+    FS_NAV_TARGET_IS_FILE,
+    FS_NAV_CANNOT_CHANGE,
+};
+
+static const char *fs_nav_text(const char *language, enum fs_nav_text_id id) {
+    switch (id) {
+    case FS_NAV_HELP_LIST:
+        return localization_select(
+            language,
+            "Lista os itens do diretorio atual ou do caminho informado.",
+            "Lists items in the current directory or in the provided path.",
+            "Lista los elementos del directorio actual o de la ruta indicada.");
+    case FS_NAV_HELP_GO:
+        return localization_select(
+            language,
+            "Altera o diretorio atual da sessao.",
+            "Changes the current directory for the session.",
+            "Cambia el directorio actual de la sesion.");
+    case FS_NAV_HELP_MYPATH:
+        return localization_select(
+            language,
+            "Exibe o caminho atual da sessao.",
+            "Shows the current path for the session.",
+            "Muestra la ruta actual de la sesion.");
+    case FS_NAV_INVALID_PATH:
+        return localization_select(language, "caminho invalido", "invalid path",
+                                   "ruta invalida");
+    case FS_NAV_CANNOT_LIST:
+        return localization_select(language, "nao foi possivel listar",
+                                   "could not list directory",
+                                   "no fue posible listar");
+    case FS_NAV_EMPTY:
+        return localization_select(language, "(vazio)\n", "(empty)\n",
+                                   "(vacio)\n");
+    case FS_NAV_REQUIRE_DESTINATION:
+        return localization_select(language, "informe destino",
+                                   "provide destination",
+                                   "indica destino");
+    case FS_NAV_TARGET_IS_FILE:
+        return localization_select(language, "destino eh um arquivo",
+                                   "destination is a file",
+                                   "el destino es un archivo");
+    case FS_NAV_CANNOT_CHANGE:
+    default:
+        return localization_select(language, "nao foi possivel mudar",
+                                   "could not change directory",
+                                   "no fue posible cambiar");
+    }
+}
 
 static int list_callback(const char *name, uint16_t mode, void *userdata) {
     struct list_ctx *ctx = (struct list_ctx *)userdata;
@@ -23,53 +82,55 @@ static int list_callback(const char *name, uint16_t mode, void *userdata) {
 }
 
 static int cmd_list(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "list [caminho]",
-                          "Lista os itens do diretorio atual ou do caminho informado.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "list [path]",
+                          fs_nav_text(language, FS_NAV_HELP_LIST))) {
         return 0;
     }
     const char *target = (argc > 1) ? argv[1] : ".";
     char path[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, target, path, sizeof(path)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_nav_text(language, FS_NAV_INVALID_PATH));
         shell_suggest_help("list");
         return -1;
     }
     struct list_ctx lctx;
     lctx.count = 0;
     if (vfs_listdir(path, list_callback, &lctx) != 0) {
-        shell_print_error("nao foi possivel listar");
+        shell_print_error(fs_nav_text(language, FS_NAV_CANNOT_LIST));
         shell_suggest_help("list");
         return -1;
     }
     if (lctx.count == 0) {
-        shell_print("(vazio)\n");
+        shell_print(fs_nav_text(language, FS_NAV_EMPTY));
     }
     return 0;
 }
 
 static int cmd_go(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "go <caminho>",
-                          "Altera o diretorio atual da sessao.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "go <path>",
+                          fs_nav_text(language, FS_NAV_HELP_GO))) {
         return 0;
     }
     if (argc < 2) {
-        shell_print_error("informe destino");
+        shell_print_error(fs_nav_text(language, FS_NAV_REQUIRE_DESTINATION));
         shell_suggest_help("go");
         return -1;
     }
     char path[SHELL_PATH_BUFFER];
     if (session_resolve_path(ctx->session, argv[1], path, sizeof(path)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_nav_text(language, FS_NAV_INVALID_PATH));
         shell_suggest_help("go");
         return -1;
     }
     shell_trim_trailing_slash(path);
     if (shell_path_is_file(path)) {
-        shell_print_error("destino eh um arquivo");
+        shell_print_error(fs_nav_text(language, FS_NAV_TARGET_IS_FILE));
         return -1;
     }
     if (session_set_cwd(ctx->session, path) != 0) {
-        shell_print_error("nao foi possivel mudar");
+        shell_print_error(fs_nav_text(language, FS_NAV_CANNOT_CHANGE));
         shell_suggest_help("go");
         return -1;
     }
@@ -78,7 +139,9 @@ static int cmd_go(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_mypath(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "mypath", "Exibe o caminho atual da sessao.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "mypath",
+                          fs_nav_text(language, FS_NAV_HELP_MYPATH))) {
         return 0;
     }
     (void)argc;

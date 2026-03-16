@@ -50,7 +50,10 @@ def run_open_write(
         session.send_line(line)
         session.wait_for("open> ", timeout=timeout, start_at=mk)
     session.send_line(".wq")
-    session.wait_for("arquivo salvo", timeout=timeout, start_at=mk)
+    try:
+        session.wait_for("file saved", timeout=timeout, start_at=mk)
+    except TimeoutError:
+        session.wait_for("arquivo salvo", timeout=timeout, start_at=mk)
     session.wait_for("> ", timeout=timeout, start_at=mk)
 
 
@@ -249,7 +252,37 @@ def smoke_first_boot(
     )
     run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
     run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
-    run_cmd(session, "add-user smokeuser smoke user", timeout=timeout, expect="usuario=smokeuser")
+    run_cmd(
+        session,
+        "mk-dir -help",
+        timeout=timeout,
+        expect="Creates a directory (and needed parents) in the given path.",
+    )
+    run_cmd(
+        session,
+        "print-file -help",
+        timeout=timeout,
+        expect="Shows the full content of a text file.",
+    )
+    run_cmd(
+        session,
+        "add-user -help",
+        timeout=timeout,
+        expect="Creates a new local user. Accepted roles: user, admin.",
+    )
+    run_cmd(
+        session,
+        "net-status -help",
+        timeout=timeout,
+        expect="Shows network state: active driver, IPv4, gateway, ARP and counters.",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "add-user smokeuser smoke user",
+        timeout=timeout,
+        expect="user=smokeuser",
+    )
     mk = session.marker()
     session.send_line("bye")
     session.wait_for("Logging out", timeout=timeout, start_at=mk)

@@ -80,6 +80,19 @@ const char *localization_language_name(const char *language) {
   }
 }
 
+const char *localization_select(const char *language, const char *pt_br,
+                                const char *en, const char *es) {
+  switch (localization_index_for(language)) {
+  case LANG_EN:
+    return en ? en : (pt_br ? pt_br : "");
+  case LANG_ES:
+    return es ? es : (pt_br ? pt_br : "");
+  case LANG_PT_BR:
+  default:
+    return pt_br ? pt_br : "";
+  }
+}
+
 const char *localization_text_for(const char *language,
                                   enum localization_text_id id) {
   switch (localization_index_for(language)) {

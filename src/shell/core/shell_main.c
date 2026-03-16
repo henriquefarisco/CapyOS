@@ -3,6 +3,7 @@
 #include "shell/core.h"
 #include "shell/commands.h"
 
+#include "core/localization.h"
 #include "memory/kmem.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
@@ -115,6 +116,15 @@ void shell_request_logout(struct shell_context *ctx)
     }
 }
 
+const char *shell_current_language(void)
+{
+    struct session_context *active = session_active();
+    if (active) {
+        return session_language(active);
+    }
+    return "pt-BR";
+}
+
 int shell_string_equal(const char *a, const char *b)
 {
     if (!a || !b) {
@@ -190,11 +200,12 @@ int shell_help_requested(int argc, char **argv)
 
 int shell_handle_help(int argc, char **argv, const char *usage, const char *details)
 {
+    const char *language = shell_current_language();
     if (!shell_help_requested(argc, argv)) {
         return 0;
     }
     if (usage) {
-        shell_print("Uso: ");
+        shell_print(localization_select(language, "Uso: ", "Usage: ", "Uso: "));
         shell_print(usage);
         shell_newline();
     }
@@ -207,9 +218,12 @@ int shell_handle_help(int argc, char **argv, const char *usage, const char *deta
 
 void shell_suggest_help(const char *cmd)
 {
-    shell_print("Use ");
+    const char *language = shell_current_language();
+    shell_print(localization_select(language, "Use ", "Use ", "Usa "));
     shell_print(cmd);
-    shell_print(" -help para detalhes.\n");
+    shell_print(localization_select(language, " -help para detalhes.\n",
+                                    " -help for details.\n",
+                                    " -help para ver detalles.\n"));
 }
 
 static int shell_get_stat(const char *path, struct vfs_stat *st)
@@ -534,7 +548,8 @@ void shell_paginate_content(const char *content)
             ++p;
         }
         if (++line_count >= lines_per_page && *p) {
-            shell_print("-- mais --");
+            shell_print(localization_select(shell_current_language(), "-- mais --",
+                                            "-- more --", "-- mas --"));
             char c = tty_getc();
             vga_backspace_multiple(10);
             if (c == 'q' || c == 'Q') {

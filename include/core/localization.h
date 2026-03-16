@@ -45,5 +45,7 @@ const char *localization_text_for(const char *language,
                                   enum localization_text_id id);
 const char *localization_language_label(const char *language);
 const char *localization_language_name(const char *language);
+const char *localization_select(const char *language, const char *pt_br,
+                                const char *en, const char *es);
 
 #endif

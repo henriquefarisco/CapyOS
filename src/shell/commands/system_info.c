@@ -6,21 +6,31 @@
 #include "drivers/timer/pit.h"
 
 static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-me\nMostra o usuario autenticado na sessao.\n");
+        shell_print(localization_select(
+            language, "Uso: print-me\nMostra o usuario autenticado na sessao.\n",
+            "Usage: print-me\nShows the authenticated user in the session.\n",
+            "Uso: print-me\nMuestra el usuario autenticado en la sesion.\n"));
         return 0;
     }
     (void)argc;
     (void)argv;
     const struct user_record *user = session_user(ctx->session);
-    shell_print(user ? user->username : "desconhecido");
+    shell_print(user ? user->username
+                     : localization_select(language, "desconhecido", "unknown",
+                                           "desconocido"));
     shell_newline();
     return 0;
 }
 
 static int cmd_print_id(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-id\nMostra UID e GID do usuario atual.\n");
+        shell_print(localization_select(
+            language, "Uso: print-id\nMostra UID e GID do usuario atual.\n",
+            "Usage: print-id\nShows UID and GID for the current user.\n",
+            "Uso: print-id\nMuestra UID y GID del usuario actual.\n"));
         return 0;
     }
     (void)argc;
@@ -40,8 +50,13 @@ static int cmd_print_id(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_print_host(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-host\nExibe o hostname configurado no sistema.\n");
+        shell_print(localization_select(
+            language,
+            "Uso: print-host\nExibe o hostname configurado no sistema.\n",
+            "Usage: print-host\nShows the configured system hostname.\n",
+            "Uso: print-host\nMuestra el hostname configurado del sistema.\n"));
         return 0;
     }
     (void)argc;
@@ -52,8 +67,12 @@ static int cmd_print_host(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_print_version(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-version\nMostra a versao do CapyOS.\n");
+        shell_print(localization_select(
+            language, "Uso: print-version\nMostra a versao do CapyOS.\n",
+            "Usage: print-version\nShows the CapyOS version.\n",
+            "Uso: print-version\nMuestra la version de CapyOS.\n"));
         return 0;
     }
     (void)ctx;
@@ -94,8 +113,13 @@ static void format_hms(uint32_t seconds, char *out, size_t out_len) {
 }
 
 static int cmd_print_time(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-time\nMostra o horario atual (simulado) desde o boot.\n");
+        shell_print(localization_select(
+            language,
+            "Uso: print-time\nMostra o horario atual (simulado) desde o boot.\n",
+            "Usage: print-time\nShows the current simulated time since boot.\n",
+            "Uso: print-time\nMuestra la hora actual (simulada) desde el arranque.\n"));
         return 0;
     }
     (void)ctx;
@@ -105,15 +129,22 @@ static int cmd_print_time(struct shell_context *ctx, int argc, char **argv) {
     uint32_t simulated = seconds % (24u * 3600u);
     char buffer[16];
     format_hms(simulated, buffer, sizeof(buffer));
-    shell_print("hora atual (simulada) ");
+    shell_print(localization_select(language, "hora atual (simulada) ",
+                                    "current time (simulated) ",
+                                    "hora actual (simulada) "));
     shell_print(buffer);
     shell_print(" (HH:MM:SS)\n");
     return 0;
 }
 
 static int cmd_print_insomnia(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-insomnia\nMostra o tempo total de atividade do sistema.");
+        shell_print(localization_select(
+            language,
+            "Uso: print-insomnia\nMostra o tempo total de atividade do sistema.",
+            "Usage: print-insomnia\nShows the total system uptime.",
+            "Uso: print-insomnia\nMuestra el tiempo total de actividad del sistema."));
         shell_newline();
         return 0;
     }
@@ -130,8 +161,13 @@ static int cmd_print_insomnia(struct shell_context *ctx, int argc, char **argv) 
 }
 
 static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: print-envs\nExibe variaveis basicas da sessao (USER, HOME, HOST, etc.).\n");
+        shell_print(localization_select(
+            language,
+            "Uso: print-envs\nExibe variaveis basicas da sessao (USER, HOME, HOST, etc.).\n",
+            "Usage: print-envs\nShows basic session variables (USER, HOME, HOST, etc.).\n",
+            "Uso: print-envs\nMuestra variables basicas de la sesion (USER, HOME, HOST, etc.).\n"));
         return 0;
     }
     (void)argc;

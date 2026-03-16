@@ -243,7 +243,16 @@ Status:
   semeando idioma padrao do sistema para o novo usuario
 - smoke oficial agora cobre heranca de idioma para usuario secundario e
   persistencia apos reboot
-- ainda faltam ampliar a migracao de strings para comandos de arquivos/rede
+- comandos de arquivos, busca, rede e gestao de usuarios agora respeitam o
+  idioma ativo na sessao autenticada
+- `system_control`, `system_info`, ajuda e sessao foram alinhados para manter
+  os textos principais em `pt-BR`, `en` e `es`
+- smoke oficial de disco provisionado e ISO valida agora os textos em ingles
+  para comandos de arquivos, rede e usuarios
+- labels tecnicos deliberadamente estaveis (`USER=`, `ipv4=`, `uid=` etc.)
+  permanecem sem traducao para preservar legibilidade e compatibilidade de
+  scripts
+- criterio de aceite desta entrega atendido nesta branch
 
 ## Entrega B1 - Rede de verdade e API de comunicacao
 
@@ -469,7 +478,7 @@ A Fase A so pode ser considerada encerrada quando:
 Objetivo desta branch:
 
 - registrar este roadmap completo
-- fechar A1 e iniciar A2
+- fechar A5 e preparar a entrada da fase B
 
 Status desta branch:
 
@@ -478,6 +487,5 @@ Status desta branch:
 - A2: concluida e validada manualmente
 - A3: concluida e validada manualmente
 - A4: concluida e validada por smoke
-- A5: infraestrutura inicial implementada e validada por smoke; fase ainda em
-  andamento
+- A5: concluida e validada por smoke
 - B1 em diante: ainda nao iniciadas

@@ -13,8 +13,8 @@
 
 static int cmd_config_keyboard(struct shell_context *ctx, int argc,
                                char **argv) {
-  const char *language = ctx && ctx->session ? session_language(ctx->session)
-                                             : "pt-BR";
+  const char *language = shell_current_language();
+  (void)ctx;
   if (shell_help_requested(argc, argv)) {
     if (shell_string_equal(language, "en")) {
       shell_print("Usage: config-keyboard [layout]\n"
@@ -40,7 +40,8 @@ static int cmd_config_keyboard(struct shell_context *ctx, int argc,
   if (argc < 2 || shell_string_equal(argv[1], "list")) {
     shell_print(localization_text_for(language, LOC_TEXT_LAYOUT_CURRENT));
     const char *cur = keyboard_current_layout();
-    shell_print(cur ? cur : "(desconhecido)");
+    shell_print(cur ? cur : localization_select(language, "(desconhecido)",
+                                                "(unknown)", "(desconocido)"));
     shell_newline();
     shell_print(localization_text_for(language, LOC_TEXT_LAYOUT_LIST_HEADER));
     for (size_t i = 0; i < keyboard_layout_count(); ++i) {
@@ -55,7 +56,8 @@ static int cmd_config_keyboard(struct shell_context *ctx, int argc,
   if (shell_string_equal(argv[1], "show")) {
     shell_print(localization_text_for(language, LOC_TEXT_LAYOUT_CURRENT));
     const char *cur = keyboard_current_layout();
-    shell_print(cur ? cur : "(desconhecido)");
+    shell_print(cur ? cur : localization_select(language, "(desconhecido)",
+                                                "(unknown)", "(desconocido)"));
     shell_newline();
     return 0;
   }
@@ -118,8 +120,7 @@ static int parse_splash_mode(const char *value, int *enabled) {
 }
 
 static int cmd_config_theme(struct shell_context *ctx, int argc, char **argv) {
-  const char *language = ctx && ctx->session ? session_language(ctx->session)
-                                             : "pt-BR";
+  const char *language = shell_current_language();
   if (shell_help_requested(argc, argv)) {
     if (shell_string_equal(language, "en")) {
       shell_print("Usage: config-theme [theme]\n"
@@ -151,9 +152,18 @@ static int cmd_config_theme(struct shell_context *ctx, int argc, char **argv) {
     shell_print(current);
     shell_newline();
     shell_print(localization_text_for(language, LOC_TEXT_THEME_LIST_HEADER));
-    shell_print(" - capyos : padrao verde/escuro do sistema\n");
-    shell_print(" - ocean  : variante azul/ciano\n");
-    shell_print(" - forest : variante verde/floresta\n");
+    shell_print(localization_select(language,
+                                    " - capyos : padrao verde/escuro do sistema\n",
+                                    " - capyos : default green/dark system theme\n",
+                                    " - capyos : tema verde/oscuro predeterminado del sistema\n"));
+    shell_print(localization_select(language,
+                                    " - ocean  : variante azul/ciano\n",
+                                    " - ocean  : blue/cyan variant\n",
+                                    " - ocean  : variante azul/cian\n"));
+    shell_print(localization_select(language,
+                                    " - forest : variante verde/floresta\n",
+                                    " - forest : green/forest variant\n",
+                                    " - forest : variante verde/bosque\n"));
     return 0;
   }
 
@@ -197,8 +207,7 @@ static int cmd_config_theme(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_config_splash(struct shell_context *ctx, int argc, char **argv) {
-  const char *language = ctx && ctx->session ? session_language(ctx->session)
-                                             : "pt-BR";
+  const char *language = shell_current_language();
   int current_enabled = 1;
   if (ctx && ctx->settings) {
     current_enabled = ctx->settings->splash_enabled ? 1 : 0;
@@ -274,8 +283,7 @@ static int cmd_config_language(struct shell_context *ctx, int argc,
                                char **argv) {
   const struct user_record *user =
       ctx && ctx->session ? session_user(ctx->session) : NULL;
-  const char *language = ctx && ctx->session ? session_language(ctx->session)
-                                             : "pt-BR";
+  const char *language = shell_current_language();
 
   if (shell_help_requested(argc, argv)) {
     if (shell_string_equal(language, "en")) {
@@ -344,8 +352,10 @@ static void sync_and_flush(void) {
 static void io_wait(void) { outb(0x80, 0); }
 
 static void do_hard_reboot(void) {
+  const char *language = shell_current_language();
   sync_and_flush();
-  shell_print("Reiniciando...\n");
+  shell_print(localization_select(language, "Reiniciando...\n",
+                                  "Rebooting...\n", "Reiniciando...\n"));
   cli();
 
   /* Metodo 1: Reset via controlador de teclado 8042. */
@@ -369,8 +379,11 @@ static void do_hard_reboot(void) {
 }
 
 static void do_power_off(void) {
+  const char *language = shell_current_language();
   sync_and_flush();
-  shell_print("Desligando...\n");
+  shell_print(localization_select(language, "Desligando...\n",
+                                  "Powering off...\n",
+                                  "Apagando...\n"));
   cli();
 
   /* Metodo 1: ACPI shutdown (S5 state). */
@@ -388,11 +401,15 @@ static void do_power_off(void) {
 
 static int cmd_shutdown_reboot(struct shell_context *ctx, int argc,
                                char **argv) {
+  const char *language = shell_current_language();
   (void)ctx;
   (void)argv;
   if (shell_help_requested(argc, argv)) {
-    shell_print("Uso: shutdown-reboot\nReinicia o sistema de forma controlada "
-                "(sincroniza buffers).");
+    shell_print(localization_select(
+        language,
+        "Uso: shutdown-reboot\nReinicia o sistema de forma controlada (sincroniza buffers).",
+        "Usage: shutdown-reboot\nReboots the system in a controlled way (syncs buffers).",
+        "Uso: shutdown-reboot\nReinicia el sistema de forma controlada (sincroniza buffers)."));
     shell_newline();
     return 0;
   }
@@ -401,11 +418,15 @@ static int cmd_shutdown_reboot(struct shell_context *ctx, int argc,
 }
 
 static int cmd_shutdown_off(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
   (void)ctx;
   (void)argv;
   if (shell_help_requested(argc, argv)) {
-    shell_print("Uso: shutdown-off\nDesliga o sistema (halt) apos sincronizar "
-                "buffers.");
+    shell_print(localization_select(
+        language,
+        "Uso: shutdown-off\nDesliga o sistema (halt) apos sincronizar buffers.",
+        "Usage: shutdown-off\nPowers off the system (halt) after syncing buffers.",
+        "Uso: shutdown-off\nApaga el sistema (halt) despues de sincronizar buffers."));
     shell_newline();
     return 0;
   }
@@ -414,9 +435,13 @@ static int cmd_shutdown_off(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_do_sync(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
   (void)ctx;
   if (shell_help_requested(argc, argv)) {
-    shell_print("Uso: do-sync\nForca a gravacao do buffer de disco.");
+    shell_print(localization_select(
+        language, "Uso: do-sync\nForca a gravacao do buffer de disco.",
+        "Usage: do-sync\nForces disk buffer flushing.",
+        "Uso: do-sync\nFuerza la escritura del buffer de disco."));
     shell_newline();
     return 0;
   }
@@ -424,14 +449,20 @@ static int cmd_do_sync(struct shell_context *ctx, int argc, char **argv) {
   (void)argv;
   struct super_block *root = vfs_root();
   if (!root || !root->bdev) {
-    shell_print_error("sem dispositivo");
+    shell_print_error(localization_select(language, "sem dispositivo",
+                                          "no device", "sin dispositivo"));
     return -1;
   }
   if (buffer_cache_sync(root->bdev) != 0) {
-    shell_print_error("falha ao sincronizar buffers de disco");
+    shell_print_error(localization_select(language,
+                                          "falha ao sincronizar buffers de disco",
+                                          "failed to sync disk buffers",
+                                          "fallo al sincronizar buffers de disco"));
     return -1;
   }
-  shell_print_ok("buffers sincronizados");
+  shell_print_ok(localization_select(language, "buffers sincronizados",
+                                     "buffers synced",
+                                     "buffers sincronizados"));
   return 0;
 }
 

@@ -1,31 +1,137 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
+#include "core/localization.h"
 #include "drivers/video/vga.h"
 #include "drivers/console/tty.h"
 #include "memory/kmem.h"
 #include "fs/vfs.h"
 
+enum fs_content_text_id {
+    FS_CONTENT_HELP_PRINT_FILE = 0,
+    FS_CONTENT_HELP_PAGE,
+    FS_CONTENT_HELP_PRINT_FILE_BEGIN,
+    FS_CONTENT_HELP_PRINT_FILE_END,
+    FS_CONTENT_HELP_PRINT_ECHO,
+    FS_CONTENT_HELP_OPEN,
+    FS_CONTENT_REQUIRE_FILE,
+    FS_CONTENT_INVALID_PATH,
+    FS_CONTENT_CANNOT_OPEN,
+    FS_CONTENT_READ_FAILED,
+    FS_CONTENT_CURRENT_CONTENT_HEADER,
+    FS_CONTENT_CURRENT_CONTENT_FOOTER,
+    FS_CONTENT_NEW_FILE_EMPTY,
+    FS_CONTENT_CANNOT_CREATE_FILE,
+    FS_CONTENT_CANNOT_OPEN_WRITE,
+    FS_CONTENT_OPEN_INSTRUCTIONS,
+    FS_CONTENT_FILE_SAVED,
+};
+
+static const char *fs_content_text(const char *language,
+                                   enum fs_content_text_id id) {
+    switch (id) {
+    case FS_CONTENT_HELP_PRINT_FILE:
+        return localization_select(
+            language,
+            "Mostra o conteudo completo de um arquivo de texto.",
+            "Shows the full content of a text file.",
+            "Muestra el contenido completo de un archivo de texto.");
+    case FS_CONTENT_HELP_PAGE:
+        return localization_select(
+            language,
+            "Exibe o arquivo de forma paginada.",
+            "Shows the file with pagination.",
+            "Muestra el archivo de forma paginada.");
+    case FS_CONTENT_HELP_PRINT_FILE_BEGIN:
+        return localization_select(
+            language,
+            "Mostra as primeiras linhas de um arquivo. Use -n para ajustar a quantidade.",
+            "Shows the first lines of a file. Use -n to adjust the amount.",
+            "Muestra las primeras lineas de un archivo. Usa -n para ajustar la cantidad.");
+    case FS_CONTENT_HELP_PRINT_FILE_END:
+        return localization_select(
+            language,
+            "Mostra as ultimas linhas de um arquivo. Use -n para ajustar a quantidade.",
+            "Shows the last lines of a file. Use -n to adjust the amount.",
+            "Muestra las ultimas lineas de un archivo. Usa -n para ajustar la cantidad.");
+    case FS_CONTENT_HELP_PRINT_ECHO:
+        return localization_select(language, "Repete os argumentos recebidos.",
+                                   "Repeats the received arguments.",
+                                   "Repite los argumentos recibidos.");
+    case FS_CONTENT_HELP_OPEN:
+        return localization_select(
+            language,
+            "Abre arquivo em modo edicao linha-a-linha. Termine com .wq para salvar e sair.",
+            "Opens a file in line-by-line edit mode. Finish with .wq to save and exit.",
+            "Abre un archivo en modo de edicion linea por linea. Termina con .wq para guardar y salir.");
+    case FS_CONTENT_REQUIRE_FILE:
+        return localization_select(language, "informe arquivo", "provide file",
+                                   "indica archivo");
+    case FS_CONTENT_INVALID_PATH:
+        return localization_select(language, "caminho invalido", "invalid path",
+                                   "ruta invalida");
+    case FS_CONTENT_CANNOT_OPEN:
+        return localization_select(language, "nao foi possivel abrir",
+                                   "could not open file",
+                                   "no fue posible abrir");
+    case FS_CONTENT_READ_FAILED:
+        return localization_select(language, "falha ao ler", "read failed",
+                                   "fallo al leer");
+    case FS_CONTENT_CURRENT_CONTENT_HEADER:
+        return localization_select(language, "=== Conteudo atual ===\n",
+                                   "=== Current content ===\n",
+                                   "=== Contenido actual ===\n");
+    case FS_CONTENT_CURRENT_CONTENT_FOOTER:
+        return localization_select(language, "======================\n",
+                                   "=======================\n",
+                                   "======================\n");
+    case FS_CONTENT_NEW_FILE_EMPTY:
+        return localization_select(language, "Arquivo novo. Conteudo vazio.\n",
+                                   "New file. Empty content.\n",
+                                   "Archivo nuevo. Contenido vacio.\n");
+    case FS_CONTENT_CANNOT_CREATE_FILE:
+        return localization_select(language, "nao foi possivel criar arquivo",
+                                   "could not create file",
+                                   "no fue posible crear archivo");
+    case FS_CONTENT_CANNOT_OPEN_WRITE:
+        return localization_select(language,
+                                   "nao foi possivel abrir para escrita",
+                                   "could not open for writing",
+                                   "no fue posible abrir para escritura");
+    case FS_CONTENT_OPEN_INSTRUCTIONS:
+        return localization_select(
+            language,
+            "Digite linhas; finalize com .wq isolado para salvar.\n",
+            "Type lines; finish with .wq alone to save.\n",
+            "Escribe lineas; finaliza con .wq solo para guardar.\n");
+    case FS_CONTENT_FILE_SAVED:
+    default:
+        return localization_select(language, "arquivo salvo", "file saved",
+                                   "archivo guardado");
+    }
+}
+
 static int cmd_print_file(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "print-file <arquivo>",
-                          "Mostra o conteudo completo de um arquivo de texto.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "print-file <file>",
+                          fs_content_text(language, FS_CONTENT_HELP_PRINT_FILE))) {
         return 0;
     }
     if (argc < 2) {
-        shell_print_error("informe arquivo");
+        shell_print_error(fs_content_text(language, FS_CONTENT_REQUIRE_FILE));
         shell_suggest_help("print-file");
         return -1;
     }
     char path[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, argv[1], path, sizeof(path)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_content_text(language, FS_CONTENT_INVALID_PATH));
         shell_suggest_help("print-file");
         return -1;
     }
     shell_trim_trailing_slash(path);
     struct file *f = shell_open_file_read(path);
     if (!f) {
-        shell_print_error("nao foi possivel abrir");
+        shell_print_error(fs_content_text(language, FS_CONTENT_CANNOT_OPEN));
         shell_suggest_help("print-file");
         return -1;
     }
@@ -35,20 +141,23 @@ static int cmd_print_file(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_page(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "page <arquivo>",
-                          "Exibe o arquivo de forma paginada.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "page <file>",
+                          fs_content_text(language, FS_CONTENT_HELP_PAGE))) {
         return 0;
     }
     return cmd_print_file(ctx, argc, argv);
 }
 
 static int cmd_print_file_begin(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "print-file-begin <arquivo> [-n <linhas>]",
-                          "Mostra as primeiras linhas de um arquivo. Use -n para ajustar a quantidade.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "print-file-begin <file> [-n <lines>]",
+                          fs_content_text(language,
+                                          FS_CONTENT_HELP_PRINT_FILE_BEGIN))) {
         return 0;
     }
     if (argc < 2) {
-        shell_print_error("informe arquivo");
+        shell_print_error(fs_content_text(language, FS_CONTENT_REQUIRE_FILE));
         shell_suggest_help("print-file-begin");
         return -1;
     }
@@ -76,7 +185,7 @@ static int cmd_print_file_begin(struct shell_context *ctx, int argc, char **argv
     }
     char path[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, argv[1], path, sizeof(path)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_content_text(language, FS_CONTENT_INVALID_PATH));
         shell_suggest_help("print-file-begin");
         return -1;
     }
@@ -84,7 +193,7 @@ static int cmd_print_file_begin(struct shell_context *ctx, int argc, char **argv
     char *buffer = NULL;
     size_t len = 0;
     if (shell_read_file(path, &buffer, &len) != 0) {
-        shell_print_error("falha ao ler");
+        shell_print_error(fs_content_text(language, FS_CONTENT_READ_FAILED));
         return -1;
     }
     int count = 0;
@@ -102,12 +211,14 @@ static int cmd_print_file_begin(struct shell_context *ctx, int argc, char **argv
 }
 
 static int cmd_print_file_end(struct shell_context *ctx, int argc, char **argv) {
-    if (shell_handle_help(argc, argv, "print-file-end <arquivo> [-n <linhas>]",
-                          "Mostra as ultimas linhas de um arquivo. Use -n para ajustar a quantidade.")) {
+    const char *language = shell_current_language();
+    if (shell_handle_help(argc, argv, "print-file-end <file> [-n <lines>]",
+                          fs_content_text(language,
+                                          FS_CONTENT_HELP_PRINT_FILE_END))) {
         return 0;
     }
     if (argc < 2) {
-        shell_print_error("informe arquivo");
+        shell_print_error(fs_content_text(language, FS_CONTENT_REQUIRE_FILE));
         shell_suggest_help("print-file-end");
         return -1;
     }
@@ -135,7 +246,7 @@ static int cmd_print_file_end(struct shell_context *ctx, int argc, char **argv) 
     }
     char path[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, argv[1], path, sizeof(path)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_content_text(language, FS_CONTENT_INVALID_PATH));
         shell_suggest_help("print-file-end");
         return -1;
     }
@@ -143,7 +254,7 @@ static int cmd_print_file_end(struct shell_context *ctx, int argc, char **argv) 
     char *buffer = NULL;
     size_t len = 0;
     if (shell_read_file(path, &buffer, &len) != 0) {
-        shell_print_error("falha ao ler");
+        shell_print_error(fs_content_text(language, FS_CONTENT_READ_FAILED));
         return -1;
     }
     int newline_count = 0;
@@ -166,9 +277,10 @@ static int cmd_print_file_end(struct shell_context *ctx, int argc, char **argv) 
 }
 
 static int cmd_print_echo(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     (void)ctx;
-    if (shell_handle_help(argc, argv, "print-echo [texto]",
-                          "Repete os argumentos recebidos.")) {
+    if (shell_handle_help(argc, argv, "print-echo [text]",
+                          fs_content_text(language, FS_CONTENT_HELP_PRINT_ECHO))) {
         return 0;
     }
     for (int i = 1; i < argc; ++i) {
@@ -181,52 +293,51 @@ static int cmd_print_echo(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-// Editor de linha simples: reescreve o arquivo com linhas digitadas até o usuário enviar ".wq"
 static int cmd_open(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     (void)ctx;
-    if (shell_handle_help(argc, argv, "open <arquivo>",
-                          "Abre arquivo em modo edicao linha-a-linha. Termine com .wq para salvar e sair.")) {
+    if (shell_handle_help(argc, argv, "open <file>",
+                          fs_content_text(language, FS_CONTENT_HELP_OPEN))) {
         return 0;
     }
     if (argc < 2) {
-        shell_print_error("informe arquivo");
+        shell_print_error(fs_content_text(language, FS_CONTENT_REQUIRE_FILE));
         shell_suggest_help("open");
         return -1;
     }
     char path[SHELL_PATH_BUFFER];
     if (shell_resolve_path(ctx, argv[1], path, sizeof(path)) != 0) {
-        shell_print_error("caminho invalido");
+        shell_print_error(fs_content_text(language, FS_CONTENT_INVALID_PATH));
         shell_suggest_help("open");
         return -1;
     }
     shell_trim_trailing_slash(path);
 
-    // Mostra conteudo atual (se existir)
     char *buffer = NULL;
     size_t len = 0;
     if (shell_read_file(path, &buffer, &len) == 0 && buffer) {
-        shell_print("=== Conteudo atual ===\n");
+        shell_print(fs_content_text(language, FS_CONTENT_CURRENT_CONTENT_HEADER));
         vga_write(buffer);
         vga_newline();
-        shell_print("======================\n");
+        shell_print(fs_content_text(language, FS_CONTENT_CURRENT_CONTENT_FOOTER));
         kfree(buffer);
     } else {
-        shell_print("Arquivo novo. Conteudo vazio.\n");
+        shell_print(fs_content_text(language, FS_CONTENT_NEW_FILE_EMPTY));
     }
 
-    // Recria o arquivo para garantir truncamento
     vfs_unlink(path);
     if (vfs_create(path, VFS_MODE_FILE, NULL) != 0) {
-        shell_print_error("nao foi possivel criar arquivo");
+        shell_print_error(
+            fs_content_text(language, FS_CONTENT_CANNOT_CREATE_FILE));
         return -1;
     }
     struct file *f = shell_open_file_write(path);
     if (!f) {
-        shell_print_error("nao foi possivel abrir para escrita");
+        shell_print_error(fs_content_text(language, FS_CONTENT_CANNOT_OPEN_WRITE));
         return -1;
     }
 
-    shell_print("Digite linhas; finalize com .wq isolado para salvar.\n");
+    shell_print(fs_content_text(language, FS_CONTENT_OPEN_INSTRUCTIONS));
     char line[TTY_BUFFER_MAX];
     while (1) {
         tty_set_prompt("open> ");
@@ -234,7 +345,6 @@ static int cmd_open(struct shell_context *ctx, int argc, char **argv) {
         tty_show_prompt();
         size_t l = tty_readline(line, sizeof(line));
         if (l == 0) {
-            // linha vazia -> apenas grava newline
             const char nl = '\n';
             vfs_write(f, &nl, 1);
             continue;
@@ -247,7 +357,7 @@ static int cmd_open(struct shell_context *ctx, int argc, char **argv) {
         vfs_write(f, &nl, 1);
     }
     vfs_close(f);
-    shell_print_ok("arquivo salvo");
+    shell_print_ok(fs_content_text(language, FS_CONTENT_FILE_SAVED));
     return 0;
 }
 

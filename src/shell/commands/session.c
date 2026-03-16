@@ -5,9 +5,13 @@
 #include "drivers/video/vga.h"
 
 static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
-        shell_print("Uso: mess\nLimpa a tela do terminal.\n");
+        shell_print(localization_select(
+            language, "Uso: mess\nLimpa a tela do terminal.\n",
+            "Usage: mess\nClears the terminal screen.\n",
+            "Uso: mess\nLimpia la pantalla del terminal.\n"));
         return 0;
     }
     vga_clear();
@@ -15,7 +19,7 @@ static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int cmd_bye(struct shell_context *ctx, int argc, char **argv) {
-    const char *language = ctx && ctx->session ? session_language(ctx->session) : "pt-BR";
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         if (shell_string_equal(language, "en")) {
             shell_print("Usage: bye\nEnds the current session and returns to the login screen.\n");

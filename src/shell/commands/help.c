@@ -19,7 +19,7 @@ static void buffer_append_local(char *dst, size_t dst_size, const char *src)
 
 static int cmd_help_any(struct shell_context *ctx, int argc, char **argv)
 {
-    const char *language = ctx && ctx->session ? session_language(ctx->session) : "pt-BR";
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         if (shell_string_equal(language, "en")) {
             shell_print("Usage: help-any\nLists all commands registered in CapyCLI.\n");
@@ -52,7 +52,9 @@ static int cmd_help_any(struct shell_context *ctx, int argc, char **argv)
 
     char *buffer = (char *)kalloc(total_len);
     if (!buffer) {
-        shell_print_error("memoria insuficiente");
+        shell_print_error(localization_select(language, "memoria insuficiente",
+                                              "insufficient memory",
+                                              "memoria insuficiente"));
         return -1;
     }
     buffer[0] = '\0';
@@ -76,7 +78,7 @@ static int cmd_help_any(struct shell_context *ctx, int argc, char **argv)
 
 static int cmd_help_docs(struct shell_context *ctx, int argc, char **argv)
 {
-    const char *language = ctx && ctx->session ? session_language(ctx->session) : "pt-BR";
+    const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         if (shell_string_equal(language, "en")) {
             shell_print("Usage: help-docs\nShows the command reference documented in /docs/capyos-cli-reference.txt.\n");

@@ -41,6 +41,7 @@ int shell_context_running(const struct shell_context *ctx);
 int shell_context_should_logout(const struct shell_context *ctx);
 void shell_request_exit(struct shell_context *ctx);
 void shell_request_logout(struct shell_context *ctx);
+const char *shell_current_language(void);
 
 void shell_update_prompt(struct shell_context *ctx);
 int shell_parse_line(char *line, char **argv, int max_args);
