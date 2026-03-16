@@ -4,6 +4,7 @@
  */
 #include "drivers/acpi/acpi.h"
 #include "arch/x86/hw/io.h"
+#include "drivers/efi/efi_console.h"
 
 #include <stddef.h>
 
@@ -11,6 +12,29 @@
 #define ACPI_SLP_EN (1 << 13)
 #define ACPI_SLP_TYP_S5                                                        \
   (5 << 10) /* Common S5 value, will be overridden if found */
+
+#define EFI_RESET_COLD_K 0u
+#define EFI_RESET_SHUTDOWN_K 2u
+
+typedef void(EFIAPI *efi_reset_system_fn_k)(uint32_t ResetType,
+                                            EFI_STATUS_K ResetStatus,
+                                            uint64_t DataSize,
+                                            void *ResetData);
+
+typedef struct {
+  uint8_t Hdr[24];
+  void *GetTime;
+  void *SetTime;
+  void *GetWakeupTime;
+  void *SetWakeupTime;
+  void *SetVirtualAddressMap;
+  void *ConvertPointer;
+  void *GetVariable;
+  void *GetNextVariableName;
+  void *SetVariable;
+  void *GetNextHighMonotonicCount;
+  efi_reset_system_fn_k ResetSystem;
+} EFI_RUNTIME_SERVICES_K;
 
 /* Global ACPI state */
 static int g_acpi_initialized = 0;
@@ -20,6 +44,8 @@ static uint16_t g_slp_typa = ACPI_SLP_TYP_S5;
 static uint16_t g_slp_typb = ACPI_SLP_TYP_S5;
 static struct acpi_gas g_reset_reg = {0};
 static uint8_t g_reset_value = 0;
+static uint64_t g_rsdp_override = 0;
+static uint64_t g_efi_system_table = 0;
 
 /* String comparison helper */
 static int mem_compare(const void *a, const void *b, size_t len) {
@@ -42,6 +68,47 @@ static int acpi_checksum_valid(const void *table, size_t len) {
   return sum == 0;
 }
 
+static int rsdp_valid(const struct acpi_rsdp *rsdp) {
+  if (!rsdp) {
+    return 0;
+  }
+  if (mem_compare(rsdp->signature, "RSD PTR ", 8) != 0) {
+    return 0;
+  }
+  if (!acpi_checksum_valid(rsdp, 20)) {
+    return 0;
+  }
+  if (rsdp->revision >= 2) {
+    uint32_t len = rsdp->length;
+    if (len < sizeof(struct acpi_rsdp) || len > 4096u) {
+      return 0;
+    }
+    if (!acpi_checksum_valid(rsdp, len)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static void efi_reset_system(uint32_t reset_type) {
+  if (!g_efi_system_table) {
+    return;
+  }
+
+  EFI_SYSTEM_TABLE_K *st = (EFI_SYSTEM_TABLE_K *)(uintptr_t)g_efi_system_table;
+  if (!st || !st->RuntimeServices) {
+    return;
+  }
+
+  EFI_RUNTIME_SERVICES_K *rt =
+      (EFI_RUNTIME_SERVICES_K *)(uintptr_t)st->RuntimeServices;
+  if (!rt || !rt->ResetSystem) {
+    return;
+  }
+
+  rt->ResetSystem(reset_type, EFI_SUCCESS_K, 0, NULL);
+}
+
 /* Search for RSDP in a memory range */
 static struct acpi_rsdp *find_rsdp_in_range(uint32_t start, uint32_t end) {
   /* RSDP is 16-byte aligned */
@@ -57,12 +124,31 @@ static struct acpi_rsdp *find_rsdp_in_range(uint32_t start, uint32_t end) {
   return NULL;
 }
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+static uint16_t bios_read16(uintptr_t addr) {
+  volatile const uint16_t *ptr = (volatile const uint16_t *)addr;
+  return *ptr;
+}
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 /* Find RSDP */
 static struct acpi_rsdp *find_rsdp(void) {
   struct acpi_rsdp *rsdp;
 
+  if (g_rsdp_override) {
+    rsdp = (struct acpi_rsdp *)(uintptr_t)g_rsdp_override;
+    if (rsdp_valid(rsdp)) {
+      return rsdp;
+    }
+  }
+
   /* Search EBDA (Extended BIOS Data Area) - first 1KB */
-  uint16_t ebda_seg = *(uint16_t *)(uintptr_t)0x40E;
+  uint16_t ebda_seg = bios_read16((uintptr_t)0x40E);
   uint32_t ebda_addr = (uint32_t)ebda_seg << 4;
   if (ebda_addr) {
     rsdp = find_rsdp_in_range(ebda_addr, ebda_addr + 1024);
@@ -73,6 +159,15 @@ static struct acpi_rsdp *find_rsdp(void) {
   /* Search BIOS ROM area: 0xE0000 - 0xFFFFF */
   rsdp = find_rsdp_in_range(0xE0000, 0x100000);
   return rsdp;
+}
+
+void acpi_set_rsdp(uint64_t rsdp_addr) {
+  g_rsdp_override = rsdp_addr;
+  g_acpi_initialized = 0;
+}
+
+void acpi_set_uefi_system_table(uint64_t system_table_addr) {
+  g_efi_system_table = system_table_addr;
 }
 
 /* Find a table in RSDT by signature */
@@ -198,8 +293,10 @@ int acpi_init(void) {
 }
 
 void acpi_shutdown(void) {
+  efi_reset_system(EFI_RESET_SHUTDOWN_K);
+
   if (!g_acpi_initialized) {
-    acpi_init();
+    (void)acpi_init();
   }
 
   if (g_pm1a_cnt) {
@@ -223,6 +320,12 @@ void acpi_shutdown(void) {
 }
 
 void acpi_reboot(void) {
+  efi_reset_system(EFI_RESET_COLD_K);
+
+  if (!g_acpi_initialized) {
+    (void)acpi_init();
+  }
+
   __asm__ volatile("cli");
 
   /* Method 0: ACPI FADT Reset (Hyper-V preferred) */

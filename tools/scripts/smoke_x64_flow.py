@@ -110,27 +110,44 @@ def cancel_iso_install(session: SmokeSession, timeout: float) -> None:
 
 
 def trigger_reboot(session: SmokeSession, timeout: float) -> bool:
-    shutdown_attempts = (
-        ("shutdown-reboot", "Reiniciando..."),
-        ("shutdown-off", "Desligando..."),
-    )
-    for cmd, marker in shutdown_attempts:
-        for _ in range(4):
-            mk = session.marker()
-            session.send_line(cmd)
-            try:
-                session.wait_for(marker, timeout=8.0, start_at=mk)
-                wait_for_vm_exit(session, timeout=timeout)
+    reboot_markers = ("Reiniciando...", "Rebooting...")
+    for _ in range(4):
+        mk = session.marker()
+        session.send_line("shutdown-reboot")
+        try:
+            session.wait_for_any(reboot_markers, timeout=8.0, start_at=mk)
+            wait_for_vm_exit(session, timeout=timeout)
+            return True
+        except RuntimeError as exc:
+            if "code 0" in str(exc):
                 return True
-            except RuntimeError as exc:
-                if "code 0" in str(exc):
-                    return True
-                raise
+            raise
+        except TimeoutError:
+            try:
+                session.wait_for("> ", timeout=8.0, start_at=mk)
             except TimeoutError:
-                try:
-                    session.wait_for("> ", timeout=8.0, start_at=mk)
-                except TimeoutError:
-                    pass
+                pass
+    return False
+
+
+def trigger_poweroff(session: SmokeSession, timeout: float) -> bool:
+    poweroff_markers = ("Desligando...", "Powering off...", "Apagando...")
+    for _ in range(4):
+        mk = session.marker()
+        session.send_line("shutdown-off")
+        try:
+            session.wait_for_any(poweroff_markers, timeout=8.0, start_at=mk)
+            wait_for_vm_exit(session, timeout=timeout)
+            return True
+        except RuntimeError as exc:
+            if "code 0" in str(exc):
+                return True
+            raise
+        except TimeoutError:
+            try:
+                session.wait_for("> ", timeout=8.0, start_at=mk)
+            except TimeoutError:
+                pass
     return False
 
 
@@ -329,7 +346,8 @@ def smoke_first_boot(
         expect="buffers sincronizados",
         expect_optional=True,
     )
-    _ = trigger_reboot(session, timeout=timeout * 2)
+    if not trigger_reboot(session, timeout=timeout * 2):
+        raise RuntimeError("shutdown-reboot did not terminate the VM")
 
 
 def smoke_second_boot(
@@ -373,3 +391,5 @@ def smoke_second_boot(
     login(session=session, timeout=timeout, user="smokeuser", password="smoke")
     assert_shell_identity(session, timeout=timeout, user="smokeuser")
     run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    if not trigger_poweroff(session, timeout=timeout * 2):
+        raise RuntimeError("shutdown-off did not terminate the VM")

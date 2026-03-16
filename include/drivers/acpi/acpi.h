@@ -87,7 +87,23 @@ struct acpi_fadt {
   struct acpi_gas reset_reg;
   uint8_t reset_value;
   uint8_t reserved3[3];
+  uint64_t x_firmware_ctrl;
+  uint64_t x_dsdt;
+  struct acpi_gas x_pm1a_event_block;
+  struct acpi_gas x_pm1b_event_block;
+  struct acpi_gas x_pm1a_control_block;
+  struct acpi_gas x_pm1b_control_block;
+  struct acpi_gas x_pm2_control_block;
+  struct acpi_gas x_pm_timer_block;
+  struct acpi_gas x_gpe0_block;
+  struct acpi_gas x_gpe1_block;
+  struct acpi_gas sleep_control_reg;
+  struct acpi_gas sleep_status_reg;
+  uint64_t hypervisor_vendor_identity;
 } __attribute__((packed));
+
+void acpi_set_rsdp(uint64_t rsdp_addr);
+void acpi_set_uefi_system_table(uint64_t system_table_addr);
 
 /**
  * Initialize ACPI subsystem.

@@ -1,7 +1,6 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "arch/x86/hw/io.h"
 #include "core/localization.h"
 #include "core/system_init.h"
 #include "core/user_prefs.h"
@@ -348,34 +347,12 @@ static void sync_and_flush(void) {
   }
 }
 
-/* Pequeno delay para I/O. */
-static void io_wait(void) { outb(0x80, 0); }
-
 static void do_hard_reboot(void) {
   const char *language = shell_current_language();
   sync_and_flush();
   shell_print(localization_select(language, "Reiniciando...\n",
                                   "Rebooting...\n", "Reiniciando...\n"));
-  cli();
-
-  /* Metodo 1: Reset via controlador de teclado 8042. */
-  uint8_t good = 0x02;
-  while (good & 0x02)
-    good = inb(0x64);
-  outb(0x64, 0xFE);
-  io_wait();
-
-  /* Metodo 2: Triple fault (carrega IDT nulo e dispara interrupcao). */
-  struct {
-    uint16_t limit;
-    uint32_t base;
-  } __attribute__((packed)) null_idt = {0, 0};
-  __asm__ volatile("lidt %0" : : "m"(null_idt));
-  __asm__ volatile("int $0x03");
-
-  while (1) {
-    hlt();
-  }
+  acpi_reboot();
 }
 
 static void do_power_off(void) {
@@ -384,19 +361,7 @@ static void do_power_off(void) {
   shell_print(localization_select(language, "Desligando...\n",
                                   "Powering off...\n",
                                   "Apagando...\n"));
-  cli();
-
-  /* Metodo 1: ACPI shutdown (S5 state). */
   acpi_shutdown();
-
-  /* Fallback: QEMU/Bochs debug exit ports. */
-  outw(0x604, 0x2000);  /* QEMU isa-debug-exit (newer) */
-  outw(0xB004, 0x2000); /* Bochs/older QEMU */
-
-  /* Last resort: halt. */
-  while (1) {
-    hlt();
-  }
 }
 
 static int cmd_shutdown_reboot(struct shell_context *ctx, int argc,

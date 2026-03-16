@@ -53,6 +53,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/core/user.o \
 	$(BUILD)/x86_64/core/user_prefs.o \
 	$(BUILD)/x86_64/core/session.o \
+	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
 	$(BUILD)/x86_64/drivers/net/tulip.o \

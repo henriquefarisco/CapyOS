@@ -40,6 +40,9 @@
 
 #define DEBUGCON_PORT 0xE9
 
+void acpi_set_rsdp(uint64_t rsdp_addr);
+void acpi_set_uefi_system_table(uint64_t system_table_addr);
+
 static inline void dbgcon_putc(uint8_t c) {
   __asm__ volatile("outb %0, %1" : : "a"(c), "Nd"((uint16_t)DEBUGCON_PORT));
 }
@@ -2292,6 +2295,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                    : 0;
   g_con.col = 0;
   g_con.row = 0;
+
+  acpi_set_rsdp(h->rsdp);
+  acpi_set_uefi_system_table(h->efi_system_table);
   system_platform_apply_theme("capyos");
   fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_con.bg);
   ui_draw_bars();

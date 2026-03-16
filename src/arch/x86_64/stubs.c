@@ -72,12 +72,6 @@ void vga_write(const char *s) {
 
 void vga_newline(void) { fbcon_putc('\n'); }
 
-/* ACPI stub */
-void acpi_shutdown(void) {
-  for (;;)
-    __asm__ volatile("hlt");
-}
-
 /* ============== TTY stubs (polled mode, no interrupts) ============== */
 static char g_tty_prompt[64] = "capy64> ";
 static int g_tty_echo = 1;

@@ -254,6 +254,45 @@ Status:
   scripts
 - criterio de aceite desta entrega atendido nesta branch
 
+## Entrega A6 - Controle de energia real
+
+Escopo:
+
+- corrigir `shutdown-reboot` para reiniciar o sistema de verdade
+- corrigir `shutdown-off` para desligar a VM/host de verdade
+- remover caminhos x64 que apenas imprimem a mensagem e entram em `halt`
+- ligar o runtime x64 ao driver ACPI real ja existente
+- adicionar regressao automatizada para reboot/poweroff
+
+Dependencias:
+
+- A1-A5
+- runtime x64 com ACPI linkado no kernel
+
+Criterio de aceite:
+
+- `shutdown-reboot` encerra a instancia atual e o boot seguinte sobe normalmente
+- `shutdown-off` encerra a instancia atual sem exigir kill externo do hypervisor
+- `reboot` e `halt` no login pre-shell continuam funcionando porque delegam aos
+  aliases da CLI
+- smoke oficial ou smoke dedicado falha se o comando apenas imprimir a mensagem
+  sem efetivar a transicao de energia
+
+Status:
+
+- bug reportado apos validacao manual do release
+- hotfix priorizado antes da Fase B
+- driver ACPI real linkado ao kernel x64 nesta branch de hotfix
+- runtime x64 passou a entregar `RSDP` e `EFI_SYSTEM_TABLE` do handoff para o
+  driver de energia
+- reboot/poweroff agora tentam `UEFI ResetSystem` como caminho primario, com
+  `ACPI`/fallbacks legados como contingencia
+- `shutdown-reboot` passou a delegar para `acpi_reboot()` com auto-init
+- `shutdown-off` passou a delegar para `acpi_shutdown()` real
+- smoke oficial agora falha se reboot/poweroff apenas imprimirem a mensagem sem
+  efetivar a transicao de energia
+- validado por smoke; aguardando validacao manual no ambiente real
+
 ## Entrega B1 - Rede de verdade e API de comunicacao
 
 Escopo:
@@ -488,4 +527,5 @@ Status desta branch:
 - A3: concluida e validada manualmente
 - A4: concluida e validada por smoke
 - A5: concluida e validada por smoke
+- A6: implementada e validada por smoke; aguardando validacao manual
 - B1 em diante: ainda nao iniciadas

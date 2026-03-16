@@ -45,12 +45,15 @@ Executar no sistema bootado:
 6. `print-file /tmp/smoke/prova.txt`
 7. `find "texto" /tmp/smoke`
 8. `do-sync`
-9. `bye`
+9. `shutdown-reboot`
+10. autenticar novamente e executar `shutdown-off`
 
 Criticos:
 - nao pode haver reset espontaneo durante login ou CLI
 - o teclado deve responder durante login e shell
 - o `do-sync` nao pode quebrar o prompt nem perder a sessao
+- `shutdown-reboot` precisa derrubar a instancia atual e permitir boot limpo
+- `shutdown-off` precisa encerrar a instancia sem kill externo do hypervisor
 
 ## 4. Persistencia entre boots
 
@@ -59,6 +62,7 @@ Criticos:
 3. No boot 2, autenticar novamente.
 4. Validar que o arquivo criado continua presente.
 5. Validar que o usuario provisionado continua autenticando.
+6. Encerrar a instancia com `shutdown-off`.
 
 Resultado esperado:
 - nenhum reformat da particao `DATA`
