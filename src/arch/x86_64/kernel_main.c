@@ -26,6 +26,7 @@
 #include "core/klog_persist.h"
 #include "core/login_runtime.h"
 #include "core/network_bootstrap.h"
+#include "core/service_manager.h"
 #include "core/session.h"
 #include "core/system_init.h"
 #include "core/user.h"
@@ -1779,6 +1780,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_advance(2, 8);
   kcon_init();
   kinit();
+  service_manager_init();
 
   /* Stage 3/8: Timers */
   boot_ui_splash_set_status("Calibrating timers...");
@@ -1873,7 +1875,20 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     fbcon_set_visual_muted(0);
     shell_runtime_rc = prepare_shell_runtime();
     if (shell_runtime_rc == 0) {
-      (void)klog_persist_flush_default();
+      int log_flush_rc = klog_persist_flush_default();
+      if (log_flush_rc == 0) {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_READY, 0,
+            "persistent klog active in /var/log/capyos_klog.txt");
+      } else {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED, log_flush_rc,
+            "persistent klog unavailable; ring buffer only");
+      }
+    } else {
+      (void)service_manager_set_state(
+          SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED,
+          shell_runtime_rc, "filesystem unavailable; ring buffer only");
     }
     fbcon_set_visual_muted(1);
 
@@ -1900,12 +1915,21 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     {
       struct net_stack_status net_status = {0};
       if (net_stack_status(&net_status) != 0) {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -1,
+            "network status unavailable");
         boot_warnings_add(&g_boot_warnings,
                           "Network status unavailable; continuing offline");
       } else if (!net_status.nic.found) {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -2,
+            "no network adapter detected");
         boot_warnings_add(&g_boot_warnings,
                           "No network adapter detected");
       } else if (!net_status.runtime_supported) {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -3,
+            "adapter detected but driver is not validated");
         if (net_status.nic.kind == NET_NIC_KIND_VMXNET3) {
           boot_warnings_add(&g_boot_warnings,
                             "VMXNET3 detected; use VMware E1000 for now");
@@ -1914,10 +1938,21 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                             "Detected network adapter has no validated driver");
         }
       } else if (!net_status.ready) {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_DEGRADED, -4,
+            "validated network driver detected but not ready");
         boot_warnings_add(&g_boot_warnings,
                           "Validated network driver detected but not ready");
+      } else {
+        (void)service_manager_set_state(
+            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_READY, 0,
+            "network stack ready");
       }
     }
+
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_UPDATE_AGENT, SYSTEM_SERVICE_STATE_BLOCKED, -5,
+        "update pipeline not implemented yet");
   }
 
   /* --- End splash -------------------------------------------------------- */

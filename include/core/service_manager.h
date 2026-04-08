@@ -1,0 +1,54 @@
+#ifndef CORE_SERVICE_MANAGER_H
+#define CORE_SERVICE_MANAGER_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define SYSTEM_SERVICE_NAME_MAX 24u
+#define SYSTEM_SERVICE_SUMMARY_MAX 80u
+
+enum system_service_id {
+  SYSTEM_SERVICE_LOGGER = 0,
+  SYSTEM_SERVICE_NETWORKD,
+  SYSTEM_SERVICE_UPDATE_AGENT,
+  SYSTEM_SERVICE_COUNT
+};
+
+enum system_service_startup {
+  SYSTEM_SERVICE_STARTUP_BOOT = 0,
+  SYSTEM_SERVICE_STARTUP_MANUAL,
+  SYSTEM_SERVICE_STARTUP_BLOCKED
+};
+
+enum system_service_state {
+  SYSTEM_SERVICE_STATE_UNKNOWN = 0,
+  SYSTEM_SERVICE_STATE_STARTING,
+  SYSTEM_SERVICE_STATE_READY,
+  SYSTEM_SERVICE_STATE_DEGRADED,
+  SYSTEM_SERVICE_STATE_BLOCKED,
+  SYSTEM_SERVICE_STATE_STOPPED
+};
+
+struct system_service_status {
+  uint32_t id;
+  char name[SYSTEM_SERVICE_NAME_MAX];
+  char summary[SYSTEM_SERVICE_SUMMARY_MAX];
+  uint8_t critical;
+  uint8_t startup;
+  uint8_t state;
+  int32_t last_result;
+  uint32_t transitions;
+};
+
+void service_manager_init(void);
+void service_manager_reset(void);
+void service_manager_bootstrap_defaults(void);
+int service_manager_set_state(uint32_t id, uint8_t state, int32_t last_result,
+                              const char *summary);
+int service_manager_get(uint32_t id, struct system_service_status *out);
+int service_manager_get_at(size_t index, struct system_service_status *out);
+size_t service_manager_count(void);
+const char *service_manager_state_label(uint8_t state);
+const char *service_manager_startup_label(uint8_t startup);
+
+#endif /* CORE_SERVICE_MANAGER_H */

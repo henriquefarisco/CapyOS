@@ -2,6 +2,7 @@
 #include "shell/core.h"
 
 #include "core/localization.h"
+#include "core/service_manager.h"
 #include "core/version.h"
 #include "drivers/timer/pit.h"
 
@@ -210,7 +211,63 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static struct shell_command g_system_info_commands[7];
+static int service_matches_filter(const char *filter, const char *name) {
+    return !filter || !filter[0] || shell_string_equal(filter, name);
+}
+
+static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    const char *filter = NULL;
+    size_t count = 0;
+
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: service-status [nome]\nMostra o estado dos servicos internos do sistema.\n",
+            "Usage: service-status [name]\nShows the state of the internal system services.\n",
+            "Uso: service-status [nombre]\nMuestra el estado de los servicios internos del sistema.\n"));
+        return 0;
+    }
+
+    if (argc >= 2) {
+        filter = argv[1];
+    }
+
+    count = service_manager_count();
+    for (size_t i = 0; i < count; ++i) {
+        struct system_service_status svc;
+        if (service_manager_get_at(i, &svc) != 0) {
+            continue;
+        }
+        if (!service_matches_filter(filter, svc.name)) {
+            continue;
+        }
+        shell_print(svc.name);
+        shell_print(" state=");
+        shell_print(service_manager_state_label(svc.state));
+        shell_print(" startup=");
+        shell_print(service_manager_startup_label(svc.startup));
+        shell_print(" critical=");
+        shell_print(svc.critical ? "yes" : "no");
+        shell_print(" rc=");
+        if (svc.last_result < 0) {
+            shell_print("-");
+            shell_print_number((uint32_t)(-svc.last_result));
+        } else {
+            shell_print_number((uint32_t)svc.last_result);
+        }
+        shell_print(" transitions=");
+        shell_print_number(svc.transitions);
+        shell_newline();
+        shell_print("  ");
+        shell_print(svc.summary[0] ? svc.summary : "(no summary)");
+        shell_newline();
+    }
+    return 0;
+}
+
+static struct shell_command g_system_info_commands[8];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -231,13 +288,15 @@ static void init_system_info_commands(void) {
     g_system_info_commands[5].handler = cmd_print_insomnia;
     g_system_info_commands[6].name = "print-envs";
     g_system_info_commands[6].handler = cmd_print_envs;
+    g_system_info_commands[7].name = "service-status";
+    g_system_info_commands[7].handler = cmd_service_status;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 7;
+        *count = 8;
     }
     return g_system_info_commands;
 }
