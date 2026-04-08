@@ -445,6 +445,105 @@ static int cmd_service_control(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
+static int find_service_target_id_by_name(const char *name,
+                                          struct system_service_target_status *out) {
+  size_t count = service_manager_target_count();
+  for (size_t i = 0; i < count; ++i) {
+    struct system_service_target_status target;
+    if (service_manager_target_get_at(i, &target) != 0) {
+      continue;
+    }
+    if (shell_string_equal(name, target.name)) {
+      if (out) {
+        *out = target;
+      }
+      return (int)target.id;
+    }
+  }
+  return -1;
+}
+
+static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_service_target_status target;
+  int target_id = -1;
+  int rc = 0;
+
+  (void)ctx;
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: service-target [show|list|apply <nome>]\nMostra ou aplica o alvo atual do supervisor de servicos.\n",
+        "Usage: service-target [show|list|apply <name>]\nShows or applies the current service supervisor target.\n",
+        "Uso: service-target [show|list|apply <nombre>]\nMuestra o aplica el objetivo actual del supervisor de servicios.\n"));
+    return 0;
+  }
+
+  if (argc < 2 || shell_string_equal(argv[1], "show")) {
+    if (service_manager_target_current(&target) != 0) {
+      shell_print_error(localization_select(language,
+                                            "alvo de servico indisponivel",
+                                            "service target unavailable",
+                                            "objetivo de servicio no disponible"));
+      return -1;
+    }
+    shell_print("target=");
+    shell_print(target.name);
+    shell_print(" mask=");
+    shell_print_number(target.service_mask);
+    shell_newline();
+    return 0;
+  }
+
+  if (shell_string_equal(argv[1], "list")) {
+    size_t count = service_manager_target_count();
+    for (size_t i = 0; i < count; ++i) {
+      if (service_manager_target_get_at(i, &target) != 0) {
+        continue;
+      }
+      shell_print(target.name);
+      shell_print(" mask=");
+      shell_print_number(target.service_mask);
+      shell_newline();
+    }
+    return 0;
+  }
+
+  if (!shell_string_equal(argv[1], "apply") || argc < 3) {
+    shell_print_error(localization_select(language,
+                                          "uso invalido",
+                                          "invalid usage",
+                                          "uso invalido"));
+    shell_suggest_help("service-target");
+    return -1;
+  }
+
+  target_id = find_service_target_id_by_name(argv[2], &target);
+  if (target_id < 0) {
+    shell_print_error(localization_select(language,
+                                          "alvo de servico desconhecido",
+                                          "unknown service target",
+                                          "objetivo de servicio desconocido"));
+    return -1;
+  }
+
+  rc = service_manager_target_apply((uint32_t)target_id);
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "falha ao aplicar alvo de servico",
+                                          "failed to apply service target",
+                                          "fallo al aplicar el objetivo de servicio"));
+    return -1;
+  }
+  shell_print_ok(localization_select(language,
+                                     "alvo de servico aplicado",
+                                     "service target applied",
+                                     "objetivo de servicio aplicado"));
+  shell_print(target.name);
+  shell_newline();
+  return 0;
+}
+
 static void do_hard_reboot(void) {
   const char *language = shell_current_language();
   sync_and_flush();
@@ -760,7 +859,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[9];
+static struct shell_command g_system_control_commands[10];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -785,13 +884,15 @@ static void init_system_control_commands(void) {
   g_system_control_commands[7].handler = cmd_runtime_native;
   g_system_control_commands[8].name = "service-control";
   g_system_control_commands[8].handler = cmd_service_control;
+  g_system_control_commands[9].name = "service-target";
+  g_system_control_commands[9].handler = cmd_service_target;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 9;
+    *count = 10;
   }
   return g_system_control_commands;
 }

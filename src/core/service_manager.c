@@ -3,6 +3,8 @@
 #include <stddef.h>
 
 static struct system_service_status g_services[SYSTEM_SERVICE_COUNT];
+static struct system_service_target_status
+    g_targets[SYSTEM_SERVICE_TARGET_COUNT];
 struct service_poll_binding {
   system_service_poll_fn poll;
   system_service_action_fn start;
@@ -19,6 +21,7 @@ struct service_poll_binding {
 };
 
 static struct service_poll_binding g_service_polls[SYSTEM_SERVICE_COUNT];
+static uint32_t g_current_target = SYSTEM_SERVICE_TARGET_NETWORK;
 static int g_services_ready = 0;
 
 static void local_zero(void *ptr, size_t len) {
@@ -61,9 +64,23 @@ static void seed_service(uint32_t id, const char *name, uint8_t critical,
   local_copy(svc->summary, sizeof(svc->summary), summary);
 }
 
+static void seed_target(uint32_t id, const char *name, uint32_t service_mask) {
+  struct system_service_target_status *target = NULL;
+  if (id >= SYSTEM_SERVICE_TARGET_COUNT) {
+    return;
+  }
+  target = &g_targets[id];
+  local_zero(target, sizeof(*target));
+  target->id = id;
+  target->service_mask = service_mask;
+  local_copy(target->name, sizeof(target->name), name);
+}
+
 void service_manager_reset(void) {
   local_zero(g_services, sizeof(g_services));
+  local_zero(g_targets, sizeof(g_targets));
   local_zero(g_service_polls, sizeof(g_service_polls));
+  g_current_target = SYSTEM_SERVICE_TARGET_NETWORK;
   g_services_ready = 0;
 }
 
@@ -77,6 +94,19 @@ void service_manager_bootstrap_defaults(void) {
   seed_service(SYSTEM_SERVICE_UPDATE_AGENT, "update-agent", 0,
                SYSTEM_SERVICE_STARTUP_BLOCKED, SYSTEM_SERVICE_STATE_BLOCKED,
                "signed updates not implemented");
+  seed_target(SYSTEM_SERVICE_TARGET_CORE, "core",
+              (1u << SYSTEM_SERVICE_LOGGER));
+  seed_target(SYSTEM_SERVICE_TARGET_NETWORK, "network",
+              (1u << SYSTEM_SERVICE_LOGGER) |
+                  (1u << SYSTEM_SERVICE_NETWORKD));
+  seed_target(SYSTEM_SERVICE_TARGET_MAINTENANCE, "maintenance",
+              (1u << SYSTEM_SERVICE_LOGGER) |
+                  (1u << SYSTEM_SERVICE_UPDATE_AGENT));
+  seed_target(SYSTEM_SERVICE_TARGET_FULL, "full",
+              (1u << SYSTEM_SERVICE_LOGGER) |
+                  (1u << SYSTEM_SERVICE_NETWORKD) |
+                  (1u << SYSTEM_SERVICE_UPDATE_AGENT));
+  g_current_target = SYSTEM_SERVICE_TARGET_NETWORK;
   g_services_ready = 1;
 }
 
@@ -126,6 +156,8 @@ int service_manager_get_at(size_t index, struct system_service_status *out) {
 
 size_t service_manager_count(void) { return SYSTEM_SERVICE_COUNT; }
 
+size_t service_manager_target_count(void) { return SYSTEM_SERVICE_TARGET_COUNT; }
+
 int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
                              void *ctx) {
   service_manager_init();
@@ -172,7 +204,13 @@ int service_manager_set_restart_limit(uint32_t id, uint32_t restart_limit) {
 
 static int service_pollable(const struct system_service_status *svc,
                             const struct service_poll_binding *binding) {
+  uint32_t active_mask = 0u;
+
+  if (g_current_target < SYSTEM_SERVICE_TARGET_COUNT) {
+    active_mask = g_targets[g_current_target].service_mask;
+  }
   return svc && binding && binding->poll &&
+         (active_mask & (1u << svc->id)) != 0u &&
          svc->state != SYSTEM_SERVICE_STATE_BLOCKED &&
          svc->state != SYSTEM_SERVICE_STATE_STOPPED;
 }
@@ -467,6 +505,65 @@ int service_manager_restart(uint32_t id) {
   return rc;
 }
 
+int service_manager_target_current(struct system_service_target_status *out) {
+  service_manager_init();
+  if (!out || g_current_target >= SYSTEM_SERVICE_TARGET_COUNT) {
+    return -1;
+  }
+  *out = g_targets[g_current_target];
+  return 0;
+}
+
+int service_manager_target_get_at(size_t index,
+                                  struct system_service_target_status *out) {
+  service_manager_init();
+  if (!out || index >= SYSTEM_SERVICE_TARGET_COUNT) {
+    return -1;
+  }
+  *out = g_targets[index];
+  return 0;
+}
+
+int service_manager_target_apply(uint32_t id) {
+  uint32_t mask = 0u;
+  int rc = 0;
+  int last_error = 0;
+
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_TARGET_COUNT) {
+    return -1;
+  }
+
+  g_current_target = id;
+  mask = g_targets[id].service_mask;
+  for (uint32_t svc_id = 0; svc_id < SYSTEM_SERVICE_COUNT; ++svc_id) {
+    struct system_service_status *svc = &g_services[svc_id];
+
+    if ((mask & (1u << svc_id)) != 0u) {
+      if (svc->state == SYSTEM_SERVICE_STATE_STOPPED ||
+          svc->state == SYSTEM_SERVICE_STATE_UNKNOWN) {
+        rc = service_manager_start(svc_id);
+        if (rc < 0 && rc != -2 && rc != -3) {
+          last_error = rc;
+        }
+      }
+      continue;
+    }
+    if (svc->state == SYSTEM_SERVICE_STATE_BLOCKED ||
+        svc->state == SYSTEM_SERVICE_STATE_STOPPED) {
+      continue;
+    }
+    rc = service_manager_stop(svc_id);
+    if (rc == 0) {
+      (void)service_manager_set_state(svc_id, SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                      "excluded from current target");
+    } else if (rc != -2) {
+      last_error = rc;
+    }
+  }
+  return last_error;
+}
+
 const char *service_manager_state_label(uint8_t state) {
   switch (state) {
   case SYSTEM_SERVICE_STATE_STARTING:
@@ -495,4 +592,12 @@ const char *service_manager_startup_label(uint8_t startup) {
   default:
     return "unknown";
   }
+}
+
+const char *service_manager_target_label(uint32_t id) {
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_TARGET_COUNT) {
+    return "unknown";
+  }
+  return g_targets[id].name[0] ? g_targets[id].name : "unknown";
 }

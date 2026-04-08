@@ -2022,6 +2022,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
         SYSTEM_SERVICE_UPDATE_AGENT,
         (1u << SYSTEM_SERVICE_LOGGER) | (1u << SYSTEM_SERVICE_NETWORKD));
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
+    (void)service_manager_target_apply(SYSTEM_SERVICE_TARGET_NETWORK);
   }
 
   /* --- End splash -------------------------------------------------------- */

@@ -6,12 +6,21 @@
 
 #define SYSTEM_SERVICE_NAME_MAX 24u
 #define SYSTEM_SERVICE_SUMMARY_MAX 80u
+#define SYSTEM_SERVICE_TARGET_NAME_MAX 16u
 
 enum system_service_id {
   SYSTEM_SERVICE_LOGGER = 0,
   SYSTEM_SERVICE_NETWORKD,
   SYSTEM_SERVICE_UPDATE_AGENT,
   SYSTEM_SERVICE_COUNT
+};
+
+enum system_service_target_id {
+  SYSTEM_SERVICE_TARGET_CORE = 0,
+  SYSTEM_SERVICE_TARGET_NETWORK,
+  SYSTEM_SERVICE_TARGET_MAINTENANCE,
+  SYSTEM_SERVICE_TARGET_FULL,
+  SYSTEM_SERVICE_TARGET_COUNT
 };
 
 enum system_service_startup {
@@ -50,6 +59,12 @@ struct system_service_status {
   uint32_t restart_limit;
 };
 
+struct system_service_target_status {
+  uint32_t id;
+  char name[SYSTEM_SERVICE_TARGET_NAME_MAX];
+  uint32_t service_mask;
+};
+
 void service_manager_init(void);
 void service_manager_reset(void);
 void service_manager_bootstrap_defaults(void);
@@ -70,7 +85,13 @@ int service_manager_poll_due(uint64_t now_ticks);
 int service_manager_start(uint32_t id);
 int service_manager_stop(uint32_t id);
 int service_manager_restart(uint32_t id);
+size_t service_manager_target_count(void);
+int service_manager_target_current(struct system_service_target_status *out);
+int service_manager_target_get_at(size_t index,
+                                  struct system_service_target_status *out);
+int service_manager_target_apply(uint32_t id);
 const char *service_manager_state_label(uint8_t state);
 const char *service_manager_startup_label(uint8_t startup);
+const char *service_manager_target_label(uint32_t id);
 
 #endif /* CORE_SERVICE_MANAGER_H */

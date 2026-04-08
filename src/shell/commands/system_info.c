@@ -258,6 +258,17 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         filter = argv[1];
     }
 
+    if (!filter || !filter[0]) {
+        struct system_service_target_status target;
+        if (service_manager_target_current(&target) == 0) {
+            shell_print("target=");
+            shell_print(target.name);
+            shell_print(" mask=");
+            shell_print_number(target.service_mask);
+            shell_newline();
+        }
+    }
+
     count = service_manager_count();
     for (size_t i = 0; i < count; ++i) {
         struct system_service_status svc;

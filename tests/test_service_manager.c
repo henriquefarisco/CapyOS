@@ -60,6 +60,7 @@ int run_service_manager_tests(void) {
     int fail_ctx = 0;
     int logger_control_ctx = 0;
     struct system_service_status svc;
+    struct system_service_target_status target;
 
     g_poll_hits = 0;
     g_start_hits = 0;
@@ -70,6 +71,12 @@ int run_service_manager_tests(void) {
 
     fails += expect_true(service_manager_count() == SYSTEM_SERVICE_COUNT,
                          "unexpected builtin service count");
+    fails += expect_true(service_manager_target_count() == SYSTEM_SERVICE_TARGET_COUNT,
+                         "unexpected builtin service target count");
+    fails += expect_true(service_manager_target_current(&target) == 0,
+                         "current service target should be readable");
+    fails += expect_true(strcmp(target.name, "network") == 0,
+                         "default service target should be network");
     fails += expect_true(service_manager_get(SYSTEM_SERVICE_LOGGER, &svc) == 0,
                          "logger service should exist");
     fails += expect_true(strcmp(svc.name, "logger") == 0,
@@ -170,6 +177,22 @@ int run_service_manager_tests(void) {
                          "restart counter should increase");
     fails += expect_true(service_manager_start(SYSTEM_SERVICE_UPDATE_AGENT) == -2,
                          "blocked update agent should refuse manual start");
+    fails += expect_true(service_manager_target_apply(SYSTEM_SERVICE_TARGET_CORE) == 0,
+                         "core target should apply cleanly");
+    fails += expect_true(service_manager_target_current(&target) == 0,
+                         "current target should still be readable after apply");
+    fails += expect_true(strcmp(target.name, "core") == 0,
+                         "current target should switch to core");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_NETWORKD, &svc) == 0,
+                         "networkd should be readable after core target apply");
+    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_STOPPED,
+                         "networkd should stop when excluded from core target");
+    fails += expect_true(service_manager_target_apply(SYSTEM_SERVICE_TARGET_NETWORK) == 0,
+                         "network target should apply cleanly");
+    fails += expect_true(service_manager_target_current(&target) == 0,
+                         "current target should be readable after reapply");
+    fails += expect_true(strcmp(target.name, "network") == 0,
+                         "current target should switch back to network");
 
     fails += expect_true(service_manager_stop(SYSTEM_SERVICE_LOGGER) == 0,
                          "logger should stop even without explicit control handler");
@@ -228,7 +251,7 @@ int run_service_manager_tests(void) {
                          "logger should be markable as ready after restart");
     fails += expect_true(service_manager_poll_due(11u) == 1,
                          "networkd should resume once logger dependency is restored");
-    fails += expect_true(g_start_hits == 4 && g_stop_hits == 4,
+    fails += expect_true(g_start_hits == 5 && g_stop_hits == 5,
                          "automatic restart should invoke stop and start handlers");
     fails += expect_true(logger_control_ctx == 110,
                          "logger control context should reflect stop/start restart");

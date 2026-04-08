@@ -43,7 +43,7 @@ Contexto operacional atual:
 | `set-pass` | `set-pass <usuario> <nova_senha>` | Altera senha. Admin altera qualquer conta; usuario comum altera apenas a propria. |
 | `list-users` | `list-users` | Lista usuarios cadastrados em `/etc/users.db`. |
 | `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL` e `VERSION` atuais. |
-| `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
+| `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `net-status` | `net-status` | Exibe estado da rede no runtime x64 (`driver`, `detected`, `runtime`, `ready`, IPv4, ARP, contadores). No `Hyper-V`, tambem imprime `build=... feature=... diag=...`, `vmbus=` e `stage=` para validar a imagem em campo. |
 | `net-refresh` | `net-refresh` | Atualiza o runtime de rede quando houver backend seguro para isso. No `Hyper-V`, avanca o controlador `NetVSC` em passos pequenos e controlados somente quando a offer sintetica ja estiver em cache. |
 | `net-dump-runtime` | `net-dump-runtime` | Exibe um dump detalhado do runtime de rede, incluindo `vmbus=`, `stage=`, gate, fase, ultimo resultado e contadores de tentativas do `Hyper-V/StorVSC`. |
@@ -56,6 +56,7 @@ Contexto operacional atual:
 | `hey` | `hey <ip|hostname|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
+| `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`). |
 | `runtime-native` | `runtime-native [show|prepare-input|prepare-storage|exit-boot-services|step]` | Exibe o gate do runtime nativo e executa passos manuais controlados do coordenador Hyper-V. O modo `show` tambem imprime `build=... feature=...`. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
 | `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`) e grava em `/system/config.ini`. |
