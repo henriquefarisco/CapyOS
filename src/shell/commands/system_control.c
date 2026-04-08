@@ -421,6 +421,13 @@ static int cmd_service_control(struct shell_context *ctx, int argc, char **argv)
                                           "servicio bloqueado por la politica actual"));
     return -1;
   }
+  if (rc == -3) {
+    shell_print_error(localization_select(language,
+                                          "dependencias do servico ainda nao estao prontas",
+                                          "service dependencies are not ready yet",
+                                          "las dependencias del servicio aun no estan listas"));
+    return -1;
+  }
   if (rc < 0) {
     shell_print_error(localization_select(language,
                                           "operacao do servico falhou",

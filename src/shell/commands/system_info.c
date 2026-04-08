@@ -215,6 +215,30 @@ static int service_matches_filter(const char *filter, const char *name) {
     return !filter || !filter[0] || shell_string_equal(filter, name);
 }
 
+static void shell_print_service_dependencies(uint32_t dependency_mask) {
+    int first = 1;
+    size_t count = service_manager_count();
+
+    if (dependency_mask == 0u) {
+        shell_print("-");
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        struct system_service_status svc;
+        if (service_manager_get_at(i, &svc) != 0) {
+            continue;
+        }
+        if ((dependency_mask & (1u << svc.id)) == 0u) {
+            continue;
+        }
+        if (!first) {
+            shell_print(",");
+        }
+        shell_print(svc.name);
+        first = 0;
+    }
+}
+
 static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     const char *filter = NULL;
@@ -273,8 +297,12 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         shell_print_number(svc.restarts);
         shell_print(" backoff=");
         shell_print_number(svc.backoff_ticks);
+        shell_print(" retry=");
+        shell_print_number(svc.restart_limit);
         shell_newline();
-        shell_print("  ");
+        shell_print("  deps=");
+        shell_print_service_dependencies(svc.dependency_mask);
+        shell_print(" summary=");
         shell_print(svc.summary[0] ? svc.summary : "(no summary)");
         shell_newline();
     }

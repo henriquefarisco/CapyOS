@@ -58,6 +58,7 @@ int run_service_manager_tests(void) {
     int blocked_ctx = 0;
     int control_ctx = 0;
     int fail_ctx = 0;
+    int logger_control_ctx = 0;
     struct system_service_status svc;
 
     g_poll_hits = 0;
@@ -116,6 +117,13 @@ int run_service_manager_tests(void) {
                              SYSTEM_SERVICE_NETWORKD,
                              test_start_cb, test_stop_cb, &control_ctx) == 0,
                          "networkd control registration failed");
+    fails += expect_true(service_manager_set_dependencies(
+                             SYSTEM_SERVICE_NETWORKD,
+                             (1u << SYSTEM_SERVICE_LOGGER)) == 0,
+                         "networkd dependency registration failed");
+    fails += expect_true(service_manager_set_restart_limit(
+                             SYSTEM_SERVICE_NETWORKD, 2u) == 0,
+                         "networkd restart limit registration failed");
     fails += expect_true(service_manager_poll_due(0u) == 1,
                          "service manager should poll one due service");
     fails += expect_true(g_poll_hits == 1 && poll_ctx == 1 && blocked_ctx == 0,
@@ -136,6 +144,10 @@ int run_service_manager_tests(void) {
                          "networkd poll counter should increase");
     fails += expect_true(svc.poll_interval_ticks == 5u,
                          "networkd poll interval should be reported");
+    fails += expect_true(svc.dependency_mask == (1u << SYSTEM_SERVICE_LOGGER),
+                         "networkd dependency mask should be reported");
+    fails += expect_true(svc.restart_limit == 2u,
+                         "networkd restart limit should be reported");
     fails += expect_true(service_manager_stop(SYSTEM_SERVICE_NETWORKD) == 0,
                          "networkd should stop cleanly");
     fails += expect_true(g_stop_hits == 1 && control_ctx == 100,
@@ -159,27 +171,71 @@ int run_service_manager_tests(void) {
     fails += expect_true(service_manager_start(SYSTEM_SERVICE_UPDATE_AGENT) == -2,
                          "blocked update agent should refuse manual start");
 
+    fails += expect_true(service_manager_stop(SYSTEM_SERVICE_LOGGER) == 0,
+                         "logger should stop even without explicit control handler");
+    fails += expect_true(service_manager_stop(SYSTEM_SERVICE_NETWORKD) == 0,
+                         "networkd should stop again before dependency test");
+    fails += expect_true(service_manager_start(SYSTEM_SERVICE_NETWORKD) == -3,
+                         "networkd should refuse start when dependency is down");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_NETWORKD, &svc) == 0,
+                         "networkd should be readable after dependency failure");
+    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_STARTING,
+                         "networkd should wait in starting state for dependency");
+    fails += expect_true(service_manager_set_state(
+                             SYSTEM_SERVICE_LOGGER,
+                             SYSTEM_SERVICE_STATE_READY, 0,
+                             "dependency restored") == 0,
+                         "logger dependency should be restorable");
+    fails += expect_true(service_manager_start(SYSTEM_SERVICE_NETWORKD) == 0,
+                         "networkd should start once dependency is restored");
+
     fails += expect_true(service_manager_set_poll(
                              SYSTEM_SERVICE_LOGGER,
                              test_failing_poll_cb, &fail_ctx) == 0,
                          "logger failing poll registration failed");
+    fails += expect_true(service_manager_set_control(
+                             SYSTEM_SERVICE_LOGGER,
+                             test_start_cb, test_stop_cb, &logger_control_ctx) == 0,
+                         "logger control registration failed");
     fails += expect_true(service_manager_set_poll_interval(
                              SYSTEM_SERVICE_LOGGER, 4u) == 0,
                          "logger failing poll interval should be configurable");
-    fails += expect_true(service_manager_poll_due(6u) == 2,
-                         "both logger and networkd should be due");
+    fails += expect_true(service_manager_set_restart_limit(
+                             SYSTEM_SERVICE_LOGGER, 2u) == 0,
+                         "logger restart limit should be configurable");
+    fails += expect_true(service_manager_poll_due(6u) == 1,
+                         "logger failure should block dependent networkd in the same cycle");
     fails += expect_true(g_fail_poll_hits == 1 && fail_ctx == 1,
                          "failing poll should execute once");
     fails += expect_true(service_manager_get(SYSTEM_SERVICE_LOGGER, &svc) == 0,
                          "logger should be readable after failing poll");
-    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_DEGRADED,
-                         "logger should degrade after failed poll");
+    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_STARTING,
+                         "logger should schedule restart after failed poll");
     fails += expect_true(svc.failures == 1,
                          "logger failure counter should increase");
     fails += expect_true(svc.backoff_ticks == 4u,
                          "logger backoff should use base interval on first failure");
+    fails += expect_true(svc.restart_limit == 2u,
+                         "logger restart limit should be reported");
     fails += expect_true(service_manager_poll_due(7u) == 0,
                          "services should stay idle while due windows are closed");
+    fails += expect_true(service_manager_poll_due(10u) == 1,
+                         "logger restart should be applied when backoff expires");
+    fails += expect_true(service_manager_set_state(
+                             SYSTEM_SERVICE_LOGGER,
+                             SYSTEM_SERVICE_STATE_READY, 0,
+                             "dependency recovered after restart") == 0,
+                         "logger should be markable as ready after restart");
+    fails += expect_true(service_manager_poll_due(11u) == 1,
+                         "networkd should resume once logger dependency is restored");
+    fails += expect_true(g_start_hits == 4 && g_stop_hits == 4,
+                         "automatic restart should invoke stop and start handlers");
+    fails += expect_true(logger_control_ctx == 110,
+                         "logger control context should reflect stop/start restart");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_LOGGER, &svc) == 0,
+                         "logger should be readable after restart execution");
+    fails += expect_true(svc.restarts == 1,
+                         "automatic restart should increase restart counter");
 
     if (fails == 0) {
         printf("[tests] service_manager OK\n");

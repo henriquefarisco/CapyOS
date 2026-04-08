@@ -1958,6 +1958,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                                         kernel_service_start_logger,
                                         kernel_service_stop_logger, NULL);
       (void)service_manager_set_poll_interval(SYSTEM_SERVICE_LOGGER, 300u);
+      (void)service_manager_set_restart_limit(SYSTEM_SERVICE_LOGGER, 0u);
     } else {
       (void)service_manager_set_state(
           SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED,
@@ -1988,6 +1989,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                                       kernel_service_start_networkd,
                                       kernel_service_stop_networkd, NULL);
     (void)service_manager_set_poll_interval(SYSTEM_SERVICE_NETWORKD, 10u);
+    (void)service_manager_set_restart_limit(SYSTEM_SERVICE_NETWORKD, 3u);
     kernel_maybe_refresh_network_runtime();
 
     {
@@ -2016,6 +2018,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)service_manager_set_state(
         SYSTEM_SERVICE_UPDATE_AGENT, SYSTEM_SERVICE_STATE_BLOCKED, -5,
         "update pipeline not implemented yet");
+    (void)service_manager_set_dependencies(
+        SYSTEM_SERVICE_UPDATE_AGENT,
+        (1u << SYSTEM_SERVICE_LOGGER) | (1u << SYSTEM_SERVICE_NETWORKD));
+    (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
   }
 
   /* --- End splash -------------------------------------------------------- */

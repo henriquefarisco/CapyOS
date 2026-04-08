@@ -11,7 +11,11 @@ struct service_poll_binding {
   void *control_ctx;
   uint32_t interval_ticks;
   uint32_t consecutive_failures;
+  uint32_t restart_attempts;
+  uint32_t dependency_mask;
+  uint32_t restart_limit;
   uint64_t next_due_tick;
+  uint8_t restart_pending;
 };
 
 static struct service_poll_binding g_service_polls[SYSTEM_SERVICE_COUNT];
@@ -146,6 +150,26 @@ int service_manager_set_poll_interval(uint32_t id, uint32_t interval_ticks) {
   return 0;
 }
 
+int service_manager_set_dependencies(uint32_t id, uint32_t dependency_mask) {
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  g_service_polls[id].dependency_mask = dependency_mask;
+  g_services[id].dependency_mask = dependency_mask;
+  return 0;
+}
+
+int service_manager_set_restart_limit(uint32_t id, uint32_t restart_limit) {
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  g_service_polls[id].restart_limit = restart_limit;
+  g_services[id].restart_limit = restart_limit;
+  return 0;
+}
+
 static int service_pollable(const struct system_service_status *svc,
                             const struct service_poll_binding *binding) {
   return svc && binding && binding->poll &&
@@ -172,6 +196,75 @@ static uint32_t service_backoff_ticks(uint32_t interval,
   return base << shift;
 }
 
+static int service_dependencies_ready(uint32_t dependency_mask) {
+  for (uint32_t id = 0; id < SYSTEM_SERVICE_COUNT; ++id) {
+    if ((dependency_mask & (1u << id)) == 0u) {
+      continue;
+    }
+    if (g_services[id].state != SYSTEM_SERVICE_STATE_READY) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int service_maybe_wait_dependencies(uint32_t id, uint64_t now_ticks,
+                                           int update_due_tick) {
+  struct service_poll_binding *binding = &g_service_polls[id];
+  uint32_t interval = binding->interval_ticks ? binding->interval_ticks : 1u;
+
+  if (binding->dependency_mask == 0u ||
+      service_dependencies_ready(binding->dependency_mask)) {
+    return 0;
+  }
+  (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STARTING, -3,
+                                  "waiting for dependencies");
+  if (update_due_tick) {
+    binding->next_due_tick = now_ticks + (uint64_t)interval;
+  }
+  return 1;
+}
+
+static int service_run_pending_restart(uint32_t id, uint64_t now_ticks,
+                                       int update_due_tick) {
+  struct service_poll_binding *binding = &g_service_polls[id];
+  struct system_service_status *svc = &g_services[id];
+  int rc = 0;
+  uint32_t interval = binding->interval_ticks ? binding->interval_ticks : 1u;
+
+  if (!binding->restart_pending) {
+    return 0;
+  }
+  if (service_maybe_wait_dependencies(id, now_ticks, update_due_tick)) {
+    return 1;
+  }
+  binding->restart_pending = 0u;
+  if (binding->start) {
+    rc = binding->start(binding->control_ctx);
+    if (rc < 0) {
+      binding->restart_pending = 1u;
+      svc->backoff_ticks =
+          service_backoff_ticks(interval, binding->restart_attempts);
+      if (update_due_tick) {
+        binding->next_due_tick = now_ticks + (uint64_t)svc->backoff_ticks;
+      }
+      (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                      "service restart failed");
+      return 1;
+    }
+  }
+  binding->consecutive_failures = 0u;
+  binding->restart_attempts = 0u;
+  svc->backoff_ticks = 0u;
+  svc->restarts++;
+  (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STARTING, 0,
+                                  "service restart applied");
+  if (update_due_tick) {
+    binding->next_due_tick = now_ticks + (uint64_t)interval;
+  }
+  return 1;
+}
+
 static int service_execute_poll(uint32_t id, uint64_t now_ticks,
                                 int update_due_tick) {
   struct service_poll_binding *binding = &g_service_polls[id];
@@ -182,6 +275,12 @@ static int service_execute_poll(uint32_t id, uint64_t now_ticks,
   if (!service_pollable(svc, binding)) {
     return 0;
   }
+  if (service_run_pending_restart(id, now_ticks, update_due_tick)) {
+    return 1;
+  }
+  if (service_maybe_wait_dependencies(id, now_ticks, update_due_tick)) {
+    return 0;
+  }
 
   rc = binding->poll(binding->poll_ctx);
   svc->polls++;
@@ -189,10 +288,35 @@ static int service_execute_poll(uint32_t id, uint64_t now_ticks,
   if (rc < 0) {
     binding->consecutive_failures++;
     svc->failures++;
+    if (binding->restart_limit != 0u && binding->start && binding->stop &&
+        binding->restart_attempts < binding->restart_limit) {
+      int stop_rc = binding->stop(binding->control_ctx);
+      if (stop_rc < 0) {
+        (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_DEGRADED,
+                                        stop_rc,
+                                        "service stop failed during recovery");
+        return 1;
+      }
+      binding->restart_attempts++;
+      binding->restart_pending = 1u;
+      svc->backoff_ticks =
+          service_backoff_ticks(interval, binding->consecutive_failures - 1u);
+      if (update_due_tick) {
+        binding->next_due_tick = now_ticks + (uint64_t)svc->backoff_ticks;
+      }
+      (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STARTING, rc,
+                                      "service restart scheduled after failure");
+      return 1;
+    }
     if (svc->state != SYSTEM_SERVICE_STATE_BLOCKED &&
         svc->state != SYSTEM_SERVICE_STATE_STOPPED) {
+      const char *summary = NULL;
+      if (binding->restart_limit != 0u && binding->start && binding->stop &&
+          binding->restart_attempts >= binding->restart_limit) {
+        summary = "service restart limit reached";
+      }
       (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_DEGRADED, rc,
-                                      NULL);
+                                      summary);
     } else {
       svc->last_result = rc;
     }
@@ -205,6 +329,7 @@ static int service_execute_poll(uint32_t id, uint64_t now_ticks,
   }
 
   binding->consecutive_failures = 0u;
+  binding->restart_attempts = 0u;
   svc->backoff_ticks = 0u;
   if (update_due_tick) {
     binding->next_due_tick = now_ticks + (uint64_t)interval;
@@ -261,9 +386,16 @@ int service_manager_start(uint32_t id) {
       svc->state == SYSTEM_SERVICE_STATE_BLOCKED) {
     return -2;
   }
+  if (!service_dependencies_ready(binding->dependency_mask)) {
+    (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STARTING, -3,
+                                    "waiting for dependencies");
+    return -3;
+  }
 
   svc->backoff_ticks = 0u;
   binding->consecutive_failures = 0u;
+  binding->restart_attempts = 0u;
+  binding->restart_pending = 0u;
   binding->next_due_tick = 0u;
   if (binding->start) {
     rc = binding->start(binding->control_ctx);
@@ -304,6 +436,8 @@ int service_manager_stop(uint32_t id) {
     }
   }
   binding->consecutive_failures = 0u;
+  binding->restart_attempts = 0u;
+  binding->restart_pending = 0u;
   binding->next_due_tick = 0u;
   svc->backoff_ticks = 0u;
   (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STOPPED, 0,

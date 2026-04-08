@@ -46,6 +46,8 @@ struct system_service_status {
   uint32_t failures;
   uint32_t restarts;
   uint32_t backoff_ticks;
+  uint32_t dependency_mask;
+  uint32_t restart_limit;
 };
 
 void service_manager_init(void);
@@ -61,6 +63,8 @@ int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
 int service_manager_set_control(uint32_t id, system_service_action_fn start,
                                 system_service_action_fn stop, void *ctx);
 int service_manager_set_poll_interval(uint32_t id, uint32_t interval_ticks);
+int service_manager_set_dependencies(uint32_t id, uint32_t dependency_mask);
+int service_manager_set_restart_limit(uint32_t id, uint32_t restart_limit);
 int service_manager_poll_once(void);
 int service_manager_poll_due(uint64_t now_ticks);
 int service_manager_start(uint32_t id);
