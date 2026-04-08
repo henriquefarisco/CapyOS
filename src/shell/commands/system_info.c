@@ -12,6 +12,7 @@
 #include "arch/x86_64/storage_runtime.h"
 #include "net/stack.h"
 #endif
+#include "fs/capyfs.h"
 #include "fs/vfs.h"
 
 static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
@@ -267,6 +268,14 @@ static void shell_print_path_status(const char *path) {
     shell_newline();
 }
 
+static int shell_recovery_capyfs_check(struct capyfs_check_report *out) {
+    struct super_block *root = vfs_root();
+    if (!root || !root->bdev || !out) {
+        return -1;
+    }
+    return capyfs_check(root->bdev, out);
+}
+
 static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     const char *filter = NULL;
@@ -451,11 +460,14 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
         struct super_block *root = vfs_root();
         struct vfs_stat config_stat;
         struct vfs_stat userdb_stat;
+        struct capyfs_check_report fs_report;
+        int fs_report_ok = 0;
         int config_ok = 0;
         int userdb_ok = 0;
         x64_kernel_recovery_status_get(&status);
         config_ok = vfs_stat_path("/system/config.ini", &config_stat) == 0;
         userdb_ok = vfs_stat_path(USER_DB_PATH, &userdb_stat) == 0;
+        fs_report_ok = shell_recovery_capyfs_check(&fs_report) == 0;
 
         shell_print_bool_flag("fs.ready=", status.shell_fs_ready);
         shell_print(" ");
@@ -484,6 +496,18 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
         shell_print((root && root->bdev) ? "yes" : "no");
         shell_newline();
 
+        shell_print("capyfs=");
+        if (fs_report_ok) {
+            shell_print(capyfs_check_result_label(fs_report.result));
+            shell_print(" reserved=");
+            shell_print_number(fs_report.reserved_blocks_expected);
+            shell_print(" root-entries=");
+            shell_print_number(fs_report.root_entries);
+        } else {
+            shell_print("unavailable");
+        }
+        shell_newline();
+
         shell_print_path_status("/");
         shell_print_path_status("/system");
         shell_print_path_status("/etc");
@@ -504,6 +528,12 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
                 "a recuperacao esta em RAM temporaria; o volume persistente nao abriu. Corrija a chave/volume pela ISO antes de promover targets permanentes.",
                 "recovery is running on temporary RAM storage; the persistent volume did not open. Fix the key/volume from the ISO before promoting permanent targets.",
                 "la recuperacion se esta ejecutando sobre RAM temporal; el volumen persistente no se abrio. Corrige la clave/el volumen desde la ISO antes de promover objetivos permanentes."));
+        } else if (!fs_report_ok || fs_report.result != CAPYFS_CHECK_OK) {
+            shell_print(localization_select(
+                language,
+                "o volume abriu, mas a estrutura CAPYFS esta inconsistente; use recovery-storage-check e depois recupere via ISO antes de tentar repair/resume.",
+                "the volume mounted, but the CAPYFS structure is inconsistent; use recovery-storage-check and then recover from the ISO before trying repair/resume.",
+                "el volumen se monto, pero la estructura CAPYFS es inconsistente; usa recovery-storage-check y luego recupera desde la ISO antes de intentar repair/resume."));
         } else if (!status.persistent_storage || !x64_storage_runtime_has_device()) {
             shell_print(localization_select(
                 language,
@@ -526,6 +556,103 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
         shell_newline();
     }
     return 0;
+#endif
+}
+
+static int cmd_recovery_storage_check(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: recovery-storage-check\nExecuta uma verificacao estrutural do CAPYFS montado e classifica superbloco, layout, bitmap, inode raiz e diretorio raiz.\n",
+            "Usage: recovery-storage-check\nRuns a structural verification of the mounted CAPYFS and classifies superblock, layout, bitmap, root inode and root directory.\n",
+            "Uso: recovery-storage-check\nEjecuta una verificacion estructural del CAPYFS montado y clasifica superbloque, layout, bitmap, inode raiz y directorio raiz.\n"));
+        return 0;
+    }
+#if !defined(__x86_64__)
+    shell_print_error(localization_select(language,
+                                          "recovery-storage-check indisponivel",
+                                          "recovery-storage-check unavailable",
+                                          "recovery-storage-check no disponible"));
+    return -1;
+#else
+    {
+        struct x64_kernel_recovery_status status;
+        struct capyfs_check_report report;
+        int rc = 0;
+
+        x64_kernel_recovery_status_get(&status);
+        if (!status.shell_fs_ready) {
+            shell_print_error(localization_select(
+                language,
+                "o runtime de storage ainda nao montou um VFS legivel",
+                "the storage runtime has not mounted a readable VFS yet",
+                "el runtime de almacenamiento aun no monto un VFS legible"));
+            return -1;
+        }
+
+        rc = shell_recovery_capyfs_check(&report);
+        if (rc != 0) {
+            shell_print_error(localization_select(
+                language,
+                "nao foi possivel inspecionar o dispositivo raiz atual",
+                "could not inspect the current root device",
+                "no fue posible inspeccionar el dispositivo raiz actual"));
+            return -1;
+        }
+
+        shell_print("capyfs=");
+        shell_print(capyfs_check_result_label(report.result));
+        shell_print(" super.magic=");
+        shell_print_number(report.super.magic);
+        shell_print(" version=");
+        shell_print_number(report.super.version);
+        shell_newline();
+
+        shell_print("layout blocks=");
+        shell_print_number(report.super.block_count);
+        shell_print(" inodes=");
+        shell_print_number(report.super.inode_count);
+        shell_print(" data-start=");
+        shell_print_number(report.super.data_start);
+        shell_print(" reserved=");
+        shell_print_number(report.reserved_blocks_expected);
+        shell_newline();
+
+        shell_print("root refs=");
+        shell_print_number(report.root_referenced_blocks);
+        shell_print(" entries=");
+        shell_print_number(report.root_entries);
+        shell_print(" detail=");
+        shell_print_number(report.detail_primary);
+        shell_print(":");
+        shell_print_number(report.detail_secondary);
+        shell_newline();
+
+        shell_print("action: ");
+        if (status.recovery_ram_fallback) {
+            shell_print(localization_select(
+                language,
+                "voce esta sobre RAM temporaria; esse check nao representa o volume persistente quebrado. Corrija o disco/chave via ISO.",
+                "you are running on temporary RAM; this check does not represent the broken persistent volume. Fix the disk/key from the ISO.",
+                "estas ejecutando sobre RAM temporal; esta verificacion no representa el volumen persistente roto. Corrige el disco/la clave desde la ISO."));
+        } else if (report.result == CAPYFS_CHECK_OK) {
+            shell_print(localization_select(
+                language,
+                "estrutura CAPYFS consistente; se faltarem arquivos base, use recovery-storage-repair.",
+                "CAPYFS structure looks consistent; if base files are missing, use recovery-storage-repair.",
+                "la estructura CAPYFS es consistente; si faltan archivos base, usa recovery-storage-repair."));
+        } else {
+            shell_print(localization_select(
+                language,
+                "estrutura CAPYFS inconsistente; nao tente promover targets persistentes. Recupere o volume via ISO/backup antes de sair da manutencao.",
+                "CAPYFS structure is inconsistent; do not promote persistent targets. Recover the volume from the ISO/backup before leaving maintenance.",
+                "la estructura CAPYFS es inconsistente; no promuevas objetivos persistentes. Recupera el volumen desde la ISO/respaldo antes de salir de mantenimiento."));
+        }
+        shell_newline();
+        return report.result == CAPYFS_CHECK_OK ? 0 : -1;
+    }
 #endif
 }
 
@@ -646,7 +773,7 @@ static int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv
 #endif
 }
 
-static struct shell_command g_system_info_commands[11];
+static struct shell_command g_system_info_commands[12];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -675,13 +802,15 @@ static void init_system_info_commands(void) {
     g_system_info_commands[9].handler = cmd_recovery_storage;
     g_system_info_commands[10].name = "recovery-network";
     g_system_info_commands[10].handler = cmd_recovery_network;
+    g_system_info_commands[11].name = "recovery-storage-check";
+    g_system_info_commands[11].handler = cmd_recovery_storage_check;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 11;
+        *count = 12;
     }
     return g_system_info_commands;
 }

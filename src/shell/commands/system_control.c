@@ -19,6 +19,7 @@
 #include "drivers/acpi/acpi.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/video/vga.h"
+#include "fs/capyfs.h"
 #include "fs/buffer.h"
 #include "fs/vfs.h"
 
@@ -360,6 +361,14 @@ static void sync_and_flush(void) {
   (void)klog_persist_flush_default();
 }
 
+static int shell_recovery_capyfs_check(struct capyfs_check_report *out) {
+  struct super_block *root = vfs_root();
+  if (!root || !root->bdev || !out) {
+    return -1;
+  }
+  return capyfs_check(root->bdev, out);
+}
+
 #if defined(__x86_64__)
 static int recovery_storage_ensure_base_layout(void) {
   static const char *dirs[] = {
@@ -698,12 +707,14 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
 #if defined(__x86_64__)
   struct x64_kernel_recovery_status status;
   struct system_service_target_status target;
+  struct capyfs_check_report fs_report;
   const char *target_name = NULL;
   struct net_stack_status net_status;
   int target_id = -1;
   int net_rc = -1;
   int storage_ok = 0;
   int network_ok = 0;
+  int fs_ok = 0;
   int verify_ok = 1;
 #endif
 
@@ -744,6 +755,8 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
 
   storage_ok = status.shell_fs_ready && status.persistent_storage &&
                x64_storage_runtime_has_device();
+  fs_ok = shell_recovery_capyfs_check(&fs_report) == 0 &&
+          fs_report.result == CAPYFS_CHECK_OK;
   net_rc = net_stack_status(&net_status);
   network_ok = (net_rc == 0 && net_status.runtime_supported);
 
@@ -759,6 +772,8 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
   shell_print(status.shell_fs_ready ? "ready" : "missing");
   shell_print(" persistent=");
   shell_print(status.persistent_storage ? "yes" : "no");
+  shell_print(" capyfs=");
+  shell_print(fs_ok ? "ok" : "fail");
   shell_print(" validated=");
   shell_print(x64_storage_runtime_has_device() ? "yes" : "no");
   shell_newline();
@@ -777,7 +792,8 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
   }
   shell_newline();
 
-  if ((uint32_t)target_id != SYSTEM_SERVICE_TARGET_MAINTENANCE && !storage_ok) {
+  if ((uint32_t)target_id != SYSTEM_SERVICE_TARGET_MAINTENANCE &&
+      (!storage_ok || !fs_ok)) {
     verify_ok = 0;
   }
   if (((uint32_t)target_id == SYSTEM_SERVICE_TARGET_NETWORK ||
@@ -793,12 +809,12 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
   if (verify_ok) {
     shell_print("recovery-resume ");
     shell_print(target.name);
-  } else if (!storage_ok) {
+  } else if (!storage_ok || !fs_ok) {
     shell_print(localization_select(
         language,
-        "corrija storage com recovery-storage/recovery-storage-repair e valide o volume antes de sair do modo de recuperacao",
-        "fix storage with recovery-storage/recovery-storage-repair and validate the volume before leaving recovery mode",
-        "corrige el almacenamiento con recovery-storage/recovery-storage-repair y valida el volumen antes de salir del modo de recuperacion"));
+        "corrija storage com recovery-storage/recovery-storage-check e, se a estrutura estiver saudavel, use recovery-storage-repair antes de sair do modo de recuperacao",
+        "fix storage with recovery-storage/recovery-storage-check and, if the structure is healthy, use recovery-storage-repair before leaving recovery mode",
+        "corrige el almacenamiento con recovery-storage/recovery-storage-check y, si la estructura esta sana, usa recovery-storage-repair antes de salir del modo de recuperacion"));
   } else {
     shell_print(localization_select(
         language,
@@ -834,8 +850,10 @@ static int cmd_recovery_storage_repair(struct shell_context *ctx, int argc,
 #else
   {
     struct x64_kernel_recovery_status status;
+    struct capyfs_check_report fs_report;
     const char *admin_password = NULL;
     int admin_exists = 0;
+    int fs_ok = 0;
 
     x64_kernel_recovery_status_get(&status);
     if (!status.maintenance_session) {
@@ -860,6 +878,16 @@ static int cmd_recovery_storage_repair(struct shell_context *ctx, int argc,
           "o shell de recuperacao esta em RAM temporaria; corrija o volume/chave pela ISO antes de tentar regravar a base persistente",
           "the recovery shell is running on temporary RAM; fix the volume/key from the ISO before trying to rewrite the persistent base",
           "la shell de recuperacion se esta ejecutando en RAM temporal; corrige el volumen/la clave desde la ISO antes de reescribir la base persistente"));
+      return -1;
+    }
+    fs_ok = shell_recovery_capyfs_check(&fs_report) == 0 &&
+            fs_report.result == CAPYFS_CHECK_OK;
+    if (!fs_ok) {
+      shell_print_error(localization_select(
+          language,
+          "o volume persistente montou, mas a estrutura CAPYFS esta inconsistente; use recovery-storage-check e recupere via ISO antes de regravar a base",
+          "the persistent volume mounted, but the CAPYFS structure is inconsistent; use recovery-storage-check and recover via ISO before rewriting the base",
+          "el volumen persistente se monto, pero la estructura CAPYFS es inconsistente; usa recovery-storage-check y recupera via ISO antes de reescribir la base"));
       return -1;
     }
     if (argc >= 2) {

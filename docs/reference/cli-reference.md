@@ -46,6 +46,7 @@ Contexto operacional atual:
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
 | `recovery-storage` | `recovery-storage` | Exibe o estado do runtime de storage, VFS raiz, volume persistente e caminhos criticos usados para recuperar o sistema. |
+| `recovery-storage-check` | `recovery-storage-check` | Executa uma verificacao estrutural read-only do CAPYFS e classifica se o volume esta saudavel, incompleto ou inconsistente para recuperacao. |
 | `recovery-storage-repair` | `recovery-storage-repair [reset-admin <senha>]` | Reconstroi a base persistente minima quando o volume ja esta montado e, opcionalmente, recria/redefine a conta `admin` durante a recuperacao. |
 | `recovery-network` | `recovery-network` | Exibe o estado detalhado da NIC/runtime de rede e a remediacao minima para promover targets com rede. |
 | `net-status` | `net-status` | Exibe estado da rede no runtime x64 (`driver`, `detected`, `runtime`, `ready`, IPv4, ARP, contadores). No `Hyper-V`, tambem imprime `build=... feature=... diag=...`, `vmbus=` e `stage=` para validar a imagem em campo. |
@@ -127,6 +128,7 @@ Contexto operacional atual:
   motivo da degradacao logo abaixo do banner.
 - Os comandos mais uteis nesse modo sao `service-status`,
   `service-target show`, `recovery-status`, `recovery-storage`,
+  `recovery-storage-check`,
   `recovery-storage-repair`,
   `recovery-network`, `recovery-verify`, `recovery-resume`, `do-sync`,
   `shutdown-reboot` e `shutdown-off`.
@@ -138,6 +140,10 @@ Contexto operacional atual:
   recompõe `/system`, `/etc`, `/var/log`, regrava `/system/config.ini`,
   revalida `/etc/users.db` e pode recriar ou redefinir `admin` com
   `recovery-storage-repair reset-admin <senha>`.
+- Rode `recovery-storage-check` antes de qualquer reparo para confirmar se a
+  estrutura do CAPYFS esta integra. Se o comando reportar inconsistencias
+  estruturais, o caminho correto e recuperar pela ISO ou por backup, nao usar
+  `recovery-storage-repair`.
 - `recovery-resume saved` tenta voltar ao alvo persistido em
   `/system/config.ini`.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,

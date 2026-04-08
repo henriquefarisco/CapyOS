@@ -41,6 +41,27 @@ struct capy_dirent_disk {
     char name[CAPYFS_NAME_MAX];
 } __attribute__((packed));
 
+enum capyfs_check_result {
+    CAPYFS_CHECK_OK = 0,
+    CAPYFS_CHECK_BAD_DEVICE,
+    CAPYFS_CHECK_IO_ERROR,
+    CAPYFS_CHECK_BAD_SUPER,
+    CAPYFS_CHECK_BAD_LAYOUT,
+    CAPYFS_CHECK_BAD_ROOT_INODE,
+    CAPYFS_CHECK_BAD_BITMAP,
+    CAPYFS_CHECK_BAD_DIRENT,
+};
+
+struct capyfs_check_report {
+    uint32_t result;
+    struct capy_super super;
+    uint32_t reserved_blocks_expected;
+    uint32_t root_referenced_blocks;
+    uint32_t root_entries;
+    uint32_t detail_primary;
+    uint32_t detail_secondary;
+};
+
 typedef void (*capyfs_progress_cb)(const char *stage, uint32_t percent);
 
 int mount_capyfs(struct block_device *dev, struct super_block *sb);
@@ -48,6 +69,8 @@ int capyfs_format(struct block_device *dev,
                   uint32_t inode_count,
                   uint32_t block_count,
                   capyfs_progress_cb progress_cb);
+int capyfs_check(struct block_device *dev, struct capyfs_check_report *out);
+const char *capyfs_check_result_label(uint32_t result);
 
 // Returns the CAPYFS file operations table.
 const struct file_ops *capyfs_file_ops(void);
