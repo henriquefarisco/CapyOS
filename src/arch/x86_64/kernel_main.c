@@ -264,7 +264,6 @@ static int g_exit_boot_services_attempted = 0;
 static int g_exit_boot_services_done = 0;
 static EFI_STATUS_K g_exit_boot_services_status = EFI_SUCCESS_K;
 static int g_network_runtime_refresh_enabled = 0;
-static uint64_t g_network_runtime_next_refresh_tick = 0;
 static uint32_t g_theme_splash_bg = 0x000A1713;
 static uint32_t g_theme_splash_icon = 0x0000A651;
 static uint32_t g_theme_splash_bar_border = 0x00213A31;
@@ -1094,19 +1093,22 @@ static void update_system_runtime_platform_status(void) {
 }
 
 static void kernel_maybe_refresh_network_runtime(void) {
-  uint64_t now = 0;
-
   if (!g_network_runtime_refresh_enabled) {
     return;
   }
-
-  now = pit_ticks();
-  if (now < g_network_runtime_next_refresh_tick) {
-    return;
-  }
-
-  g_network_runtime_next_refresh_tick = now + 10u;
   (void)net_stack_refresh_runtime();
+}
+
+static void kernel_update_logger_service_status(int rc) {
+  if (rc == 0) {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_READY, 0,
+        "persistent klog active in /var/log/capyos_klog.txt");
+  } else {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED, rc,
+        "persistent klog unavailable; ring buffer only");
+  }
 }
 
 static void kernel_update_network_service_status(void) {
@@ -1148,8 +1150,17 @@ static int kernel_service_poll_networkd(void *ctx) {
   return 0;
 }
 
+static int kernel_service_poll_logger(void *ctx) {
+  int rc = 0;
+
+  (void)ctx;
+  rc = klog_persist_flush_default();
+  kernel_update_logger_service_status(rc);
+  return rc;
+}
+
 static void kernel_service_poll(void) {
-  (void)service_manager_poll_once();
+  (void)service_manager_poll_due(pit_ticks());
 }
 
 static void print_active_efi_runtime_trace(void) {
@@ -1919,15 +1930,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     shell_runtime_rc = prepare_shell_runtime();
     if (shell_runtime_rc == 0) {
       int log_flush_rc = klog_persist_flush_default();
-      if (log_flush_rc == 0) {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_READY, 0,
-            "persistent klog active in /var/log/capyos_klog.txt");
-      } else {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED, log_flush_rc,
-            "persistent klog unavailable; ring buffer only");
-      }
+      kernel_update_logger_service_status(log_flush_rc);
+      (void)service_manager_set_poll(SYSTEM_SERVICE_LOGGER,
+                                     kernel_service_poll_logger, NULL);
+      (void)service_manager_set_poll_interval(SYSTEM_SERVICE_LOGGER, 300u);
     } else {
       (void)service_manager_set_state(
           SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED,
@@ -1952,9 +1958,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     net_io.putc = fbcon_putc;
     network_bootstrap_run(&net_io, &g_shell_settings);
     g_network_runtime_refresh_enabled = 1;
-    g_network_runtime_next_refresh_tick = 0u;
     (void)service_manager_set_poll(SYSTEM_SERVICE_NETWORKD,
                                    kernel_service_poll_networkd, NULL);
+    (void)service_manager_set_poll_interval(SYSTEM_SERVICE_NETWORKD, 10u);
     kernel_maybe_refresh_network_runtime();
 
     {

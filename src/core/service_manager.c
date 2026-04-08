@@ -6,6 +6,8 @@ static struct system_service_status g_services[SYSTEM_SERVICE_COUNT];
 struct service_poll_binding {
   system_service_poll_fn poll;
   void *ctx;
+  uint32_t interval_ticks;
+  uint64_t next_due_tick;
 };
 
 static struct service_poll_binding g_service_polls[SYSTEM_SERVICE_COUNT];
@@ -124,7 +126,27 @@ int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
   }
   g_service_polls[id].poll = poll;
   g_service_polls[id].ctx = ctx;
+  g_service_polls[id].next_due_tick = 0u;
+  g_services[id].poll_interval_ticks = g_service_polls[id].interval_ticks;
   return 0;
+}
+
+int service_manager_set_poll_interval(uint32_t id, uint32_t interval_ticks) {
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  g_service_polls[id].interval_ticks = interval_ticks;
+  g_service_polls[id].next_due_tick = 0u;
+  g_services[id].poll_interval_ticks = interval_ticks;
+  return 0;
+}
+
+static int service_pollable(const struct system_service_status *svc,
+                            const struct service_poll_binding *binding) {
+  return svc && binding && binding->poll &&
+         svc->state != SYSTEM_SERVICE_STATE_BLOCKED &&
+         svc->state != SYSTEM_SERVICE_STATE_STOPPED;
 }
 
 int service_manager_poll_once(void) {
@@ -135,16 +157,41 @@ int service_manager_poll_once(void) {
     struct service_poll_binding *binding = &g_service_polls[id];
     struct system_service_status *svc = &g_services[id];
 
-    if (!binding->poll) {
-      continue;
-    }
-    if (svc->state == SYSTEM_SERVICE_STATE_BLOCKED ||
-        svc->state == SYSTEM_SERVICE_STATE_STOPPED) {
+    if (!service_pollable(svc, binding)) {
       continue;
     }
     (void)binding->poll(binding->ctx);
     svc->polls++;
     polled++;
+  }
+
+  return polled;
+}
+
+int service_manager_poll_due(uint64_t now_ticks) {
+  int polled = 0;
+
+  service_manager_init();
+  for (uint32_t id = 0; id < SYSTEM_SERVICE_COUNT; ++id) {
+    struct service_poll_binding *binding = &g_service_polls[id];
+    struct system_service_status *svc = &g_services[id];
+    uint32_t interval = 0u;
+
+    if (!service_pollable(svc, binding)) {
+      continue;
+    }
+    if (now_ticks < binding->next_due_tick) {
+      continue;
+    }
+    (void)binding->poll(binding->ctx);
+    svc->polls++;
+    polled++;
+
+    interval = binding->interval_ticks;
+    if (interval == 0u) {
+      interval = 1u;
+    }
+    binding->next_due_tick = now_ticks + (uint64_t)interval;
   }
 
   return polled;

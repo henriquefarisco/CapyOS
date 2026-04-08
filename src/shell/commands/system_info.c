@@ -261,6 +261,12 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         shell_print_number(svc.transitions);
         shell_print(" polls=");
         shell_print_number(svc.polls);
+        shell_print(" every=");
+        if (svc.poll_interval_ticks == 0u) {
+            shell_print("loop");
+        } else {
+            shell_print_number(svc.poll_interval_ticks);
+        }
         shell_newline();
         shell_print("  ");
         shell_print(svc.summary[0] ? svc.summary : "(no summary)");

@@ -41,6 +41,7 @@ struct system_service_status {
   int32_t last_result;
   uint32_t transitions;
   uint32_t polls;
+  uint32_t poll_interval_ticks;
 };
 
 void service_manager_init(void);
@@ -53,7 +54,9 @@ int service_manager_get_at(size_t index, struct system_service_status *out);
 size_t service_manager_count(void);
 int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
                              void *ctx);
+int service_manager_set_poll_interval(uint32_t id, uint32_t interval_ticks);
 int service_manager_poll_once(void);
+int service_manager_poll_due(uint64_t now_ticks);
 const char *service_manager_state_label(uint8_t state);
 const char *service_manager_startup_label(uint8_t startup);
 
