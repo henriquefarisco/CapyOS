@@ -56,7 +56,7 @@ Contexto operacional atual:
 | `hey` | `hey <ip|hostname|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
-| `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`). |
+| `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. |
 | `runtime-native` | `runtime-native [show|prepare-input|prepare-storage|exit-boot-services|step]` | Exibe o gate do runtime nativo e executa passos manuais controlados do coordenador Hyper-V. O modo `show` tambem imprime `build=... feature=...`. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
 | `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`) e grava em `/system/config.ini`. |

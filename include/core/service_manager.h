@@ -89,6 +89,8 @@ size_t service_manager_target_count(void);
 int service_manager_target_current(struct system_service_target_status *out);
 int service_manager_target_get_at(size_t index,
                                   struct system_service_target_status *out);
+int service_manager_target_find(const char *name,
+                                struct system_service_target_status *out);
 int service_manager_target_apply(uint32_t id);
 const char *service_manager_state_label(uint8_t state);
 const char *service_manager_startup_label(uint8_t startup);

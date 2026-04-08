@@ -278,6 +278,8 @@ static void klog_print_adapter(const char *s);
 static void klog_print_adapter_flush(void);
 static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
                                uint32_t color);
+static uint32_t kernel_service_target_from_settings(
+    const struct system_settings *settings);
 
 void system_platform_apply_theme(const char *theme) {
   if (!theme || streq(theme, "capyos")) {
@@ -1184,6 +1186,16 @@ static void kernel_service_poll(void) {
   (void)service_manager_poll_due(pit_ticks());
 }
 
+static uint32_t kernel_service_target_from_settings(
+    const struct system_settings *settings) {
+  struct system_service_target_status target;
+  if (settings &&
+      service_manager_target_find(settings->service_target, &target) == 0) {
+    return target.id;
+  }
+  return SYSTEM_SERVICE_TARGET_NETWORK;
+}
+
 static void print_active_efi_runtime_trace(void) {
   struct x64_platform_diag_io io = kernel_platform_diag_io();
   x64_kernel_print_active_efi_runtime_trace(&io);
@@ -2022,7 +2034,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
         SYSTEM_SERVICE_UPDATE_AGENT,
         (1u << SYSTEM_SERVICE_LOGGER) | (1u << SYSTEM_SERVICE_NETWORKD));
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
-    (void)service_manager_target_apply(SYSTEM_SERVICE_TARGET_NETWORK);
+    (void)service_manager_target_apply(
+        kernel_service_target_from_settings(&g_shell_settings));
   }
 
   /* --- End splash -------------------------------------------------------- */

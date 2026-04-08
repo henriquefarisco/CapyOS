@@ -2,6 +2,7 @@
 #include "core/system_init.h"
 
 #include "core/localization.h"
+#include "core/service_manager.h"
 #include "core/session.h"
 #include "core/user.h"
 #include "drivers/console/tty.h"
@@ -99,6 +100,14 @@ static const char *system_network_mode_or_default(const char *mode) {
     return "dhcp";
   }
   return "static";
+}
+
+static const char *system_service_target_or_default(const char *target) {
+  struct system_service_target_status status;
+  if (service_manager_target_find(target, &status) == 0) {
+    return service_manager_target_label(status.id);
+  }
+  return service_manager_target_label(SYSTEM_SERVICE_TARGET_NETWORK);
 }
 
 static uint32_t system_ipv4_addr(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
@@ -255,6 +264,8 @@ static void system_settings_set_defaults(struct system_settings *settings) {
                g_boot_default_language);
   cstring_copy(settings->network_mode, sizeof(settings->network_mode),
                "static");
+  cstring_copy(settings->service_target, sizeof(settings->service_target),
+               system_service_target_or_default(NULL));
   settings->ipv4_addr = system_ipv4_addr(10, 0, 2, 15);
   settings->ipv4_mask = system_ipv4_addr(255, 255, 255, 0);
   settings->ipv4_gateway = system_ipv4_addr(10, 0, 2, 2);
@@ -474,7 +485,8 @@ static void log_dependency_wait(const char *dependency, const char *target) {
 
 static int verify_config_file(const char *hostname, const char *theme,
                               const char *keyboard, const char *language,
-                              const char *network_mode, int splash_enabled,
+                              const char *network_mode,
+                              const char *service_target, int splash_enabled,
                               uint32_t ipv4_addr,
                               uint32_t ipv4_mask, uint32_t ipv4_gateway,
                               uint32_t ipv4_dns) {
@@ -482,6 +494,8 @@ static int verify_config_file(const char *hostname, const char *theme,
   const char *keyboard_value = keyboard ? keyboard : "us";
   const char *language_value = system_language_or_default(language);
   const char *network_mode_value = system_network_mode_or_default(network_mode);
+  const char *service_target_value =
+      system_service_target_or_default(service_target);
   char ipv4_text[16];
   char mask_text[16];
   char gateway_text[16];
@@ -505,6 +519,7 @@ static int verify_config_file(const char *hostname, const char *theme,
   int keyboard_ok = 0;
   int language_ok = 0;
   int network_mode_ok = 0;
+  int service_target_ok = 0;
   int splash_ok = 0;
   int ipv4_ok = 0;
   int mask_ok = 0;
@@ -539,6 +554,10 @@ static int verify_config_file(const char *hostname, const char *theme,
                    config_line_equals(&buffer[start], len, "network_mode",
                                       network_mode_value)) {
           network_mode_ok = 1;
+        } else if (!service_target_ok &&
+                   config_line_equals(&buffer[start], len, "service_target",
+                                      service_target_value)) {
+          service_target_ok = 1;
         } else if (!splash_ok && config_line_equals(&buffer[start], len,
                                                     "splash", splash_value)) {
           splash_ok = 1;
@@ -562,8 +581,8 @@ static int verify_config_file(const char *hostname, const char *theme,
   }
 
   if (!hostname_ok || !theme_ok || !keyboard_ok || !language_ok ||
-      !network_mode_ok || !splash_ok || !ipv4_ok || !mask_ok || !gateway_ok ||
-      !dns_ok) {
+      !network_mode_ok || !service_target_ok || !splash_ok || !ipv4_ok ||
+      !mask_ok || !gateway_ok || !dns_ok) {
     vga_write("Falha ao validar conteudo de /system/config.ini.\n");
     return -1;
   }
@@ -579,11 +598,13 @@ static int write_settings_file(const struct system_settings *settings) {
   }
 
   const char *splash_value = settings->splash_enabled ? "enabled" : "disabled";
+  const char *service_target_value =
+      system_service_target_or_default(settings->service_target);
   char ipv4_text[16];
   char mask_text[16];
   char gateway_text[16];
   char dns_text[16];
-  char config_buffer[384];
+  char config_buffer[512];
   config_buffer[0] = '\0';
   system_ipv4_to_string(settings->ipv4_addr, ipv4_text);
   system_ipv4_to_string(settings->ipv4_mask, mask_text);
@@ -605,6 +626,9 @@ static int write_settings_file(const struct system_settings *settings) {
   buffer_append(config_buffer, sizeof(config_buffer), "network_mode=");
   buffer_append(config_buffer, sizeof(config_buffer),
                 system_network_mode_or_default(settings->network_mode));
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "service_target=");
+  buffer_append(config_buffer, sizeof(config_buffer), service_target_value);
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
   buffer_append(config_buffer, sizeof(config_buffer), "splash=");
   buffer_append(config_buffer, sizeof(config_buffer), splash_value);
@@ -1858,7 +1882,7 @@ static int first_boot_setup_impl(void) {
   sync_root_device();
   if (verify_config_file(settings.hostname, settings.theme,
                          settings.keyboard_layout, settings.language,
-                         settings.network_mode,
+                         settings.network_mode, settings.service_target,
                          settings.splash_enabled, settings.ipv4_addr,
                          settings.ipv4_mask, settings.ipv4_gateway,
                          settings.ipv4_dns) !=
@@ -1959,6 +1983,9 @@ static void apply_config_line(struct system_settings *settings,
   } else if (strings_equal(key, "network_mode")) {
     cstring_copy(settings->network_mode, sizeof(settings->network_mode),
                  system_network_mode_or_default(value));
+  } else if (strings_equal(key, "service_target")) {
+    cstring_copy(settings->service_target, sizeof(settings->service_target),
+                 system_service_target_or_default(value));
   } else if (strings_equal(key, "splash")) {
     if (value[0] == 'd' || value[0] == 'D') {
       settings->splash_enabled = 0;
@@ -2055,7 +2082,7 @@ int system_save_settings(const struct system_settings *settings) {
   sync_root_device();
   if (verify_config_file(settings->hostname, settings->theme,
                          settings->keyboard_layout, settings->language,
-                         settings->network_mode,
+                         settings->network_mode, settings->service_target,
                          settings->splash_enabled, settings->ipv4_addr,
                          settings->ipv4_mask, settings->ipv4_gateway,
                          settings->ipv4_dns) != 0) {
@@ -2118,6 +2145,15 @@ int system_save_network_mode(const char *mode) {
   system_load_settings(&settings);
   cstring_copy(settings.network_mode, sizeof(settings.network_mode),
                system_network_mode_or_default(mode));
+  return system_save_settings(&settings);
+}
+
+int system_save_service_target(const char *target) {
+  struct system_settings settings;
+  system_settings_set_defaults(&settings);
+  system_load_settings(&settings);
+  cstring_copy(settings.service_target, sizeof(settings.service_target),
+               system_service_target_or_default(target));
   return system_save_settings(&settings);
 }
 

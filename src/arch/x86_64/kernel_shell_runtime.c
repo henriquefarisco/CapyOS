@@ -227,6 +227,17 @@ static void apply_default_settings(struct system_settings *settings) {
   local_copy(settings->theme, sizeof(settings->theme), "capyos");
   local_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout), "us");
   local_copy(settings->language, sizeof(settings->language), "en");
+  local_copy(settings->network_mode, sizeof(settings->network_mode), "static");
+  local_copy(settings->service_target, sizeof(settings->service_target),
+             "network");
+  settings->ipv4_addr = ((uint32_t)10u << 24) | ((uint32_t)0u << 16) |
+                        ((uint32_t)2u << 8) | 15u;
+  settings->ipv4_mask = ((uint32_t)255u << 24) | ((uint32_t)255u << 16) |
+                        ((uint32_t)255u << 8) | 0u;
+  settings->ipv4_gateway = ((uint32_t)10u << 24) | ((uint32_t)0u << 16) |
+                           ((uint32_t)2u << 8) | 2u;
+  settings->ipv4_dns = ((uint32_t)1u << 24) | ((uint32_t)1u << 16) |
+                       ((uint32_t)1u << 8) | 1u;
   settings->splash_enabled = 0;
   settings->diagnostics_enabled = 0;
 }

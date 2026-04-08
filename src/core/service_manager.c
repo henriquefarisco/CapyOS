@@ -45,6 +45,20 @@ static void local_copy(char *dst, size_t dst_size, const char *src) {
   dst[i] = '\0';
 }
 
+static int local_equal(const char *a, const char *b) {
+  size_t i = 0;
+  if (!a || !b) {
+    return 0;
+  }
+  while (a[i] && b[i]) {
+    if (a[i] != b[i]) {
+      return 0;
+    }
+    ++i;
+  }
+  return a[i] == b[i];
+}
+
 static void seed_service(uint32_t id, const char *name, uint8_t critical,
                          uint8_t startup, uint8_t state,
                          const char *summary) {
@@ -522,6 +536,24 @@ int service_manager_target_get_at(size_t index,
   }
   *out = g_targets[index];
   return 0;
+}
+
+int service_manager_target_find(const char *name,
+                                struct system_service_target_status *out) {
+  service_manager_init();
+  if (!name || !name[0]) {
+    return -1;
+  }
+  for (size_t i = 0; i < SYSTEM_SERVICE_TARGET_COUNT; ++i) {
+    if (!local_equal(name, g_targets[i].name)) {
+      continue;
+    }
+    if (out) {
+      *out = g_targets[i];
+    }
+    return (int)g_targets[i].id;
+  }
+  return -1;
 }
 
 int service_manager_target_apply(uint32_t id) {

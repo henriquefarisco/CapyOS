@@ -17,6 +17,7 @@ struct system_settings {
     char keyboard_layout[16];
     char language[16];
     char network_mode[8];
+    char service_target[16];
     uint32_t ipv4_addr;
     uint32_t ipv4_mask;
     uint32_t ipv4_gateway;
@@ -70,6 +71,7 @@ int system_save_splash_enabled(int enabled);
 int system_save_network_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
                              uint32_t dns);
 int system_save_network_mode(const char *mode);
+int system_save_service_target(const char *target);
 int system_login(struct session_context *session, const struct system_settings *settings);
 void system_apply_theme(const struct system_settings *settings);
 void system_apply_keyboard_layout(const struct system_settings *settings);

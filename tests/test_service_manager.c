@@ -77,6 +77,13 @@ int run_service_manager_tests(void) {
                          "current service target should be readable");
     fails += expect_true(strcmp(target.name, "network") == 0,
                          "default service target should be network");
+    fails += expect_true(service_manager_target_find("maintenance", &target) ==
+                             SYSTEM_SERVICE_TARGET_MAINTENANCE,
+                         "service target lookup by name should work");
+    fails += expect_true(strcmp(service_manager_target_label(
+                                    SYSTEM_SERVICE_TARGET_FULL),
+                                "full") == 0,
+                         "service target label mismatch");
     fails += expect_true(service_manager_get(SYSTEM_SERVICE_LOGGER, &svc) == 0,
                          "logger service should exist");
     fails += expect_true(strcmp(svc.name, "logger") == 0,

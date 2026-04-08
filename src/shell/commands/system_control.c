@@ -445,31 +445,12 @@ static int cmd_service_control(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
-static int find_service_target_id_by_name(const char *name,
-                                          struct system_service_target_status *out) {
-  size_t count = service_manager_target_count();
-  for (size_t i = 0; i < count; ++i) {
-    struct system_service_target_status target;
-    if (service_manager_target_get_at(i, &target) != 0) {
-      continue;
-    }
-    if (shell_string_equal(name, target.name)) {
-      if (out) {
-        *out = target;
-      }
-      return (int)target.id;
-    }
-  }
-  return -1;
-}
-
 static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
   struct system_service_target_status target;
   int target_id = -1;
   int rc = 0;
 
-  (void)ctx;
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
@@ -518,7 +499,7 @@ static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) 
     return -1;
   }
 
-  target_id = find_service_target_id_by_name(argv[2], &target);
+  target_id = service_manager_target_find(argv[2], &target);
   if (target_id < 0) {
     shell_print_error(localization_select(language,
                                           "alvo de servico desconhecido",
@@ -534,6 +515,20 @@ static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) 
                                           "failed to apply service target",
                                           "fallo al aplicar el objetivo de servicio"));
     return -1;
+  }
+  if (ctx && ctx->settings) {
+    shell_copy(((struct system_settings *)ctx->settings)->service_target,
+               sizeof(ctx->settings->service_target), target.name);
+  }
+  if (system_save_service_target(target.name) != 0) {
+    shell_print_ok(localization_select(language,
+                                       "alvo de servico aplicado",
+                                       "service target applied",
+                                       "objetivo de servicio aplicado"));
+    shell_print(target.name);
+    shell_newline();
+    shell_print(localization_text_for(language, LOC_TEXT_CONFIG_SAVE_WARNING));
+    return 0;
   }
   shell_print_ok(localization_select(language,
                                      "alvo de servico aplicado",
