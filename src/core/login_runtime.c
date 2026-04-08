@@ -12,6 +12,12 @@ static int ops_ready(const struct login_runtime_ops *ops) {
          ops->cmd_info;
 }
 
+static void login_service_poll(struct login_runtime_ops *ops) {
+  if (ops && ops->service_poll) {
+    ops->service_poll();
+  }
+}
+
 int login_runtime_run(struct login_runtime_ops *ops) {
   int first_login_screen = 1;
   char line[128];
@@ -32,6 +38,7 @@ int login_runtime_run(struct login_runtime_ops *ops) {
                                      LOC_TEXT_PREPARE_SHELL_FAILED));
     return -1;
   }
+  login_service_poll(ops);
 
   for (;;) {
     if (first_login_screen) {
@@ -49,11 +56,13 @@ int login_runtime_run(struct login_runtime_ops *ops) {
     ops->session_reset(ops->session_ctx);
     ops->session_set_active(NULL);
     ops->shell_context_init(ops->shell_ctx, ops->session_ctx, ops->settings);
+    login_service_poll(ops);
 
     if (ops->system_login(ops->session_ctx, ops->settings) != 0) {
       ops->print(localization_text_for(system_language, LOC_TEXT_AUTH_FLOW_FAILED));
       return -1;
     }
+    login_service_poll(ops);
 
     {
       const struct user_record *login_user = ops->session_user(ops->session_ctx);
@@ -72,16 +81,19 @@ int login_runtime_run(struct login_runtime_ops *ops) {
       const char *cwd = ops->session_cwd(ops->session_ctx);
       char prompt[128];
 
+      login_service_poll(ops);
       shell_build_prompt(active_user, ops->settings, cwd, prompt,
                          sizeof(prompt));
       ops->print(prompt);
 
       ops->readline(line, sizeof(line), 0);
+      login_service_poll(ops);
       if (!line[0]) {
         continue;
       }
 
       if (ops->dispatch_shell_command(line)) {
+        login_service_poll(ops);
         if (ops->shell_context_should_logout(ops->shell_ctx)) {
           ops->session_reset(ops->session_ctx);
           ops->session_set_active(NULL);
@@ -94,22 +106,27 @@ int login_runtime_run(struct login_runtime_ops *ops) {
 
       if (ops->is_equal(line, "help")) {
         (void)ops->run_shell_alias("help-any");
+        login_service_poll(ops);
         continue;
       }
       if (ops->is_equal(line, "clear")) {
         (void)ops->run_shell_alias("mess");
+        login_service_poll(ops);
         continue;
       }
       if (ops->is_equal(line, "reboot")) {
         (void)ops->run_shell_alias("shutdown-reboot");
+        login_service_poll(ops);
         continue;
       }
       if (ops->is_equal(line, "halt")) {
         (void)ops->run_shell_alias("shutdown-off");
+        login_service_poll(ops);
         continue;
       }
       if (ops->is_equal(line, "info")) {
         ops->cmd_info();
+        login_service_poll(ops);
         continue;
       }
 
@@ -118,6 +135,7 @@ int login_runtime_run(struct login_runtime_ops *ops) {
       ops->print(line);
       ops->print(localization_text_for(session_language(ops->session_ctx),
                                        LOC_TEXT_UNKNOWN_COMMAND_HINT));
+      login_service_poll(ops);
     }
   }
 }

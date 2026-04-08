@@ -3,6 +3,12 @@
 #include <stddef.h>
 
 static struct system_service_status g_services[SYSTEM_SERVICE_COUNT];
+struct service_poll_binding {
+  system_service_poll_fn poll;
+  void *ctx;
+};
+
+static struct service_poll_binding g_service_polls[SYSTEM_SERVICE_COUNT];
 static int g_services_ready = 0;
 
 static void local_zero(void *ptr, size_t len) {
@@ -47,6 +53,7 @@ static void seed_service(uint32_t id, const char *name, uint8_t critical,
 
 void service_manager_reset(void) {
   local_zero(g_services, sizeof(g_services));
+  local_zero(g_service_polls, sizeof(g_service_polls));
   g_services_ready = 0;
 }
 
@@ -108,6 +115,40 @@ int service_manager_get_at(size_t index, struct system_service_status *out) {
 }
 
 size_t service_manager_count(void) { return SYSTEM_SERVICE_COUNT; }
+
+int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
+                             void *ctx) {
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  g_service_polls[id].poll = poll;
+  g_service_polls[id].ctx = ctx;
+  return 0;
+}
+
+int service_manager_poll_once(void) {
+  int polled = 0;
+
+  service_manager_init();
+  for (uint32_t id = 0; id < SYSTEM_SERVICE_COUNT; ++id) {
+    struct service_poll_binding *binding = &g_service_polls[id];
+    struct system_service_status *svc = &g_services[id];
+
+    if (!binding->poll) {
+      continue;
+    }
+    if (svc->state == SYSTEM_SERVICE_STATE_BLOCKED ||
+        svc->state == SYSTEM_SERVICE_STATE_STOPPED) {
+      continue;
+    }
+    (void)binding->poll(binding->ctx);
+    svc->polls++;
+    polled++;
+  }
+
+  return polled;
+}
 
 const char *service_manager_state_label(uint8_t state) {
   switch (state) {

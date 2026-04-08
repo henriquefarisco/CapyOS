@@ -29,6 +29,8 @@ enum system_service_state {
   SYSTEM_SERVICE_STATE_STOPPED
 };
 
+typedef int (*system_service_poll_fn)(void *ctx);
+
 struct system_service_status {
   uint32_t id;
   char name[SYSTEM_SERVICE_NAME_MAX];
@@ -38,6 +40,7 @@ struct system_service_status {
   uint8_t state;
   int32_t last_result;
   uint32_t transitions;
+  uint32_t polls;
 };
 
 void service_manager_init(void);
@@ -48,6 +51,9 @@ int service_manager_set_state(uint32_t id, uint8_t state, int32_t last_result,
 int service_manager_get(uint32_t id, struct system_service_status *out);
 int service_manager_get_at(size_t index, struct system_service_status *out);
 size_t service_manager_count(void);
+int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
+                             void *ctx);
+int service_manager_poll_once(void);
 const char *service_manager_state_label(uint8_t state);
 const char *service_manager_startup_label(uint8_t startup);
 

@@ -1109,6 +1109,49 @@ static void kernel_maybe_refresh_network_runtime(void) {
   (void)net_stack_refresh_runtime();
 }
 
+static void kernel_update_network_service_status(void) {
+  struct net_stack_status net_status = {0};
+
+  if (net_stack_status(&net_status) != 0) {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -1,
+        "network status unavailable");
+    return;
+  }
+  if (!net_status.nic.found) {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -2,
+        "no network adapter detected");
+    return;
+  }
+  if (!net_status.runtime_supported) {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -3,
+        "adapter detected but driver is not validated");
+    return;
+  }
+  if (!net_status.ready) {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_DEGRADED, -4,
+        "validated network driver detected but not ready");
+    return;
+  }
+  (void)service_manager_set_state(SYSTEM_SERVICE_NETWORKD,
+                                  SYSTEM_SERVICE_STATE_READY, 0,
+                                  "network stack ready");
+}
+
+static int kernel_service_poll_networkd(void *ctx) {
+  (void)ctx;
+  kernel_maybe_refresh_network_runtime();
+  kernel_update_network_service_status();
+  return 0;
+}
+
+static void kernel_service_poll(void) {
+  (void)service_manager_poll_once();
+}
+
 static void print_active_efi_runtime_trace(void) {
   struct x64_platform_diag_io io = kernel_platform_diag_io();
   x64_kernel_print_active_efi_runtime_trace(&io);
@@ -1616,8 +1659,8 @@ int kernel_input_getc(char *out_char) {
     struct x64_hyperv_runtime_coordinator_ops ops =
         kernel_hyperv_runtime_coordinator_ops();
     int hyperv_was_ready = g_input_runtime.has_hyperv;
+    kernel_service_poll();
     (void)x64_hyperv_runtime_poll_promotions(&g_input_runtime, &ops);
-    kernel_maybe_refresh_network_runtime();
     if (x64_input_poll_char(&g_input_runtime, out_char)) {
       return 1;
     }
@@ -1910,26 +1953,20 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     network_bootstrap_run(&net_io, &g_shell_settings);
     g_network_runtime_refresh_enabled = 1;
     g_network_runtime_next_refresh_tick = 0u;
+    (void)service_manager_set_poll(SYSTEM_SERVICE_NETWORKD,
+                                   kernel_service_poll_networkd, NULL);
     kernel_maybe_refresh_network_runtime();
 
     {
       struct net_stack_status net_status = {0};
+      kernel_update_network_service_status();
       if (net_stack_status(&net_status) != 0) {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -1,
-            "network status unavailable");
         boot_warnings_add(&g_boot_warnings,
                           "Network status unavailable; continuing offline");
       } else if (!net_status.nic.found) {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -2,
-            "no network adapter detected");
         boot_warnings_add(&g_boot_warnings,
                           "No network adapter detected");
       } else if (!net_status.runtime_supported) {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -3,
-            "adapter detected but driver is not validated");
         if (net_status.nic.kind == NET_NIC_KIND_VMXNET3) {
           boot_warnings_add(&g_boot_warnings,
                             "VMXNET3 detected; use VMware E1000 for now");
@@ -1938,15 +1975,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                             "Detected network adapter has no validated driver");
         }
       } else if (!net_status.ready) {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_DEGRADED, -4,
-            "validated network driver detected but not ready");
         boot_warnings_add(&g_boot_warnings,
                           "Validated network driver detected but not ready");
-      } else {
-        (void)service_manager_set_state(
-            SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_READY, 0,
-            "network stack ready");
       }
     }
 
@@ -2004,6 +2034,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     login_ops.show_splash = login_show_splash;
     login_ops.ui_banner = ui_banner;
     login_ops.cmd_info = cmd_info;
+    login_ops.service_poll = kernel_service_poll;
 
     if (login_runtime_run(&login_ops) != 0) {
       kernel_halt_forever();
