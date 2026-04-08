@@ -8,6 +8,8 @@ struct x64_kernel_recovery_status {
   uint8_t degraded;
   uint8_t forced_maintenance;
   uint8_t forced_core;
+  uint8_t shell_fs_ready;
+  uint8_t persistent_storage;
   uint8_t reason;
   uint32_t bootstrap_target;
   uint32_t requested_target;

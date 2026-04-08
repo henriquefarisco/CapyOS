@@ -5,12 +5,14 @@
 #include "core/klog_persist.h"
 #include "core/service_manager.h"
 #include "core/system_init.h"
+#include "core/user.h"
 #include "core/user_prefs.h"
 #include "core/version.h"
 #if defined(__x86_64__)
 #include "arch/x86_64/interrupts.h"
-#include "arch/x86_64/storage_runtime.h"
 #include "arch/x86_64/kernel_runtime_control.h"
+#include "arch/x86_64/storage_runtime.h"
+#include "net/stack.h"
 #include "drivers/hyperv/hyperv.h"
 #endif
 #include "drivers/acpi/acpi.h"
@@ -641,6 +643,124 @@ static int cmd_recovery_resume(struct shell_context *ctx, int argc, char **argv)
 #endif
 }
 
+static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+#if defined(__x86_64__)
+  struct x64_kernel_recovery_status status;
+  struct system_service_target_status target;
+  const char *target_name = NULL;
+  struct net_stack_status net_status;
+  int target_id = -1;
+  int net_rc = -1;
+  int storage_ok = 0;
+  int network_ok = 0;
+  int verify_ok = 1;
+#endif
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: recovery-verify [saved|core|network|full|maintenance]\nVerifica se os prerequisitos minimos para promover um target de recuperacao ja estao presentes.\n",
+        "Usage: recovery-verify [saved|core|network|full|maintenance]\nChecks whether the minimum prerequisites to promote a recovery target are already present.\n",
+        "Uso: recovery-verify [saved|core|network|full|maintenance]\nVerifica si los prerequisitos minimos para promover un objetivo de recuperacion ya estan presentes.\n"));
+    return 0;
+  }
+
+#if !defined(__x86_64__)
+  (void)ctx;
+  shell_print_error(localization_select(language,
+                                        "recovery-verify indisponivel",
+                                        "recovery-verify unavailable",
+                                        "recovery-verify no disponible"));
+  return -1;
+#else
+  x64_kernel_recovery_status_get(&status);
+  if (argc < 2 || shell_string_equal(argv[1], "saved")) {
+    target_name = (ctx && ctx->settings && ctx->settings->service_target[0])
+                      ? ctx->settings->service_target
+                      : "network";
+  } else {
+    target_name = argv[1];
+  }
+
+  target_id = service_manager_target_find(target_name, &target);
+  if (target_id < 0) {
+    shell_print_error(localization_select(language,
+                                          "alvo de verificacao desconhecido",
+                                          "unknown verification target",
+                                          "objetivo de verificacion desconocido"));
+    return -1;
+  }
+
+  storage_ok = status.shell_fs_ready && status.persistent_storage &&
+               x64_storage_runtime_has_device();
+  net_rc = net_stack_status(&net_status);
+  network_ok = (net_rc == 0 && net_status.runtime_supported);
+
+  shell_print("target=");
+  shell_print(target.name);
+  shell_print(" maintenance=");
+  shell_print(status.maintenance_session ? "yes" : "no");
+  shell_newline();
+
+  shell_print("check storage=");
+  shell_print(storage_ok ? "ok" : "fail");
+  shell_print(" fs=");
+  shell_print(status.shell_fs_ready ? "ready" : "missing");
+  shell_print(" persistent=");
+  shell_print(status.persistent_storage ? "yes" : "no");
+  shell_print(" validated=");
+  shell_print(x64_storage_runtime_has_device() ? "yes" : "no");
+  shell_newline();
+
+  shell_print("check network=");
+  if (net_rc != 0) {
+    shell_print("unknown");
+  } else {
+    shell_print(network_ok ? "ok" : "fail");
+    shell_print(" driver=");
+    shell_print(net_driver_name(net_status.nic.kind));
+    shell_print(" ready=");
+    shell_print(net_status.ready ? "yes" : "no");
+    shell_print(" validated=");
+    shell_print(net_status.runtime_supported ? "yes" : "no");
+  }
+  shell_newline();
+
+  if ((uint32_t)target_id != SYSTEM_SERVICE_TARGET_MAINTENANCE && !storage_ok) {
+    verify_ok = 0;
+  }
+  if (((uint32_t)target_id == SYSTEM_SERVICE_TARGET_NETWORK ||
+       (uint32_t)target_id == SYSTEM_SERVICE_TARGET_FULL) &&
+      !network_ok) {
+    verify_ok = 0;
+  }
+
+  shell_print("result=");
+  shell_print(verify_ok ? "ready" : "blocked");
+  shell_newline();
+  shell_print("next: ");
+  if (verify_ok) {
+    shell_print("recovery-resume ");
+    shell_print(target.name);
+  } else if (!storage_ok) {
+    shell_print(localization_select(
+        language,
+        "corrija storage com recovery-storage e valide o volume antes de sair do modo de recuperacao",
+        "fix storage with recovery-storage and validate the volume before leaving recovery mode",
+        "corrige el almacenamiento con recovery-storage y valida el volumen antes de salir del modo de recuperacion"));
+  } else {
+    shell_print(localization_select(
+        language,
+        "corrija a rede com recovery-network ou ajuste a VM para hardware suportado antes de promover o target",
+        "fix networking with recovery-network or adjust the VM to supported hardware before promoting the target",
+        "corrige la red con recovery-network o ajusta la VM a hardware soportado antes de promover el objetivo"));
+  }
+  shell_newline();
+  return verify_ok ? 0 : -1;
+#endif
+}
+
 static void do_hard_reboot(void) {
   const char *language = shell_current_language();
   sync_and_flush();
@@ -956,7 +1076,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[11];
+static struct shell_command g_system_control_commands[12];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -985,13 +1105,15 @@ static void init_system_control_commands(void) {
   g_system_control_commands[9].handler = cmd_service_target;
   g_system_control_commands[10].name = "recovery-resume";
   g_system_control_commands[10].handler = cmd_recovery_resume;
+  g_system_control_commands[11].name = "recovery-verify";
+  g_system_control_commands[11].handler = cmd_recovery_verify;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 11;
+    *count = 12;
   }
   return g_system_control_commands;
 }

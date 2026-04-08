@@ -45,6 +45,8 @@ Contexto operacional atual:
 | `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL` e `VERSION` atuais. |
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
+| `recovery-storage` | `recovery-storage` | Exibe o estado do runtime de storage, VFS raiz, volume persistente e caminhos criticos usados para recuperar o sistema. |
+| `recovery-network` | `recovery-network` | Exibe o estado detalhado da NIC/runtime de rede e a remediacao minima para promover targets com rede. |
 | `net-status` | `net-status` | Exibe estado da rede no runtime x64 (`driver`, `detected`, `runtime`, `ready`, IPv4, ARP, contadores). No `Hyper-V`, tambem imprime `build=... feature=... diag=...`, `vmbus=` e `stage=` para validar a imagem em campo. |
 | `net-refresh` | `net-refresh` | Atualiza o runtime de rede quando houver backend seguro para isso. No `Hyper-V`, avanca o controlador `NetVSC` em passos pequenos e controlados somente quando a offer sintetica ja estiver em cache. |
 | `net-dump-runtime` | `net-dump-runtime` | Exibe um dump detalhado do runtime de rede, incluindo `vmbus=`, `stage=`, gate, fase, ultimo resultado e contadores de tentativas do `Hyper-V/StorVSC`. |
@@ -59,6 +61,7 @@ Contexto operacional atual:
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
 | `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. O boot pode degradar temporariamente o alvo ativo para `core` ou `maintenance` quando detectar falha estrutural. |
 | `recovery-resume` | `recovery-resume <saved|core|network|full|maintenance>` | Em modo de recuperacao, tenta promover o runtime atual para outro alvo de servicos com guardrails minimos de storage/rede. |
+| `recovery-verify` | `recovery-verify [saved|core|network|full|maintenance]` | Verifica se os prerequisitos minimos para promover um alvo de recuperacao ja estao presentes, sem aplicar a mudanca. |
 | `runtime-native` | `runtime-native [show|prepare-input|prepare-storage|exit-boot-services|step]` | Exibe o gate do runtime nativo e executa passos manuais controlados do coordenador Hyper-V. O modo `show` tambem imprime `build=... feature=...`. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
 | `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`) e grava em `/system/config.ini`. |
@@ -122,10 +125,13 @@ Contexto operacional atual:
 - Nessa sessao, o prompt usa o usuario sintetico `maintenance` e informa o
   motivo da degradacao logo abaixo do banner.
 - Os comandos mais uteis nesse modo sao `service-status`,
-  `service-target show`, `recovery-status`, `recovery-resume`, `do-sync`,
+  `service-target show`, `recovery-status`, `recovery-storage`,
+  `recovery-network`, `recovery-verify`, `recovery-resume`, `do-sync`,
   `shutdown-reboot` e `shutdown-off`.
 - `recovery-resume saved` tenta voltar ao alvo persistido em
   `/system/config.ini`.
+- `recovery-verify saved` valida primeiro se storage e, quando necessario,
+  rede ja atendem ao alvo persistido antes de tentar a promocao.
 - Se o storage validado ainda nao estiver disponivel, o sistema recusa sair
   do modo de recuperacao para evitar promover um runtime inconsistente.
 

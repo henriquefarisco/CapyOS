@@ -4,6 +4,7 @@
 #include "core/localization.h"
 #include "core/service_boot_policy.h"
 #include "core/service_manager.h"
+#include "core/user.h"
 #include "core/version.h"
 #include "drivers/timer/pit.h"
 #if defined(__x86_64__)
@@ -11,6 +12,7 @@
 #include "arch/x86_64/storage_runtime.h"
 #include "net/stack.h"
 #endif
+#include "fs/vfs.h"
 
 static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
@@ -245,6 +247,26 @@ static void shell_print_service_dependencies(uint32_t dependency_mask) {
     }
 }
 
+static void shell_print_bool_flag(const char *label, int value) {
+    shell_print(label);
+    shell_print(value ? "yes" : "no");
+}
+
+static void shell_print_path_status(const char *path) {
+    struct vfs_stat st;
+    int rc = vfs_stat_path(path, &st);
+    shell_print(path);
+    shell_print(" exists=");
+    shell_print(rc == 0 ? "yes" : "no");
+    if (rc == 0) {
+        shell_print(" type=");
+        shell_print((st.mode & VFS_MODE_DIR) ? "dir" : "file");
+        shell_print(" size=");
+        shell_print_number(st.size);
+    }
+    shell_newline();
+}
+
 static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     const char *filter = NULL;
@@ -404,7 +426,205 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
 #endif
 }
 
-static struct shell_command g_system_info_commands[9];
+static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: recovery-storage\nMostra o estado do runtime de storage, do VFS raiz e dos caminhos persistentes usados pela recuperacao.\n",
+            "Usage: recovery-storage\nShows the storage runtime, root VFS and persistent paths used by recovery.\n",
+            "Uso: recovery-storage\nMuestra el runtime de almacenamiento, el VFS raiz y las rutas persistentes usadas por la recuperacion.\n"));
+        return 0;
+    }
+#if !defined(__x86_64__)
+    shell_print_error(localization_select(language,
+                                          "recovery-storage indisponivel",
+                                          "recovery-storage unavailable",
+                                          "recovery-storage no disponible"));
+    return -1;
+#else
+    {
+        struct x64_kernel_recovery_status status;
+        struct super_block *root = vfs_root();
+        x64_kernel_recovery_status_get(&status);
+
+        shell_print_bool_flag("fs.ready=", status.shell_fs_ready);
+        shell_print(" ");
+        shell_print_bool_flag("persistent=", status.persistent_storage);
+        shell_print(" ");
+        shell_print_bool_flag("validated-storage=", x64_storage_runtime_has_device());
+        shell_newline();
+
+        shell_print("backend=");
+        shell_print(x64_storage_runtime_backend_name());
+        shell_print(" firmware=");
+        shell_print(x64_storage_runtime_uses_firmware() ? "yes" : "no");
+        shell_print(" native-candidate=");
+        shell_print(x64_storage_runtime_native_candidate_name());
+        shell_newline();
+
+        shell_print("data-path=");
+        shell_print(x64_storage_runtime_data_path());
+        shell_print(" native-data-path=");
+        shell_print(x64_storage_runtime_native_data_path());
+        shell_newline();
+
+        shell_print("root-mounted=");
+        shell_print((root && root->bdev) ? "yes" : "no");
+        shell_newline();
+
+        shell_print_path_status("/");
+        shell_print_path_status("/system");
+        shell_print_path_status("/etc");
+        shell_print_path_status("/var/log");
+        shell_print_path_status("/system/config.ini");
+        shell_print_path_status(USER_DB_PATH);
+
+        shell_print("remediation: ");
+        if (!status.shell_fs_ready) {
+            shell_print(localization_select(
+                language,
+                "o runtime do shell ainda nao montou um VFS confiavel; reinicie pela ISO e valide a chave do volume.",
+                "the shell runtime has not mounted a trustworthy VFS yet; boot from the ISO and validate the volume key.",
+                "el runtime del shell aun no monto un VFS confiable; arranca desde la ISO y valida la clave del volumen."));
+        } else if (!status.persistent_storage || !x64_storage_runtime_has_device()) {
+            shell_print(localization_select(
+                language,
+                "o volume persistente ainda nao esta validado; prefira VMware com storage AHCI/NVMe e confirme a presenca do volume DATA.",
+                "persistent storage is not validated yet; prefer VMware with AHCI/NVMe storage and confirm the DATA volume is present.",
+                "el almacenamiento persistente aun no esta validado; prefiere VMware con almacenamiento AHCI/NVMe y confirma la presencia del volumen DATA."));
+        } else {
+            shell_print(localization_select(
+                language,
+                "os prerequisitos de storage parecem saudaveis para tentar recovery-resume.",
+                "storage prerequisites look healthy enough to try recovery-resume.",
+                "los prerequisitos de almacenamiento parecen saludables para intentar recovery-resume."));
+        }
+        shell_newline();
+    }
+    return 0;
+#endif
+}
+
+static int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: recovery-network\nMostra o estado detalhado da rede durante a recuperacao e aponta a remediacao minima para promover o target de rede.\n",
+            "Usage: recovery-network\nShows detailed network state during recovery and points to the minimum remediation needed to promote the network target.\n",
+            "Uso: recovery-network\nMuestra el estado detallado de la red durante la recuperacion e indica la remediacion minima para promover el objetivo de red.\n"));
+        return 0;
+    }
+#if !defined(__x86_64__)
+    shell_print_error(localization_select(language,
+                                          "recovery-network indisponivel",
+                                          "recovery-network unavailable",
+                                          "recovery-network no disponible"));
+    return -1;
+#else
+    {
+        struct net_stack_status st;
+        char ip[16], mask[16], gw[16], dns[16];
+        if (net_stack_status(&st) != 0) {
+            shell_print_error(localization_select(
+                language,
+                "estado da rede indisponivel no runtime atual",
+                "network state unavailable in the current runtime",
+                "estado de red no disponible en el runtime actual"));
+            return -1;
+        }
+
+        net_ipv4_format(st.ipv4.addr, ip);
+        net_ipv4_format(st.ipv4.mask, mask);
+        net_ipv4_format(st.ipv4.gateway, gw);
+        net_ipv4_format(st.ipv4.dns, dns);
+
+        shell_print("driver=");
+        shell_print(net_driver_name(st.nic.kind));
+        shell_print(" detected=");
+        shell_print(st.nic.found ? "yes" : "no");
+        shell_print(" runtime=");
+        shell_print(st.runtime_supported ? "validated" : "missing");
+        shell_print(" ready=");
+        shell_print(st.ready ? "yes" : "no");
+        shell_newline();
+
+        if (st.nic.found) {
+            shell_print("pci=");
+            shell_print_number(st.nic.bus);
+            shell_print(":");
+            shell_print_number(st.nic.device);
+            shell_print(".");
+            shell_print_number(st.nic.function);
+            shell_print(" vendor=");
+            shell_print_number(st.nic.vendor_id);
+            shell_print(" device=");
+            shell_print_number(st.nic.device_id);
+            shell_newline();
+        }
+
+        shell_print("ipv4=");
+        shell_print(ip);
+        shell_print(" mask=");
+        shell_print(mask);
+        shell_print(" gw=");
+        shell_print(gw);
+        shell_print(" dns=");
+        shell_print(dns);
+        shell_newline();
+
+        shell_print("tx=");
+        shell_print_number((uint32_t)st.stats.frames_tx);
+        shell_print(" rx=");
+        shell_print_number((uint32_t)st.stats.frames_rx);
+        shell_print(" drop=");
+        shell_print_number((uint32_t)st.stats.frames_drop);
+        shell_print(" arp=");
+        shell_print_number(st.arp_entries);
+        shell_newline();
+
+        shell_print("remediation: ");
+        if (!st.nic.found) {
+            shell_print(localization_select(
+                language,
+                "nenhuma NIC foi detectada; confirme que a VM possui um adaptador de rede anexado.",
+                "no NIC was detected; confirm that the VM has a network adapter attached.",
+                "no se detecto ninguna NIC; confirma que la VM tenga un adaptador de red conectado."));
+        } else if (!st.runtime_supported && st.nic.kind == NET_NIC_KIND_VMXNET3) {
+            shell_print(localization_select(
+                language,
+                "VMXNET3 foi detectado sem driver validado; troque a VM para E1000 antes de promover o target de rede.",
+                "VMXNET3 was detected without a validated driver; switch the VM to E1000 before promoting the network target.",
+                "VMXNET3 fue detectado sin driver validado; cambia la VM a E1000 antes de promover el objetivo de red."));
+        } else if (!st.runtime_supported) {
+            shell_print(localization_select(
+                language,
+                "a NIC atual nao possui driver validado; ajuste a VM para um hardware suportado antes de promover a rede.",
+                "the current NIC does not have a validated driver; adjust the VM to supported hardware before promoting networking.",
+                "la NIC actual no tiene un driver validado; ajusta la VM a hardware soportado antes de promover la red."));
+        } else if (!st.ready) {
+            shell_print(localization_select(
+                language,
+                "o runtime de rede existe, mas ainda nao esta pronto; confira cabos virtuais, configuracao IPv4 e tente net-refresh/net-status.",
+                "the network runtime exists, but it is not ready yet; check virtual cabling, IPv4 configuration and try net-refresh/net-status.",
+                "el runtime de red existe, pero aun no esta listo; revisa el cableado virtual, la configuracion IPv4 e intenta net-refresh/net-status."));
+        } else {
+            shell_print(localization_select(
+                language,
+                "os prerequisitos de rede parecem saudaveis para tentar recovery-resume network/full.",
+                "network prerequisites look healthy enough to try recovery-resume network/full.",
+                "los prerequisitos de red parecen saludables para intentar recovery-resume network/full."));
+        }
+        shell_newline();
+    }
+    return 0;
+#endif
+}
+
+static struct shell_command g_system_info_commands[11];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -429,13 +649,17 @@ static void init_system_info_commands(void) {
     g_system_info_commands[7].handler = cmd_service_status;
     g_system_info_commands[8].name = "recovery-status";
     g_system_info_commands[8].handler = cmd_recovery_status;
+    g_system_info_commands[9].name = "recovery-storage";
+    g_system_info_commands[9].handler = cmd_recovery_storage;
+    g_system_info_commands[10].name = "recovery-network";
+    g_system_info_commands[10].handler = cmd_recovery_network;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 9;
+        *count = 11;
     }
     return g_system_info_commands;
 }

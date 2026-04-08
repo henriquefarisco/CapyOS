@@ -1242,6 +1242,8 @@ void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   out->degraded = g_boot_policy_decision.degraded;
   out->forced_maintenance = g_boot_policy_decision.forced_maintenance;
   out->forced_core = g_boot_policy_decision.forced_core;
+  out->shell_fs_ready = g_shell_fs_ready ? 1u : 0u;
+  out->persistent_storage = g_shell_persistent_storage ? 1u : 0u;
   out->reason = g_boot_policy_decision.reason;
   out->bootstrap_target = g_boot_policy_decision.bootstrap_target;
   out->requested_target = g_boot_policy_decision.requested_target;
