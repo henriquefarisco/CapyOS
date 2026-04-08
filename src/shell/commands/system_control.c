@@ -454,9 +454,9 @@ static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) 
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: service-target [show|list|apply <nome>]\nMostra ou aplica o alvo atual do supervisor de servicos.\n",
-        "Usage: service-target [show|list|apply <name>]\nShows or applies the current service supervisor target.\n",
-        "Uso: service-target [show|list|apply <nombre>]\nMuestra o aplica el objetivo actual del supervisor de servicios.\n"));
+        "Uso: service-target [show|list|apply <nome>]\nMostra ou aplica o alvo atual do supervisor de servicos.\nO modo show exibe o alvo ativo e o alvo salvo.\n",
+        "Usage: service-target [show|list|apply <name>]\nShows or applies the current service supervisor target.\nShow mode displays the active and saved targets.\n",
+        "Uso: service-target [show|list|apply <nombre>]\nMuestra o aplica el objetivo actual del supervisor de servicios.\nEl modo show muestra el objetivo activo y el guardado.\n"));
     return 0;
   }
 
@@ -468,8 +468,12 @@ static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) 
                                             "objetivo de servicio no disponible"));
       return -1;
     }
-    shell_print("target=");
+    shell_print("active=");
     shell_print(target.name);
+    if (ctx && ctx->settings && ctx->settings->service_target[0]) {
+      shell_print(" saved=");
+      shell_print(ctx->settings->service_target);
+    }
     shell_print(" mask=");
     shell_print_number(target.service_mask);
     shell_newline();

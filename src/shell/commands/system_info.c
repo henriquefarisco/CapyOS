@@ -263,6 +263,10 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         if (service_manager_target_current(&target) == 0) {
             shell_print("target=");
             shell_print(target.name);
+            if (ctx && ctx->settings && ctx->settings->service_target[0]) {
+                shell_print(" saved=");
+                shell_print(ctx->settings->service_target);
+            }
             shell_print(" mask=");
             shell_print_number(target.service_mask);
             shell_newline();

@@ -26,6 +26,7 @@
 #include "core/klog_persist.h"
 #include "core/login_runtime.h"
 #include "core/network_bootstrap.h"
+#include "core/service_boot_policy.h"
 #include "core/service_manager.h"
 #include "core/session.h"
 #include "core/system_init.h"
@@ -280,6 +281,8 @@ static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
                                uint32_t color);
 static uint32_t kernel_service_target_from_settings(
     const struct system_settings *settings);
+static void kernel_log_boot_policy_decision(
+    const struct system_service_boot_policy_decision *decision);
 
 void system_platform_apply_theme(const char *theme) {
   if (!theme || streq(theme, "capyos")) {
@@ -1196,6 +1199,20 @@ static uint32_t kernel_service_target_from_settings(
   return SYSTEM_SERVICE_TARGET_NETWORK;
 }
 
+static void kernel_log_boot_policy_decision(
+    const struct system_service_boot_policy_decision *decision) {
+  if (!decision || !decision->degraded) {
+    return;
+  }
+  if (decision->forced_maintenance) {
+    klog(KLOG_WARN,
+         "[services] Boot policy forced maintenance target for this boot.");
+  } else if (decision->forced_core) {
+    klog(KLOG_WARN, "[services] Boot policy downgraded target to core.");
+  }
+  klog(KLOG_WARN, service_boot_policy_reason_summary(decision->reason));
+}
+
 static void print_active_efi_runtime_trace(void) {
   struct x64_platform_diag_io io = kernel_platform_diag_io();
   x64_kernel_print_active_efi_runtime_trace(&io);
@@ -1855,7 +1872,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_begin();
 
   struct boot_warnings g_boot_warnings;
+  struct system_service_boot_policy_decision g_boot_policy_decision;
   boot_warnings_init(&g_boot_warnings);
+  service_boot_policy_evaluate(NULL, &g_boot_policy_decision);
 
   /* Stage 1/8: Platform tables */
   boot_ui_splash_set_status("Initializing platform...");
@@ -1868,6 +1887,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   kcon_init();
   kinit();
   service_manager_init();
+  (void)service_manager_target_apply(g_boot_policy_decision.bootstrap_target);
 
   /* Stage 3/8: Timers */
   boot_ui_splash_set_status("Calibrating timers...");
@@ -1954,6 +1974,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_advance(8, 8);
   {
     int shell_runtime_rc;
+    int validated_storage_ready = 0;
+    int network_status_available = 0;
+    int validated_network_supported = 0;
+    struct system_service_boot_policy_input boot_policy_input;
 
     /* First boot setup is interactive and uses vga_* wrappers, so the
      * framebuffer must be visible while the shell runtime prepares the
@@ -1985,6 +2009,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     } else if (!x64_storage_runtime_has_device()) {
       boot_warnings_add(&g_boot_warnings,
                         "No validated storage backend detected");
+    } else {
+      validated_storage_ready = 1;
     }
     struct network_bootstrap_io net_io;
     net_io.print = klog_print_adapter;
@@ -2010,10 +2036,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       if (net_stack_status(&net_status) != 0) {
         boot_warnings_add(&g_boot_warnings,
                           "Network status unavailable; continuing offline");
+        network_status_available = 0;
       } else if (!net_status.nic.found) {
+        network_status_available = 1;
         boot_warnings_add(&g_boot_warnings,
                           "No network adapter detected");
       } else if (!net_status.runtime_supported) {
+        network_status_available = 1;
         if (net_status.nic.kind == NET_NIC_KIND_VMXNET3) {
           boot_warnings_add(&g_boot_warnings,
                             "VMXNET3 detected; use VMware E1000 for now");
@@ -2022,8 +2051,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                             "Detected network adapter has no validated driver");
         }
       } else if (!net_status.ready) {
+        network_status_available = 1;
+        validated_network_supported = 1;
         boot_warnings_add(&g_boot_warnings,
                           "Validated network driver detected but not ready");
+      } else {
+        network_status_available = 1;
+        validated_network_supported = 1;
       }
     }
 
@@ -2034,8 +2068,23 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
         SYSTEM_SERVICE_UPDATE_AGENT,
         (1u << SYSTEM_SERVICE_LOGGER) | (1u << SYSTEM_SERVICE_NETWORKD));
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
-    (void)service_manager_target_apply(
-        kernel_service_target_from_settings(&g_shell_settings));
+    boot_policy_input.requested_target =
+        kernel_service_target_from_settings(&g_shell_settings);
+    boot_policy_input.shell_runtime_ready = shell_runtime_rc == 0 ? 1u : 0u;
+    boot_policy_input.validated_storage_ready =
+        validated_storage_ready ? 1u : 0u;
+    boot_policy_input.network_status_available =
+        network_status_available ? 1u : 0u;
+    boot_policy_input.validated_network_supported =
+        validated_network_supported ? 1u : 0u;
+    service_boot_policy_evaluate(&boot_policy_input, &g_boot_policy_decision);
+    kernel_log_boot_policy_decision(&g_boot_policy_decision);
+    if (g_boot_policy_decision.degraded) {
+      boot_warnings_add(&g_boot_warnings,
+                        service_boot_policy_reason_summary(
+                            g_boot_policy_decision.reason));
+    }
+    (void)service_manager_target_apply(g_boot_policy_decision.final_target);
   }
 
   /* --- End splash -------------------------------------------------------- */
