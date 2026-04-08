@@ -11,6 +11,7 @@
 #if defined(__x86_64__)
 #include "arch/x86_64/interrupts.h"
 #include "arch/x86_64/kernel_runtime_control.h"
+#include "arch/x86_64/kernel_volume_runtime.h"
 #include "arch/x86_64/storage_runtime.h"
 #include "net/stack.h"
 #include "drivers/hyperv/hyperv.h"
@@ -358,6 +359,55 @@ static void sync_and_flush(void) {
   }
   (void)klog_persist_flush_default();
 }
+
+#if defined(__x86_64__)
+static int recovery_storage_ensure_base_layout(void) {
+  static const char *dirs[] = {
+      "/docs", "/etc", "/home", "/home/admin", "/system", "/tmp", "/var",
+      "/var/log"};
+
+  for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+    if (x64_kernel_volume_runtime_ensure_dir_recursive(dirs[i]) != 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int recovery_storage_rewrite_config(const struct shell_context *ctx) {
+  struct system_settings settings;
+
+  if (ctx && ctx->settings) {
+    settings = *ctx->settings;
+  } else if (system_load_settings(&settings) != 0) {
+    /* system_load_settings() already populates defaults on failure. */
+  }
+
+  return system_save_settings(&settings);
+}
+
+static int recovery_storage_reset_admin(const char *password) {
+  struct user_record admin;
+  uint32_t uid = 1000u;
+  uint32_t gid = 1000u;
+
+  if (!password || !password[0]) {
+    return -1;
+  }
+  if (x64_kernel_volume_runtime_ensure_dir_recursive("/home/admin") != 0) {
+    return -1;
+  }
+  if (userdb_find("admin", &admin) == 0) {
+    return userdb_set_password("admin", password);
+  }
+  (void)userdb_next_ids(&uid, &gid);
+  if (user_record_init("admin", password, "admin", uid, gid, "/home/admin",
+                       &admin) != 0) {
+    return -1;
+  }
+  return userdb_add(&admin);
+}
+#endif
 
 static int find_service_id_by_name(const char *name, struct system_service_status *out) {
   size_t count = service_manager_count();
@@ -746,9 +796,9 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
   } else if (!storage_ok) {
     shell_print(localization_select(
         language,
-        "corrija storage com recovery-storage e valide o volume antes de sair do modo de recuperacao",
-        "fix storage with recovery-storage and validate the volume before leaving recovery mode",
-        "corrige el almacenamiento con recovery-storage y valida el volumen antes de salir del modo de recuperacion"));
+        "corrija storage com recovery-storage/recovery-storage-repair e valide o volume antes de sair do modo de recuperacao",
+        "fix storage with recovery-storage/recovery-storage-repair and validate the volume before leaving recovery mode",
+        "corrige el almacenamiento con recovery-storage/recovery-storage-repair y valida el volumen antes de salir del modo de recuperacion"));
   } else {
     shell_print(localization_select(
         language,
@@ -758,6 +808,128 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
   }
   shell_newline();
   return verify_ok ? 0 : -1;
+#endif
+}
+
+static int cmd_recovery_storage_repair(struct shell_context *ctx, int argc,
+                                       char **argv) {
+  const char *language = shell_current_language();
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: recovery-storage-repair [reset-admin <senha>]\nReconstrui a base persistente minima (/system, /etc, /var/log, config.ini e users.db) quando o volume ja esta montado. Use reset-admin <senha> para recriar ou redefinir a conta admin durante a recuperacao.\n",
+        "Usage: recovery-storage-repair [reset-admin <password>]\nRebuilds the minimum persistent base (/system, /etc, /var/log, config.ini and users.db) when the volume is already mounted. Use reset-admin <password> to recreate or reset the admin account during recovery.\n",
+        "Uso: recovery-storage-repair [reset-admin <clave>]\nReconstruye la base persistente minima (/system, /etc, /var/log, config.ini y users.db) cuando el volumen ya esta montado. Usa reset-admin <clave> para recrear o restablecer la cuenta admin durante la recuperacion.\n"));
+    return 0;
+  }
+
+#if !defined(__x86_64__)
+  (void)ctx;
+  shell_print_error(localization_select(language,
+                                        "recovery-storage-repair indisponivel",
+                                        "recovery-storage-repair unavailable",
+                                        "recovery-storage-repair no disponible"));
+  return -1;
+#else
+  {
+    struct x64_kernel_recovery_status status;
+    const char *admin_password = NULL;
+    int admin_exists = 0;
+
+    x64_kernel_recovery_status_get(&status);
+    if (!status.maintenance_session) {
+      shell_print_error(localization_select(
+          language,
+          "recovery-storage-repair so pode ser usado no modo de recuperacao",
+          "recovery-storage-repair can only be used in recovery mode",
+          "recovery-storage-repair solo puede usarse en modo de recuperacion"));
+      return -1;
+    }
+    if (!status.shell_fs_ready) {
+      shell_print_error(localization_select(
+          language,
+          "o VFS atual ainda nao esta pronto para reparo",
+          "the current VFS is not ready for repair yet",
+          "el VFS actual aun no esta listo para reparacion"));
+      return -1;
+    }
+    if (status.recovery_ram_fallback || !status.persistent_storage) {
+      shell_print_error(localization_select(
+          language,
+          "o shell de recuperacao esta em RAM temporaria; corrija o volume/chave pela ISO antes de tentar regravar a base persistente",
+          "the recovery shell is running on temporary RAM; fix the volume/key from the ISO before trying to rewrite the persistent base",
+          "la shell de recuperacion se esta ejecutando en RAM temporal; corrige el volumen/la clave desde la ISO antes de reescribir la base persistente"));
+      return -1;
+    }
+    if (argc >= 2) {
+      if (!shell_string_equal(argv[1], "reset-admin") || argc < 3) {
+        shell_print_error(localization_select(language,
+                                              "uso invalido",
+                                              "invalid usage",
+                                              "uso invalido"));
+        shell_suggest_help("recovery-storage-repair");
+        return -1;
+      }
+      admin_password = argv[2];
+    }
+
+    if (recovery_storage_ensure_base_layout() != 0) {
+      shell_print_error(localization_select(
+          language,
+          "falha ao reconstruir a arvore minima de diretorios",
+          "failed to rebuild the minimum directory tree",
+          "fallo al reconstruir el arbol minimo de directorios"));
+      return -1;
+    }
+    if (recovery_storage_rewrite_config(ctx) != 0) {
+      shell_print_error(localization_select(
+          language,
+          "falha ao regravar /system/config.ini",
+          "failed to rewrite /system/config.ini",
+          "fallo al reescribir /system/config.ini"));
+      return -1;
+    }
+    if (userdb_ensure() != 0) {
+      shell_print_error(localization_select(
+          language,
+          "falha ao preparar /etc/users.db",
+          "failed to prepare /etc/users.db",
+          "fallo al preparar /etc/users.db"));
+      return -1;
+    }
+    if (admin_password && recovery_storage_reset_admin(admin_password) != 0) {
+      shell_print_error(localization_select(
+          language,
+          "falha ao recriar/redefinir a conta admin",
+          "failed to recreate/reset the admin account",
+          "fallo al recrear/restablecer la cuenta admin"));
+      return -1;
+    }
+
+    admin_exists = userdb_find("admin", NULL) == 0;
+    sync_and_flush();
+
+    shell_print_ok(localization_select(
+        language,
+        "base persistente revalidada",
+        "persistent base revalidated",
+        "base persistente revalidada"));
+    shell_print("config=/system/config.ini users.db=");
+    shell_print(admin_exists ? "ready" : "present-without-admin");
+    if (admin_password) {
+      shell_print(" admin=reset");
+    }
+    shell_newline();
+    if (!admin_exists) {
+      shell_print(localization_select(
+          language,
+          "Obs: a conta admin ainda nao existe. Use recovery-storage-repair reset-admin <senha> antes de sair da recuperacao.\n",
+          "Note: the admin account still does not exist. Use recovery-storage-repair reset-admin <password> before leaving recovery.\n",
+          "Nota: la cuenta admin aun no existe. Usa recovery-storage-repair reset-admin <clave> antes de salir de recuperacion.\n"));
+    }
+    return 0;
+  }
 #endif
 }
 
@@ -1076,7 +1248,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[12];
+static struct shell_command g_system_control_commands[13];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -1107,13 +1279,15 @@ static void init_system_control_commands(void) {
   g_system_control_commands[10].handler = cmd_recovery_resume;
   g_system_control_commands[11].name = "recovery-verify";
   g_system_control_commands[11].handler = cmd_recovery_verify;
+  g_system_control_commands[12].name = "recovery-storage-repair";
+  g_system_control_commands[12].handler = cmd_recovery_storage_repair;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 12;
+    *count = 13;
   }
   return g_system_control_commands;
 }

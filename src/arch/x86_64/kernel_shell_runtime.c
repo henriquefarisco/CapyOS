@@ -48,7 +48,8 @@ static void local_copy(char *dst, size_t dst_size, const char *src) {
 static int state_ready(const struct x64_kernel_shell_runtime_state *state) {
   return state && state->shell_ctx && state->session_ctx && state->settings &&
          state->shell_initialized && state->shell_fs_ready &&
-         state->shell_persistent_storage && state->data_io_probe &&
+         state->shell_persistent_storage &&
+         state->shell_recovery_ram_fallback && state->data_io_probe &&
          state->data_io_probe_size > 0;
 }
 
@@ -131,6 +132,28 @@ static int bootstrap_ramdisk_runtime(
   return 0;
 }
 
+static int shell_enter_recovery_ram_runtime(
+    struct x64_kernel_shell_runtime_state *state,
+    const struct x64_kernel_shell_runtime_io *io,
+    const struct x64_kernel_shell_runtime_ops *ops, const char *reason) {
+  if (!state || !state->allow_recovery_ram_fallback ||
+      !state->shell_recovery_ram_fallback) {
+    return -1;
+  }
+
+  io_print(io,
+           "[recovery] Storage persistente indisponivel; iniciando runtime "
+           "temporario em RAM.\n");
+  if (reason && reason[0]) {
+    io_print(io, "[recovery] Motivo: ");
+    io_print(io, reason);
+    io_putc(io, '\n');
+  }
+  *state->shell_recovery_ram_fallback = 1;
+  *state->shell_persistent_storage = 0;
+  return bootstrap_ramdisk_runtime(state, io, ops);
+}
+
 static int shell_bootstrap_filesystem(
     struct x64_kernel_shell_runtime_state *state,
     const struct x64_kernel_shell_runtime_io *io,
@@ -141,6 +164,9 @@ static int shell_bootstrap_filesystem(
   if (*state->shell_fs_ready) {
     return 0;
   }
+
+  *state->shell_persistent_storage = 0;
+  *state->shell_recovery_ram_fallback = 0;
 
   buffer_cache_init();
   vfs_init();
@@ -167,24 +193,43 @@ static int shell_bootstrap_filesystem(
     if (system_detect_first_boot() != 0) {
       io_print(io, "[setup] Primeira inicializacao detectada.\n");
       if (system_run_first_boot_setup() != 0) {
-        io_print(io, "[setup] ERRO: assistente inicial falhou.\n");
-        return -1;
+        if (state->allow_recovery_ram_fallback) {
+          io_print(io,
+                   "[setup] Aviso: assistente inicial falhou; abrindo shell "
+                   "de recuperacao sobre o volume montado.\n");
+        } else {
+          io_print(io, "[setup] ERRO: assistente inicial falhou.\n");
+          return -1;
+        }
       }
     }
     if (userdb_ensure() != 0) {
-      io_print(io,
-               "[fs] ERRO: /etc/users.db indisponivel no volume persistente.\n");
-      return -1;
+      if (state->allow_recovery_ram_fallback) {
+        io_print(io,
+                 "[fs] Aviso: /etc/users.db indisponivel; recovery shell "
+                 "seguira no volume montado para reparo manual.\n");
+      } else {
+        io_print(
+            io,
+            "[fs] ERRO: /etc/users.db indisponivel no volume persistente.\n");
+        return -1;
+      }
     }
     struct vfs_stat userdb_stat;
     if (vfs_stat_path(USER_DB_PATH, &userdb_stat) == 0 &&
         userdb_stat.size == 0) {
       io_print(io, "[setup] users.db vazio detectado no volume persistente.\n");
       if (system_run_first_boot_setup() != 0) {
-        io_print(
-            io,
-            "[setup] ERRO: nao foi possivel reconstruir usuarios iniciais.\n");
-        return -1;
+        if (state->allow_recovery_ram_fallback) {
+          io_print(io,
+                   "[setup] Aviso: nao foi possivel reconstruir usuarios "
+                   "iniciais; recovery shell seguira para reparo manual.\n");
+        } else {
+          io_print(
+              io,
+              "[setup] ERRO: nao foi possivel reconstruir usuarios iniciais.\n");
+          return -1;
+        }
       }
     }
     if (ops->persist_active_volume_key_hash() != 0) {
@@ -194,6 +239,11 @@ static int shell_bootstrap_filesystem(
     }
   } else {
     if (data_dev) {
+      if (state->allow_recovery_ram_fallback) {
+        return shell_enter_recovery_ram_runtime(
+            state, io, ops,
+            "falha ao montar/desbloquear o volume persistente CAPYFS");
+      }
       io_print(io, "[fs] ERRO: falha no volume persistente CAPYFS.\n");
       io_print(
           io,
@@ -204,14 +254,26 @@ static int shell_bootstrap_filesystem(
     }
     if (state->handoff && state->handoff->version >= 2 &&
         ops->handoff_has_firmware_block_io()) {
+      if (state->allow_recovery_ram_fallback) {
+        return shell_enter_recovery_ram_runtime(
+            state, io, ops, "volume DATA nao encontrado no handoff UEFI");
+      }
       io_print(io, "[fs] ERRO: handoff sem volume DATA CAPYFS em boot UEFI.\n");
       io_print(io,
                "[fs] Bloqueando fallback em RAM para evitar perda de persistencia.\n");
       return -1;
     }
-    io_print(io, "[fs] Sem volume persistente no handoff; usando RAM.\n");
-    if (bootstrap_ramdisk_runtime(state, io, ops) != 0) {
-      return -1;
+    if (state->allow_recovery_ram_fallback) {
+      if (shell_enter_recovery_ram_runtime(
+              state, io, ops, "nenhum volume persistente foi fornecido ao boot") !=
+          0) {
+        return -1;
+      }
+    } else {
+      io_print(io, "[fs] Sem volume persistente no handoff; usando RAM.\n");
+      if (bootstrap_ramdisk_runtime(state, io, ops) != 0) {
+        return -1;
+      }
     }
   }
 

@@ -1002,6 +1002,7 @@ static struct system_service_boot_policy_decision g_boot_policy_decision;
 static int g_shell_initialized = 0;
 static int g_shell_fs_ready = 0;
 static int g_shell_persistent_storage = 0;
+static int g_shell_recovery_ram_fallback = 0;
 static size_t kernel_readline(char *buf, size_t maxlen, int mask);
 static char g_active_volume_key[X64_KERNEL_VOLUME_KEY_MAX];
 static int g_active_volume_key_ready = 0;
@@ -1244,6 +1245,7 @@ void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   out->forced_core = g_boot_policy_decision.forced_core;
   out->shell_fs_ready = g_shell_fs_ready ? 1u : 0u;
   out->persistent_storage = g_shell_persistent_storage ? 1u : 0u;
+  out->recovery_ram_fallback = g_shell_recovery_ram_fallback ? 1u : 0u;
   out->reason = g_boot_policy_decision.reason;
   out->bootstrap_target = g_boot_policy_decision.bootstrap_target;
   out->requested_target = g_boot_policy_decision.requested_target;
@@ -1271,7 +1273,8 @@ int x64_kernel_recovery_resume_target(uint32_t target_id) {
     return -1;
   }
   if (target_id != SYSTEM_SERVICE_TARGET_MAINTENANCE &&
-      (!g_shell_persistent_storage || !x64_storage_runtime_has_device())) {
+      (g_shell_recovery_ram_fallback || !g_shell_persistent_storage ||
+       !x64_storage_runtime_has_device())) {
     return -2;
   }
   if (target_id == SYSTEM_SERVICE_TARGET_NETWORK ||
@@ -1392,8 +1395,11 @@ static struct x64_kernel_shell_runtime_state kernel_shell_runtime_state(void) {
   state.shell_initialized = &g_shell_initialized;
   state.shell_fs_ready = &g_shell_fs_ready;
   state.shell_persistent_storage = &g_shell_persistent_storage;
+  state.shell_recovery_ram_fallback = &g_shell_recovery_ram_fallback;
   state.data_io_probe = g_data_io_probe;
   state.data_io_probe_size = sizeof(g_data_io_probe);
+  state.allow_recovery_ram_fallback =
+      kernel_boots_in_maintenance_mode() ? 1u : 0u;
   return state;
 }
 

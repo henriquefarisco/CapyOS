@@ -46,6 +46,7 @@ Contexto operacional atual:
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
 | `recovery-storage` | `recovery-storage` | Exibe o estado do runtime de storage, VFS raiz, volume persistente e caminhos criticos usados para recuperar o sistema. |
+| `recovery-storage-repair` | `recovery-storage-repair [reset-admin <senha>]` | Reconstroi a base persistente minima quando o volume ja esta montado e, opcionalmente, recria/redefine a conta `admin` durante a recuperacao. |
 | `recovery-network` | `recovery-network` | Exibe o estado detalhado da NIC/runtime de rede e a remediacao minima para promover targets com rede. |
 | `net-status` | `net-status` | Exibe estado da rede no runtime x64 (`driver`, `detected`, `runtime`, `ready`, IPv4, ARP, contadores). No `Hyper-V`, tambem imprime `build=... feature=... diag=...`, `vmbus=` e `stage=` para validar a imagem em campo. |
 | `net-refresh` | `net-refresh` | Atualiza o runtime de rede quando houver backend seguro para isso. No `Hyper-V`, avanca o controlador `NetVSC` em passos pequenos e controlados somente quando a offer sintetica ja estiver em cache. |
@@ -126,8 +127,17 @@ Contexto operacional atual:
   motivo da degradacao logo abaixo do banner.
 - Os comandos mais uteis nesse modo sao `service-status`,
   `service-target show`, `recovery-status`, `recovery-storage`,
+  `recovery-storage-repair`,
   `recovery-network`, `recovery-verify`, `recovery-resume`, `do-sync`,
   `shutdown-reboot` e `shutdown-off`.
+- Se `recovery-storage` indicar `ram-fallback=yes`, a shell de recuperacao
+  esta rodando sobre um runtime temporario em RAM. Nesse caso, os reparos nao
+  serao persistidos no volume principal; a correcao precisa ser feita via ISO,
+  chave correta do volume ou remediacao externa do disco.
+- Quando o volume persistente ja estiver montado, `recovery-storage-repair`
+  recompõe `/system`, `/etc`, `/var/log`, regrava `/system/config.ini`,
+  revalida `/etc/users.db` e pode recriar ou redefinir `admin` com
+  `recovery-storage-repair reset-admin <senha>`.
 - `recovery-resume saved` tenta voltar ao alvo persistido em
   `/system/config.ini`.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,

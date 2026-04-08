@@ -379,6 +379,8 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
         shell_print(status.maintenance_session ? "yes" : "no");
         shell_print(" degraded=");
         shell_print(status.degraded ? "yes" : "no");
+        shell_print(" ram-fallback=");
+        shell_print(status.recovery_ram_fallback ? "yes" : "no");
         shell_print(" reason=");
         shell_print(service_boot_policy_reason_label(status.reason));
         shell_newline();
@@ -447,11 +449,19 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
     {
         struct x64_kernel_recovery_status status;
         struct super_block *root = vfs_root();
+        struct vfs_stat config_stat;
+        struct vfs_stat userdb_stat;
+        int config_ok = 0;
+        int userdb_ok = 0;
         x64_kernel_recovery_status_get(&status);
+        config_ok = vfs_stat_path("/system/config.ini", &config_stat) == 0;
+        userdb_ok = vfs_stat_path(USER_DB_PATH, &userdb_stat) == 0;
 
         shell_print_bool_flag("fs.ready=", status.shell_fs_ready);
         shell_print(" ");
         shell_print_bool_flag("persistent=", status.persistent_storage);
+        shell_print(" ");
+        shell_print_bool_flag("ram-fallback=", status.recovery_ram_fallback);
         shell_print(" ");
         shell_print_bool_flag("validated-storage=", x64_storage_runtime_has_device());
         shell_newline();
@@ -488,18 +498,30 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
                 "o runtime do shell ainda nao montou um VFS confiavel; reinicie pela ISO e valide a chave do volume.",
                 "the shell runtime has not mounted a trustworthy VFS yet; boot from the ISO and validate the volume key.",
                 "el runtime del shell aun no monto un VFS confiable; arranca desde la ISO y valida la clave del volumen."));
+        } else if (status.recovery_ram_fallback) {
+            shell_print(localization_select(
+                language,
+                "a recuperacao esta em RAM temporaria; o volume persistente nao abriu. Corrija a chave/volume pela ISO antes de promover targets permanentes.",
+                "recovery is running on temporary RAM storage; the persistent volume did not open. Fix the key/volume from the ISO before promoting permanent targets.",
+                "la recuperacion se esta ejecutando sobre RAM temporal; el volumen persistente no se abrio. Corrige la clave/el volumen desde la ISO antes de promover objetivos permanentes."));
         } else if (!status.persistent_storage || !x64_storage_runtime_has_device()) {
             shell_print(localization_select(
                 language,
                 "o volume persistente ainda nao esta validado; prefira VMware com storage AHCI/NVMe e confirme a presenca do volume DATA.",
                 "persistent storage is not validated yet; prefer VMware with AHCI/NVMe storage and confirm the DATA volume is present.",
                 "el almacenamiento persistente aun no esta validado; prefiere VMware con almacenamiento AHCI/NVMe y confirma la presencia del volumen DATA."));
+        } else if (!config_ok || !userdb_ok || userdb_stat.size == 0) {
+            shell_print(localization_select(
+                language,
+                "o volume persistente abriu, mas a base estrutural ainda esta incompleta; use recovery-storage-repair para reconstruir config.ini, diretórios criticos e, se preciso, resetar o admin.",
+                "the persistent volume mounted, but the structural base is still incomplete; use recovery-storage-repair to rebuild config.ini, critical directories and, if needed, reset admin.",
+                "el volumen persistente se monto, pero la base estructural aun esta incompleta; usa recovery-storage-repair para reconstruir config.ini, directorios criticos y, si hace falta, restablecer admin."));
         } else {
             shell_print(localization_select(
                 language,
-                "os prerequisitos de storage parecem saudaveis para tentar recovery-resume.",
-                "storage prerequisites look healthy enough to try recovery-resume.",
-                "los prerequisitos de almacenamiento parecen saludables para intentar recovery-resume."));
+                "os prerequisitos de storage parecem saudaveis para tentar recovery-resume; se quiser regravar a base persistente, use recovery-storage-repair.",
+                "storage prerequisites look healthy enough to try recovery-resume; if you want to rewrite the persistent base, use recovery-storage-repair.",
+                "los prerequisitos de almacenamiento parecen saludables para intentar recovery-resume; si quieres regrabar la base persistente, usa recovery-storage-repair."));
         }
         shell_newline();
     }

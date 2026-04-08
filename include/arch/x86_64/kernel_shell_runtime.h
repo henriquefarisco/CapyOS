@@ -19,8 +19,10 @@ struct x64_kernel_shell_runtime_state {
   int *shell_initialized;
   int *shell_fs_ready;
   int *shell_persistent_storage;
+  int *shell_recovery_ram_fallback;
   uint8_t *data_io_probe;
   size_t data_io_probe_size;
+  uint8_t allow_recovery_ram_fallback;
 };
 
 struct x64_kernel_shell_runtime_io {
