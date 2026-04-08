@@ -112,6 +112,16 @@ Contexto operacional atual:
 - A configuracao e gravada em `/system/config.ini` como `splash=enabled` ou
   `splash=disabled`.
 
+### Modo de manutencao
+
+- Quando a politica de boot degradar o alvo para `maintenance`, o sistema
+  entra diretamente em uma sessao de recuperacao em vez de passar pelo login
+  normal.
+- Nessa sessao, o prompt usa o usuario sintetico `maintenance` e informa o
+  motivo da degradacao logo abaixo do banner.
+- Os comandos mais uteis nesse modo sao `service-status`,
+  `service-target show`, `do-sync`, `shutdown-reboot` e `shutdown-off`.
+
 ### Idioma por usuario
 
 - `config-language list` mostra os idiomas suportados: `pt-BR`, `en`, `es`.

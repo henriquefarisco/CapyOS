@@ -3,7 +3,9 @@
 
 static int ops_ready(const struct login_runtime_ops *ops) {
   return ops && ops->shell_ctx && ops->session_ctx && ops->settings &&
-         ops->prepare_shell_runtime && ops->init_shell_context_user &&
+         ops->prepare_shell_runtime &&
+         (!ops->maintenance_mode || ops->maintenance_session_start) &&
+         ops->init_shell_context_user &&
          ops->dispatch_shell_command && ops->run_shell_alias && ops->is_equal &&
          ops->readline && ops->session_reset && ops->session_set_active &&
          ops->shell_context_init && ops->system_login && ops->session_user &&
@@ -15,6 +17,46 @@ static int ops_ready(const struct login_runtime_ops *ops) {
 static void login_service_poll(struct login_runtime_ops *ops) {
   if (ops && ops->service_poll) {
     ops->service_poll();
+  }
+}
+
+static void login_show_maintenance_notice(struct login_runtime_ops *ops,
+                                          const char *language) {
+  if (!ops || !ops->maintenance_mode) {
+    return;
+  }
+
+  ops->print(localization_select(
+      language,
+      "[maintenance] Sistema iniciado em modo de recuperacao.\n",
+      "[maintenance] System booted in recovery mode.\n",
+      "[maintenance] Sistema iniciado en modo de recuperacion.\n"));
+  if (ops->maintenance_reason && ops->maintenance_reason[0]) {
+    ops->print(localization_select(language, "Motivo: ", "Reason: ",
+                                   "Motivo: "));
+    ops->print(ops->maintenance_reason);
+    ops->putc('\n');
+  }
+  ops->print(localization_select(
+      language,
+      "Use service-status, service-target show, do-sync e shutdown-reboot para diagnostico e recuperacao.\n",
+      "Use service-status, service-target show, do-sync and shutdown-reboot for diagnosis and recovery.\n",
+      "Usa service-status, service-target show, do-sync y shutdown-reboot para diagnostico y recuperacion.\n"));
+}
+
+static void login_render_screen(struct login_runtime_ops *ops,
+                                const char *language, int first_screen) {
+  if (!ops) {
+    return;
+  }
+  if (first_screen) {
+    ops->show_splash(ops->settings);
+  }
+  ops->clear_view();
+  ops->ui_banner();
+  if (ops->maintenance_mode) {
+    ops->print("\n");
+    login_show_maintenance_notice(ops, language);
   }
 }
 
@@ -42,9 +84,7 @@ int login_runtime_run(struct login_runtime_ops *ops) {
 
   for (;;) {
     if (first_login_screen) {
-      ops->show_splash(ops->settings);
-      ops->clear_view();
-      ops->ui_banner();
+      login_render_screen(ops, system_language, 1);
       first_login_screen = 0;
     }
     ops->print("\n");
@@ -58,9 +98,21 @@ int login_runtime_run(struct login_runtime_ops *ops) {
     ops->shell_context_init(ops->shell_ctx, ops->session_ctx, ops->settings);
     login_service_poll(ops);
 
-    if (ops->system_login(ops->session_ctx, ops->settings) != 0) {
-      ops->print(localization_text_for(system_language, LOC_TEXT_AUTH_FLOW_FAILED));
-      return -1;
+    if (ops->maintenance_mode) {
+      if (ops->maintenance_session_start(ops->session_ctx, ops->settings) != 0) {
+        ops->print(localization_select(
+            system_language,
+            "[erro] Falha ao iniciar a sessao de recuperacao.\n",
+            "[error] Failed to start the recovery session.\n",
+            "[error] No fue posible iniciar la sesion de recuperacion.\n"));
+        return -1;
+      }
+    } else {
+      if (ops->system_login(ops->session_ctx, ops->settings) != 0) {
+        ops->print(
+            localization_text_for(system_language, LOC_TEXT_AUTH_FLOW_FAILED));
+        return -1;
+      }
     }
     login_service_poll(ops);
 
@@ -97,8 +149,7 @@ int login_runtime_run(struct login_runtime_ops *ops) {
         if (ops->shell_context_should_logout(ops->shell_ctx)) {
           ops->session_reset(ops->session_ctx);
           ops->session_set_active(NULL);
-          ops->clear_view();
-          ops->ui_banner();
+          login_render_screen(ops, system_language, 0);
           break;
         }
         continue;

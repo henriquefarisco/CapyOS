@@ -10,11 +10,15 @@
 
 struct login_runtime_ops {
   int has_any_input;
+  int maintenance_mode;
   struct shell_context *shell_ctx;
   struct session_context *session_ctx;
   struct system_settings *settings;
+  const char *maintenance_reason;
 
   int (*prepare_shell_runtime)(void);
+  int (*maintenance_session_start)(struct session_context *session,
+                                   const struct system_settings *settings);
   int (*init_shell_context_user)(const struct user_record *user);
   int (*dispatch_shell_command)(char *line);
   int (*run_shell_alias)(const char *alias_line);

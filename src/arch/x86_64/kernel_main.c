@@ -24,6 +24,7 @@
 #include "core/kcon.h"
 #include "core/klog.h"
 #include "core/klog_persist.h"
+#include "core/localization.h"
 #include "core/login_runtime.h"
 #include "core/network_bootstrap.h"
 #include "core/service_boot_policy.h"
@@ -279,6 +280,7 @@ static void klog_print_adapter(const char *s);
 static void klog_print_adapter_flush(void);
 static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
                                uint32_t color);
+static void local_copy(char *dst, size_t dst_size, const char *src);
 static uint32_t kernel_service_target_from_settings(
     const struct system_settings *settings);
 static void kernel_log_boot_policy_decision(
@@ -995,6 +997,7 @@ static struct shell_context g_shell_ctx;
 static struct session_context g_session_ctx;
 static struct super_block g_shell_root_sb;
 static struct system_settings g_shell_settings;
+static struct system_service_boot_policy_decision g_boot_policy_decision;
 static int g_shell_initialized = 0;
 static int g_shell_fs_ready = 0;
 static int g_shell_persistent_storage = 0;
@@ -1211,6 +1214,47 @@ static void kernel_log_boot_policy_decision(
     klog(KLOG_WARN, "[services] Boot policy downgraded target to core.");
   }
   klog(KLOG_WARN, service_boot_policy_reason_summary(decision->reason));
+}
+
+static int kernel_boots_in_maintenance_mode(void) {
+  return g_boot_policy_decision.final_target ==
+         SYSTEM_SERVICE_TARGET_MAINTENANCE;
+}
+
+static const char *kernel_boot_maintenance_reason(void) {
+  if (!kernel_boots_in_maintenance_mode()) {
+    return NULL;
+  }
+  if (!g_boot_policy_decision.degraded) {
+    return "Maintenance target requested for this boot";
+  }
+  return service_boot_policy_reason_summary(g_boot_policy_decision.reason);
+}
+
+static int
+kernel_start_maintenance_session(struct session_context *session,
+                                 const struct system_settings *settings) {
+  struct user_record recovery_user;
+  const char *default_language = "en";
+
+  if (!session) {
+    return -1;
+  }
+  if (settings && settings->language[0]) {
+    const char *normalized = localization_normalize_language(settings->language);
+    if (normalized) {
+      default_language = normalized;
+    }
+  }
+
+  user_record_clear(&recovery_user);
+  local_copy(recovery_user.username, sizeof(recovery_user.username),
+             "maintenance");
+  local_copy(recovery_user.role, sizeof(recovery_user.role), "recovery");
+  local_copy(recovery_user.home, sizeof(recovery_user.home), "/system");
+  recovery_user.uid = 0u;
+  recovery_user.gid = 0u;
+  return session_begin(session, &recovery_user, default_language);
 }
 
 static void print_active_efi_runtime_trace(void) {
@@ -1872,7 +1916,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_begin();
 
   struct boot_warnings g_boot_warnings;
-  struct system_service_boot_policy_decision g_boot_policy_decision;
   boot_warnings_init(&g_boot_warnings);
   service_boot_policy_evaluate(NULL, &g_boot_policy_decision);
 
@@ -2114,10 +2157,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   {
     struct login_runtime_ops login_ops;
     login_ops.has_any_input = x64_input_has_any(&g_input_runtime);
+    login_ops.maintenance_mode = kernel_boots_in_maintenance_mode();
     login_ops.shell_ctx = &g_shell_ctx;
     login_ops.session_ctx = &g_session_ctx;
     login_ops.settings = &g_shell_settings;
+    login_ops.maintenance_reason = kernel_boot_maintenance_reason();
     login_ops.prepare_shell_runtime = prepare_shell_runtime;
+    login_ops.maintenance_session_start = kernel_start_maintenance_session;
     login_ops.init_shell_context_user = init_shell_context;
     login_ops.dispatch_shell_command = try_shell_command;
     login_ops.run_shell_alias = run_shell_alias;

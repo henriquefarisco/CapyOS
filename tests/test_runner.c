@@ -10,6 +10,7 @@ int run_csprng_tests(void);
 int run_crypt_vector_tests(void);
 int run_efi_block_tests(void);
 int run_klog_tests(void);
+int run_login_runtime_tests(void);
 int run_localization_tests(void);
 int run_service_manager_tests(void);
 int run_service_boot_policy_tests(void);
@@ -44,6 +45,7 @@ int main(void) {
     failures += run_crypt_vector_tests();
     failures += run_efi_block_tests();
     failures += run_klog_tests();
+    failures += run_login_runtime_tests();
     failures += run_localization_tests();
     failures += run_service_manager_tests();
     failures += run_service_boot_policy_tests();
