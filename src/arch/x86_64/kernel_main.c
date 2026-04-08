@@ -1150,6 +1150,18 @@ static int kernel_service_poll_networkd(void *ctx) {
   return 0;
 }
 
+static int kernel_service_start_networkd(void *ctx) {
+  (void)ctx;
+  g_network_runtime_refresh_enabled = 1;
+  return kernel_service_poll_networkd(NULL);
+}
+
+static int kernel_service_stop_networkd(void *ctx) {
+  (void)ctx;
+  g_network_runtime_refresh_enabled = 0;
+  return 0;
+}
+
 static int kernel_service_poll_logger(void *ctx) {
   int rc = 0;
 
@@ -1157,6 +1169,15 @@ static int kernel_service_poll_logger(void *ctx) {
   rc = klog_persist_flush_default();
   kernel_update_logger_service_status(rc);
   return rc;
+}
+
+static int kernel_service_start_logger(void *ctx) {
+  return kernel_service_poll_logger(ctx);
+}
+
+static int kernel_service_stop_logger(void *ctx) {
+  (void)ctx;
+  return klog_persist_flush_default();
 }
 
 static void kernel_service_poll(void) {
@@ -1933,6 +1954,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       kernel_update_logger_service_status(log_flush_rc);
       (void)service_manager_set_poll(SYSTEM_SERVICE_LOGGER,
                                      kernel_service_poll_logger, NULL);
+      (void)service_manager_set_control(SYSTEM_SERVICE_LOGGER,
+                                        kernel_service_start_logger,
+                                        kernel_service_stop_logger, NULL);
       (void)service_manager_set_poll_interval(SYSTEM_SERVICE_LOGGER, 300u);
     } else {
       (void)service_manager_set_state(
@@ -1960,6 +1984,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     g_network_runtime_refresh_enabled = 1;
     (void)service_manager_set_poll(SYSTEM_SERVICE_NETWORKD,
                                    kernel_service_poll_networkd, NULL);
+    (void)service_manager_set_control(SYSTEM_SERVICE_NETWORKD,
+                                      kernel_service_start_networkd,
+                                      kernel_service_stop_networkd, NULL);
     (void)service_manager_set_poll_interval(SYSTEM_SERVICE_NETWORKD, 10u);
     kernel_maybe_refresh_network_runtime();
 

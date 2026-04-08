@@ -3,6 +3,7 @@
 
 #include "core/localization.h"
 #include "core/klog_persist.h"
+#include "core/service_manager.h"
 #include "core/system_init.h"
 #include "core/user_prefs.h"
 #include "core/version.h"
@@ -356,6 +357,87 @@ static void sync_and_flush(void) {
   (void)klog_persist_flush_default();
 }
 
+static int find_service_id_by_name(const char *name, struct system_service_status *out) {
+  size_t count = service_manager_count();
+  for (size_t i = 0; i < count; ++i) {
+    struct system_service_status svc;
+    if (service_manager_get_at(i, &svc) != 0) {
+      continue;
+    }
+    if (shell_string_equal(name, svc.name)) {
+      if (out) {
+        *out = svc;
+      }
+      return (int)svc.id;
+    }
+  }
+  return -1;
+}
+
+static int cmd_service_control(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_service_status svc;
+  int service_id = -1;
+  int rc = 0;
+
+  (void)ctx;
+  if (shell_help_requested(argc, argv) || argc < 3) {
+    shell_print(localization_select(
+        language,
+        "Uso: service-control <start|stop|restart> <nome>\nControla o ciclo de vida basico dos servicos internos.\n",
+        "Usage: service-control <start|stop|restart> <name>\nControls the basic lifecycle of internal services.\n",
+        "Uso: service-control <start|stop|restart> <nombre>\nControla el ciclo de vida basico de los servicios internos.\n"));
+    return argc < 3 ? -1 : 0;
+  }
+
+  service_id = find_service_id_by_name(argv[2], &svc);
+  if (service_id < 0) {
+    shell_print_error(localization_select(language,
+                                          "servico desconhecido",
+                                          "unknown service",
+                                          "servicio desconocido"));
+    return -1;
+  }
+
+  if (shell_string_equal(argv[1], "start")) {
+    rc = service_manager_start((uint32_t)service_id);
+  } else if (shell_string_equal(argv[1], "stop")) {
+    rc = service_manager_stop((uint32_t)service_id);
+  } else if (shell_string_equal(argv[1], "restart")) {
+    rc = service_manager_restart((uint32_t)service_id);
+  } else {
+    shell_print_error(localization_select(language,
+                                          "acao invalida",
+                                          "invalid action",
+                                          "accion invalida"));
+    shell_suggest_help("service-control");
+    return -1;
+  }
+
+  if (rc == -2) {
+    shell_print_error(localization_select(language,
+                                          "servico bloqueado por politica atual",
+                                          "service blocked by current policy",
+                                          "servicio bloqueado por la politica actual"));
+    return -1;
+  }
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "operacao do servico falhou",
+                                          "service operation failed",
+                                          "la operacion del servicio fallo"));
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "servico atualizado",
+                                     "service updated",
+                                     "servicio actualizado"));
+  shell_print(argv[2]);
+  shell_newline();
+  return 0;
+}
+
 static void do_hard_reboot(void) {
   const char *language = shell_current_language();
   sync_and_flush();
@@ -671,7 +753,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[8];
+static struct shell_command g_system_control_commands[9];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -694,13 +776,15 @@ static void init_system_control_commands(void) {
   g_system_control_commands[6].handler = cmd_do_sync;
   g_system_control_commands[7].name = "runtime-native";
   g_system_control_commands[7].handler = cmd_runtime_native;
+  g_system_control_commands[8].name = "service-control";
+  g_system_control_commands[8].handler = cmd_service_control;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 8;
+    *count = 9;
   }
   return g_system_control_commands;
 }

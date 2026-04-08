@@ -30,6 +30,7 @@ enum system_service_state {
 };
 
 typedef int (*system_service_poll_fn)(void *ctx);
+typedef int (*system_service_action_fn)(void *ctx);
 
 struct system_service_status {
   uint32_t id;
@@ -42,6 +43,9 @@ struct system_service_status {
   uint32_t transitions;
   uint32_t polls;
   uint32_t poll_interval_ticks;
+  uint32_t failures;
+  uint32_t restarts;
+  uint32_t backoff_ticks;
 };
 
 void service_manager_init(void);
@@ -54,9 +58,14 @@ int service_manager_get_at(size_t index, struct system_service_status *out);
 size_t service_manager_count(void);
 int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
                              void *ctx);
+int service_manager_set_control(uint32_t id, system_service_action_fn start,
+                                system_service_action_fn stop, void *ctx);
 int service_manager_set_poll_interval(uint32_t id, uint32_t interval_ticks);
 int service_manager_poll_once(void);
 int service_manager_poll_due(uint64_t now_ticks);
+int service_manager_start(uint32_t id);
+int service_manager_stop(uint32_t id);
+int service_manager_restart(uint32_t id);
 const char *service_manager_state_label(uint8_t state);
 const char *service_manager_startup_label(uint8_t startup);
 

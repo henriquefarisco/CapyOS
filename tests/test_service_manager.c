@@ -4,12 +4,42 @@
 #include "core/service_manager.h"
 
 static int g_poll_hits = 0;
+static int g_start_hits = 0;
+static int g_stop_hits = 0;
+static int g_fail_poll_hits = 0;
 
 static int test_poll_cb(void *ctx) {
     int *value = (int *)ctx;
     g_poll_hits++;
     if (value) {
         (*value)++;
+    }
+    return 0;
+}
+
+static int test_failing_poll_cb(void *ctx) {
+    int *value = (int *)ctx;
+    g_fail_poll_hits++;
+    if (value) {
+        (*value)++;
+    }
+    return -7;
+}
+
+static int test_start_cb(void *ctx) {
+    int *value = (int *)ctx;
+    g_start_hits++;
+    if (value) {
+        (*value) += 10;
+    }
+    return 0;
+}
+
+static int test_stop_cb(void *ctx) {
+    int *value = (int *)ctx;
+    g_stop_hits++;
+    if (value) {
+        (*value) += 100;
     }
     return 0;
 }
@@ -26,9 +56,14 @@ int run_service_manager_tests(void) {
     int fails = 0;
     int poll_ctx = 0;
     int blocked_ctx = 0;
+    int control_ctx = 0;
+    int fail_ctx = 0;
     struct system_service_status svc;
 
     g_poll_hits = 0;
+    g_start_hits = 0;
+    g_stop_hits = 0;
+    g_fail_poll_hits = 0;
     service_manager_reset();
     service_manager_bootstrap_defaults();
 
@@ -77,6 +112,10 @@ int run_service_manager_tests(void) {
                              SYSTEM_SERVICE_UPDATE_AGENT,
                              test_poll_cb, &blocked_ctx) == 0,
                          "blocked service poll callback registration failed");
+    fails += expect_true(service_manager_set_control(
+                             SYSTEM_SERVICE_NETWORKD,
+                             test_start_cb, test_stop_cb, &control_ctx) == 0,
+                         "networkd control registration failed");
     fails += expect_true(service_manager_poll_due(0u) == 1,
                          "service manager should poll one due service");
     fails += expect_true(g_poll_hits == 1 && poll_ctx == 1 && blocked_ctx == 0,
@@ -97,6 +136,50 @@ int run_service_manager_tests(void) {
                          "networkd poll counter should increase");
     fails += expect_true(svc.poll_interval_ticks == 5u,
                          "networkd poll interval should be reported");
+    fails += expect_true(service_manager_stop(SYSTEM_SERVICE_NETWORKD) == 0,
+                         "networkd should stop cleanly");
+    fails += expect_true(g_stop_hits == 1 && control_ctx == 100,
+                         "stop callback should execute");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_NETWORKD, &svc) == 0,
+                         "networkd should be readable after stop");
+    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_STOPPED,
+                         "networkd should transition to stopped");
+    fails += expect_true(service_manager_start(SYSTEM_SERVICE_NETWORKD) == 0,
+                         "networkd should start cleanly");
+    fails += expect_true(g_start_hits == 1 && control_ctx == 110,
+                         "start callback should execute");
+    fails += expect_true(service_manager_restart(SYSTEM_SERVICE_NETWORKD) == 0,
+                         "networkd should restart cleanly");
+    fails += expect_true(g_start_hits == 2 && g_stop_hits == 2,
+                         "restart should call stop and start");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_NETWORKD, &svc) == 0,
+                         "networkd should be readable after restart");
+    fails += expect_true(svc.restarts == 1,
+                         "restart counter should increase");
+    fails += expect_true(service_manager_start(SYSTEM_SERVICE_UPDATE_AGENT) == -2,
+                         "blocked update agent should refuse manual start");
+
+    fails += expect_true(service_manager_set_poll(
+                             SYSTEM_SERVICE_LOGGER,
+                             test_failing_poll_cb, &fail_ctx) == 0,
+                         "logger failing poll registration failed");
+    fails += expect_true(service_manager_set_poll_interval(
+                             SYSTEM_SERVICE_LOGGER, 4u) == 0,
+                         "logger failing poll interval should be configurable");
+    fails += expect_true(service_manager_poll_due(6u) == 2,
+                         "both logger and networkd should be due");
+    fails += expect_true(g_fail_poll_hits == 1 && fail_ctx == 1,
+                         "failing poll should execute once");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_LOGGER, &svc) == 0,
+                         "logger should be readable after failing poll");
+    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_DEGRADED,
+                         "logger should degrade after failed poll");
+    fails += expect_true(svc.failures == 1,
+                         "logger failure counter should increase");
+    fails += expect_true(svc.backoff_ticks == 4u,
+                         "logger backoff should use base interval on first failure");
+    fails += expect_true(service_manager_poll_due(7u) == 0,
+                         "services should stay idle while due windows are closed");
 
     if (fails == 0) {
         printf("[tests] service_manager OK\n");

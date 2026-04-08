@@ -5,8 +5,12 @@
 static struct system_service_status g_services[SYSTEM_SERVICE_COUNT];
 struct service_poll_binding {
   system_service_poll_fn poll;
-  void *ctx;
+  system_service_action_fn start;
+  system_service_action_fn stop;
+  void *poll_ctx;
+  void *control_ctx;
   uint32_t interval_ticks;
+  uint32_t consecutive_failures;
   uint64_t next_due_tick;
 };
 
@@ -125,7 +129,7 @@ int service_manager_set_poll(uint32_t id, system_service_poll_fn poll,
     return -1;
   }
   g_service_polls[id].poll = poll;
-  g_service_polls[id].ctx = ctx;
+  g_service_polls[id].poll_ctx = ctx;
   g_service_polls[id].next_due_tick = 0u;
   g_services[id].poll_interval_ticks = g_service_polls[id].interval_ticks;
   return 0;
@@ -149,20 +153,71 @@ static int service_pollable(const struct system_service_status *svc,
          svc->state != SYSTEM_SERVICE_STATE_STOPPED;
 }
 
+int service_manager_set_control(uint32_t id, system_service_action_fn start,
+                                system_service_action_fn stop, void *ctx) {
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  g_service_polls[id].start = start;
+  g_service_polls[id].stop = stop;
+  g_service_polls[id].control_ctx = ctx;
+  return 0;
+}
+
+static uint32_t service_backoff_ticks(uint32_t interval,
+                                      uint32_t consecutive_failures) {
+  uint32_t base = interval ? interval : 1u;
+  uint32_t shift = consecutive_failures > 5u ? 5u : consecutive_failures;
+  return base << shift;
+}
+
+static int service_execute_poll(uint32_t id, uint64_t now_ticks,
+                                int update_due_tick) {
+  struct service_poll_binding *binding = &g_service_polls[id];
+  struct system_service_status *svc = &g_services[id];
+  int rc = 0;
+  uint32_t interval = 0u;
+
+  if (!service_pollable(svc, binding)) {
+    return 0;
+  }
+
+  rc = binding->poll(binding->poll_ctx);
+  svc->polls++;
+  interval = binding->interval_ticks ? binding->interval_ticks : 1u;
+  if (rc < 0) {
+    binding->consecutive_failures++;
+    svc->failures++;
+    if (svc->state != SYSTEM_SERVICE_STATE_BLOCKED &&
+        svc->state != SYSTEM_SERVICE_STATE_STOPPED) {
+      (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                      NULL);
+    } else {
+      svc->last_result = rc;
+    }
+    svc->backoff_ticks =
+        service_backoff_ticks(interval, binding->consecutive_failures - 1u);
+    if (update_due_tick) {
+      binding->next_due_tick = now_ticks + (uint64_t)svc->backoff_ticks;
+    }
+    return 1;
+  }
+
+  binding->consecutive_failures = 0u;
+  svc->backoff_ticks = 0u;
+  if (update_due_tick) {
+    binding->next_due_tick = now_ticks + (uint64_t)interval;
+  }
+  return 1;
+}
+
 int service_manager_poll_once(void) {
   int polled = 0;
 
   service_manager_init();
   for (uint32_t id = 0; id < SYSTEM_SERVICE_COUNT; ++id) {
-    struct service_poll_binding *binding = &g_service_polls[id];
-    struct system_service_status *svc = &g_services[id];
-
-    if (!service_pollable(svc, binding)) {
-      continue;
-    }
-    (void)binding->poll(binding->ctx);
-    svc->polls++;
-    polled++;
+    polled += service_execute_poll(id, 0u, 0);
   }
 
   return polled;
@@ -183,18 +238,99 @@ int service_manager_poll_due(uint64_t now_ticks) {
     if (now_ticks < binding->next_due_tick) {
       continue;
     }
-    (void)binding->poll(binding->ctx);
-    svc->polls++;
-    polled++;
-
-    interval = binding->interval_ticks;
-    if (interval == 0u) {
-      interval = 1u;
-    }
-    binding->next_due_tick = now_ticks + (uint64_t)interval;
+    polled += service_execute_poll(id, now_ticks, 1);
+    interval = binding->interval_ticks ? binding->interval_ticks : 1u;
+    svc->poll_interval_ticks = interval;
   }
 
   return polled;
+}
+
+int service_manager_start(uint32_t id) {
+  struct service_poll_binding *binding = NULL;
+  struct system_service_status *svc = NULL;
+  int rc = 0;
+
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  svc = &g_services[id];
+  binding = &g_service_polls[id];
+  if (svc->startup == SYSTEM_SERVICE_STARTUP_BLOCKED &&
+      svc->state == SYSTEM_SERVICE_STATE_BLOCKED) {
+    return -2;
+  }
+
+  svc->backoff_ticks = 0u;
+  binding->consecutive_failures = 0u;
+  binding->next_due_tick = 0u;
+  if (binding->start) {
+    rc = binding->start(binding->control_ctx);
+    if (rc < 0) {
+      (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                      "service start failed");
+      return rc;
+    }
+  }
+  if (svc->state == SYSTEM_SERVICE_STATE_STOPPED ||
+      svc->state == SYSTEM_SERVICE_STATE_UNKNOWN) {
+    (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STARTING, 0,
+                                    "service start requested");
+  }
+  return 0;
+}
+
+int service_manager_stop(uint32_t id) {
+  struct service_poll_binding *binding = NULL;
+  struct system_service_status *svc = NULL;
+  int rc = 0;
+
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  svc = &g_services[id];
+  binding = &g_service_polls[id];
+  if (svc->state == SYSTEM_SERVICE_STATE_BLOCKED) {
+    return -2;
+  }
+  if (binding->stop) {
+    rc = binding->stop(binding->control_ctx);
+    if (rc < 0) {
+      (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                      "service stop failed");
+      return rc;
+    }
+  }
+  binding->consecutive_failures = 0u;
+  binding->next_due_tick = 0u;
+  svc->backoff_ticks = 0u;
+  (void)service_manager_set_state(id, SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                  "service stopped");
+  return 0;
+}
+
+int service_manager_restart(uint32_t id) {
+  struct system_service_status *svc = NULL;
+  int rc = 0;
+
+  service_manager_init();
+  if (id >= SYSTEM_SERVICE_COUNT) {
+    return -1;
+  }
+  svc = &g_services[id];
+  if (svc->state != SYSTEM_SERVICE_STATE_STOPPED) {
+    rc = service_manager_stop(id);
+    if (rc < 0) {
+      return rc;
+    }
+  }
+  rc = service_manager_start(id);
+  if (rc == 0) {
+    svc->restarts++;
+  }
+  return rc;
 }
 
 const char *service_manager_state_label(uint8_t state) {

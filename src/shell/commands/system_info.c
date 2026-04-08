@@ -267,6 +267,12 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         } else {
             shell_print_number(svc.poll_interval_ticks);
         }
+        shell_print(" failures=");
+        shell_print_number(svc.failures);
+        shell_print(" restarts=");
+        shell_print_number(svc.restarts);
+        shell_print(" backoff=");
+        shell_print_number(svc.backoff_ticks);
         shell_newline();
         shell_print("  ");
         shell_print(svc.summary[0] ? svc.summary : "(no summary)");
