@@ -543,6 +543,104 @@ static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) 
   return 0;
 }
 
+static int cmd_recovery_resume(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+#if defined(__x86_64__)
+  struct x64_kernel_recovery_status status;
+  struct system_service_target_status target;
+  const char *target_name = NULL;
+  int target_id = -1;
+  int rc = 0;
+#endif
+
+  if (shell_help_requested(argc, argv) || argc < 2) {
+    shell_print(localization_select(
+        language,
+        "Uso: recovery-resume <saved|core|network|full|maintenance>\nTenta promover o runtime atual para outro alvo de servicos com validacoes minimas de recuperacao.\n",
+        "Usage: recovery-resume <saved|core|network|full|maintenance>\nAttempts to promote the current runtime to another service target with minimal recovery validation.\n",
+        "Uso: recovery-resume <saved|core|network|full|maintenance>\nIntenta promover el runtime actual a otro objetivo de servicios con validaciones minimas de recuperacion.\n"));
+    return argc < 2 ? -1 : 0;
+  }
+
+#if !defined(__x86_64__)
+  (void)ctx;
+  shell_print_error(localization_select(language,
+                                        "recovery-resume indisponivel",
+                                        "recovery-resume unavailable",
+                                        "recovery-resume no disponible"));
+  return -1;
+#else
+  x64_kernel_recovery_status_get(&status);
+  if (!status.maintenance_session) {
+    shell_print_error(localization_select(language,
+                                          "o sistema nao esta em modo de recuperacao neste boot",
+                                          "the system is not running in recovery mode for this boot",
+                                          "el sistema no esta ejecutandose en modo de recuperacion en este arranque"));
+    return -1;
+  }
+
+  if (shell_string_equal(argv[1], "saved")) {
+    target_name = (ctx && ctx->settings && ctx->settings->service_target[0])
+                      ? ctx->settings->service_target
+                      : "network";
+  } else {
+    target_name = argv[1];
+  }
+
+  target_id = service_manager_target_find(target_name, &target);
+  if (target_id < 0) {
+    shell_print_error(localization_select(language,
+                                          "alvo de recuperacao desconhecido",
+                                          "unknown recovery target",
+                                          "objetivo de recuperacion desconocido"));
+    return -1;
+  }
+
+  rc = x64_kernel_recovery_resume_target((uint32_t)target_id);
+  if (rc == -2) {
+    shell_print_error(localization_select(language,
+                                          "storage validado ainda nao esta disponivel para sair do modo de recuperacao",
+                                          "validated storage is still unavailable to leave recovery mode",
+                                          "el almacenamiento validado aun no esta disponible para salir del modo de recuperacion"));
+    return -1;
+  }
+  if (rc == -3) {
+    shell_print_error(localization_select(language,
+                                          "o estado da rede ainda nao pode ser validado",
+                                          "network status cannot be validated yet",
+                                          "el estado de la red aun no puede validarse"));
+    return -1;
+  }
+  if (rc == -4) {
+    shell_print_error(localization_select(language,
+                                          "o runtime de rede validado ainda nao esta disponivel para este alvo",
+                                          "validated network runtime is not available for this target yet",
+                                          "el runtime de red validado aun no esta disponible para este objetivo"));
+    return -1;
+  }
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "falha ao promover o alvo de recuperacao",
+                                          "failed to promote the recovery target",
+                                          "fallo al promover el objetivo de recuperacion"));
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "alvo de recuperacao aplicado",
+                                     "recovery target applied",
+                                     "objetivo de recuperacion aplicado"));
+  shell_print(target.name);
+  shell_newline();
+  shell_print(localization_select(
+      language,
+      "A sessao atual continua em modo de recuperacao ate reboot ou novo login.\n",
+      "The current session remains in recovery mode until reboot or a new login.\n",
+      "La sesion actual permanece en modo de recuperacion hasta reiniciar o realizar un nuevo inicio de sesion.\n"));
+  return 0;
+#endif
+}
+
 static void do_hard_reboot(void) {
   const char *language = shell_current_language();
   sync_and_flush();
@@ -858,7 +956,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[10];
+static struct shell_command g_system_control_commands[11];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -885,13 +983,15 @@ static void init_system_control_commands(void) {
   g_system_control_commands[8].handler = cmd_service_control;
   g_system_control_commands[9].name = "service-target";
   g_system_control_commands[9].handler = cmd_service_target;
+  g_system_control_commands[10].name = "recovery-resume";
+  g_system_control_commands[10].handler = cmd_recovery_resume;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 10;
+    *count = 11;
   }
   return g_system_control_commands;
 }

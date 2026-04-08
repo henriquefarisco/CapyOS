@@ -2,9 +2,15 @@
 #include "shell/core.h"
 
 #include "core/localization.h"
+#include "core/service_boot_policy.h"
 #include "core/service_manager.h"
 #include "core/version.h"
 #include "drivers/timer/pit.h"
+#if defined(__x86_64__)
+#include "arch/x86_64/kernel_runtime_control.h"
+#include "arch/x86_64/storage_runtime.h"
+#include "net/stack.h"
+#endif
 
 static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
@@ -324,7 +330,81 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
     return 0;
 }
 
-static struct shell_command g_system_info_commands[8];
+static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: recovery-status\nMostra o estado atual do modo de recuperacao, alvo de boot e diagnosticos basicos de storage/rede.\n",
+            "Usage: recovery-status\nShows the current recovery mode state, boot target and basic storage/network diagnostics.\n",
+            "Uso: recovery-status\nMuestra el estado actual del modo de recuperacion, el objetivo de arranque y diagnosticos basicos de almacenamiento/red.\n"));
+        return 0;
+    }
+#if !defined(__x86_64__)
+    shell_print_error(localization_select(language,
+                                          "recovery-status indisponivel",
+                                          "recovery-status unavailable",
+                                          "recovery-status no disponible"));
+    return -1;
+#else
+    {
+        struct x64_kernel_recovery_status status;
+        struct net_stack_status net_status;
+        int net_rc = 0;
+        x64_kernel_recovery_status_get(&status);
+        shell_print("maintenance=");
+        shell_print(status.maintenance_session ? "yes" : "no");
+        shell_print(" degraded=");
+        shell_print(status.degraded ? "yes" : "no");
+        shell_print(" reason=");
+        shell_print(service_boot_policy_reason_label(status.reason));
+        shell_newline();
+
+        shell_print("bootstrap=");
+        shell_print(service_manager_target_label(status.bootstrap_target));
+        shell_print(" requested=");
+        shell_print(service_manager_target_label(status.requested_target));
+        shell_print(" boot=");
+        shell_print(service_manager_target_label(status.boot_target));
+        shell_print(" active=");
+        shell_print(service_manager_target_label(status.active_target));
+        if (ctx && ctx->settings && ctx->settings->service_target[0]) {
+            shell_print(" saved=");
+            shell_print(ctx->settings->service_target);
+        }
+        shell_newline();
+
+        shell_print("storage backend=");
+        shell_print(x64_storage_runtime_backend_name());
+        shell_print(" validated=");
+        shell_print(x64_storage_runtime_has_device() ? "yes" : "no");
+        shell_print(" persistent=");
+        shell_print((ctx && ctx->settings) ? "configured" : "unknown");
+        shell_newline();
+
+        net_rc = net_stack_status(&net_status);
+        shell_print("network status=");
+        shell_print(net_rc == 0 ? "ok" : "unavailable");
+        if (net_rc == 0) {
+            shell_print(" runtime=");
+            shell_print(net_status.runtime_supported ? "validated" : "missing");
+            shell_print(" ready=");
+            shell_print(net_status.ready ? "yes" : "no");
+            shell_print(" nic=");
+            shell_print(net_driver_name(net_status.nic.kind));
+        }
+        shell_newline();
+
+        shell_print("summary: ");
+        shell_print(x64_kernel_recovery_reason_summary());
+        shell_newline();
+    }
+    return 0;
+#endif
+}
+
+static struct shell_command g_system_info_commands[9];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -347,13 +427,15 @@ static void init_system_info_commands(void) {
     g_system_info_commands[6].handler = cmd_print_envs;
     g_system_info_commands[7].name = "service-status";
     g_system_info_commands[7].handler = cmd_service_status;
+    g_system_info_commands[8].name = "recovery-status";
+    g_system_info_commands[8].handler = cmd_recovery_status;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 8;
+        *count = 9;
     }
     return g_system_info_commands;
 }

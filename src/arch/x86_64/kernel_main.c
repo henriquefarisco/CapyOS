@@ -10,6 +10,7 @@
 #include "arch/x86_64/interrupts.h"
 #include "arch/x86_64/native_runtime_gate.h"
 #include "arch/x86_64/kernel_platform_runtime.h"
+#include "arch/x86_64/kernel_runtime_control.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
 #include "arch/x86_64/kernel_shell_runtime.h"
 #include "arch/x86_64/kernel_volume_runtime.h"
@@ -1229,6 +1230,61 @@ static const char *kernel_boot_maintenance_reason(void) {
     return "Maintenance target requested for this boot";
   }
   return service_boot_policy_reason_summary(g_boot_policy_decision.reason);
+}
+
+void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
+  struct system_service_target_status active_target;
+
+  if (!out) {
+    return;
+  }
+  out->maintenance_session = kernel_boots_in_maintenance_mode() ? 1u : 0u;
+  out->degraded = g_boot_policy_decision.degraded;
+  out->forced_maintenance = g_boot_policy_decision.forced_maintenance;
+  out->forced_core = g_boot_policy_decision.forced_core;
+  out->reason = g_boot_policy_decision.reason;
+  out->bootstrap_target = g_boot_policy_decision.bootstrap_target;
+  out->requested_target = g_boot_policy_decision.requested_target;
+  out->boot_target = g_boot_policy_decision.final_target;
+  out->active_target = g_boot_policy_decision.final_target;
+  if (service_manager_target_current(&active_target) == 0) {
+    out->active_target = active_target.id;
+  }
+}
+
+const char *x64_kernel_recovery_reason_summary(void) {
+  if (g_boot_policy_decision.degraded) {
+    return service_boot_policy_reason_summary(g_boot_policy_decision.reason);
+  }
+  if (kernel_boots_in_maintenance_mode()) {
+    return "Maintenance target requested for this boot";
+  }
+  return "Boot policy preserved the requested target";
+}
+
+int x64_kernel_recovery_resume_target(uint32_t target_id) {
+  struct net_stack_status net_status;
+
+  if (target_id >= SYSTEM_SERVICE_TARGET_COUNT) {
+    return -1;
+  }
+  if (target_id != SYSTEM_SERVICE_TARGET_MAINTENANCE &&
+      (!g_shell_persistent_storage || !x64_storage_runtime_has_device())) {
+    return -2;
+  }
+  if (target_id == SYSTEM_SERVICE_TARGET_NETWORK ||
+      target_id == SYSTEM_SERVICE_TARGET_FULL) {
+    if (net_stack_status(&net_status) != 0) {
+      return -3;
+    }
+    if (!net_status.runtime_supported) {
+      return -4;
+    }
+  }
+  if (service_manager_target_apply(target_id) < 0) {
+    return -5;
+  }
+  return 0;
 }
 
 static int
