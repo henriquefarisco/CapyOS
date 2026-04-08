@@ -1,10 +1,11 @@
-# Guia Hyper-V para CapyOS (UEFI/GPT x86_64)
+# Guia Hyper-V para CapyOS (historico / nao suportado)
 
-Este guia cobre o caminho oficial de validacao e release:
+Status atual:
 
-- Hyper-V Geracao 2
-- trilha unica `UEFI/GPT/x86_64`
-- boot pelo disco provisionado
+- `Hyper-V` nao faz parte da trilha suportada de validacao ou release
+- o caminho oficial atual para VM e `VMware` em `UEFI` com `E1000`
+- este documento permanece apenas como referencia historica de investigacao
+- qualquer comportamento em `Hyper-V` deve ser tratado como experimental
 
 O fluxo `BIOS/MBR` (Geracao 1) esta descontinuado para build, boot e release.
 
@@ -16,10 +17,33 @@ O fluxo `BIOS/MBR` (Geracao 1) esta descontinuado para build, boot e release.
 - Secure Boot: desabilitado (`BOOTX64.EFI` ainda nao e assinado)
 
 ### Rede
-- Adapter padrao: `Network Adapter` apenas quando o objetivo for validar boot
-  puro
-- Para validacao de rede atual, prefira laboratorio separado com `Legacy
-  Network Adapter` ate o caminho `netvsc` estar pronto
+- `Geracao 2` usa somente `Network Adapter` sintetico (`NetVSC/VMBus`) na
+  trilha suportada.
+- `Legacy Network Adapter` nao entra no fluxo `Gen2`; se voce estiver usando
+  `tulip-2114x`, isso ja e um laboratorio `Gen1`/legado fora do suporte atual.
+- Para rede em `Hyper-V Gen2`, capture sempre:
+  - `runtime-native show`
+  - `net-status`
+  - `net-dump-runtime`
+  - log serial completo do boot ate o login
+
+### Preflight do host
+- A coleta do host Hyper-V exige PowerShell elevado.
+- Script recomendado no host Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\scripts\hyperv_host_preflight.ps1 -Name CapyOSGen2 -IncludeEvents
+```
+
+- O script exporta `build/hyperv-preflight/hyperv-preflight.json` e
+  `build/hyperv-preflight/hyperv-preflight.txt` com:
+  - estado do host/VM
+  - geracao da VM
+  - `Secure Boot`
+  - memoria dinamica
+  - NICs sinteticas configuradas
+  - discos/DVD/COM
+  - eventos `Hyper-V-Worker` e `VMMS` quando `-IncludeEvents` for usado
 
 ### Disco
 - Use VHD fixo (`.vhd`) conectado em SCSI.
@@ -50,6 +74,9 @@ wsl -e bash -lc "cd /mnt/d/Projetos/CapyOS && make iso-uefi && python3 tools/scr
 Notas:
 - nao precisa `sudo`
 - confirme que `--img` aponta para o mesmo disco anexado na VM
+- se optar por `--volume-key`, o script agora exige
+  `--allow-plain-volume-key` para deixar explicito que isso e apenas de
+  laboratorio/smoke
 - depois do provisionamento, valide a imagem:
 
 ```bash
@@ -111,6 +138,26 @@ make smoke-x64-iso
   - confirmar que a VM esta usando Geracao 2
   - validar layout no sistema com `config-keyboard show`
   - usar `info` para inspecionar `input.mode`, `ps2=` e `hyperv=`
+- Rede sintetica parada:
+  - confirmar que a VM esta em `Geracao 2` com `Network Adapter`
+  - coletar `runtime-native show`, `net-status`, `net-dump-runtime`
+  - registrar se `vmbus=` esta em `off|hypercall|synic|contact|offers`
+  - registrar se `stage=` esta em `offers|channel|control|ready|failed`
+  - exportar o log serial completo antes de repetir qualquer tentativa manual
+
+### Mapa rapido de estagios Hyper-V
+
+| Sinal | Leitura pratica | Proximo foco |
+| --- | --- | --- |
+| `vmbus=off` | guest nao entrou no trilho Hyper-V/VMBus | confirmar que a VM e `Gen2`, que o guest detectou Hyper-V e que o build atual realmente contem a trilha nativa |
+| `vmbus=hypercall` | pagina de hypercall preparada, mas `SynIC` ainda nao estabilizou | revisar inicializacao minima do barramento e sinais de bootstrap hibrido |
+| `vmbus=synic` | `SynIC` pronto, mas sem contato completo com o `VMBus` | olhar handshake de contato e telemetria serial do `VMBus` |
+| `vmbus=contact` | tentativa de contato feita, offers ainda nao foram cacheadas | focar em `REQUESTOFFERS`, tempo de espera e mensagens de transporte |
+| `vmbus=offers` + `stage=offers` | offer sintetica apareceu, mas o controlador ainda nao abriu canal | revisar gate: `StorVSC` antes de `ExitBootServices`, `NetVSC` so depois de storage nativo estavel |
+| `stage=channel` | canal abriu, handshake de controle ainda nao fechou | focar em `NetVSP/RNDIS`, `relid`, `connection_id`, timeout e resultado final |
+| `stage=control` | canal e controle ativos, mas o runtime ainda nao ficou pronto | revisar negociacao final do `NetVSC`, modo `ready`, DHCP e promocao do backend |
+| `stage=ready` | backend sintetico pronto | validar `net-mode dhcp`, `net-resolve example.com`, `hey gateway` |
+| `stage=failed` | runtime degradou para passivo seguro | usar `last_action`, `last_result`, `relid`, `connection_id`, log serial e eventos do host para localizar a falha exata |
 
 ## 6) Escopo descontinuado
 

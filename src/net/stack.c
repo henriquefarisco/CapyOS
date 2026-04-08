@@ -1,21 +1,25 @@
 #include "net/stack.h"
 
-#include "drivers/net/e1000.h"
-#include "drivers/net/tulip.h"
+#include "core/klog.h"
+#include "net/dns.h"
+#include "net/hyperv_runtime.h"
+#include "net/hyperv_runtime_gate.h"
+#include "net/hyperv_runtime_policy.h"
+#include "stack_arp.h"
+#include "stack_driver.h"
+#include "stack_icmp.h"
+#include "stack_ipv4.h"
+#include "stack_services.h"
+#include "stack_selftest.h"
+#include "stack_utils.h"
+
+#include "core/system_init.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #define NET_ETHERTYPE_IPV4 0x0800u
-#define NET_ETHERTYPE_ARP 0x0806u
-#define NET_ARP_HTYPE_ETHERNET 0x0001u
-#define NET_ARP_PTYPE_IPV4 0x0800u
-#define NET_ARP_OP_REQUEST 0x0001u
-#define NET_ARP_OP_REPLY 0x0002u
-#define NET_ARP_CAPACITY 16u
 #define NET_FRAME_MAX 1600u
-#define NET_IPV4_VERSION_IHL 0x45u
-#define NET_IPV4_DONT_FRAGMENT 0x4000u
 #define NET_POLL_BUDGET 16u
 
 struct net_eth_hdr {
@@ -24,230 +28,28 @@ struct net_eth_hdr {
   uint16_t ethertype;
 } __attribute__((packed));
 
-struct net_arp_pkt {
-  uint16_t htype;
-  uint16_t ptype;
-  uint8_t hlen;
-  uint8_t plen;
-  uint16_t opcode;
-  uint8_t sender_mac[6];
-  uint32_t sender_ip;
-  uint8_t target_mac[6];
-  uint32_t target_ip;
-} __attribute__((packed));
-
-struct net_ipv4_hdr {
-  uint8_t version_ihl;
-  uint8_t dscp_ecn;
-  uint16_t total_len;
-  uint16_t ident;
-  uint16_t flags_frag_off;
-  uint8_t ttl;
-  uint8_t protocol;
-  uint16_t checksum;
-  uint32_t src_ip;
-  uint32_t dst_ip;
-} __attribute__((packed));
-
-struct net_icmp_hdr {
-  uint8_t type;
-  uint8_t code;
-  uint16_t checksum;
-  uint16_t ident;
-  uint16_t sequence;
-} __attribute__((packed));
-
-struct net_udp_hdr {
-  uint16_t src_port;
-  uint16_t dst_port;
-  uint16_t len;
-  uint16_t checksum;
-} __attribute__((packed));
-
-struct net_tcp_hdr {
-  uint16_t src_port;
-  uint16_t dst_port;
-  uint32_t seq;
-  uint32_t ack;
-  uint16_t flags;
-  uint16_t window;
-  uint16_t checksum;
-  uint16_t urgent;
-} __attribute__((packed));
-
-struct net_arp_entry {
-  uint32_t ip;
-  uint8_t mac[6];
-  uint8_t valid;
-  uint32_t age;
-};
-
 struct net_state {
   uint8_t initialized;
   uint8_t ready;
+  uint8_t driver_available;
+  uint8_t reserved_pad;
   uint16_t ident_seq;
   uint32_t age_ticks;
+  const char *unavailable_reason;
   struct net_nic_probe nic;
   struct net_ipv4_config ipv4;
   struct net_stack_stats stats;
   struct net_arp_entry arp[NET_ARP_CAPACITY];
-
-  uint8_t icmp_waiting;
-  uint16_t icmp_wait_ident;
-  uint16_t icmp_wait_seq;
-  uint8_t icmp_reply_ready;
-  uint32_t icmp_reply_ip;
+  struct net_dhcp_state dhcp;
+  struct net_dns_state dns;
+  struct net_icmp_state icmp;
+  struct net_hyperv_runtime_state hyperv_runtime;
 };
 
 static struct net_state g_net;
 
-static void mem_zero(void *ptr, size_t len) {
-  uint8_t *p = (uint8_t *)ptr;
-  for (size_t i = 0; i < len; ++i) {
-    p[i] = 0;
-  }
-}
-
-static void mem_copy(void *dst, const void *src, size_t len) {
-  uint8_t *d = (uint8_t *)dst;
-  const uint8_t *s = (const uint8_t *)src;
-  for (size_t i = 0; i < len; ++i) {
-    d[i] = s[i];
-  }
-}
-
-static uint16_t htons16(uint16_t v) { return (uint16_t)((v << 8) | (v >> 8)); }
-
-static uint32_t htonl32(uint32_t v) {
-  return ((v & 0x000000FFu) << 24) | ((v & 0x0000FF00u) << 8) |
-         ((v & 0x00FF0000u) >> 8) | ((v & 0xFF000000u) >> 24);
-}
-
-static uint16_t ntohs16(uint16_t v) { return htons16(v); }
-static uint32_t ntohl32(uint32_t v) { return htonl32(v); }
-
-static uint16_t checksum16(const uint8_t *data, size_t len) {
-  uint32_t sum = 0;
-  while (len >= 2) {
-    uint16_t word = (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
-    sum += word;
-    data += 2;
-    len -= 2;
-  }
-  if (len) {
-    sum += (uint16_t)((uint16_t)data[0] << 8);
-  }
-  while (sum >> 16) {
-    sum = (sum & 0xFFFFu) + (sum >> 16);
-  }
-  return (uint16_t)(~sum);
-}
-
-static void delay_approx_1ms(void) {
-  for (volatile uint32_t i = 0; i < 60000u; ++i) {
-    __asm__ volatile("pause");
-  }
-}
-
-static int ip_is_local(uint32_t ip) { return ip == g_net.ipv4.addr; }
-
 static int ip_is_broadcast(uint32_t ip) {
   return ip == NET_IPV4_ADDR(255, 255, 255, 255);
-}
-
-static int ip_is_unspecified(uint32_t ip) { return ip == 0u; }
-
-static int ip_is_same_subnet(uint32_t a, uint32_t b, uint32_t mask) {
-  return (a & mask) == (b & mask);
-}
-
-void net_ipv4_format(uint32_t ip, char out[16]) {
-  if (!out) {
-    return;
-  }
-  uint8_t a = (uint8_t)((ip >> 24) & 0xFFu);
-  uint8_t b = (uint8_t)((ip >> 16) & 0xFFu);
-  uint8_t c = (uint8_t)((ip >> 8) & 0xFFu);
-  uint8_t d = (uint8_t)(ip & 0xFFu);
-  char *p = out;
-  uint8_t octets[4] = {a, b, c, d};
-  for (uint32_t i = 0; i < 4; ++i) {
-    uint8_t v = octets[i];
-    if (v >= 100u) {
-      *p++ = (char)('0' + (v / 100u));
-      v %= 100u;
-      *p++ = (char)('0' + (v / 10u));
-      *p++ = (char)('0' + (v % 10u));
-    } else if (v >= 10u) {
-      *p++ = (char)('0' + (v / 10u));
-      *p++ = (char)('0' + (v % 10u));
-    } else {
-      *p++ = (char)('0' + v);
-    }
-    if (i != 3u) {
-      *p++ = '.';
-    }
-  }
-  *p = '\0';
-}
-
-static int driver_send_frame(const uint8_t *frame, uint16_t len) {
-  if (g_net.nic.kind == NET_NIC_KIND_E1000) {
-    return e1000_send_frame(frame, len);
-  }
-  if (g_net.nic.kind == NET_NIC_KIND_TULIP) {
-    return tulip_send_frame(frame, len);
-  }
-  return -1;
-}
-
-static int driver_poll_frame(uint8_t *out, uint16_t cap, uint16_t *len) {
-  if (g_net.nic.kind == NET_NIC_KIND_E1000) {
-    return e1000_poll_frame(out, cap, len);
-  }
-  if (g_net.nic.kind == NET_NIC_KIND_TULIP) {
-    return tulip_poll_frame(out, cap, len);
-  }
-  return 0;
-}
-
-static int arp_find(uint32_t ip) {
-  for (uint32_t i = 0; i < NET_ARP_CAPACITY; ++i) {
-    if (g_net.arp[i].valid && g_net.arp[i].ip == ip) {
-      return (int)i;
-    }
-  }
-  return -1;
-}
-
-static void arp_update(uint32_t ip, const uint8_t mac[6]) {
-  int idx = arp_find(ip);
-  if (idx < 0) {
-    for (uint32_t i = 0; i < NET_ARP_CAPACITY; ++i) {
-      if (!g_net.arp[i].valid) {
-        idx = (int)i;
-        break;
-      }
-    }
-  }
-  if (idx < 0) {
-    idx = (int)(g_net.age_ticks % NET_ARP_CAPACITY);
-  }
-  g_net.arp[idx].valid = 1;
-  g_net.arp[idx].ip = ip;
-  mem_copy(g_net.arp[idx].mac, mac, 6);
-  g_net.arp[idx].age = g_net.age_ticks++;
-  g_net.stats.arp_updates++;
-}
-
-static uint32_t arp_count(void) {
-  uint32_t count = 0;
-  for (uint32_t i = 0; i < NET_ARP_CAPACITY; ++i) {
-    if (g_net.arp[i].valid) {
-      count++;
-    }
-  }
-  return count;
 }
 
 static void set_default_config(void) {
@@ -265,280 +67,142 @@ static void set_default_config(void) {
   g_net.ipv4.mac[5] = 0x64u;
 }
 
-static int send_arp_packet(uint16_t opcode, const uint8_t dst_mac[6],
-                           const uint8_t target_mac[6], uint32_t sender_ip,
-                           uint32_t target_ip) {
-  uint8_t frame[sizeof(struct net_eth_hdr) + sizeof(struct net_arp_pkt)];
-  struct net_eth_hdr *eth = (struct net_eth_hdr *)frame;
-  struct net_arp_pkt *arp =
-      (struct net_arp_pkt *)(frame + sizeof(struct net_eth_hdr));
-
-  mem_copy(eth->dst, dst_mac, 6);
-  mem_copy(eth->src, g_net.ipv4.mac, 6);
-  eth->ethertype = htons16(NET_ETHERTYPE_ARP);
-
-  arp->htype = htons16(NET_ARP_HTYPE_ETHERNET);
-  arp->ptype = htons16(NET_ARP_PTYPE_IPV4);
-  arp->hlen = 6;
-  arp->plen = 4;
-  arp->opcode = htons16(opcode);
-  mem_copy(arp->sender_mac, g_net.ipv4.mac, 6);
-  arp->sender_ip = htonl32(sender_ip);
-  mem_copy(arp->target_mac, target_mac, 6);
-  arp->target_ip = htonl32(target_ip);
-
-  if (driver_send_frame(frame, (uint16_t)sizeof(frame)) == 0) {
-    g_net.stats.frames_tx++;
-    return 0;
-  }
-  g_net.stats.frames_drop++;
-  return -1;
+static int arp_send_frame_cb(const uint8_t *frame, uint16_t len) {
+  return net_stack_driver_send_frame(&g_net.nic, frame, len);
 }
 
-static int send_arp_request(uint32_t target_ip) {
-  static const uint8_t bcast[6] = {0xFFu, 0xFFu, 0xFFu,
-                                   0xFFu, 0xFFu, 0xFFu};
-  static const uint8_t zero[6] = {0, 0, 0, 0, 0, 0};
-  return send_arp_packet(NET_ARP_OP_REQUEST, bcast, zero, g_net.ipv4.addr,
-                         target_ip);
-}
+static int arp_poll_cb(void) { return net_stack_poll(); }
 
-static int send_arp_reply(const uint8_t target_mac[6], uint32_t target_ip) {
-  return send_arp_packet(NET_ARP_OP_REPLY, target_mac, target_mac,
-                         g_net.ipv4.addr, target_ip);
-}
+static void arp_delay_cb(void) { net_stack_delay_approx_1ms(); }
 
-static void build_ipv4_header(struct net_ipv4_hdr *ip, uint16_t payload_len,
-                              uint8_t protocol, uint32_t src_ip,
-                              uint32_t dst_ip, uint16_t ident) {
-  ip->version_ihl = NET_IPV4_VERSION_IHL;
-  ip->dscp_ecn = 0;
-  ip->total_len =
-      htons16((uint16_t)(sizeof(struct net_ipv4_hdr) + payload_len));
-  ip->ident = htons16(ident);
-  ip->flags_frag_off = htons16(NET_IPV4_DONT_FRAGMENT);
-  ip->ttl = g_net.ipv4.ttl ? g_net.ipv4.ttl : 64;
-  ip->protocol = protocol;
-  ip->checksum = 0;
-  ip->src_ip = htonl32(src_ip);
-  ip->dst_ip = htonl32(dst_ip);
-  ip->checksum =
-      htons16(checksum16((const uint8_t *)ip, sizeof(struct net_ipv4_hdr)));
-}
+static struct net_stack_ipv4_runtime stack_ipv4_runtime(void) {
+  struct net_stack_ipv4_runtime runtime;
 
-static int wait_for_arp(uint32_t target_ip, uint32_t timeout_ms) {
-  for (uint32_t elapsed = 0; elapsed < timeout_ms; ++elapsed) {
-    if (arp_find(target_ip) >= 0) {
-      return 0;
-    }
-    (void)net_stack_poll();
-    delay_approx_1ms();
-  }
-  return -1;
-}
-
-static int resolve_arp(uint32_t target_ip) {
-  if (arp_find(target_ip) >= 0) {
-    return 0;
-  }
-
-  for (uint32_t tries = 0; tries < 3; ++tries) {
-    g_net.stats.arp_misses++;
-    if (send_arp_request(target_ip) != 0) {
-      continue;
-    }
-    if (wait_for_arp(target_ip, 200u) == 0) {
-      return 0;
-    }
-  }
-  return -1;
-}
-
-static uint32_t route_next_hop(uint32_t dst_ip) {
-  if (ip_is_local(dst_ip) || ip_is_broadcast(dst_ip)) {
-    return dst_ip;
-  }
-  if (ip_is_same_subnet(dst_ip, g_net.ipv4.addr, g_net.ipv4.mask)) {
-    return dst_ip;
-  }
-  if (ip_is_unspecified(g_net.ipv4.gateway)) {
-    return dst_ip;
-  }
-  return g_net.ipv4.gateway;
-}
-
-static int handle_arp(const uint8_t *payload, size_t len) {
-  if (len < sizeof(struct net_arp_pkt)) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  const struct net_arp_pkt *arp = (const struct net_arp_pkt *)payload;
-  if (ntohs16(arp->htype) != NET_ARP_HTYPE_ETHERNET ||
-      ntohs16(arp->ptype) != NET_ARP_PTYPE_IPV4 || arp->hlen != 6 ||
-      arp->plen != 4) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-
-  uint32_t sender_ip = ntohl32(arp->sender_ip);
-  uint32_t target_ip = ntohl32(arp->target_ip);
-  uint16_t opcode = ntohs16(arp->opcode);
-  g_net.stats.arp_seen++;
-  arp_update(sender_ip, arp->sender_mac);
-
-  if (opcode == NET_ARP_OP_REQUEST && ip_is_local(target_ip)) {
-    g_net.stats.arp_hits++;
-    if (g_net.ready) {
-      (void)send_arp_reply(arp->sender_mac, sender_ip);
-    }
-  } else if (opcode == NET_ARP_OP_REPLY && ip_is_local(target_ip)) {
-    g_net.stats.arp_hits++;
-  }
-  return 0;
-}
-
-static int handle_icmp(uint32_t src_ip, const uint8_t *payload, size_t len,
-                       int to_local) {
-  if (len < sizeof(struct net_icmp_hdr)) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-
-  const struct net_icmp_hdr *icmp = (const struct net_icmp_hdr *)payload;
-  g_net.stats.icmp_rx++;
-
-  if (!to_local) {
-    return 0;
-  }
-
-  if (icmp->type == 8 && icmp->code == 0) {
-    if (len > 256u) {
-      return -1;
-    }
-    uint8_t reply[256];
-    mem_copy(reply, payload, len);
-    struct net_icmp_hdr *hdr = (struct net_icmp_hdr *)reply;
-    hdr->type = 0;
-    hdr->code = 0;
-    hdr->checksum = 0;
-    hdr->checksum = htons16(checksum16(reply, len));
-    (void)net_stack_send_ipv4(NET_L4_PROTO_ICMP, src_ip, reply, len);
-    return 0;
-  }
-
-  if (icmp->type == 0 && icmp->code == 0 && g_net.icmp_waiting) {
-    uint16_t ident = ntohs16(icmp->ident);
-    uint16_t seq = ntohs16(icmp->sequence);
-    if (ident == g_net.icmp_wait_ident && seq == g_net.icmp_wait_seq) {
-      g_net.icmp_reply_ready = 1;
-      g_net.icmp_reply_ip = src_ip;
-    }
-  }
-
-  return 0;
-}
-
-static int handle_udp(const uint8_t *payload, size_t len) {
-  (void)payload;
-  if (len < sizeof(struct net_udp_hdr)) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  g_net.stats.udp_rx++;
-  return 0;
-}
-
-static int handle_tcp(const uint8_t *payload, size_t len) {
-  (void)payload;
-  if (len < sizeof(struct net_tcp_hdr)) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  g_net.stats.tcp_rx++;
-  return 0;
-}
-
-static int handle_ipv4(const uint8_t *payload, size_t len,
-                       const uint8_t src_mac[6]) {
-  if (len < sizeof(struct net_ipv4_hdr)) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  const struct net_ipv4_hdr *ip = (const struct net_ipv4_hdr *)payload;
-  if ((ip->version_ihl >> 4) != 4) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  size_t ihl_bytes = (size_t)(ip->version_ihl & 0x0Fu) * 4u;
-  if (ihl_bytes < sizeof(struct net_ipv4_hdr) || ihl_bytes > len) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  if (checksum16((const uint8_t *)ip, ihl_bytes) != 0) {
-    g_net.stats.ipv4_bad_checksum++;
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-  uint16_t total_len = ntohs16(ip->total_len);
-  if (total_len < ihl_bytes || total_len > len) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-
-  uint32_t src_ip = ntohl32(ip->src_ip);
-  uint32_t dst_ip = ntohl32(ip->dst_ip);
-  if (src_mac) {
-    arp_update(src_ip, src_mac);
-  }
-
-  g_net.stats.ipv4_seen++;
-  if (!ip_is_local(dst_ip) && !ip_is_broadcast(dst_ip)) {
-    return 0;
-  }
-
-  const uint8_t *l4_payload = payload + ihl_bytes;
-  size_t l4_len = total_len - ihl_bytes;
-  switch (ip->protocol) {
-  case NET_L4_PROTO_ICMP:
-    return handle_icmp(src_ip, l4_payload, l4_len, 1);
-  case NET_L4_PROTO_UDP:
-    return handle_udp(l4_payload, l4_len);
-  case NET_L4_PROTO_TCP:
-    return handle_tcp(l4_payload, l4_len);
-  default:
-    g_net.stats.frames_drop++;
-    return -1;
-  }
+  runtime.initialized = g_net.initialized;
+  runtime.ready = g_net.ready;
+  runtime.ident_seq = &g_net.ident_seq;
+  runtime.age_ticks = &g_net.age_ticks;
+  runtime.ipv4 = &g_net.ipv4;
+  runtime.stats = &g_net.stats;
+  runtime.arp_entries = g_net.arp;
+  runtime.arp_capacity = NET_ARP_CAPACITY;
+  runtime.dhcp = &g_net.dhcp;
+  runtime.dns = &g_net.dns;
+  runtime.icmp = &g_net.icmp;
+  return runtime;
 }
 
 int net_stack_init(void) {
-  mem_zero(&g_net, sizeof(g_net));
+  net_stack_mem_zero(&g_net, sizeof(g_net));
   set_default_config();
   g_net.ident_seq = 1;
+  g_net.driver_available = 0;
+  g_net.unavailable_reason = NULL;
+  net_hyperv_runtime_state_init(&g_net.hyperv_runtime);
+
+  klog(KLOG_INFO, "[net] net_stack_init: probing NICs...");
 
   if (net_probe_first_supported(&g_net.nic) == 0 && g_net.nic.found) {
+    g_net.driver_available = 1;
     g_net.ipv4.mtu = g_net.nic.mtu;
-    mem_copy(g_net.ipv4.mac, g_net.nic.mac, 6);
+    net_stack_mem_copy(g_net.ipv4.mac, g_net.nic.mac, 6);
+    g_net.ready = 0;
 
-    if (g_net.nic.kind == NET_NIC_KIND_E1000 &&
-        e1000_init(g_net.nic.bar0, g_net.ipv4.mac) == 0 && e1000_ready()) {
-      g_net.ready = 1;
-    } else if (g_net.nic.kind == NET_NIC_KIND_TULIP &&
-               tulip_init(g_net.nic.bar0, g_net.nic.bar0_is_io) == 0 &&
-               tulip_ready()) {
-      g_net.ready = 1;
+    klog_hex(KLOG_INFO, "[net] NIC found kind=", (uint64_t)g_net.nic.kind);
+    klog_hex(KLOG_INFO, "[net] NIC vendor=", (uint64_t)g_net.nic.vendor_id);
+    klog_hex(KLOG_INFO, "[net] NIC device=", (uint64_t)g_net.nic.device_id);
+
+    if (net_stack_driver_init_runtime(&g_net.nic, g_net.ipv4.mac) == 0) {
+      g_net.ready =
+          (uint8_t)(g_net.nic.kind != NET_NIC_KIND_HYPERV_NETVSC ? 1 : 0);
+      if (g_net.ready) {
+        klog(KLOG_INFO, "[net] Driver runtime ready (immediate).");
+      } else {
+        klog(KLOG_INFO, "[net] Driver runtime deferred (NetVSC path).");
+      }
     } else {
-      g_net.ready = 0;
+      klog(KLOG_WARN, "[net] Driver runtime init failed; stack not ready.");
+      g_net.unavailable_reason = "driver runtime init failed";
+    }
+
+    if (g_net.nic.kind == NET_NIC_KIND_HYPERV_NETVSC) {
+      klog(KLOG_INFO, "[net] Configuring Hyper-V NetVSC runtime...");
+      if (net_hyperv_runtime_state_configure(&g_net.nic,
+                                              &g_net.hyperv_runtime) != 0) {
+        klog(KLOG_WARN, "[net] Hyper-V runtime configure returned error.");
+      }
+      net_hyperv_runtime_state_apply_nic(&g_net.hyperv_runtime, &g_net.nic);
     }
   } else {
     g_net.ready = 0;
+    g_net.driver_available = 0;
+    g_net.unavailable_reason = "no compatible NIC found";
+    klog(KLOG_WARN, "[net] No compatible NIC found. Continuing without network.");
   }
 
   g_net.initialized = 1;
-  return g_net.ready ? 0 : -1;
+
+  /* Always return 0 so the boot flow continues even without network.
+   * Callers check net_stack_ready() or net_stack_driver_available()
+   * to determine actual network status. */
+  if (!g_net.ready && !g_net.driver_available) {
+    klog(KLOG_WARN, "[net] AVISO: Nenhum driver de rede compativel. Sistema continuara sem rede.");
+  }
+  return 0;
 }
 
 int net_stack_ready(void) { return g_net.initialized && g_net.ready; }
+
+int net_stack_refresh_runtime(void) {
+  struct system_runtime_platform platform;
+  int rc = 0;
+
+  if (!g_net.initialized || !g_net.nic.found) {
+    return -1;
+  }
+  if (g_net.ready) {
+    return 0;
+  }
+  if (g_net.nic.kind != NET_NIC_KIND_HYPERV_NETVSC) {
+    return -2;
+  }
+  system_runtime_platform_get(&platform);
+  switch (net_hyperv_runtime_gate_state_for(
+      g_net.nic.found, g_net.nic.kind, g_net.hyperv_runtime.runtime_configured,
+      g_net.hyperv_runtime.bus_connected, &platform)) {
+  case NET_HYPERV_RUNTIME_GATE_WAIT_PLATFORM:
+  case NET_HYPERV_RUNTIME_GATE_WAIT_STORAGE:
+  case NET_HYPERV_RUNTIME_GATE_WAIT_BUS:
+    return 0;
+  case NET_HYPERV_RUNTIME_GATE_WAIT_RUNTIME:
+    return -3;
+  default:
+    break;
+  }
+  rc = net_hyperv_runtime_state_refresh(g_net.initialized, g_net.ready,
+                                        &g_net.nic, &g_net.hyperv_runtime);
+  net_hyperv_runtime_state_apply_nic(&g_net.hyperv_runtime, &g_net.nic);
+
+  /* Late promotion: once the NetVSC backend has completed its VMBus channel
+   * open and NetVSP/RNDIS control handshake, promote the stack to ready so
+   * that hey, net-mode dhcp, and other commands can proceed. */
+  if (!g_net.ready &&
+      g_net.hyperv_runtime.runtime_phase == NETVSC_RUNTIME_READY) {
+    g_net.ready = 1;
+    /* Propagate real MAC and MTU from the NetVSC control handshake. */
+    if (g_net.hyperv_runtime.controller.backend.session.control.mac_valid) {
+      net_stack_mem_copy(
+          g_net.ipv4.mac,
+          g_net.hyperv_runtime.controller.backend.session.control.mac, 6);
+    }
+    if (g_net.hyperv_runtime.controller.backend.session.control.mtu != 0u) {
+      g_net.ipv4.mtu =
+          (uint16_t)g_net.hyperv_runtime.controller.backend.session.control.mtu;
+      g_net.nic.mtu = g_net.ipv4.mtu;
+    }
+  }
+  return rc;
+}
 
 int net_stack_set_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
                        uint32_t dns) {
@@ -549,22 +213,55 @@ int net_stack_set_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
   g_net.ipv4.mask = mask;
   g_net.ipv4.gateway = gateway;
   g_net.ipv4.dns = dns;
-  mem_zero(g_net.arp, sizeof(g_net.arp));
-  g_net.icmp_waiting = 0;
-  g_net.icmp_reply_ready = 0;
+  net_stack_mem_zero(g_net.arp, sizeof(g_net.arp));
+  net_dhcp_reset(&g_net.dhcp);
+  net_dns_reset(&g_net.dns);
+  net_icmp_reset(&g_net.icmp);
   return 0;
 }
 
 int net_stack_status(struct net_stack_status *out) {
+  struct system_runtime_platform platform;
+
   if (!out || !g_net.initialized) {
     return -1;
   }
   out->initialized = g_net.initialized;
   out->ready = g_net.ready;
-  out->arp_entries = arp_count();
+  out->runtime_supported = g_net.nic.runtime_supported;
+  out->hyperv_vmbus_stage = g_net.hyperv_runtime.vmbus_stage;
+  out->hyperv_stage = g_net.hyperv_runtime.stage;
+  out->hyperv_offer_ready = g_net.hyperv_runtime.offer_ready;
+  out->hyperv_bus_prepared = g_net.hyperv_runtime.bus_prepared;
+  out->hyperv_channel_ready = g_net.hyperv_runtime.channel_ready;
+  out->hyperv_bus_connected = g_net.hyperv_runtime.bus_connected;
+  out->hyperv_runtime_configured = g_net.hyperv_runtime.runtime_configured;
+  out->hyperv_runtime_enabled = g_net.hyperv_runtime.runtime_enabled;
+  out->hyperv_runtime_phase = g_net.hyperv_runtime.runtime_phase;
+  out->hyperv_refresh_action = NET_HYPERV_RUNTIME_ACTION_INVALID_KIND;
+  out->hyperv_gate_state = NET_HYPERV_RUNTIME_GATE_INVALID;
+  out->arp_entries = net_arp_count(g_net.arp, NET_ARP_CAPACITY);
+  out->hyperv_refresh_attempts = g_net.hyperv_runtime.refresh_attempts;
+  out->hyperv_refresh_changes = g_net.hyperv_runtime.refresh_changes;
+  out->hyperv_last_error = g_net.hyperv_runtime.last_error;
+  out->hyperv_last_result = g_net.hyperv_runtime.last_result;
   out->nic = g_net.nic;
   out->ipv4 = g_net.ipv4;
   out->stats = g_net.stats;
+  if (g_net.nic.kind == NET_NIC_KIND_HYPERV_NETVSC) {
+    struct net_hyperv_runtime_policy policy;
+    struct net_hyperv_runtime_snapshot snapshot;
+
+    system_runtime_platform_get(&platform);
+    net_hyperv_runtime_snapshot(&g_net.nic, &g_net.hyperv_runtime, &snapshot);
+    net_hyperv_runtime_policy_plan(g_net.initialized, g_net.ready, &g_net.nic,
+                                   &snapshot, &policy);
+    out->hyperv_refresh_action = policy.action;
+    out->hyperv_gate_state = net_hyperv_runtime_gate_state_for(
+        g_net.nic.found, g_net.nic.kind,
+        g_net.hyperv_runtime.runtime_configured,
+        g_net.hyperv_runtime.bus_connected, &platform);
+  }
   return 0;
 }
 
@@ -574,16 +271,22 @@ int net_stack_receive_frame(const uint8_t *frame, size_t len) {
   }
 
   const struct net_eth_hdr *eth = (const struct net_eth_hdr *)frame;
-  uint16_t ethertype = ntohs16(eth->ethertype);
+  uint16_t ethertype = net_stack_ntohs16(eth->ethertype);
   const uint8_t *payload = frame + sizeof(struct net_eth_hdr);
   size_t payload_len = len - sizeof(struct net_eth_hdr);
 
   g_net.stats.frames_rx++;
   switch (ethertype) {
   case NET_ETHERTYPE_ARP:
-    return handle_arp(payload, payload_len);
+    return net_arp_handle(g_net.arp, NET_ARP_CAPACITY, &g_net.age_ticks,
+                          &g_net.stats, &g_net.ipv4, payload, payload_len,
+                          g_net.ready, arp_send_frame_cb);
   case NET_ETHERTYPE_IPV4:
-    return handle_ipv4(payload, payload_len, eth->src);
+    {
+      struct net_stack_ipv4_runtime runtime = stack_ipv4_runtime();
+      return net_stack_ipv4_handle(&runtime, payload, payload_len, eth->src,
+                                   net_stack_send_ipv4);
+    }
   default:
     g_net.stats.eth_unknown++;
     g_net.stats.frames_drop++;
@@ -600,7 +303,8 @@ int net_stack_poll(void) {
   uint16_t frame_len = 0;
   int processed = 0;
   for (uint32_t i = 0; i < NET_POLL_BUDGET; ++i) {
-    int rc = driver_poll_frame(frame, sizeof(frame), &frame_len);
+    int rc = net_stack_driver_poll_frame(&g_net.nic, frame, sizeof(frame),
+                                         &frame_len);
     if (rc <= 0) {
       break;
     }
@@ -612,65 +316,50 @@ int net_stack_poll(void) {
 
 int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
                         const uint8_t *payload, size_t payload_len) {
+  static const uint8_t broadcast_mac[6] = {0xFFu, 0xFFu, 0xFFu,
+                                           0xFFu, 0xFFu, 0xFFu};
   if (!g_net.initialized || !g_net.ready || !payload || payload_len == 0) {
     g_net.stats.frames_drop++;
     return -1;
   }
 
   size_t ip_payload_max =
-      (g_net.ipv4.mtu > sizeof(struct net_ipv4_hdr))
-          ? (g_net.ipv4.mtu - sizeof(struct net_ipv4_hdr))
+      (g_net.ipv4.mtu > NET_IPV4_HEADER_SIZE)
+          ? (g_net.ipv4.mtu - NET_IPV4_HEADER_SIZE)
           : 0;
   if (payload_len > ip_payload_max) {
     g_net.stats.frames_drop++;
     return -1;
   }
 
-  uint32_t next_hop = route_next_hop(dst_ip);
-  if (resolve_arp(next_hop) != 0) {
+  if (ip_is_broadcast(dst_ip)) {
+    struct net_stack_ipv4_runtime runtime = stack_ipv4_runtime();
+    return net_stack_ipv4_send_frame(&runtime, protocol, g_net.ipv4.addr,
+                                     dst_ip, broadcast_mac, payload,
+                                     payload_len, arp_send_frame_cb);
+  }
+
+  uint32_t next_hop =
+      net_arp_route_next_hop(g_net.ipv4.addr, g_net.ipv4.mask,
+                             g_net.ipv4.gateway, dst_ip);
+  if (net_arp_resolve(g_net.arp, NET_ARP_CAPACITY, &g_net.age_ticks,
+                      &g_net.stats, &g_net.ipv4, next_hop, arp_send_frame_cb,
+                      arp_poll_cb, arp_delay_cb) != 0) {
     g_net.stats.frames_drop++;
     return -1;
   }
-  int arp_idx = arp_find(next_hop);
+  int arp_idx = net_arp_find(g_net.arp, NET_ARP_CAPACITY, next_hop);
   if (arp_idx < 0) {
     g_net.stats.frames_drop++;
     return -1;
   }
   g_net.stats.arp_hits++;
-
-  uint8_t frame[NET_FRAME_MAX];
-  size_t frame_len =
-      sizeof(struct net_eth_hdr) + sizeof(struct net_ipv4_hdr) + payload_len;
-  if (frame_len > sizeof(frame)) {
-    g_net.stats.frames_drop++;
-    return -1;
+  {
+    struct net_stack_ipv4_runtime runtime = stack_ipv4_runtime();
+    return net_stack_ipv4_send_frame(&runtime, protocol, g_net.ipv4.addr,
+                                     dst_ip, g_net.arp[arp_idx].mac, payload,
+                                     payload_len, arp_send_frame_cb);
   }
-
-  struct net_eth_hdr *eth = (struct net_eth_hdr *)frame;
-  mem_copy(eth->dst, g_net.arp[arp_idx].mac, 6);
-  mem_copy(eth->src, g_net.ipv4.mac, 6);
-  eth->ethertype = htons16(NET_ETHERTYPE_IPV4);
-
-  struct net_ipv4_hdr *ip =
-      (struct net_ipv4_hdr *)(frame + sizeof(struct net_eth_hdr));
-  build_ipv4_header(ip, (uint16_t)payload_len, protocol, g_net.ipv4.addr,
-                    dst_ip, g_net.ident_seq++);
-  mem_copy((uint8_t *)ip + sizeof(struct net_ipv4_hdr), payload, payload_len);
-
-  if (driver_send_frame(frame, (uint16_t)frame_len) != 0) {
-    g_net.stats.frames_drop++;
-    return -1;
-  }
-
-  g_net.stats.frames_tx++;
-  if (protocol == NET_L4_PROTO_ICMP) {
-    g_net.stats.icmp_tx++;
-  } else if (protocol == NET_L4_PROTO_UDP) {
-    g_net.stats.udp_tx++;
-  } else if (protocol == NET_L4_PROTO_TCP) {
-    g_net.stats.tcp_tx++;
-  }
-  return 0;
 }
 
 int net_stack_ping(uint32_t dst_ip, uint32_t timeout_ms, uint32_t *rtt_ms,
@@ -679,173 +368,201 @@ int net_stack_ping(uint32_t dst_ip, uint32_t timeout_ms, uint32_t *rtt_ms,
     return -1;
   }
 
-  uint32_t next_hop = route_next_hop(dst_ip);
-  if (resolve_arp(next_hop) != 0) {
+  uint32_t next_hop =
+      net_arp_route_next_hop(g_net.ipv4.addr, g_net.ipv4.mask,
+                             g_net.ipv4.gateway, dst_ip);
+  if (net_arp_resolve(g_net.arp, NET_ARP_CAPACITY, &g_net.age_ticks,
+                      &g_net.stats, &g_net.ipv4, next_hop, arp_send_frame_cb,
+                      arp_poll_cb, arp_delay_cb) != 0) {
     return -1;
   }
 
   uint8_t icmp_pkt[32];
-  struct net_icmp_hdr *icmp = (struct net_icmp_hdr *)icmp_pkt;
   uint16_t seq = g_net.ident_seq++;
   uint16_t ident = 0xCA50u;
+  size_t icmp_len = 0;
 
-  icmp->type = 8;
-  icmp->code = 0;
-  icmp->checksum = 0;
-  icmp->ident = htons16(ident);
-  icmp->sequence = htons16(seq);
-  icmp_pkt[8] = 'h';
-  icmp_pkt[9] = 'e';
-  icmp_pkt[10] = 'y';
-  icmp_pkt[11] = '-';
-  icmp_pkt[12] = 'c';
-  icmp_pkt[13] = 'a';
-  icmp_pkt[14] = 'p';
-  icmp_pkt[15] = 'y';
-  for (uint32_t i = 16; i < sizeof(icmp_pkt); ++i) {
-    icmp_pkt[i] = (uint8_t)i;
+  if (net_icmp_build_echo_request(ident, seq, icmp_pkt, sizeof(icmp_pkt),
+                                  &icmp_len) != 0) {
+    return -1;
   }
-  icmp->checksum = htons16(checksum16(icmp_pkt, sizeof(icmp_pkt)));
-
-  g_net.icmp_waiting = 1;
-  g_net.icmp_wait_ident = ident;
-  g_net.icmp_wait_seq = seq;
-  g_net.icmp_reply_ready = 0;
-  g_net.icmp_reply_ip = 0;
+  net_icmp_begin_wait(&g_net.icmp, ident, seq);
 
   if (net_stack_send_ipv4(NET_L4_PROTO_ICMP, dst_ip, icmp_pkt,
-                          sizeof(icmp_pkt)) != 0) {
-    g_net.icmp_waiting = 0;
+                          icmp_len) != 0) {
+    net_icmp_end_wait(&g_net.icmp);
     return -1;
   }
 
   for (uint32_t elapsed = 0; elapsed <= timeout_ms; ++elapsed) {
     (void)net_stack_poll();
-    if (g_net.icmp_reply_ready) {
-      g_net.icmp_waiting = 0;
+    if (g_net.icmp.reply_ready) {
+      g_net.icmp.waiting = 0;
       if (rtt_ms) {
         *rtt_ms = elapsed;
       }
       if (reply_ip) {
-        *reply_ip = g_net.icmp_reply_ip;
+        *reply_ip = g_net.icmp.reply_ip;
       }
-      g_net.icmp_reply_ready = 0;
+      g_net.icmp.reply_ready = 0;
       return 0;
     }
-    delay_approx_1ms();
+    net_stack_delay_approx_1ms();
   }
 
-  g_net.icmp_waiting = 0;
-  g_net.icmp_reply_ready = 0;
+  net_icmp_end_wait(&g_net.icmp);
   return -1;
 }
 
-static size_t build_l2_l3(uint8_t *frame, const uint8_t src_mac[6],
-                          const uint8_t dst_mac[6], uint32_t src_ip,
-                          uint32_t dst_ip, uint8_t proto, uint16_t l4_len) {
-  struct net_eth_hdr *eth = (struct net_eth_hdr *)frame;
-  mem_copy(eth->dst, dst_mac, 6);
-  mem_copy(eth->src, src_mac, 6);
-  eth->ethertype = htons16(NET_ETHERTYPE_IPV4);
+int net_stack_dhcp_acquire(uint32_t timeout_ms) {
+  uint32_t fallback_addr = 0;
+  uint32_t fallback_mask = 0;
+  uint32_t fallback_gateway = 0;
+  uint32_t fallback_dns = 0;
+  uint32_t stage_timeout = 0;
 
-  struct net_ipv4_hdr *ip =
-      (struct net_ipv4_hdr *)(frame + sizeof(struct net_eth_hdr));
-  build_ipv4_header(ip, l4_len, proto, src_ip, dst_ip, 0x2222u);
-  return sizeof(struct net_eth_hdr) + sizeof(struct net_ipv4_hdr);
+  if (!g_net.initialized || !g_net.ready || timeout_ms < 200u) {
+    return -1;
+  }
+
+  fallback_addr = g_net.ipv4.addr;
+  fallback_mask = g_net.ipv4.mask;
+  fallback_gateway = g_net.ipv4.gateway;
+  fallback_dns = g_net.ipv4.dns;
+  stage_timeout = timeout_ms / 2u;
+  if (stage_timeout < 150u) {
+    stage_timeout = 150u;
+  }
+
+  net_dhcp_reset(&g_net.dhcp);
+  g_net.dhcp.xid =
+      (0xCA500000u ^ ((uint32_t)g_net.ident_seq << 8) ^ g_net.age_ticks);
+  g_net.dhcp.waiting_offer = 1;
+
+  if (net_dhcp_send_message(&g_net.dhcp, &g_net.ipv4,
+                            NET_DHCP_MSG_DISCOVER, 0u, 0u,
+                            net_stack_send_ipv4) != 0) {
+    net_dhcp_reset(&g_net.dhcp);
+    return -1;
+  }
+
+  for (uint32_t elapsed = 0; elapsed <= stage_timeout; ++elapsed) {
+    (void)net_stack_poll();
+    if (g_net.dhcp.offer_ready) {
+      break;
+    }
+    net_stack_delay_approx_1ms();
+  }
+  if (!g_net.dhcp.offer_ready || g_net.dhcp.offered_ip == 0u ||
+      g_net.dhcp.server_id == 0u) {
+    net_dhcp_reset(&g_net.dhcp);
+    return -1;
+  }
+
+  g_net.dhcp.waiting_offer = 0;
+  g_net.dhcp.waiting_ack = 1;
+  g_net.dhcp.ack_ready = 0;
+  g_net.dhcp.nak_received = 0;
+  if (net_dhcp_send_message(&g_net.dhcp, &g_net.ipv4,
+                            NET_DHCP_MSG_REQUEST,
+                            g_net.dhcp.offered_ip, g_net.dhcp.server_id,
+                            net_stack_send_ipv4) != 0) {
+    net_dhcp_reset(&g_net.dhcp);
+    return -1;
+  }
+
+  for (uint32_t elapsed = 0; elapsed <= stage_timeout; ++elapsed) {
+    (void)net_stack_poll();
+    if (g_net.dhcp.ack_ready || g_net.dhcp.nak_received) {
+      break;
+    }
+    net_stack_delay_approx_1ms();
+  }
+  if (!g_net.dhcp.ack_ready || g_net.dhcp.nak_received ||
+      g_net.dhcp.ack_ip == 0u) {
+    net_dhcp_reset(&g_net.dhcp);
+    return -1;
+  }
+
+  if (g_net.dhcp.subnet_mask == 0u) {
+    g_net.dhcp.subnet_mask = fallback_mask;
+  }
+  if (g_net.dhcp.router == 0u) {
+    g_net.dhcp.router = fallback_gateway;
+  }
+  if (g_net.dhcp.dns == 0u) {
+    g_net.dhcp.dns = fallback_dns;
+  }
+
+  (void)net_stack_set_ipv4(g_net.dhcp.ack_ip,
+                           g_net.dhcp.subnet_mask ? g_net.dhcp.subnet_mask
+                                                  : fallback_mask,
+                           g_net.dhcp.router, g_net.dhcp.dns);
+  if (g_net.ipv4.addr == 0u) {
+    g_net.ipv4.addr = fallback_addr;
+    return -1;
+  }
+  return 0;
+}
+
+int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
+                          uint32_t *out_ip) {
+  if (!g_net.initialized || !g_net.ready || !hostname || !out_ip ||
+      timeout_ms < 100u || g_net.ipv4.addr == 0u || g_net.ipv4.dns == 0u) {
+    return -1;
+  }
+
+  net_dns_reset(&g_net.dns);
+  g_net.dns.waiting_reply = 1;
+  g_net.dns.query_id =
+      (uint16_t)(0xCA00u ^ g_net.ident_seq ^ (uint16_t)g_net.age_ticks);
+  if (g_net.dns.query_id == 0u) {
+    g_net.dns.query_id = 0xCA51u;
+  }
+
+  if (net_dns_send_query(&g_net.dns, &g_net.ipv4, hostname,
+                         net_stack_send_ipv4) != 0) {
+    net_dns_reset(&g_net.dns);
+    return -1;
+  }
+
+  for (uint32_t elapsed = 0; elapsed <= timeout_ms; ++elapsed) {
+    (void)net_stack_poll();
+    if (g_net.dns.response_ready) {
+      *out_ip = g_net.dns.answer_ip;
+      net_dns_reset(&g_net.dns);
+      return 0;
+    }
+    if (g_net.dns.response_failed) {
+      break;
+    }
+    net_stack_delay_approx_1ms();
+  }
+
+  net_dns_reset(&g_net.dns);
+  return -1;
+}
+
+int net_stack_driver_available(void) {
+  return g_net.initialized && g_net.driver_available;
+}
+
+const char *net_stack_unavailable_reason(void) {
+  if (!g_net.initialized) {
+    return "stack not initialized";
+  }
+  if (g_net.driver_available && g_net.ready) {
+    return NULL; /* available */
+  }
+  return g_net.unavailable_reason ? g_net.unavailable_reason : "unknown";
 }
 
 int net_stack_protocol_selftest(void) {
   if (!g_net.initialized) {
     return -1;
   }
-
-  struct net_stack_stats before = g_net.stats;
-  const uint8_t peer_mac[6] = {0x52u, 0x54u, 0x00u, 0x12u, 0x34u, 0x99u};
-  const uint32_t peer_ip = NET_IPV4_ADDR(10, 0, 2, 200);
-
-  /* 1) ARP request to local IP. */
-  {
-    uint8_t frame[sizeof(struct net_eth_hdr) + sizeof(struct net_arp_pkt)];
-    struct net_eth_hdr *eth = (struct net_eth_hdr *)frame;
-    for (int i = 0; i < 6; ++i) {
-      eth->dst[i] = 0xFFu;
-    }
-    mem_copy(eth->src, peer_mac, 6);
-    eth->ethertype = htons16(NET_ETHERTYPE_ARP);
-
-    struct net_arp_pkt *arp = (struct net_arp_pkt *)(frame + sizeof(*eth));
-    arp->htype = htons16(NET_ARP_HTYPE_ETHERNET);
-    arp->ptype = htons16(NET_ARP_PTYPE_IPV4);
-    arp->hlen = 6;
-    arp->plen = 4;
-    arp->opcode = htons16(NET_ARP_OP_REQUEST);
-    mem_copy(arp->sender_mac, peer_mac, 6);
-    arp->sender_ip = htonl32(peer_ip);
-    mem_zero(arp->target_mac, 6);
-    arp->target_ip = htonl32(g_net.ipv4.addr);
-    (void)net_stack_receive_frame(frame, sizeof(frame));
-  }
-
-  /* 2) ICMP echo request. */
-  {
-    uint8_t frame[NET_FRAME_MAX];
-    size_t off = build_l2_l3(frame, peer_mac, g_net.ipv4.mac, peer_ip,
-                             g_net.ipv4.addr, NET_L4_PROTO_ICMP,
-                             (uint16_t)(sizeof(struct net_icmp_hdr) + 4u));
-    struct net_icmp_hdr *icmp = (struct net_icmp_hdr *)(frame + off);
-    icmp->type = 8;
-    icmp->code = 0;
-    icmp->checksum = 0;
-    icmp->ident = htons16(0xCAFEu);
-    icmp->sequence = htons16(1);
-    uint8_t *data = (uint8_t *)(icmp + 1);
-    data[0] = 0x43u;
-    data[1] = 0x41u;
-    data[2] = 0x50u;
-    data[3] = 0x59u;
-    icmp->checksum = htons16(checksum16((const uint8_t *)icmp, sizeof(*icmp) + 4u));
-    (void)net_stack_receive_frame(frame, off + sizeof(*icmp) + 4u);
-  }
-
-  /* 3) UDP datagram to local port. */
-  {
-    uint8_t frame[NET_FRAME_MAX];
-    size_t off = build_l2_l3(frame, peer_mac, g_net.ipv4.mac, peer_ip,
-                             g_net.ipv4.addr, NET_L4_PROTO_UDP,
-                             sizeof(struct net_udp_hdr));
-    struct net_udp_hdr *udp = (struct net_udp_hdr *)(frame + off);
-    udp->src_port = htons16(5353u);
-    udp->dst_port = htons16(9000u);
-    udp->len = htons16(sizeof(struct net_udp_hdr));
-    udp->checksum = 0;
-    (void)net_stack_receive_frame(frame, off + sizeof(*udp));
-  }
-
-  /* 4) TCP SYN segment to local port. */
-  {
-    uint8_t frame[NET_FRAME_MAX];
-    size_t off = build_l2_l3(frame, peer_mac, g_net.ipv4.mac, peer_ip,
-                             g_net.ipv4.addr, NET_L4_PROTO_TCP,
-                             sizeof(struct net_tcp_hdr));
-    struct net_tcp_hdr *tcp = (struct net_tcp_hdr *)(frame + off);
-    tcp->src_port = htons16(40000u);
-    tcp->dst_port = htons16(8080u);
-    tcp->seq = htonl32(1u);
-    tcp->ack = 0;
-    tcp->flags = htons16((uint16_t)((5u << 12) | 0x0002u));
-    tcp->window = htons16(64240u);
-    tcp->checksum = 0;
-    tcp->urgent = 0;
-    (void)net_stack_receive_frame(frame, off + sizeof(*tcp));
-  }
-
-  if (g_net.stats.arp_seen <= before.arp_seen ||
-      g_net.stats.icmp_rx <= before.icmp_rx ||
-      g_net.stats.udp_rx <= before.udp_rx ||
-      g_net.stats.tcp_rx <= before.tcp_rx) {
-    return -1;
-  }
-  return 0;
+  return net_stack_protocol_selftest_run(&g_net.ipv4, &g_net.stats,
+                                         net_stack_receive_frame);
 }
 
 const char *net_driver_name(uint8_t kind) { return net_probe_kind_name(kind); }

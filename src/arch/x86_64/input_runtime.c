@@ -20,6 +20,13 @@ enum {
 static int g_has_com1 = -1;
 static int g_has_ps2_active = -1;
 static int g_has_ps2_passive = -1;
+static int g_hyperv_keyboard_auto_promotion_enabled = 0;
+static int g_hyperv_keyboard_auto_promotion_logged = 0;
+
+void x64_input_enable_auto_promotion(void) {
+  g_hyperv_keyboard_auto_promotion_enabled = 1;
+  g_hyperv_keyboard_auto_promotion_logged = 0;
+}
 
 static inline void outb_local(uint16_t port, uint8_t value) {
   __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -172,7 +179,9 @@ static int decode_prefixed_scancode(int *prefix_flag, uint8_t raw_scancode,
   if (*prefix_flag) {
     raw_scancode = normalize_extended_scancode(raw_scancode);
   }
-  *prefix_flag = 0;
+  /* NOTE: prefix_flag is intentionally left set until after the caller
+   * has a chance to check it for arrow-key detection.  The caller clears
+   * it after use. */
   *out_scancode = raw_scancode;
   return 1;
 }
@@ -541,12 +550,15 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->has_hyperv = config->has_hyperv ? 1 : 0;
   runtime->hyperv_confirmed = 0;
   runtime->hyperv_preferred = 0;
+  runtime->hyperv_transport_prepared = 0;
   runtime->ps2_fallback_parked = 0;
   runtime->hyperv_deferred = config->hyperv_deferred ? 1 : 0;
   runtime->hyperv_promotion_attempted = config->has_hyperv ? 1 : 0;
   runtime->hyperv_promotion_attempts = 0u;
+  runtime->hyperv_prepare_attempts = 0u;
   runtime->hyperv_event_count = 0u;
   runtime->hyperv_degrade_count = 0u;
+  runtime->hyperv_prepare_last_result = 0;
   runtime->hyperv_retry_tick = 0u;
   runtime->has_com1 = config->has_com1 ? 1 : 0;
   runtime->efi_system_table = config->efi_system_table;
@@ -557,6 +569,12 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->hyperv_extended_prefix = 0;
   runtime->dead_accent = 0;
   runtime->pending_char = 0;
+  runtime->escape_seq[0] = 0;
+  runtime->escape_seq[1] = 0;
+  runtime->escape_seq[2] = 0;
+  runtime->escape_seq[3] = 0;
+  runtime->escape_seq_len = 0;
+  runtime->escape_seq_pos = 0;
 
   if (runtime->prefer_native) {
     if (config->has_ps2) {
@@ -587,6 +605,38 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   refresh_primary_backend(runtime);
 }
 
+/* Translate extended scancodes for arrow keys into VT100 escape sequences.
+ * Returns 1 if the scancode was an arrow key (caller should emit the first
+ * byte and return), 0 if it wasn't. */
+static int emit_arrow_escape(struct x64_input_runtime *runtime, uint8_t sc,
+                             char *out_char) {
+  char dir = 0;
+
+  switch (sc) {
+  case 0x48:
+    dir = 'A';
+    break; /* Up */
+  case 0x50:
+    dir = 'B';
+    break; /* Down */
+  case 0x4D:
+    dir = 'C';
+    break; /* Right */
+  case 0x4B:
+    dir = 'D';
+    break; /* Left */
+  default:
+    return 0;
+  }
+
+  runtime->escape_seq[0] = '[';
+  runtime->escape_seq[1] = dir;
+  runtime->escape_seq_len = 2;
+  runtime->escape_seq_pos = 0;
+  *out_char = 0x1B; /* ESC — first byte emitted immediately */
+  return 1;
+}
+
 int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
   char c = 0;
   uint8_t sc = 0;
@@ -594,6 +644,16 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
 
   if (!runtime || !out_char) {
     return 0;
+  }
+
+  /* Drain any pending arrow-key escape sequence first. */
+  if (runtime->escape_seq_pos < runtime->escape_seq_len) {
+    *out_char = runtime->escape_seq[runtime->escape_seq_pos++];
+    if (runtime->escape_seq_pos >= runtime->escape_seq_len) {
+      runtime->escape_seq_len = 0;
+      runtime->escape_seq_pos = 0;
+    }
+    return 1;
   }
 
   if (runtime->pending_char) {
@@ -621,16 +681,24 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
       break;
     case X64_INPUT_BACKEND_PS2:
       if (runtime->has_ps2 && ps2_poll_scancode(&sc)) {
+        int was_extended = 0;
         if (!decode_prefixed_scancode(&runtime->ps2_extended_prefix, sc, &sc,
                                       &key_break)) {
           break;
         }
+        was_extended = runtime->ps2_extended_prefix;
+        runtime->ps2_extended_prefix = 0;
         if (sc == 0x2A || sc == 0x36) {
           runtime->shift_active = key_break ? 0 : 1;
           break;
         }
         if (key_break) {
           break;
+        }
+        /* Arrow keys on extended scancodes → VT100 escape sequence. */
+        if (was_extended && emit_arrow_escape(runtime, sc, out_char)) {
+          x64_input_note_backend(runtime, backend);
+          return 1;
         }
         if (sc == 0x1C) {
           *out_char = '\n';
@@ -677,6 +745,11 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
             }
             if (hv_break) {
               break;
+            }
+            /* Arrow keys on extended scancodes → VT100 escape sequence. */
+            if (hv_extended && emit_arrow_escape(runtime, hv_sc, out_char)) {
+              x64_input_note_backend(runtime, backend);
+              return 1;
             }
             if (hv_sc == 0x1C) {
               *out_char = '\n';
@@ -842,13 +915,22 @@ void x64_input_retire_firmware_backend(struct x64_input_runtime *runtime) {
   retire_firmware_backend(runtime);
 }
 
-int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
-                                       int boot_services_active,
-                                       void (*print)(const char *)) {
+static int x64_input_enable_hyperv_native_internal(
+    struct x64_input_runtime *runtime, int boot_services_active,
+    void (*print)(const char *), int force) {
   uint64_t now = 0;
 
   if (!runtime || !runtime->hyperv_deferred || runtime->has_hyperv ||
       boot_services_active) {
+    return 0;
+  }
+  if (!force && !g_hyperv_keyboard_auto_promotion_enabled) {
+    if (!g_hyperv_keyboard_auto_promotion_logged) {
+      runtime_print(
+          print,
+          "[hyperv] Promocao automatica do VMBus keyboard suspensa; seguindo com fallback atual para liberar storage/rede.\n");
+      g_hyperv_keyboard_auto_promotion_logged = 1;
+    }
     return 0;
   }
   if (runtime->hyperv_promotion_attempts >= HYPERV_PROMOTION_MAX_ATTEMPTS) {
@@ -885,6 +967,7 @@ int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
   }
 
   runtime->has_hyperv = 1;
+  runtime->hyperv_transport_prepared = 1;
   runtime->hyperv_confirmed = 0;
   runtime->hyperv_deferred = 0;
   runtime->hyperv_retry_tick = 0u;
@@ -896,5 +979,55 @@ int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
   }
   refresh_primary_backend(runtime);
   runtime_print(print, "[hyperv] Teclado VMBus promovido em runtime nativo.\n");
+  return 1;
+}
+
+int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
+                                       int boot_services_active,
+                                       void (*print)(const char *)) {
+  return x64_input_enable_hyperv_native_internal(runtime, boot_services_active,
+                                                 print, 0);
+}
+
+int x64_input_force_enable_hyperv_native(struct x64_input_runtime *runtime,
+                                         int boot_services_active,
+                                         void (*print)(const char *)) {
+  return x64_input_enable_hyperv_native_internal(runtime, boot_services_active,
+                                                 print, 1);
+}
+
+int x64_input_try_prepare_hyperv_runtime(struct x64_input_runtime *runtime,
+                                         int boot_services_active,
+                                         void (*print)(const char *)) {
+  int rc = 0;
+
+  if (!runtime || !runtime->hyperv_deferred || runtime->has_hyperv ||
+      !boot_services_active) {
+    return 0;
+  }
+
+  runtime->hyperv_prepare_attempts++;
+  if (runtime->hyperv_transport_prepared || vmbus_runtime_hypercall_prepared()) {
+    runtime->hyperv_transport_prepared = 1;
+    runtime->hyperv_prepare_last_result = 0;
+    return 0;
+  }
+
+  runtime_print(
+      print,
+      "[hyperv] Preparando base VMBus do input em modo manual/controlado.\n");
+  rc = vmbus_runtime_prepare_hypercall();
+  runtime->hyperv_prepare_last_result = rc;
+  if (rc != 0) {
+    runtime_print(
+        print,
+        "[hyperv] Falha ao preparar base VMBus do input; mantendo promocao adiada.\n");
+    return -1;
+  }
+
+  runtime->hyperv_transport_prepared = 1;
+  runtime_print(
+      print,
+      "[hyperv] Base VMBus do input preparada; promocao do teclado segue adiada ate passo explicito futuro.\n");
   return 1;
 }

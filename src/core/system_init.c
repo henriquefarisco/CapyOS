@@ -74,6 +74,7 @@ static int strings_equal(const char *a, const char *b) {
 
 static char g_boot_default_keyboard_layout[16] = "us";
 static char g_boot_default_language[16] = "en";
+static struct system_runtime_platform g_runtime_platform = {0};
 
 static const char *normalize_keyboard_layout_name(const char *input) {
   if (!input || !input[0]) {
@@ -93,12 +94,153 @@ static const char *system_language_or_default(const char *language) {
   return normalized ? normalized : "en";
 }
 
+static const char *system_network_mode_or_default(const char *mode) {
+  if (mode && strings_equal(mode, "dhcp")) {
+    return "dhcp";
+  }
+  return "static";
+}
+
+static uint32_t system_ipv4_addr(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
+  return ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)c << 8) |
+         (uint32_t)d;
+}
+
+static void system_ipv4_to_string(uint32_t ip, char out[16]) {
+  char *p = out;
+  uint8_t octets[4];
+  if (!out) {
+    return;
+  }
+  octets[0] = (uint8_t)((ip >> 24) & 0xFFu);
+  octets[1] = (uint8_t)((ip >> 16) & 0xFFu);
+  octets[2] = (uint8_t)((ip >> 8) & 0xFFu);
+  octets[3] = (uint8_t)(ip & 0xFFu);
+  for (uint32_t i = 0; i < 4; ++i) {
+    uint8_t value = octets[i];
+    if (value >= 100u) {
+      *p++ = (char)('0' + (value / 100u));
+      value %= 100u;
+      *p++ = (char)('0' + (value / 10u));
+      *p++ = (char)('0' + (value % 10u));
+    } else if (value >= 10u) {
+      *p++ = (char)('0' + (value / 10u));
+      *p++ = (char)('0' + (value % 10u));
+    } else {
+      *p++ = (char)('0' + value);
+    }
+    if (i != 3u) {
+      *p++ = '.';
+    }
+  }
+  *p = '\0';
+}
+
+static int system_parse_ipv4(const char *text, uint32_t *out) {
+  uint32_t parts[4] = {0, 0, 0, 0};
+  uint32_t idx = 0;
+  uint32_t value = 0;
+  int has_digit = 0;
+  const char *p = text;
+
+  if (!text || !out) {
+    return -1;
+  }
+  for (;; ++p) {
+    char ch = *p;
+    if (ch >= '0' && ch <= '9') {
+      has_digit = 1;
+      value = (value * 10u) + (uint32_t)(ch - '0');
+      if (value > 255u) {
+        return -1;
+      }
+      continue;
+    }
+    if (ch == '.' || ch == '\0') {
+      if (!has_digit || idx >= 4u) {
+        return -1;
+      }
+      parts[idx++] = value;
+      value = 0;
+      has_digit = 0;
+      if (ch == '\0') {
+        break;
+      }
+      continue;
+    }
+    return -1;
+  }
+  if (idx != 4u) {
+    return -1;
+  }
+  *out = system_ipv4_addr((uint8_t)parts[0], (uint8_t)parts[1],
+                          (uint8_t)parts[2], (uint8_t)parts[3]);
+  return 0;
+}
+
 void system_set_boot_defaults(const char *keyboard_layout, const char *language) {
   cstring_copy(g_boot_default_keyboard_layout,
                sizeof(g_boot_default_keyboard_layout),
                normalize_keyboard_layout_name(keyboard_layout));
   cstring_copy(g_boot_default_language, sizeof(g_boot_default_language),
                system_language_or_default(language));
+}
+
+void system_runtime_platform_set(const struct system_runtime_platform *status) {
+  if (!status) {
+    memory_zero(&g_runtime_platform, sizeof(g_runtime_platform));
+    return;
+  }
+  g_runtime_platform = *status;
+}
+
+void system_runtime_platform_get(struct system_runtime_platform *out) {
+  if (!out) {
+    return;
+  }
+  *out = g_runtime_platform;
+}
+
+const char *system_exit_boot_services_gate_label(uint8_t gate) {
+  switch (gate) {
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_NATIVE:
+    return "native";
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_READY:
+    return "ready";
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_CONTRACT:
+    return "wait-contract";
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_INPUT:
+    return "wait-input";
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_STORAGE_DEVICE:
+    return "wait-storage-device";
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_STORAGE_FIRMWARE:
+    return "wait-storage-firmware";
+  case SYSTEM_EXIT_BOOT_SERVICES_GATE_FAILED:
+    return "failed";
+  default:
+    return "unknown";
+  }
+}
+
+const char *system_hyperv_input_gate_label(uint8_t gate) {
+  switch (gate) {
+  case SYSTEM_HYPERV_INPUT_GATE_OFF:
+    return "off";
+  case SYSTEM_HYPERV_INPUT_GATE_ACTIVE:
+    return "active";
+  case SYSTEM_HYPERV_INPUT_GATE_WAIT_BOOT_SERVICES:
+    return "wait-boot-services";
+  case SYSTEM_HYPERV_INPUT_GATE_PREPARED:
+    return "prepared";
+  case SYSTEM_HYPERV_INPUT_GATE_READY:
+    return "ready";
+  case SYSTEM_HYPERV_INPUT_GATE_RETRY:
+    return "retry";
+  case SYSTEM_HYPERV_INPUT_GATE_FAILED:
+    return "failed";
+  default:
+    return "unknown";
+  }
 }
 
 static void system_settings_set_defaults(struct system_settings *settings) {
@@ -111,6 +253,12 @@ static void system_settings_set_defaults(struct system_settings *settings) {
                g_boot_default_keyboard_layout);
   cstring_copy(settings->language, sizeof(settings->language),
                g_boot_default_language);
+  cstring_copy(settings->network_mode, sizeof(settings->network_mode),
+               "static");
+  settings->ipv4_addr = system_ipv4_addr(10, 0, 2, 15);
+  settings->ipv4_mask = system_ipv4_addr(255, 255, 255, 0);
+  settings->ipv4_gateway = system_ipv4_addr(10, 0, 2, 2);
+  settings->ipv4_dns = system_ipv4_addr(1, 1, 1, 1);
   settings->splash_enabled = 1;
   settings->diagnostics_enabled = 0;
 }
@@ -289,10 +437,8 @@ static void log_emit_segments(const char *a, const char *b, const char *c,
     if (!seg) {
       continue;
     }
-    vga_write(seg);
     log_buffer_append(seg);
   }
-  vga_newline();
   log_buffer_append("\n");
   log_flush_pending();
 }
@@ -328,16 +474,24 @@ static void log_dependency_wait(const char *dependency, const char *target) {
 
 static int verify_config_file(const char *hostname, const char *theme,
                               const char *keyboard, const char *language,
-                              int splash_enabled) {
+                              const char *network_mode, int splash_enabled,
+                              uint32_t ipv4_addr,
+                              uint32_t ipv4_mask, uint32_t ipv4_gateway,
+                              uint32_t ipv4_dns) {
   const char *splash_value = splash_enabled ? "enabled" : "disabled";
   const char *keyboard_value = keyboard ? keyboard : "us";
   const char *language_value = system_language_or_default(language);
+  const char *network_mode_value = system_network_mode_or_default(network_mode);
+  char ipv4_text[16];
+  char mask_text[16];
+  char gateway_text[16];
+  char dns_text[16];
   struct file *f = vfs_open("/system/config.ini", VFS_OPEN_READ);
   if (!f) {
     vga_write("Falha ao reabrir configuracao em /system/config.ini.\n");
     return -1;
   }
-  char buffer[256];
+  char buffer[384];
   long read = vfs_read(f, buffer, sizeof(buffer) - 1);
   vfs_close(f);
   if (read <= 0) {
@@ -350,7 +504,17 @@ static int verify_config_file(const char *hostname, const char *theme,
   int theme_ok = 0;
   int keyboard_ok = 0;
   int language_ok = 0;
+  int network_mode_ok = 0;
   int splash_ok = 0;
+  int ipv4_ok = 0;
+  int mask_ok = 0;
+  int gateway_ok = 0;
+  int dns_ok = 0;
+
+  system_ipv4_to_string(ipv4_addr, ipv4_text);
+  system_ipv4_to_string(ipv4_mask, mask_text);
+  system_ipv4_to_string(ipv4_gateway, gateway_text);
+  system_ipv4_to_string(ipv4_dns, dns_text);
 
   size_t start = 0;
   for (size_t i = 0; i <= (size_t)read; ++i) {
@@ -371,9 +535,26 @@ static int verify_config_file(const char *hostname, const char *theme,
                    config_line_equals(&buffer[start], len, "language",
                                       language_value)) {
           language_ok = 1;
+        } else if (!network_mode_ok &&
+                   config_line_equals(&buffer[start], len, "network_mode",
+                                      network_mode_value)) {
+          network_mode_ok = 1;
         } else if (!splash_ok && config_line_equals(&buffer[start], len,
                                                     "splash", splash_value)) {
           splash_ok = 1;
+        } else if (!ipv4_ok &&
+                   config_line_equals(&buffer[start], len, "ipv4", ipv4_text)) {
+          ipv4_ok = 1;
+        } else if (!mask_ok &&
+                   config_line_equals(&buffer[start], len, "mask", mask_text)) {
+          mask_ok = 1;
+        } else if (!gateway_ok &&
+                   config_line_equals(&buffer[start], len, "gateway",
+                                      gateway_text)) {
+          gateway_ok = 1;
+        } else if (!dns_ok &&
+                   config_line_equals(&buffer[start], len, "dns", dns_text)) {
+          dns_ok = 1;
         }
       }
       start = i + 1;
@@ -381,7 +562,8 @@ static int verify_config_file(const char *hostname, const char *theme,
   }
 
   if (!hostname_ok || !theme_ok || !keyboard_ok || !language_ok ||
-      !splash_ok) {
+      !network_mode_ok || !splash_ok || !ipv4_ok || !mask_ok || !gateway_ok ||
+      !dns_ok) {
     vga_write("Falha ao validar conteudo de /system/config.ini.\n");
     return -1;
   }
@@ -397,8 +579,16 @@ static int write_settings_file(const struct system_settings *settings) {
   }
 
   const char *splash_value = settings->splash_enabled ? "enabled" : "disabled";
-  char config_buffer[256];
+  char ipv4_text[16];
+  char mask_text[16];
+  char gateway_text[16];
+  char dns_text[16];
+  char config_buffer[384];
   config_buffer[0] = '\0';
+  system_ipv4_to_string(settings->ipv4_addr, ipv4_text);
+  system_ipv4_to_string(settings->ipv4_mask, mask_text);
+  system_ipv4_to_string(settings->ipv4_gateway, gateway_text);
+  system_ipv4_to_string(settings->ipv4_dns, dns_text);
   buffer_append(config_buffer, sizeof(config_buffer), "hostname=");
   buffer_append(config_buffer, sizeof(config_buffer), settings->hostname);
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
@@ -412,8 +602,24 @@ static int write_settings_file(const struct system_settings *settings) {
   buffer_append(config_buffer, sizeof(config_buffer),
                 system_language_or_default(settings->language));
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "network_mode=");
+  buffer_append(config_buffer, sizeof(config_buffer),
+                system_network_mode_or_default(settings->network_mode));
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
   buffer_append(config_buffer, sizeof(config_buffer), "splash=");
   buffer_append(config_buffer, sizeof(config_buffer), splash_value);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "ipv4=");
+  buffer_append(config_buffer, sizeof(config_buffer), ipv4_text);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "mask=");
+  buffer_append(config_buffer, sizeof(config_buffer), mask_text);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "gateway=");
+  buffer_append(config_buffer, sizeof(config_buffer), gateway_text);
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "dns=");
+  buffer_append(config_buffer, sizeof(config_buffer), dns_text);
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
 
   return write_text_file("/system/config.ini", config_buffer);
@@ -492,6 +698,175 @@ static size_t wizard_prompt(const char *prompt, char *buffer, size_t buffer_len,
   tty_set_echo(1);
   tty_set_echo_mask('\0');
   return len;
+}
+
+static int wizard_menu_select(const char *title, const char *language,
+                              const char *const *items, size_t count,
+                              size_t default_index);
+
+static void wizard_draw_setup_header(uint32_t progress, const char *title) {
+  char pct[8];
+
+  vga_clear();
+  vga_write("CAPYOS SETUP");
+  vga_newline();
+  vga_newline();
+
+  pct[0] = '\0';
+  u32_to_string(progress, pct, sizeof(pct));
+  vga_write("[");
+  vga_write(pct);
+  vga_write("%]");
+  if (title && title[0]) {
+    vga_write(" ");
+    vga_write(title);
+  }
+  vga_newline();
+  vga_newline();
+}
+
+static size_t wizard_prompt_setup(uint32_t progress, const char *title,
+                                  const char *prompt, char *buffer,
+                                  size_t buffer_len, int secret) {
+  wizard_draw_setup_header(progress, title);
+  return wizard_prompt(prompt, buffer, buffer_len, secret);
+}
+
+static int wizard_menu_select_setup(uint32_t progress, const char *title,
+                                    const char *language,
+                                    const char *const *items, size_t count,
+                                    size_t default_index) {
+  char menu_title[160];
+  char pct[8];
+
+  menu_title[0] = '\0';
+  u32_to_string(progress, pct, sizeof(pct));
+  buffer_append(menu_title, sizeof(menu_title), "[");
+  buffer_append(menu_title, sizeof(menu_title), pct);
+  buffer_append(menu_title, sizeof(menu_title), "%] ");
+  buffer_append(menu_title, sizeof(menu_title), title ? title : "");
+  return wizard_menu_select(menu_title, language, items, count, default_index);
+}
+
+static const char *system_ui_menu_hint(const char *language) {
+  const char *normalized = system_language_or_default(language);
+  if (strings_equal(normalized, "en")) {
+    return "Use Up/Down, number keys, and Enter.";
+  }
+  if (strings_equal(normalized, "es")) {
+    return "Usa flechas, numeros y Enter.";
+  }
+  return "Use setas, numeros e Enter.";
+}
+
+static const char *system_ui_menu_enabled(const char *language) {
+  const char *normalized = system_language_or_default(language);
+  if (strings_equal(normalized, "en")) {
+    return "Enabled";
+  }
+  if (strings_equal(normalized, "es")) {
+    return "Activado";
+  }
+  return "Ativado";
+}
+
+static const char *system_ui_menu_disabled(const char *language) {
+  const char *normalized = system_language_or_default(language);
+  if (strings_equal(normalized, "en")) {
+    return "Disabled";
+  }
+  if (strings_equal(normalized, "es")) {
+    return "Desactivado";
+  }
+  return "Desativado";
+}
+
+static const char *system_ui_splash_menu_title(const char *language) {
+  const char *normalized = system_language_or_default(language);
+  if (strings_equal(normalized, "en")) {
+    return "Animated splash";
+  }
+  if (strings_equal(normalized, "es")) {
+    return "Splash animado";
+  }
+  return "Splash animado";
+}
+
+static void wizard_draw_menu(const char *title, const char *language,
+                             const char *const *items, size_t count,
+                             size_t selected) {
+  vga_clear();
+  vga_write("CAPYOS SETUP");
+  vga_newline();
+  vga_newline();
+  if (title && title[0]) {
+    vga_write(title);
+    vga_newline();
+  }
+  vga_write(system_ui_menu_hint(language));
+  vga_newline();
+  vga_newline();
+
+  for (size_t i = 0; i < count; ++i) {
+    char line[160];
+    char idx[12];
+    line[0] = '\0';
+    u32_to_string((uint32_t)(i + 1u), idx, sizeof(idx));
+    buffer_append(line, sizeof(line), (i == selected) ? "> " : "  ");
+    buffer_append(line, sizeof(line), "[");
+    buffer_append(line, sizeof(line), idx);
+    buffer_append(line, sizeof(line), "] ");
+    buffer_append(line, sizeof(line), items[i] ? items[i] : "");
+    vga_write(line);
+    vga_newline();
+  }
+}
+
+static int wizard_menu_select(const char *title, const char *language,
+                              const char *const *items, size_t count,
+                              size_t default_index) {
+  size_t selected = 0;
+
+  if (!items || count == 0) {
+    return 0;
+  }
+  if (default_index < count) {
+    selected = default_index;
+  }
+
+  tty_set_echo(1);
+  tty_set_echo_mask('\0');
+  for (;;) {
+    char ch;
+    wizard_draw_menu(title, language, items, count, selected);
+    ch = tty_getc();
+
+    if (ch == '\r' || ch == '\n') {
+      return (int)selected;
+    }
+    if (ch >= '1' && ch <= '9') {
+      size_t pick = (size_t)(ch - '1');
+      if (pick < count) {
+        return (int)pick;
+      }
+      continue;
+    }
+    if (ch != 27) {
+      continue;
+    }
+
+    ch = tty_getc();
+    if (ch != '[') {
+      continue;
+    }
+
+    ch = tty_getc();
+    if (ch == 'A') {
+      selected = (selected == 0) ? (count - 1) : (selected - 1);
+    } else if (ch == 'B') {
+      selected = (selected + 1u) % count;
+    }
+  }
 }
 
 enum system_ui_text_id {
@@ -886,10 +1261,11 @@ static void dbg_print(const char *a, const char *b) {
   if (!g_setup_debug)
     return;
   if (a)
-    vga_write(a);
+    log_buffer_append(a);
   if (b)
-    vga_write(b);
-  vga_newline();
+    log_buffer_append(b);
+  log_buffer_append("\n");
+  log_flush_pending();
 }
 
 static void dbg_print_heap(const char *prefix, const char *path) {
@@ -901,17 +1277,17 @@ static void dbg_print_heap(const char *prefix, const char *path) {
   u32_to_string((uint32_t)kheap_used(), used, sizeof(used));
   u32_to_string((uint32_t)kheap_size(), total, sizeof(total));
   if (prefix) {
-    vga_write(prefix);
+    log_buffer_append(prefix);
   }
   if (path) {
-    vga_write(path);
+    log_buffer_append(path);
   }
-  vga_write(" [heap ");
-  vga_write(used);
-  vga_write("/");
-  vga_write(total);
-  vga_write("]");
-  vga_newline();
+  log_buffer_append(" [heap ");
+  log_buffer_append(used);
+  log_buffer_append("/");
+  log_buffer_append(total);
+  log_buffer_append("]\n");
+  log_flush_pending();
 }
 
 static int ensure_directory(const char *path) {
@@ -1104,7 +1480,7 @@ static int first_boot_setup_impl(void) {
   }
   vga_newline();
 
-  g_setup_debug = 1; // habilita logs detalhados durante a preparacao inicial
+  g_setup_debug = 0;
 
   const char *proc_dirs = "preparacao de diretorios padrao";
   log_process_begin(proc_dirs);
@@ -1238,104 +1614,99 @@ static int first_boot_setup_impl(void) {
   log_process_finalize(proc_docs);
   log_process_finalize_success(proc_docs);
 
-  print_line(system_ui_text(setup_language, SYS_UI_LAYOUTS_AVAILABLE));
-  for (size_t i = 0; i < keyboard_layout_count(); ++i) {
-    char idxbuf[4];
-    idxbuf[0] = '[';
-    idxbuf[1] = (char)('0' + (int)i);
-    idxbuf[2] = ']';
-    idxbuf[3] = '\0';
-    vga_write("  ");
-    vga_write(idxbuf);
-    vga_write(" ");
-    vga_write(keyboard_layout_name(i));
-    vga_write(" - ");
-    vga_write(keyboard_layout_description(i));
-    vga_newline();
-  }
-
   char layout_choice[32];
   memory_zero(layout_choice, sizeof(layout_choice));
-  while (1) {
-    size_t llen =
-        wizard_prompt(system_ui_text(setup_language, SYS_UI_LAYOUT_PROMPT),
-                      layout_choice,
-                      sizeof(layout_choice), 0);
-    if (llen == 0) {
+  {
+    size_t layout_count = keyboard_layout_count();
+    size_t selected_layout = 0;
+    char layout_labels[16][96];
+    const char *layout_items[16];
+
+    if (layout_count > 16u) {
+      layout_count = 16u;
+    }
+    for (size_t i = 0; i < layout_count; ++i) {
+      layout_labels[i][0] = '\0';
+      buffer_append(layout_labels[i], sizeof(layout_labels[i]),
+                    keyboard_layout_name(i));
+      buffer_append(layout_labels[i], sizeof(layout_labels[i]), " - ");
+      buffer_append(layout_labels[i], sizeof(layout_labels[i]),
+                    keyboard_layout_description(i));
+      layout_items[i] = layout_labels[i];
+      if (strings_equal(keyboard_layout_name(i), g_boot_default_keyboard_layout)) {
+        selected_layout = i;
+      }
+    }
+
+    selected_layout = (size_t)wizard_menu_select_setup(
+        20u,
+        system_ui_text(setup_language, SYS_UI_LAYOUTS_AVAILABLE),
+        setup_language, layout_items, layout_count, selected_layout);
+    cstring_copy(layout_choice, sizeof(layout_choice),
+                 keyboard_layout_name(selected_layout));
+    if (keyboard_set_layout_by_name(layout_choice) != 0) {
       cstring_copy(layout_choice, sizeof(layout_choice), "us");
-    } else if (llen == 1 && layout_choice[0] >= '0' &&
-               layout_choice[0] < '0' + (char)keyboard_layout_count()) {
-      size_t pick = (size_t)(layout_choice[0] - '0');
-      cstring_copy(layout_choice, sizeof(layout_choice),
-                   keyboard_layout_name(pick));
+      keyboard_set_layout_by_name(layout_choice);
+      print_line(system_ui_text(setup_language, SYS_UI_LAYOUT_UNKNOWN));
     }
-    if (keyboard_set_layout_by_name(layout_choice) == 0) {
-      char msg[96];
-      msg[0] = '\0';
-      buffer_append(msg, sizeof(msg),
-                    system_ui_text(setup_language, SYS_UI_LAYOUT_APPLIED_PREFIX));
-      buffer_append(msg, sizeof(msg), layout_choice);
-      print_line(msg);
-      break;
-    }
-    print_line(system_ui_text(setup_language, SYS_UI_LAYOUT_UNKNOWN));
   }
 
   char hostname[TTY_BUFFER_MAX];
-  char theme_input[TTY_BUFFER_MAX];
-  char splash_answer[TTY_BUFFER_MAX];
+  const char *theme = "capyos";
+  int splash_enabled = 1;
   memory_zero(hostname, sizeof(hostname));
-  memory_zero(theme_input, sizeof(theme_input));
-  memory_zero(splash_answer, sizeof(splash_answer));
 
   const char *proc_settings = "coleta de configuracoes basicas";
   log_dependency_wait(proc_docs, proc_settings);
   log_process_begin(proc_settings);
   log_process_begin_success(proc_settings);
   size_t hlen =
-      wizard_prompt(system_ui_text(setup_language, SYS_UI_HOSTNAME_PROMPT),
-                    hostname, sizeof(hostname), 0);
+      wizard_prompt_setup(40u, "Hostname",
+                          system_ui_text(setup_language, SYS_UI_HOSTNAME_PROMPT),
+                          hostname, sizeof(hostname), 0);
   if (hlen == 0) {
     cstring_copy(hostname, sizeof(hostname), "capyos-node");
   }
-  char host_msg[128];
-  host_msg[0] = '\0';
-  buffer_append(host_msg, sizeof(host_msg),
-                system_ui_text(setup_language, SYS_UI_HOSTNAME_DEFINED_PREFIX));
-  buffer_append(host_msg, sizeof(host_msg), hostname);
-  print_line(host_msg);
 
-  print_line(system_ui_text(setup_language, SYS_UI_THEMES_AVAILABLE));
-  size_t tlen =
-      wizard_prompt(system_ui_text(setup_language, SYS_UI_THEME_PROMPT),
-                    theme_input, sizeof(theme_input), 0);
-  if (tlen == 0) {
-    cstring_copy(theme_input, sizeof(theme_input), "capyos");
+  {
+    const char *theme_items[3];
+    if (strings_equal(setup_language, "en")) {
+      theme_items[0] = "CapyOS - default";
+      theme_items[1] = "Ocean - blue accents";
+      theme_items[2] = "Forest - green accents";
+    } else if (strings_equal(setup_language, "es")) {
+      theme_items[0] = "CapyOS - predeterminado";
+      theme_items[1] = "Ocean - tonos azules";
+      theme_items[2] = "Forest - tonos verdes";
+    } else {
+      theme_items[0] = "CapyOS - padrao";
+      theme_items[1] = "Ocean - tons azuis";
+      theme_items[2] = "Forest - tons verdes";
+    }
+    int theme_pick = wizard_menu_select_setup(
+        55u,
+        system_ui_text(setup_language, SYS_UI_THEMES_AVAILABLE),
+        setup_language, theme_items,
+        sizeof(theme_items) / sizeof(theme_items[0]), 0);
+    theme = validate_theme(theme_pick == 0 ? "capyos"
+                           : (theme_pick == 1 ? "ocean" : "forest"));
   }
-  const char *theme = validate_theme(theme_input);
-  char theme_msg[128];
-  theme_msg[0] = '\0';
-  buffer_append(theme_msg, sizeof(theme_msg),
-                system_ui_text(setup_language, SYS_UI_THEME_SELECTED_PREFIX));
-  buffer_append(theme_msg, sizeof(theme_msg), theme);
-  print_line(theme_msg);
 
-  size_t slen = wizard_prompt(
-      system_ui_text(setup_language, SYS_UI_SPLASH_PROMPT), splash_answer,
-      sizeof(splash_answer), 0);
-  int splash_enabled = 1;
-  if (slen > 0 && (splash_answer[0] == 'n' || splash_answer[0] == 'N')) {
-    splash_enabled = 0;
+  {
+    const char *splash_items[] = {system_ui_menu_enabled(setup_language),
+                                  system_ui_menu_disabled(setup_language)};
+    int splash_pick = wizard_menu_select_setup(
+        70u, system_ui_splash_menu_title(setup_language), setup_language,
+        splash_items, 2, 0);
+    splash_enabled = (splash_pick == 0) ? 1 : 0;
   }
-  print_line(splash_enabled
-                 ? system_ui_text(setup_language, SYS_UI_SPLASH_ENABLED)
-                 : system_ui_text(setup_language, SYS_UI_SPLASH_DISABLED));
 
   char admin_username[USER_NAME_MAX];
   memory_zero(admin_username, sizeof(admin_username));
   size_t ulen =
-      wizard_prompt(system_ui_text(setup_language, SYS_UI_ADMIN_USER_PROMPT),
-                    admin_username, sizeof(admin_username), 0);
+      wizard_prompt_setup(85u, "Administrator",
+                          system_ui_text(setup_language, SYS_UI_ADMIN_USER_PROMPT),
+                          admin_username, sizeof(admin_username), 0);
   if (ulen == 0) {
     cstring_copy(admin_username, sizeof(admin_username), "admin");
   }
@@ -1407,6 +1778,7 @@ static int first_boot_setup_impl(void) {
   buffer_append(password_prompt, sizeof(password_prompt), ": ");
 
   while (!admin_ready) {
+    wizard_draw_setup_header(95u, "Administrator password");
     if (prompt_password_pair(password_prompt, admin_password,
                              sizeof(admin_password), setup_language) != 0) {
       print_line(system_ui_text(setup_language, SYS_UI_ADMIN_REGISTER_FAIL));
@@ -1461,41 +1833,35 @@ static int first_boot_setup_impl(void) {
   log_process_finalize_success(proc_admin);
 
   log_process_progress(proc_settings);
-  char config_buffer[256];
-  memory_zero(config_buffer, sizeof(config_buffer));
-  const char *splash_value = splash_enabled ? "enabled" : "disabled";
+  struct system_settings settings;
+  system_settings_set_defaults(&settings);
   const char *keyboard_value = keyboard_current_layout();
   if (!keyboard_value || !keyboard_value[0]) {
     keyboard_value = "us";
   }
-
-  buffer_append(config_buffer, sizeof(config_buffer), "hostname=");
-  buffer_append(config_buffer, sizeof(config_buffer), hostname);
-  buffer_append(config_buffer, sizeof(config_buffer), "\n");
-  buffer_append(config_buffer, sizeof(config_buffer), "theme=");
-  buffer_append(config_buffer, sizeof(config_buffer), theme);
-  buffer_append(config_buffer, sizeof(config_buffer), "\n");
-  buffer_append(config_buffer, sizeof(config_buffer), "keyboard=");
-  buffer_append(config_buffer, sizeof(config_buffer), keyboard_value);
-  buffer_append(config_buffer, sizeof(config_buffer), "\n");
-  buffer_append(config_buffer, sizeof(config_buffer), "language=");
-  buffer_append(config_buffer, sizeof(config_buffer), setup_language);
-  buffer_append(config_buffer, sizeof(config_buffer), "\n");
-  buffer_append(config_buffer, sizeof(config_buffer), "splash=");
-  buffer_append(config_buffer, sizeof(config_buffer), splash_value);
-  buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  cstring_copy(settings.hostname, sizeof(settings.hostname), hostname);
+  cstring_copy(settings.theme, sizeof(settings.theme), theme);
+  cstring_copy(settings.keyboard_layout, sizeof(settings.keyboard_layout),
+               keyboard_value);
+  cstring_copy(settings.language, sizeof(settings.language), setup_language);
+  cstring_copy(settings.network_mode, sizeof(settings.network_mode), "static");
+  settings.splash_enabled = splash_enabled ? 1 : 0;
 
   const char *proc_config = "gravacao da configuracao do sistema";
   log_dependency_wait(proc_admin, proc_config);
   log_process_begin(proc_config);
   log_process_begin_success(proc_config);
-  if (write_text_file("/system/config.ini", config_buffer) != 0) {
+  if (write_settings_file(&settings) != 0) {
     print_line(system_ui_text(setup_language, SYS_UI_CONFIG_WRITE_FAIL));
     return -1;
   }
   sync_root_device();
-  if (verify_config_file(hostname, theme, keyboard_value, setup_language,
-                         splash_enabled) !=
+  if (verify_config_file(settings.hostname, settings.theme,
+                         settings.keyboard_layout, settings.language,
+                         settings.network_mode,
+                         settings.splash_enabled, settings.ipv4_addr,
+                         settings.ipv4_mask, settings.ipv4_gateway,
+                         settings.ipv4_dns) !=
       0) {
     return -1;
   }
@@ -1590,11 +1956,34 @@ static void apply_config_line(struct system_settings *settings,
   } else if (strings_equal(key, "language")) {
     cstring_copy(settings->language, sizeof(settings->language),
                  system_language_or_default(value));
+  } else if (strings_equal(key, "network_mode")) {
+    cstring_copy(settings->network_mode, sizeof(settings->network_mode),
+                 system_network_mode_or_default(value));
   } else if (strings_equal(key, "splash")) {
     if (value[0] == 'd' || value[0] == 'D') {
       settings->splash_enabled = 0;
     } else {
       settings->splash_enabled = 1;
+    }
+  } else if (strings_equal(key, "ipv4")) {
+    uint32_t parsed = 0;
+    if (system_parse_ipv4(value, &parsed) == 0) {
+      settings->ipv4_addr = parsed;
+    }
+  } else if (strings_equal(key, "mask")) {
+    uint32_t parsed = 0;
+    if (system_parse_ipv4(value, &parsed) == 0) {
+      settings->ipv4_mask = parsed;
+    }
+  } else if (strings_equal(key, "gateway")) {
+    uint32_t parsed = 0;
+    if (system_parse_ipv4(value, &parsed) == 0) {
+      settings->ipv4_gateway = parsed;
+    }
+  } else if (strings_equal(key, "dns")) {
+    uint32_t parsed = 0;
+    if (system_parse_ipv4(value, &parsed) == 0) {
+      settings->ipv4_dns = parsed;
     }
   }
 }
@@ -1666,7 +2055,10 @@ int system_save_settings(const struct system_settings *settings) {
   sync_root_device();
   if (verify_config_file(settings->hostname, settings->theme,
                          settings->keyboard_layout, settings->language,
-                         settings->splash_enabled) != 0) {
+                         settings->network_mode,
+                         settings->splash_enabled, settings->ipv4_addr,
+                         settings->ipv4_mask, settings->ipv4_gateway,
+                         settings->ipv4_dns) != 0) {
     rc = -1;
     goto done;
   }
@@ -1707,13 +2099,34 @@ int system_save_splash_enabled(int enabled) {
   return system_save_settings(&settings);
 }
 
+int system_save_network_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
+                             uint32_t dns) {
+  struct system_settings settings;
+  system_settings_set_defaults(&settings);
+  system_load_settings(&settings);
+  cstring_copy(settings.network_mode, sizeof(settings.network_mode), "static");
+  settings.ipv4_addr = addr;
+  settings.ipv4_mask = mask;
+  settings.ipv4_gateway = gateway;
+  settings.ipv4_dns = dns;
+  return system_save_settings(&settings);
+}
+
+int system_save_network_mode(const char *mode) {
+  struct system_settings settings;
+  system_settings_set_defaults(&settings);
+  system_load_settings(&settings);
+  cstring_copy(settings.network_mode, sizeof(settings.network_mode),
+               system_network_mode_or_default(mode));
+  return system_save_settings(&settings);
+}
+
 void system_apply_keyboard_layout(const struct system_settings *settings) {
   const char *layout = (settings && settings->keyboard_layout[0])
                            ? settings->keyboard_layout
                            : "us";
   if (keyboard_set_layout_by_name(layout) != 0) {
-    vga_write(
-        "[kbd] layout desconhecido em config.ini; revertendo para 'us'.\n");
+    log_event("[kbd] layout desconhecido em config.ini; revertendo para 'us'.");
     keyboard_set_layout_by_name("us");
   }
 }

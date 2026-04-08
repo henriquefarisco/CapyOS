@@ -531,7 +531,6 @@ static int capyfs_lookup(struct inode *dir, const char *name, struct inode **out
     if (dir) {
         capyfs_dbg_hex32("   dir ino=", dir->ino);
     }
-    if (name) { vga_write("   name: "); vga_write(name); vga_newline(); }
     if (!dir || !out_inode || !name) {
         return -1;
     }
@@ -570,7 +569,6 @@ static int capyfs_lookup(struct inode *dir, const char *name, struct inode **out
 static int capyfs_create(struct inode *dir, const char *name, uint16_t mode,
                          const struct vfs_metadata *meta, struct inode **out_inode) {
     capyfs_dbg_puts("[CAPYFS] create begin");
-    if (name) { vga_write("   target: "); vga_write(name); vga_newline(); }
     capyfs_dbg_hex32("   dir ptr=", (uint32_t)(uintptr_t)dir);
     if (!dir || !name || !out_inode) {
         return -1;

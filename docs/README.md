@@ -12,7 +12,7 @@ Escopo atual:
 - `architecture/system-overview.md`
   - visao geral da arquitetura atual, boot, storage, drivers e lacunas
 - `setup/hyper-v.md`
-  - guia de provisionamento e boot no Hyper-V Gen2
+  - guia historico de investigacao; Hyper-V nao e trilha suportada de release
 - `testing/boot-and-cli-validation.md`
   - roteiro de validacao do boot, login, CLI e persistencia
 - `reference/cli-reference.md`
@@ -21,6 +21,9 @@ Escopo atual:
   - plano operacional do ciclo atual
 - `plans/platform-hardening-plan.md`
   - detalha o fechamento da etapa de hardening da plataforma x64
+- `plans/system-master-plan.md`
+  - plano-mestre de evolucao do sistema inteiro, cobrindo fundacoes faltantes,
+    seguranca, performance, GUI, atualizacoes, apps e linguagem propria
 - `plans/refactor-plan.md`
   - fechamento da migracao para a trilha unica x64
 - `plans/system-roadmap.md`
@@ -43,6 +46,6 @@ Escopo atual:
 
 1. `../README.md`
 2. `architecture/system-overview.md`
-3. `setup/hyper-v.md`
+3. `plans/system-master-plan.md`
 4. `testing/boot-and-cli-validation.md`
 5. `releases/README.md`

@@ -12,23 +12,25 @@ CAPYOS x64 smoke test for installed-disk flow:
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
-import time
 from pathlib import Path
 
+from smoke_x64_common import (
+    boot_with_session,
+    cleanup_file,
+    create_runtime_ovmf_vars,
+    print_log_tail,
+    provision_disk,
+    resolve_ovmf_or_raise,
+    resolve_qemu_binary,
+    run_build_if_requested,
+    validate_installed_disk_artifacts,
+)
 from smoke_x64_flow import (
     login,
     maybe_run_first_boot_setup,
     smoke_first_boot,
     smoke_second_boot,
-)
-from smoke_x64_session import (
-    SmokeSession,
-    choose_free_port,
-    detect_ovmf,
-    make_qemu_cmd,
-    run_command,
 )
 
 
@@ -81,64 +83,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--volume-key",
         default="CAPYOS-SMOKE-KEY-2026-0001",
-        help="Volume key persisted in CAPYCFG.BIN",
+        help="Lab-only volume key persisted in CAPYCFG.BIN for smoke coverage",
     )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
     return parser.parse_args()
-
-
-def run_build_if_requested(repo_root: Path, parsed: argparse.Namespace) -> None:
-    if not parsed.build:
-        return
-    run_command(["make", "all64"], cwd=repo_root)
-    run_command(["make", "iso-uefi"], cwd=repo_root)
-    run_command(["make", "manifest64"], cwd=repo_root)
-
-
-def validate_artifacts(repo_root: Path) -> tuple[Path, Path, Path]:
-    bootx64 = (repo_root / "build/boot/uefi_loader.efi").resolve()
-    kernel = (repo_root / "build/capyos64.bin").resolve()
-    manifest = (repo_root / "build/manifest.bin").resolve()
-    for p in (bootx64, kernel, manifest):
-        if not p.exists():
-            raise FileNotFoundError(f"required artifact missing: {p}")
-    return bootx64, kernel, manifest
-
-
-def provision_disk(
-    repo_root: Path,
-    disk_path: Path,
-    parsed: argparse.Namespace,
-    bootx64: Path,
-    kernel: Path,
-    manifest: Path,
-) -> None:
-    disk_path.parent.mkdir(parents=True, exist_ok=True)
-    run_command(
-        [
-            "python3",
-            "tools/scripts/provision_gpt.py",
-            "--img",
-            str(disk_path),
-            "--size",
-            parsed.disk_size,
-            "--bootx64",
-            str(bootx64),
-            "--kernel",
-            str(kernel),
-            "--manifest",
-            str(manifest),
-            "--keyboard-layout",
-            parsed.keyboard_layout,
-            "--language",
-            parsed.language,
-            "--volume-key",
-            parsed.volume_key,
-            "--allow-existing",
-            "--confirm",
-        ],
-        cwd=repo_root,
-    )
 
 
 def run_boot1(
@@ -152,24 +100,17 @@ def run_boot1(
     marker: str,
 ) -> None:
     print("[info] boot #1: first-boot setup + login + write marker")
-    port = choose_free_port()
-    cmd = make_qemu_cmd(
+    session = boot_with_session(
         qemu_bin=qemu_bin,
         ovmf_code=ovmf_code,
         ovmf_vars_runtime=ovmf_vars_runtime,
         disk_path=disk_path,
-        serial_port=port,
+        log_path=boot1_log,
+        debugcon_log=boot1_debugcon_log,
         memory_mb=parsed.memory,
         storage_bus=parsed.storage_bus,
-        debugcon_log=boot1_debugcon_log,
-    )
-    session = SmokeSession(
-        cmd=cmd,
-        serial_port=port,
-        log_path=boot1_log,
         verbose=parsed.verbose,
     )
-    session.start()
     try:
         maybe_run_first_boot_setup(
             session=session,
@@ -201,24 +142,17 @@ def run_boot2(
     marker: str,
 ) -> None:
     print("[info] boot #2: login + persistence validation")
-    port = choose_free_port()
-    cmd = make_qemu_cmd(
+    session = boot_with_session(
         qemu_bin=qemu_bin,
         ovmf_code=ovmf_code,
         ovmf_vars_runtime=ovmf_vars_runtime,
         disk_path=disk_path,
-        serial_port=port,
+        log_path=boot2_log,
+        debugcon_log=boot2_debugcon_log,
         memory_mb=parsed.memory,
         storage_bus=parsed.storage_bus,
-        debugcon_log=boot2_debugcon_log,
-    )
-    session = SmokeSession(
-        cmd=cmd,
-        serial_port=port,
-        log_path=boot2_log,
         verbose=parsed.verbose,
     )
-    session.start()
     try:
         mk = session.marker()
         session.wait_for_any(
@@ -237,18 +171,6 @@ def run_boot2(
         session.stop()
 
 
-def print_log_tail(log_path: Path) -> None:
-    try:
-        if not log_path.exists():
-            return
-        tail = log_path.read_text(encoding="latin-1", errors="replace")[-2500:]
-        print(f"----- {log_path.name} tail -----", file=sys.stderr)
-        print(tail, file=sys.stderr)
-        print("---------------------------", file=sys.stderr)
-    except Exception:
-        pass
-
-
 def main() -> int:
     parsed = parse_args()
 
@@ -261,26 +183,34 @@ def main() -> int:
     boot2_debugcon_log = log_base.with_name(log_base.stem + ".boot2.debugcon.log")
     marker = "persist-ok"
 
-    qemu_bin = shutil.which(parsed.qemu)
-    if not qemu_bin:
-        print(f"[err] qemu not found in PATH: {parsed.qemu}", file=sys.stderr)
+    try:
+        qemu_bin = resolve_qemu_binary(parsed.qemu)
+    except FileNotFoundError as exc:
+        print(f"[err] {exc}", file=sys.stderr)
         return 2
 
     try:
-        ovmf_code, ovmf_vars_template = detect_ovmf(parsed.ovmf)
+        ovmf_code, ovmf_vars_template = resolve_ovmf_or_raise(parsed.ovmf)
     except FileNotFoundError as exc:
         print(f"[err] {exc}", file=sys.stderr)
         return 2
 
     ovmf_vars_runtime: Path | None = None
     try:
-        run_build_if_requested(repo_root, parsed)
-        bootx64, kernel, manifest = validate_artifacts(repo_root)
-        provision_disk(repo_root, disk_path, parsed, bootx64, kernel, manifest)
-
-        ovmf_vars_runtime = log_base.with_name(log_base.stem + ".OVMF_VARS.runtime.fd")
-        ovmf_vars_runtime.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ovmf_vars_template, ovmf_vars_runtime)
+        run_build_if_requested(repo_root, parsed.build)
+        bootx64, kernel, manifest = validate_installed_disk_artifacts(repo_root)
+        provision_disk(
+            repo_root=repo_root,
+            disk_path=disk_path,
+            disk_size=parsed.disk_size,
+            bootx64=bootx64,
+            kernel=kernel,
+            manifest=manifest,
+            keyboard_layout=parsed.keyboard_layout,
+            language=parsed.language,
+            volume_key=parsed.volume_key,
+        )
+        ovmf_vars_runtime = create_runtime_ovmf_vars(log_base, ovmf_vars_template)
 
         run_boot1(
             qemu_bin=qemu_bin,
@@ -308,16 +238,9 @@ def main() -> int:
         print_log_tail(boot2_log)
         return 1
     finally:
-        if ovmf_vars_runtime is not None:
-            try:
-                ovmf_vars_runtime.unlink(missing_ok=True)
-            except Exception:
-                pass
+        cleanup_file(ovmf_vars_runtime)
         if not parsed.keep_disk:
-            try:
-                disk_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            cleanup_file(disk_path)
 
     print("[ok] smoke x64 CLI + persistence passed.")
     return 0

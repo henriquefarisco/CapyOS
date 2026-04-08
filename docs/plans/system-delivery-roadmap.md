@@ -291,14 +291,14 @@ Status:
 - `shutdown-off` passou a delegar para `acpi_shutdown()` real
 - smoke oficial agora falha se reboot/poweroff apenas imprimirem a mensagem sem
   efetivar a transicao de energia
-- validado por smoke; aguardando validacao manual no ambiente real
+- validado por smoke e pelo ambiente real
 
 ## Entrega B1 - Rede de verdade e API de comunicacao
 
 Escopo:
 
 - endurecer driver de rede atual e probes
-- consolidar configuracao IPv4 e DHCP futuramente
+- consolidar configuracao IPv4, DHCP e DNS operacional
 - projetar camada de sockets
 - preparar base para TLS e chamadas externas
 
@@ -313,6 +313,102 @@ Bloqueia:
 - apps online
 - firewall real
 - integracoes externas
+
+Status:
+
+- em andamento na branch `codex/network-b1-stage1`
+- primeira fatia priorizada: separar `NIC detectada` de `backend operacional`
+- probe agora deve preferir drivers realmente implementados, preservando
+  observabilidade quando apenas hardware conhecido sem backend existir
+- `net-status` e o bootstrap precisam mostrar `runtime=ready|driver-missing|init-failed`
+  antes da entrada de DHCP e sockets
+- persistencia de IPv4 estatico em `/system/config.ini` concluida nesta branch;
+  `net-set` deixou de ser estado volatil e o boot reaplica `ipv4/mask/gateway/dns`
+- `network_mode=static|dhcp` e cliente DHCP minimo concluidos nesta branch,
+  com fallback estatico preservado no `config.ini`
+- cliente DNS minimo via UDP/53 concluido nesta branch, com comando
+  `net-resolve <hostname>` e cobertura de smoke em modo `dhcp`
+- validacao manual em `Hyper-V Gen2` mostrou o proximo bloqueio real da B1:
+  a VM expoe NIC sintetica `Hyper-V NetVSC`, enquanto o runtime atual ainda so
+  sobe backends PCI (`e1000`/`tulip`)
+- o probe agora passa a reportar `hyperv-netvsc` como backend detectado sem
+  runtime, em vez de `unknown/none`, para tornar o diagnostico explicito dentro
+  do proprio sistema
+- a descoberta generica de offers do `VMBus` ja foi isolada em um modulo
+  proprio `NetVSC`, mas segue totalmente fora do caminho de boot e da CLI no
+  `Hyper-V Gen2`: os testes reais mostraram reboot ate com consulta explicita de
+  `offer`, entao `net-refresh` ficou desativado para esse backend
+- a abertura do canal `VMBus`, `NetVSP` e `RNDIS` continua pendente para uma
+  fase separada, sem ainda promover a NIC a backend operacional
+- a fundacao de codec `RNDIS` ja entrou com builders/parsers e testes de host,
+  para destravar o backend dedicado sem voltar a tocar no `Hyper-V` real antes
+  da hora
+- a state machine offline do `NetVSC` (`initialize -> query mtu -> query mac ->
+  set packet filter`) ja existe com testes de host; falta agora acoplar isso ao
+  backend dedicado sobre `VMBus`, sem religar nenhuma chamada experimental na
+  CLI
+- a camada offline de envelope `NetVSP` agora tambem existe para empacotar
+  requests `RNDIS` do controle dedicado, ainda totalmente fora do runtime do
+  `Hyper-V`
+- a orquestracao offline de sessao `NetVSP -> RNDIS` tambem ja existe com
+  testes de host, para o backend futuro acoplar handshake e controle sem nascer
+  dentro do shell nem do boot
+- o backend dedicado `NetVSC` tambem ja existe como state machine isolada por
+  callbacks (`offer -> channel -> NetVSP -> RNDIS`), ainda sem chamar `VMBus`
+  no runtime real
+- o transporte generico de canal `VMBus` ja foi extraido do driver de teclado e
+  o adapter real `NetVSC -> VMBus` ja compila, mas continua fora da stack e da
+  CLI enquanto o caminho de runtime nao estiver pronto para validacao controlada
+- o controlador passivo de runtime `NetVSC` agora ja vive dentro da stack com
+  observabilidade (`controller=disabled phase=...`), mas segue desativado por
+  politica para nao reabrir regressao no `Hyper-V`
+- o `net-refresh` agora so tenta avancar o controlador `NetVSC` quando a offer
+  sintetica ja estiver em cache; o passo continua pequeno e controlado para a
+  primeira validacao manual no `Hyper-V`
+- a validacao manual mais recente no `Hyper-V Gen2` fechou o diagnostico de
+  dependencia: o runtime de rede segue com `bus=disconnected cache=miss` e a
+  tentativa de conectar `VMBus` a partir da CLI reinicia a VM; portanto a ordem
+  correta mudou
+- para `Hyper-V Gen2`, o proximo prerequisito real passou a ser um runtime
+  nativo de plataforma nesse backend, em especial storage `Hyper-V SCSI/StorVSC`
+  e um gerenciador seguro de conexao `VMBus` fora da CLI
+- a fundacao offline de `StorVSC` passa a ser o proximo corte concreto:
+  envelope `StorVSP`, sessao de inicializacao (`begin -> version ->
+  properties -> end -> enumerate`) e testes de host, tudo ainda fora do
+  runtime real
+- o backend offline `StorVSC` (`offer -> channel -> control -> ready`) passa a
+  ser a sequencia imediata seguinte, para deixar toda a logica de controle
+  validada antes de conectar isso ao `VMBus` real
+- em seguida, o runtime passivo `StorVSC` precisa existir no mesmo molde do
+  `NetVSC`, para que a plataforma possa carregar esse controlador sem ainda
+  ativa-lo no `Hyper-V` real
+- o adapter `StorVSC -> VMBus` agora ja compila em modulo proprio, com GUID
+  publico do storage sintetico `Hyper-V` e o mesmo contrato de transporte
+  generico usado pelo trilho de rede
+- o runtime x64 de storage agora carrega esse controlador `StorVSC` de forma
+  passiva e expõe telemetria de boot (`bus/cache/controller/phase`), sem ainda
+  tentar abrir canal ou negociar `VMBus` no `Hyper-V` real
+- o kernel agora ja possui um hook interno de `arming` para o `StorVSC`, preso
+  aos mesmos pontos seguros em que o runtime sai de firmware e promove input
+  nativo; esse hook so habilita o controlador quando `VMBus` e `offer` ja
+  estiverem prontos, sem ainda abrir canal ou avancar controle
+- o corte seguinte tambem ja entrou: depois do `arming`, o kernel pode avancar
+  o `StorVSC` apenas ate `phase=channel`, consumindo a `offer` cacheada e
+  preparando o canal offline, mas ainda sem emitir `OPENCHANNEL`
+- o passo seguro seguinte mapeado passa a ser `VMBus prepare`, mas a tentativa
+  automatica no boot foi recuada: no `Hyper-V Gen2` real ela ainda destabiliza
+  o primeiro boot apos formatacao, entao esse preparo fica adiado ate existir
+  um ponto de ativacao ainda mais restrito
+- enquanto esse corte mais restrito nao chega, a observabilidade do sistema
+  deve mostrar de forma explicita o motivo do bloqueio (`platform-hybrid`,
+  `vmbus-unprepared`, `offer-miss`, etc.) para `NetVSC` e `StorVSC`
+- enquanto esse prerequisito nao existir, o sistema deve expor explicitamente o
+  bloqueio como `platform=hybrid bootsvc=active storage-fw=on/off`, em vez de
+  sugerir que o problema esta apenas no `NetVSC`
+- proximos cortes naturais da B1: camada de sockets/requests, DNS cache e
+  base para chamadas externas/TLS; no trilho `Hyper-V`, isso depende antes do
+  backend `NetVSC/RNDIS` sobre `VMBus`, que por sua vez depende do trilho
+  `StorVSC/VMBus runtime`
 
 ## Entrega B2 - Timer/IRQ, scheduler e multithread
 
@@ -528,4 +624,5 @@ Status desta branch:
 - A4: concluida e validada por smoke
 - A5: concluida e validada por smoke
 - A6: implementada e validada por smoke; aguardando validacao manual
-- B1 em diante: ainda nao iniciadas
+- B1: em andamento; probe/runtime, IPv4 persistente, DHCP minimo e DNS resolve
+  concluidos nesta branch

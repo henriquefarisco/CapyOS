@@ -43,13 +43,18 @@ Contexto operacional atual:
 | `set-pass` | `set-pass <usuario> <nova_senha>` | Altera senha. Admin altera qualquer conta; usuario comum altera apenas a propria. |
 | `list-users` | `list-users` | Lista usuarios cadastrados em `/etc/users.db`. |
 | `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL` e `VERSION` atuais. |
-| `net-status` | `net-status` | Exibe estado da rede no runtime x64 (driver, IPv4/mask, ARP, contadores). |
+| `net-status` | `net-status` | Exibe estado da rede no runtime x64 (`driver`, `detected`, `runtime`, `ready`, IPv4, ARP, contadores). No `Hyper-V`, tambem imprime `build=... feature=... diag=...`, `vmbus=` e `stage=` para validar a imagem em campo. |
+| `net-refresh` | `net-refresh` | Atualiza o runtime de rede quando houver backend seguro para isso. No `Hyper-V`, avanca o controlador `NetVSC` em passos pequenos e controlados somente quando a offer sintetica ja estiver em cache. |
+| `net-dump-runtime` | `net-dump-runtime` | Exibe um dump detalhado do runtime de rede, incluindo `vmbus=`, `stage=`, gate, fase, ultimo resultado e contadores de tentativas do `Hyper-V/StorVSC`. |
 | `net-ip` | `net-ip` | Exibe o IPv4 local e mascara de rede configurados. |
 | `net-gw` | `net-gw` | Exibe o gateway padrao configurado. |
 | `net-dns` | `net-dns` | Exibe o DNS configurado. |
-| `net-set` | `net-set <ip> <mask> <gateway> <dns>` | Aplica configuracao IPv4 estatica na stack atual de rede. |
-| `hey` | `hey <ip|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
+| `net-resolve` | `net-resolve <hostname>` | Resolve um hostname via DNS usando o servidor configurado na stack atual. |
+| `net-set` | `net-set <ip> <mask> <gateway> <dns>` | Aplica IPv4 estatico na stack atual e salva em `/system/config.ini`. |
+| `net-mode` | `net-mode [list|show|static|dhcp]` | Alterna entre modo estatico e DHCP, persistindo `network_mode=` em `/system/config.ini`. |
+| `hey` | `hey <ip|hostname|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
+| `runtime-native` | `runtime-native [show|prepare-input|prepare-storage|exit-boot-services|step]` | Exibe o gate do runtime nativo e executa passos manuais controlados do coordenador Hyper-V. O modo `show` tambem imprime `build=... feature=...`. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
 | `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`) e grava em `/system/config.ini`. |
 | `config-splash` | `config-splash [show|on|off]` | Alterna a animacao de splash do boot e grava em `/system/config.ini`. |
@@ -115,6 +120,71 @@ Contexto operacional atual:
   `/home/<usuario>/.config/capyos/user.ini`.
 - O idioma passa a ser aplicado automaticamente apos o login e persiste entre
   reboots.
+
+### Rede
+
+- `net-status` mostra duas camadas de estado:
+  `driver=<nome>` identifica a NIC detectada;
+  `runtime=<none|driver-missing|init-failed|ready>` identifica se existe
+  backend funcional no kernel atual.
+- Em `Hyper-V`, quando a offer sintetica de rede for descoberta, `net-status`
+  tambem exibe `vmbus=relid:<n> conn:<n> dedicated=<yes|no>`.
+- Em `Hyper-V`, `net-status` passa a exibir `netvsc=<stage>` e `vmbus=<stage>`
+  com a trilha explicita `off|hypercall|synic|contact|offers|channel|control|ready|failed`.
+- `net-refresh` esta desativado para `Hyper-V` nesta fase, porque qualquer
+  consulta `VMBus` fora de um backend dedicado ainda reinicia a VM real.
+- `net-dump-runtime` e a forma recomendada de validar o backend `Hyper-V`
+  durante esta frente: ele mostra `gate`, `next`, `last_result`, numero de
+  tentativas e estado do `StorVSC`, sempre com `vmbus=` e `stage=`.
+- `runtime-native show` exibe o gate de `ExitBootServices` (`ebs=`), o gate
+  de input `Hyper-V` (`input-gate=`) e o estado agregado da plataforma.
+- `runtime-native show` agora tambem imprime `build=` e `feature=` para
+  confirmar rapidamente se a VM carregou a build correta desta trilha.
+- `runtime-native show` agora tambem imprime `tables=` e
+  `vmbus=off|hypercall|synic|contact|offers` para distinguir preparo de
+  hypercall, preparo de `SynIC`, contato do barramento e cache de offers.
+- `runtime-native prepare-input` tenta apenas preparar a base `Hyper-V/VMBus`
+  do input no nivel de hypercall, sem tentar `ExitBootServices`.
+- `runtime-native prepare-bridge` e `runtime-native prepare-synic` seguem
+  desativados no modo hibrido; a validacao em Hyper-V real mostrou reboot
+  quando esses passos foram expostos antes do `ExitBootServices`.
+- `runtime-native prepare-input` tambem fica desativado no modo hibrido; a
+  validacao em Hyper-V real mostrou reboot mesmo no preparo minimo do
+  hypercall.
+- `runtime-native prepare-storage` no modo hibrido esta limitado ao passo
+  passivo seguro; ele nao conecta `VMBus` nem abre canal.
+- `runtime-native prepare-storage` tenta apenas avançar o `StorVSC` em um
+  passo seguro e controlado: preparar barramento, conectar `VMBus`, cachear a
+  offer ou avancar o controlador, dependendo do estado atual.
+- `runtime-native exit-boot-services` tenta apenas o passo manual de
+  `ExitBootServices`, respeitando os gates atuais.
+- Quando o `runtime-native show` indicar `next=exit-boot-services`, o sistema
+  ja reuniu os pre-requisitos minimos para tentar a transicao manual ao
+  runtime nativo no passo seguinte.
+- `runtime-native step` executa um unico passo controlado do coordenador de
+  runtime nativo. Se um passo falhar, o comando agora deixa isso explicito em
+  vez de reportar falsamente que houve avancos. O fluxo e incremental: um
+  passo pode apenas preparar a base do `VMBus`, e o passo seguinte tenta o
+  `ExitBootServices`.
+- `detected=yes/no` separa ausencia real de hardware de ausencia de driver.
+- `ready=yes/no` indica se a stack esta operacional para envio/polling.
+- `net-resolve <hostname>` consulta um registro `A` via UDP/53 usando o DNS
+  configurado na stack atual.
+- `hey <hostname>` agora tenta resolver o nome via DNS antes do ICMP echo,
+  usando o mesmo DNS configurado na stack atual.
+- `net-set <ip> <mask> <gateway> <dns>` altera a stack atual e persiste a
+  configuracao em `/system/config.ini`.
+- `net-mode show` exibe o modo persistido ativo: `static` ou `dhcp`.
+- `net-mode static` reaplica os valores salvos em `ipv4/mask/gateway/dns`.
+- `net-mode dhcp` solicita lease dinamico imediatamente e persiste
+  `network_mode=dhcp`.
+- Os campos persistidos atualmente sao `ipv4=`, `mask=`, `gateway=` e `dns=`.
+- O `config.ini` tambem guarda `network_mode=`.
+- No boot instalado, a stack reaplica os valores estaticos salvos e, em
+  `dhcp`, tenta lease dinamico antes do login. Se o lease falhar, o fallback
+  estatico salvo continua disponivel.
+- Em `dhcp`, o lease atual pode sobrescrever `ipv4/gateway/dns` apenas em
+  runtime; o fallback estatico continua salvo no `config.ini`.
 
 ## Comandos planejados (nao implementados)
 

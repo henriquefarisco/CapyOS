@@ -1,0 +1,11 @@
+#ifndef DRIVERS_STORAGE_STORVSC_VMBUS_H
+#define DRIVERS_STORAGE_STORVSC_VMBUS_H
+
+#include "drivers/storage/storvsc_backend.h"
+
+int storvsc_vmbus_offer_cached(struct vmbus_offer_info *out);
+int storvsc_vmbus_offer_refresh_connected(struct vmbus_offer_info *out);
+int storvsc_vmbus_bus_connected(void);
+struct storvsc_backend_ops storvsc_vmbus_ops(void);
+
+#endif /* DRIVERS_STORAGE_STORVSC_VMBUS_H */

@@ -41,10 +41,6 @@ int login_runtime_run(struct login_runtime_ops *ops) {
       first_login_screen = 0;
     }
     ops->print("\n");
-    ops->print("========================================\n");
-    ops->print("             CapyOS 64-bit             \n");
-    ops->print("========================================\n");
-    ops->print("\n");
 
     if (!ops->has_any_input) {
       ops->print(localization_text_for(system_language, LOC_TEXT_NO_INPUT_DEVICE));

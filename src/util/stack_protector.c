@@ -1,10 +1,11 @@
 #include <stdint.h>
-#include "drivers/video/vga.h"
 
-uintptr_t __stack_chk_guard = 0x595e9fbd;
+extern void fbcon_print(const char *s);
+
+uintptr_t __stack_chk_guard = (uintptr_t)0x595e9fbd3c2a1f07ULL;
 
 void __stack_chk_fail(void) {
-    vga_write("\n*** STACK SMASHING DETECTED ***\n");
+    fbcon_print("\n*** STACK SMASHING DETECTED ***\n");
     __asm__ volatile("cli");
     while (1) { __asm__ volatile("hlt"); }
 }

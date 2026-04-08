@@ -32,12 +32,15 @@ struct x64_input_runtime {
   int has_hyperv;
   int hyperv_confirmed;
   int hyperv_preferred;
+  int hyperv_transport_prepared;
   int ps2_fallback_parked;
   int hyperv_deferred;
   int hyperv_promotion_attempted;
   uint32_t hyperv_promotion_attempts;
+  uint32_t hyperv_prepare_attempts;
   uint32_t hyperv_event_count;
   uint32_t hyperv_degrade_count;
+  int32_t hyperv_prepare_last_result;
   uint64_t hyperv_retry_tick;
   int has_com1;
   uint64_t efi_system_table;
@@ -48,6 +51,12 @@ struct x64_input_runtime {
   int hyperv_extended_prefix;
   char dead_accent;
   char pending_char;
+  /* Arrow key escape sequence buffer: when an extended scancode for an
+   * arrow key is detected, the 3-byte VT100 sequence (ESC [ A/B/C/D) is
+   * stored here and drained one character at a time by poll_char. */
+  char escape_seq[4];
+  uint8_t escape_seq_len;
+  uint8_t escape_seq_pos;
 };
 
 struct x64_input_probe_result {
@@ -88,5 +97,12 @@ void x64_input_retire_firmware_backend(struct x64_input_runtime *runtime);
 int x64_input_try_enable_hyperv_native(struct x64_input_runtime *runtime,
                                        int boot_services_active,
                                        void (*print)(const char *));
+int x64_input_force_enable_hyperv_native(struct x64_input_runtime *runtime,
+                                         int boot_services_active,
+                                         void (*print)(const char *));
+int x64_input_try_prepare_hyperv_runtime(struct x64_input_runtime *runtime,
+                                         int boot_services_active,
+                                         void (*print)(const char *));
+void x64_input_enable_auto_promotion(void);
 
 #endif /* ARCH_X86_64_INPUT_RUNTIME_H */

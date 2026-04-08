@@ -5,6 +5,7 @@
 
 #include "boot/handoff.h"
 #include "drivers/storage/efi_block.h"
+#include "drivers/storage/storvsc_runtime.h"
 #include "fs/block.h"
 
 enum x64_storage_backend {
@@ -32,5 +33,27 @@ const char *x64_storage_runtime_native_data_path(void);
 int x64_storage_runtime_uses_firmware(void);
 int x64_storage_runtime_has_native_candidate(void);
 int x64_storage_runtime_has_device(void);
+int x64_storage_runtime_hyperv_present(void);
+int x64_storage_runtime_hyperv_bus_prepared(void);
+int x64_storage_runtime_hyperv_bus_connected(void);
+int x64_storage_runtime_hyperv_offer_cached(void);
+const char *x64_storage_runtime_hyperv_phase_name(void);
+const char *x64_storage_runtime_hyperv_gate_label(int boot_services_active);
+const char *x64_storage_runtime_hyperv_next_action_label(
+    int boot_services_active);
+const char *x64_storage_runtime_hyperv_block_reason(int boot_services_active);
+void x64_storage_runtime_allow_hyperv_hybrid_prepare(int allow);
+int x64_storage_runtime_hyperv_controller_status(
+    struct storvsc_controller_status *out);
+uint32_t x64_storage_runtime_hyperv_attempt_count(void);
+uint32_t x64_storage_runtime_hyperv_change_count(void);
+int32_t x64_storage_runtime_hyperv_last_result(void);
+const char *x64_storage_runtime_hyperv_last_action_label(int boot_services_active);
+int x64_storage_runtime_try_prepare_hyperv_bus(void (*print)(const char *));
+int x64_storage_runtime_manual_hyperv_step(int boot_services_active,
+                                           void (*print)(const char *));
+int x64_storage_runtime_try_enable_hyperv_native(
+    int boot_services_active, int allow_hybrid_prepare,
+    void (*print)(const char *));
 
 #endif /* ARCH_X86_64_STORAGE_RUNTIME_H */

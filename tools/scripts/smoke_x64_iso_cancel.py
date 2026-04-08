@@ -12,22 +12,25 @@ Smoke test for the ISO cancel path:
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
+from smoke_x64_common import (
+    boot_with_session,
+    cleanup_file,
+    create_runtime_ovmf_vars,
+    prepare_target_disk,
+    print_log_tail,
+    resolve_ovmf_or_raise,
+    resolve_qemu_binary,
+    run_build_if_requested,
+    validate_iso_artifact,
+)
 from smoke_x64_flow import (
     cancel_iso_install,
     complete_iso_install,
     login,
     maybe_run_first_boot_setup,
-)
-from smoke_x64_session import (
-    SmokeSession,
-    choose_free_port,
-    detect_ovmf,
-    make_qemu_cmd,
-    run_command,
 )
 
 
@@ -84,89 +87,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def parse_size(size: str) -> int:
-    raw = size.strip().upper()
-    mul = 1
-    if raw.endswith("K"):
-        mul = 1024
-        raw = raw[:-1]
-    elif raw.endswith("M"):
-        mul = 1024 * 1024
-        raw = raw[:-1]
-    elif raw.endswith("G"):
-        mul = 1024 * 1024 * 1024
-        raw = raw[:-1]
-    return int(raw, 10) * mul
-
-
-def run_build_if_requested(repo_root: Path, parsed: argparse.Namespace) -> None:
-    if not parsed.build:
-        return
-    run_command(["make", "all64"], cwd=repo_root)
-    run_command(["make", "iso-uefi"], cwd=repo_root)
-    run_command(["make", "manifest64"], cwd=repo_root)
-
-
-def validate_artifacts(repo_root: Path, parsed: argparse.Namespace) -> Path:
-    iso_path = (repo_root / parsed.iso).resolve()
-    if not iso_path.exists():
-        raise FileNotFoundError(f"required ISO missing: {iso_path}")
-    return iso_path
-
-
-def prepare_target_disk(disk_path: Path, disk_size: str) -> None:
-    disk_path.parent.mkdir(parents=True, exist_ok=True)
-    with disk_path.open("wb") as fp:
-        fp.truncate(parse_size(disk_size))
-
-
-def boot_with_session(
-    *,
-    qemu_bin: str,
-    ovmf_code: str,
-    ovmf_vars_runtime: Path,
-    disk_path: Path,
-    log_path: Path,
-    debugcon_log: Path,
-    parsed: argparse.Namespace,
-    iso_path: Path | None = None,
-    boot_from: str = "disk",
-) -> SmokeSession:
-    port = choose_free_port()
-    cmd = make_qemu_cmd(
-        qemu_bin=qemu_bin,
-        ovmf_code=ovmf_code,
-        ovmf_vars_runtime=ovmf_vars_runtime,
-        disk_path=disk_path,
-        serial_port=port,
-        memory_mb=parsed.memory,
-        storage_bus=parsed.storage_bus,
-        debugcon_log=debugcon_log,
-        iso_path=iso_path,
-        boot_from=boot_from,
-    )
-    session = SmokeSession(
-        cmd=cmd,
-        serial_port=port,
-        log_path=log_path,
-        verbose=parsed.verbose,
-    )
-    session.start()
-    return session
-
-
-def print_log_tail(log_path: Path) -> None:
-    try:
-        if not log_path.exists():
-            return
-        tail = log_path.read_text(encoding="latin-1", errors="replace")[-2500:]
-        print(f"----- {log_path.name} tail -----", file=sys.stderr)
-        print(tail, file=sys.stderr)
-        print("---------------------------", file=sys.stderr)
-    except Exception:
-        pass
-
-
 def main() -> int:
     parsed = parse_args()
     repo_root = Path(__file__).resolve().parents[2]
@@ -177,26 +97,24 @@ def main() -> int:
     installer_debugcon_log = log_base.with_name(log_base.stem + ".installer.debugcon.log")
     cancel_debugcon_log = log_base.with_name(log_base.stem + ".cancel.debugcon.log")
 
-    qemu_bin = shutil.which(parsed.qemu)
-    if not qemu_bin:
-        print(f"[err] qemu not found in PATH: {parsed.qemu}", file=sys.stderr)
+    try:
+        qemu_bin = resolve_qemu_binary(parsed.qemu)
+    except FileNotFoundError as exc:
+        print(f"[err] {exc}", file=sys.stderr)
         return 2
 
     try:
-        ovmf_code, ovmf_vars_template = detect_ovmf(parsed.ovmf)
+        ovmf_code, ovmf_vars_template = resolve_ovmf_or_raise(parsed.ovmf)
     except FileNotFoundError as exc:
         print(f"[err] {exc}", file=sys.stderr)
         return 2
 
     ovmf_vars_runtime: Path | None = None
     try:
-        run_build_if_requested(repo_root, parsed)
-        iso_path = validate_artifacts(repo_root, parsed)
+        run_build_if_requested(repo_root, parsed.build)
+        iso_path = validate_iso_artifact(repo_root, parsed.iso)
         prepare_target_disk(disk_path, parsed.disk_size)
-
-        ovmf_vars_runtime = log_base.with_name(log_base.stem + ".OVMF_VARS.runtime.fd")
-        ovmf_vars_runtime.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ovmf_vars_template, ovmf_vars_runtime)
+        ovmf_vars_runtime = create_runtime_ovmf_vars(log_base, ovmf_vars_template)
 
         print("[info] boot #0: install from ISO")
         install_session = boot_with_session(
@@ -206,7 +124,9 @@ def main() -> int:
             disk_path=disk_path,
             log_path=installer_log,
             debugcon_log=installer_debugcon_log,
-            parsed=parsed,
+            memory_mb=parsed.memory,
+            storage_bus=parsed.storage_bus,
+            verbose=parsed.verbose,
             iso_path=iso_path,
             boot_from="cdrom",
         )
@@ -227,7 +147,9 @@ def main() -> int:
             disk_path=disk_path,
             log_path=cancel_log,
             debugcon_log=cancel_debugcon_log,
-            parsed=parsed,
+            memory_mb=parsed.memory,
+            storage_bus=parsed.storage_bus,
+            verbose=parsed.verbose,
             iso_path=iso_path,
             boot_from="cdrom",
         )
@@ -254,16 +176,9 @@ def main() -> int:
         print_log_tail(cancel_log)
         return 1
     finally:
-        if ovmf_vars_runtime is not None:
-            try:
-                ovmf_vars_runtime.unlink(missing_ok=True)
-            except Exception:
-                pass
+        cleanup_file(ovmf_vars_runtime)
         if not parsed.keep_disk:
-            try:
-                disk_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            cleanup_file(disk_path)
 
     print("[ok] smoke x64 ISO cancel -> disk fallback passed.")
     return 0

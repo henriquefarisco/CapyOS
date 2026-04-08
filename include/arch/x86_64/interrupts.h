@@ -16,6 +16,8 @@ void x64_interrupts_disable(void);
 
 void x64_platform_tables_init(int native_runtime_ready);
 int x64_platform_tables_active(void);
+int x64_platform_tables_prepare_bridge(void);
+int x64_platform_tables_bridge_active(void);
 const char *x64_platform_tables_status(void);
 
 #endif /* ARCH_X86_64_INTERRUPTS_H */

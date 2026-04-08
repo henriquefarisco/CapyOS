@@ -73,6 +73,7 @@ static struct x64_idt_entry g_idt[IDT_ENTRIES];
 static struct x64_descriptor_ptr g_idtr;
 static void (*g_irq_handlers[16])(void);
 static int g_platform_tables_active = 0;
+static int g_platform_tables_bridge_active = 0;
 static const char *g_platform_tables_status = "not-initialized";
 static uint8_t g_master_mask = 0xFFu;
 static uint8_t g_slave_mask = 0xFFu;
@@ -371,7 +372,16 @@ void x64_platform_tables_init(int native_runtime_ready) {
   }
 
   if (!native_runtime_ready) {
-    g_platform_tables_status = "deferred-firmware-runtime";
+    if (!g_platform_tables_bridge_active) {
+      g_platform_tables_status = "deferred-firmware-runtime";
+    }
+    return;
+  }
+
+  if (g_platform_tables_bridge_active) {
+    g_platform_tables_active = 1;
+    g_platform_tables_status = "native-descriptors-active";
+    x64_interrupts_enable();
     return;
   }
 
@@ -382,8 +392,28 @@ void x64_platform_tables_init(int native_runtime_ready) {
   pic_set_mask(0xFFu, 0xFFu);
   g_platform_tables_active = 1;
   g_platform_tables_status = "native-descriptors-active";
+  x64_interrupts_enable();
 }
 
 int x64_platform_tables_active(void) { return g_platform_tables_active; }
+
+int x64_platform_tables_prepare_bridge(void) {
+  if (g_platform_tables_active || g_platform_tables_bridge_active) {
+    return 0;
+  }
+
+  x64_interrupts_disable();
+  gdt_init();
+  idt_install();
+  pic_remap(0x20u, 0x28u);
+  pic_set_mask(0xFFu, 0xFFu);
+  g_platform_tables_bridge_active = 1;
+  g_platform_tables_status = "bridge-descriptors-active";
+  return 1;
+}
+
+int x64_platform_tables_bridge_active(void) {
+  return g_platform_tables_bridge_active;
+}
 
 const char *x64_platform_tables_status(void) { return g_platform_tables_status; }

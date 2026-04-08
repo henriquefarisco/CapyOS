@@ -4,6 +4,7 @@
 #include "shell/commands.h"
 
 #include "core/localization.h"
+#include "core/klog.h"
 #include "memory/kmem.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
@@ -696,71 +697,67 @@ int shell_read_file(const char *path, char **out_buf, size_t *out_len)
 
 static int diag_log_append(const char *msg)
 {
-    (void)msg;
+    if (!msg || !msg[0]) {
+        return 0;
+    }
+    klog(KLOG_INFO, msg);
     return 0;
+}
+
+static void diag_log_segments(const char *a, const char *b, const char *c,
+                              const char *d, const char *e)
+{
+    char line[192];
+    line[0] = '\0';
+    if (a) shell_append_text(line, sizeof(line), a);
+    if (b) shell_append_text(line, sizeof(line), b);
+    if (c) shell_append_text(line, sizeof(line), c);
+    if (d) shell_append_text(line, sizeof(line), d);
+    if (e) shell_append_text(line, sizeof(line), e);
+    (void)diag_log_append(line);
 }
 
 static void cli_log_process_begin(const char *name)
 {
-    vga_write("[diag] Iniciando ");
-    vga_write(name);
-    vga_write("...\n");
+    diag_log_segments("[diag] Iniciando ", name, "...", NULL, NULL);
 }
 
 static void cli_log_process_begin_success(const char *name)
 {
-    vga_write("[diag] Processo ");
-    vga_write(name);
-    vga_write(" iniciado.\n");
+    diag_log_segments("[diag] Processo ", name, " iniciado.", NULL, NULL);
 }
 
 static void cli_log_process_progress(const char *name)
 {
-    vga_write("[diag] ");
-    vga_write(name);
-    vga_write(" em andamento...\n");
+    diag_log_segments("[diag] ", name, " em andamento...", NULL, NULL);
 }
 
 static void cli_log_process_conclude(const char *name)
 {
-    vga_write("[diag] Finalizando ");
-    vga_write(name);
-    vga_write("...\n");
+    diag_log_segments("[diag] Finalizando ", name, "...", NULL, NULL);
 }
 
 static void cli_log_process_finalize(const char *name)
 {
-    vga_write("[diag] Processo ");
-    vga_write(name);
-    vga_write(" concluido.\n");
+    diag_log_segments("[diag] Processo ", name, " concluido.", NULL, NULL);
 }
 
 static void cli_log_process_finalize_success(const char *name)
 {
-    vga_write("[diag] Processo ");
-    vga_write(name);
-    vga_write(" finalizado com sucesso.\n");
+    diag_log_segments("[diag] Processo ", name,
+                      " finalizado com sucesso.", NULL, NULL);
 }
 
 static void cli_log_process_error(const char *name, const char *reason)
 {
-    vga_write("[erro] Processo ");
-    vga_write(name);
-    vga_write(" falhou");
-    if (reason) {
-        vga_write(": ");
-        vga_write(reason);
-    }
-    vga_write(".\n");
+    diag_log_segments("[erro] Processo ", name, " falhou",
+                      reason ? ": " : "", reason ? reason : "");
 }
 
 static void cli_log_dependency_wait(const char *dependency, const char *target)
 {
-    vga_write("Aguardando processo ");
-    vga_write(dependency);
-    vga_write(" para iniciar o processo ");
-    vga_write(target);
-    vga_write("...\n");
+    diag_log_segments("Aguardando processo ", dependency,
+                      " para iniciar o processo ", target, "...");
 }
 
 static int shell_self_test(struct shell_context *ctx)
