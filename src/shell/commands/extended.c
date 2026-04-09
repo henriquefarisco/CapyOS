@@ -193,3 +193,5 @@ const struct shell_command *shell_commands_extended(size_t *count) {
   if (count) *count = sizeof(extended_commands) / sizeof(extended_commands[0]);
   return extended_commands;
 }
+
+__asm__(".section .note.GNU-stack,\"\",@progbits");
