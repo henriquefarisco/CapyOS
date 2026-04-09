@@ -191,10 +191,9 @@ void html_viewer_paint(struct html_viewer_app *app) {
   }
 
   /* URL bar */
-  for (uint32_t x = 0; x < s->width; x++) {
-    uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + 0);
-    for (uint32_t y = 0; y < 24; y++) {
-      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
+  for (uint32_t y = 0; y < 24; y++) {
+    uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
+    for (uint32_t x = 0; x < s->width; x++) {
       row[x] = 0x313244;
     }
   }

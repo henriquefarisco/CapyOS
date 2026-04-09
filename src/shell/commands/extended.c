@@ -176,17 +176,17 @@ static int cmd_scheduler_stats(struct shell_context *ctx, int argc, char **argv)
 }
 
 static const struct shell_command extended_commands[] = {
-  {"print-tasks",     "Show running tasks",        cmd_print_tasks},
-  {"print-mem",       "Show memory statistics",     cmd_print_mem},
-  {"print-cpus",      "Show CPU/SMP info",          cmd_print_cpus},
-  {"print-gpu",       "Show GPU info",              cmd_print_gpu},
-  {"print-clock",     "Show real-time clock",       cmd_print_clock},
-  {"print-boot-times","Show boot stage timings",    cmd_print_boot_times},
-  {"print-sockets",   "Show socket statistics",     cmd_print_sockets},
-  {"print-dns-cache", "Show DNS cache stats",       cmd_print_dns_cache},
-  {"print-boot-slot", "Show boot slot A/B status",  cmd_print_boot_slot},
-  {"auth-status",     "Show auth lockout policy",   cmd_auth_status},
-  {"scheduler-stats", "Show scheduler statistics",  cmd_scheduler_stats},
+  {"print-tasks",      cmd_print_tasks},
+  {"print-mem",        cmd_print_mem},
+  {"print-cpus",       cmd_print_cpus},
+  {"print-gpu",        cmd_print_gpu},
+  {"print-clock",      cmd_print_clock},
+  {"print-boot-times", cmd_print_boot_times},
+  {"print-sockets",    cmd_print_sockets},
+  {"print-dns-cache",  cmd_print_dns_cache},
+  {"print-boot-slot",  cmd_print_boot_slot},
+  {"auth-status",      cmd_auth_status},
+  {"scheduler-stats",  cmd_scheduler_stats},
 };
 
 const struct shell_command *shell_commands_extended(size_t *count) {
