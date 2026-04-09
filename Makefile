@@ -149,7 +149,36 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/filesystem_navigation.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_content.o \
 	$(BUILD)/x86_64/shell/commands/filesystem_manage.o \
-	$(BUILD)/x86_64/shell/commands/filesystem_search.o
+	$(BUILD)/x86_64/shell/commands/filesystem_search.o \
+	$(BUILD)/x86_64/arch/x86_64/panic.o \
+	$(BUILD)/x86_64/arch/x86_64/apic.o \
+	$(BUILD)/x86_64/arch/x86_64/context_switch.o \
+	$(BUILD)/x86_64/arch/x86_64/syscall_entry.o \
+	$(BUILD)/x86_64/kernel/task.o \
+	$(BUILD)/x86_64/kernel/scheduler.o \
+	$(BUILD)/x86_64/kernel/spinlock.o \
+	$(BUILD)/x86_64/kernel/worker.o \
+	$(BUILD)/x86_64/kernel/syscall.o \
+	$(BUILD)/x86_64/kernel/elf_loader.o \
+	$(BUILD)/x86_64/kernel/process.o \
+	$(BUILD)/x86_64/memory/pmm.o \
+	$(BUILD)/x86_64/memory/vmm.o \
+	$(BUILD)/x86_64/fs/journal/journal.o \
+	$(BUILD)/x86_64/fs/fsck/fsck.o \
+	$(BUILD)/x86_64/net/socket.o \
+	$(BUILD)/x86_64/net/tcp.o \
+	$(BUILD)/x86_64/net/dns_cache.o \
+	$(BUILD)/x86_64/net/http.o \
+	$(BUILD)/x86_64/security/ed25519.o \
+	$(BUILD)/x86_64/core/boot_slot.o \
+	$(BUILD)/x86_64/core/package_manager.o \
+	$(BUILD)/x86_64/drivers/input/mouse.o \
+	$(BUILD)/x86_64/gui/event.o \
+	$(BUILD)/x86_64/gui/font.o \
+	$(BUILD)/x86_64/gui/compositor.o \
+	$(BUILD)/x86_64/gui/widget.o \
+	$(BUILD)/x86_64/gui/terminal.o \
+	$(BUILD)/x86_64/lang/capylang.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c

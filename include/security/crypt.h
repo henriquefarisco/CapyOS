@@ -36,4 +36,9 @@ void crypt_derive_xts_keys(const char *password, const uint8_t *salt,
                            uint8_t key1[CRYPT_KEY_SIZE],
                            uint8_t key2[CRYPT_KEY_SIZE]);
 
+int crypt_constant_time_compare(const uint8_t *a, const uint8_t *b, size_t len);
+void crypt_hmac_sha256(const uint8_t *key, size_t key_len,
+                       const uint8_t *data, size_t data_len,
+                       uint8_t out[SHA256_DIGEST_SIZE]);
+
 #endif

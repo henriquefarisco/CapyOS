@@ -1,7 +1,8 @@
 -Iinclude
 -Ibuild/generated
--m32
+-m64
 -ffreestanding
--D__i386__
+-mcmodel=small
+-mno-red-zone
 -Wall
 -Wextra
