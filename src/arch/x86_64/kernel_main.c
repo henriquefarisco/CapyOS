@@ -58,6 +58,8 @@
 #include "arch/x86_64/apic.h"
 #include "kernel/task.h"
 #include "kernel/scheduler.h"
+#include "arch/x86_64/smp.h"
+#include "core/boot_metrics.h"
 #include "memory/pmm.h"
 #include "net/dns_cache.h"
 #include "net/socket.h"
@@ -2596,6 +2598,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   if (!handoff_boot_services_active() && apic_available()) {
     apic_init();
     klog(KLOG_INFO, "[apic] Local APIC initialized.");
+  }
+  boot_metrics_init();
+  if (apic_available()) {
+    smp_detect_cpus(h->rsdp);
   }
 
   /* Stage 4/8: Keyboard */
