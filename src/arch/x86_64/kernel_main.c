@@ -1292,6 +1292,7 @@ static int kernel_persist_recovery_report(void) {
   char report[1024];
   struct capyfs_check_report fs_report;
   struct net_stack_status net_status;
+  struct system_update_status update_status;
   int fs_ok = 0;
   int net_ok = 0;
 
@@ -1362,6 +1363,28 @@ static int kernel_persist_recovery_report(void) {
     buffer_append_text(report, sizeof(report), "\nnetwork_ready=");
     buffer_append_yes_no(report, sizeof(report), net_status.ready);
   }
+  update_agent_status_get(&update_status);
+  buffer_append_text(report, sizeof(report), "\nupdate_catalog=");
+  buffer_append_yes_no(report, sizeof(report), update_status.catalog_present);
+  buffer_append_text(report, sizeof(report), "\nupdate_available=");
+  buffer_append_yes_no(report, sizeof(report), update_status.update_available);
+  buffer_append_text(report, sizeof(report), "\nupdate_stage_ready=");
+  buffer_append_yes_no(report, sizeof(report), update_status.stage_ready);
+  buffer_append_text(report, sizeof(report), "\nupdate_pending_activation=");
+  buffer_append_yes_no(report, sizeof(report), update_status.pending_activation);
+  buffer_append_text(report, sizeof(report), "\nupdate_available_version=");
+  buffer_append_text(report, sizeof(report),
+                     update_status.available_version[0]
+                         ? update_status.available_version
+                         : "-");
+  buffer_append_text(report, sizeof(report), "\nupdate_staged_version=");
+  buffer_append_text(report, sizeof(report),
+                     update_status.staged_version[0]
+                         ? update_status.staged_version
+                         : "-");
+  buffer_append_text(report, sizeof(report), "\nupdate_summary=");
+  buffer_append_text(report, sizeof(report),
+                     update_status.summary[0] ? update_status.summary : "-");
   buffer_append_text(report, sizeof(report), "\n");
 
   return kernel_write_text_file("/var/log/recovery-boot.txt", report);
@@ -1371,6 +1394,7 @@ static int kernel_append_recovery_history_event(const char *event_name) {
   char line[768];
   struct capyfs_check_report fs_report;
   struct net_stack_status net_status;
+  struct system_update_status update_status;
   int fs_ok = 0;
   int net_ok = 0;
 
@@ -1422,6 +1446,26 @@ static int kernel_append_recovery_history_event(const char *event_name) {
     buffer_append_text(line, sizeof(line), "degraded");
   } else {
     buffer_append_text(line, sizeof(line), "ready");
+  }
+  update_agent_status_get(&update_status);
+  buffer_append_text(line, sizeof(line), " update=");
+  if (update_status.pending_activation) {
+    buffer_append_text(line, sizeof(line), "pending");
+  } else if (update_status.stage_ready) {
+    buffer_append_text(line, sizeof(line), "staged");
+  } else if (update_status.update_available) {
+    buffer_append_text(line, sizeof(line), "available");
+  } else if (update_status.catalog_present) {
+    buffer_append_text(line, sizeof(line), "catalog");
+  } else {
+    buffer_append_text(line, sizeof(line), "none");
+  }
+  buffer_append_text(line, sizeof(line), " update_rc=");
+  if (update_status.last_result < 0) {
+    buffer_append_text(line, sizeof(line), "-");
+    buffer_append_u32(line, sizeof(line), (uint32_t)(-update_status.last_result));
+  } else {
+    buffer_append_u32(line, sizeof(line), (uint32_t)update_status.last_result);
   }
   buffer_append_text(line, sizeof(line), "\n");
 
@@ -1697,10 +1741,12 @@ static const char *kernel_boot_maintenance_reason(void) {
 
 void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   struct system_service_target_status active_target;
+  struct system_update_status update_status;
 
   if (!out) {
     return;
   }
+  update_agent_status_get(&update_status);
   out->maintenance_session = g_runtime_maintenance_mode ? 1u : 0u;
   out->degraded = g_boot_policy_decision.degraded;
   out->forced_maintenance = g_boot_policy_decision.forced_maintenance;
@@ -1713,6 +1759,16 @@ void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   out->requested_target = g_boot_policy_decision.requested_target;
   out->boot_target = g_boot_policy_decision.final_target;
   out->active_target = g_boot_policy_decision.final_target;
+  out->update_catalog_present = update_status.catalog_present;
+  out->update_available = update_status.update_available;
+  out->update_stage_ready = update_status.stage_ready;
+  out->update_pending_activation = update_status.pending_activation;
+  out->update_last_result = update_status.last_result;
+  local_copy(out->update_available_version,
+             sizeof(out->update_available_version),
+             update_status.available_version);
+  local_copy(out->update_staged_version, sizeof(out->update_staged_version),
+             update_status.staged_version);
   if (service_manager_target_current(&active_target) == 0) {
     out->active_target = active_target.id;
   }
@@ -2589,6 +2645,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     int validated_storage_ready = 0;
     int network_status_available = 0;
     int validated_network_supported = 0;
+    int update_rc = 0;
+    struct system_update_status update_status;
     struct system_service_boot_policy_input boot_policy_input;
 
     /* First boot setup is interactive and uses vga_* wrappers, so the
@@ -2652,6 +2710,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)service_manager_set_dependencies(
         SYSTEM_SERVICE_UPDATE_AGENT, (1u << SYSTEM_SERVICE_LOGGER));
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
+    update_rc = update_agent_poll();
+    kernel_update_update_agent_service_status(update_rc);
+    update_agent_status_get(&update_status);
 
     {
       struct net_stack_status net_status = {0};
@@ -2682,6 +2743,17 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
         network_status_available = 1;
         validated_network_supported = 1;
       }
+    }
+    if (update_rc < 0) {
+      boot_warnings_add(&g_boot_warnings,
+                        "Local update state is inconsistent; review staging");
+    } else if (update_status.pending_activation) {
+      boot_warnings_add(
+          &g_boot_warnings,
+          "Staged update activation is armed; payload activation is still manual");
+    } else if (update_status.stage_ready) {
+      boot_warnings_add(&g_boot_warnings,
+                        "A staged update is present in persistent storage");
     }
 
     boot_policy_input.requested_target =

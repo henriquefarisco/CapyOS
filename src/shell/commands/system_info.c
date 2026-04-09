@@ -437,9 +437,9 @@ static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
             language,
-            "Uso: update-status\nMostra o estado atual do catalogo local de atualizacoes e do update-agent.\n",
-            "Usage: update-status\nShows the current state of the local update catalog and update agent.\n",
-            "Uso: update-status\nMuestra el estado actual del catalogo local de actualizaciones y del update-agent.\n"));
+            "Uso: update-status\nMostra o estado atual do catalogo local, do staging persistente e do update-agent.\n",
+            "Usage: update-status\nShows the current state of the local catalog, persistent staging and update agent.\n",
+            "Uso: update-status\nMuestra el estado actual del catalogo local, del staging persistente y del update-agent.\n"));
         return 0;
     }
 
@@ -450,6 +450,10 @@ static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
     shell_print(status.catalog_present ? "present" : "missing");
     shell_print(" update=");
     shell_print(status.update_available ? "available" : "none");
+    shell_print(" stage=");
+    shell_print(status.stage_ready ? "ready" : "empty");
+    shell_print(" pending=");
+    shell_print(status.pending_activation ? "armed" : "no");
     shell_print(" rc=");
     shell_print_signed_result(status.last_result);
     shell_newline();
@@ -474,9 +478,44 @@ static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
     shell_print(status.manifest_path[0] ? status.manifest_path : "-");
     shell_newline();
 
+    shell_print("staged=");
+    shell_print(status.staged_version[0] ? status.staged_version : "-");
+    shell_print(" staged-manifest=");
+    shell_print(status.staged_manifest_path[0] ? status.staged_manifest_path : "-");
+    shell_newline();
+
     shell_print("summary=");
     shell_print(status.summary[0] ? status.summary : "(no summary)");
     shell_newline();
+    return 0;
+}
+
+static int cmd_update_history(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    char *content = NULL;
+    size_t content_len = 0;
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: update-history\nExibe o historico persistido de eventos do update-agent gravado em /var/log/update-history.log.\n",
+            "Usage: update-history\nShows the persisted history of update-agent events stored in /var/log/update-history.log.\n",
+            "Uso: update-history\nMuestra el historial persistido de eventos del update-agent guardado en /var/log/update-history.log.\n"));
+        return 0;
+    }
+
+    if (shell_read_file("/var/log/update-history.log", &content, &content_len) != 0 ||
+        !content || content_len == 0) {
+        shell_print_error(localization_select(
+            language,
+            "nenhum historico persistido de update foi encontrado em /var/log/update-history.log",
+            "no persisted update history was found in /var/log/update-history.log",
+            "no se encontro ningun historial persistido de update en /var/log/update-history.log"));
+        return -1;
+    }
+
+    shell_paginate_content(content);
+    kfree(content);
     return 0;
 }
 
@@ -547,6 +586,23 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
             shell_print(" nic=");
             shell_print(net_driver_name(net_status.nic.kind));
         }
+        shell_newline();
+
+        shell_print("update catalog=");
+        shell_print(status.update_catalog_present ? "present" : "missing");
+        shell_print(" available=");
+        shell_print(status.update_available ? "yes" : "no");
+        shell_print(" stage=");
+        shell_print(status.update_stage_ready ? "ready" : "empty");
+        shell_print(" pending=");
+        shell_print(status.update_pending_activation ? "armed" : "no");
+        shell_print(" rc=");
+        shell_print_signed_result(status.update_last_result);
+        shell_newline();
+        shell_print("update versions available=");
+        shell_print(status.update_available_version[0] ? status.update_available_version : "-");
+        shell_print(" staged=");
+        shell_print(status.update_staged_version[0] ? status.update_staged_version : "-");
         shell_newline();
 
         shell_print("summary: ");
@@ -951,7 +1007,7 @@ static int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv
 #endif
 }
 
-static struct shell_command g_system_info_commands[16];
+static struct shell_command g_system_info_commands[17];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -978,25 +1034,27 @@ static void init_system_info_commands(void) {
     g_system_info_commands[8].handler = cmd_job_status;
     g_system_info_commands[9].name = "update-status";
     g_system_info_commands[9].handler = cmd_update_status;
-    g_system_info_commands[10].name = "recovery-status";
-    g_system_info_commands[10].handler = cmd_recovery_status;
-    g_system_info_commands[11].name = "recovery-report";
-    g_system_info_commands[11].handler = cmd_recovery_report;
-    g_system_info_commands[12].name = "recovery-history";
-    g_system_info_commands[12].handler = cmd_recovery_history;
-    g_system_info_commands[13].name = "recovery-storage";
-    g_system_info_commands[13].handler = cmd_recovery_storage;
-    g_system_info_commands[14].name = "recovery-network";
-    g_system_info_commands[14].handler = cmd_recovery_network;
-    g_system_info_commands[15].name = "recovery-storage-check";
-    g_system_info_commands[15].handler = cmd_recovery_storage_check;
+    g_system_info_commands[10].name = "update-history";
+    g_system_info_commands[10].handler = cmd_update_history;
+    g_system_info_commands[11].name = "recovery-status";
+    g_system_info_commands[11].handler = cmd_recovery_status;
+    g_system_info_commands[12].name = "recovery-report";
+    g_system_info_commands[12].handler = cmd_recovery_report;
+    g_system_info_commands[13].name = "recovery-history";
+    g_system_info_commands[13].handler = cmd_recovery_history;
+    g_system_info_commands[14].name = "recovery-storage";
+    g_system_info_commands[14].handler = cmd_recovery_storage;
+    g_system_info_commands[15].name = "recovery-network";
+    g_system_info_commands[15].handler = cmd_recovery_network;
+    g_system_info_commands[16].name = "recovery-storage-check";
+    g_system_info_commands[16].handler = cmd_recovery_storage_check;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 16;
+        *count = 17;
     }
     return g_system_info_commands;
 }

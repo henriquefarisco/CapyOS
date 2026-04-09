@@ -364,6 +364,111 @@ static void sync_and_flush(void) {
   (void)klog_persist_flush_default();
 }
 
+static void append_text(char *dst, size_t dst_size, const char *src) {
+  size_t len = 0;
+  size_t i = 0;
+  if (!dst || dst_size == 0 || !src) {
+    return;
+  }
+  while (dst[len] && len + 1 < dst_size) {
+    ++len;
+  }
+  while (src[i] && len + 1 < dst_size) {
+    dst[len++] = src[i++];
+  }
+  dst[len] = '\0';
+}
+
+static size_t text_length(const char *text) {
+  size_t len = 0;
+  if (!text) {
+    return 0;
+  }
+  while (text[len]) {
+    ++len;
+  }
+  return len;
+}
+
+static void append_u32_text(char *dst, size_t dst_size, uint32_t value) {
+  char digits[16];
+  size_t pos = 0;
+  if (value == 0u) {
+    append_text(dst, dst_size, "0");
+    return;
+  }
+  while (value && pos + 1u < sizeof(digits)) {
+    digits[pos++] = (char)('0' + (value % 10u));
+    value /= 10u;
+  }
+  while (pos > 0u) {
+    char ch[2];
+    ch[0] = digits[--pos];
+    ch[1] = '\0';
+    append_text(dst, dst_size, ch);
+  }
+}
+
+static void update_history_append_event(const char *event_name,
+                                        const struct system_update_status *status) {
+  char line[320];
+  struct dentry *d = NULL;
+  struct file *f = NULL;
+
+  if (!status) {
+    return;
+  }
+#if defined(__x86_64__)
+  if (x64_kernel_volume_runtime_ensure_dir_recursive("/var/log") != 0) {
+    return;
+  }
+#endif
+  if (vfs_lookup("/var/log/update-history.log", &d) != 0 &&
+      vfs_create("/var/log/update-history.log", VFS_MODE_FILE, NULL) != 0) {
+    return;
+  }
+
+  line[0] = '\0';
+#if defined(__x86_64__)
+  append_text(line, sizeof(line), "ticks=");
+  append_u32_text(line, sizeof(line), pit_ticks());
+  append_text(line, sizeof(line), " ");
+#endif
+  append_text(line, sizeof(line), "event=");
+  append_text(line, sizeof(line),
+              (event_name && event_name[0]) ? event_name : "unknown");
+  append_text(line, sizeof(line), " catalog=");
+  append_text(line, sizeof(line), status->catalog_present ? "present" : "missing");
+  append_text(line, sizeof(line), " update=");
+  append_text(line, sizeof(line), status->update_available ? "available" : "none");
+  append_text(line, sizeof(line), " stage=");
+  append_text(line, sizeof(line), status->stage_ready ? "ready" : "empty");
+  append_text(line, sizeof(line), " pending=");
+  append_text(line, sizeof(line), status->pending_activation ? "armed" : "no");
+  append_text(line, sizeof(line), " current=");
+  append_text(line, sizeof(line),
+              status->current_version[0] ? status->current_version : "-");
+  append_text(line, sizeof(line), " available_ver=");
+  append_text(line, sizeof(line),
+              status->available_version[0] ? status->available_version : "-");
+  append_text(line, sizeof(line), " staged_ver=");
+  append_text(line, sizeof(line),
+              status->staged_version[0] ? status->staged_version : "-");
+  append_text(line, sizeof(line), " summary=");
+  append_text(line, sizeof(line), status->summary[0] ? status->summary : "-");
+  append_text(line, sizeof(line), "\n");
+
+  f = vfs_open("/var/log/update-history.log", VFS_OPEN_WRITE);
+  if (!f) {
+    return;
+  }
+  if (f->dentry && f->dentry->inode) {
+    f->position = f->dentry->inode->size;
+  }
+  (void)vfs_write(f, line, text_length(line));
+  vfs_close(f);
+}
+
 static int shell_recovery_capyfs_check(struct capyfs_check_report *out) {
   struct super_block *root = vfs_root();
   if (!root || !root->bdev || !out) {
@@ -552,6 +657,26 @@ static int cmd_job_run(struct shell_context *ctx, int argc, char **argv) {
   return 0;
 }
 
+static int refresh_update_agent_service_state(int rc,
+                                              struct system_update_status *status) {
+  struct system_update_status local_status;
+
+  if (!status) {
+    status = &local_status;
+  }
+  update_agent_status_get(status);
+  if (rc < 0) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                    status->summary);
+  } else {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_READY,
+                                    status->last_result, status->summary);
+  }
+  return rc;
+}
+
 static int cmd_update_check(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
   struct system_update_status status;
@@ -567,12 +692,8 @@ static int cmd_update_check(struct shell_context *ctx, int argc, char **argv) {
     return 0;
   }
 
-  rc = update_agent_poll();
-  update_agent_status_get(&status);
+  rc = refresh_update_agent_service_state(update_agent_poll(), &status);
   if (rc < 0) {
-    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
-                                    SYSTEM_SERVICE_STATE_DEGRADED, rc,
-                                    status.summary);
     shell_print_error(localization_select(language,
                                           "catalogo local de atualizacao invalido",
                                           "local update catalog is invalid",
@@ -580,15 +701,143 @@ static int cmd_update_check(struct shell_context *ctx, int argc, char **argv) {
     return -1;
   }
 
-  (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
-                                  SYSTEM_SERVICE_STATE_READY, status.last_result,
-                                  status.summary);
   shell_print_ok(localization_select(language,
                                      "catalogo local de atualizacao verificado",
                                      "local update catalog checked",
                                      "catalogo local de actualizacion verificado"));
   shell_print(status.summary);
   shell_newline();
+  update_history_append_event("check", &status);
+  return 0;
+}
+
+static int cmd_update_stage(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_update_status status;
+  int rc = 0;
+  (void)ctx;
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: update-stage\nCopia o manifesto cacheado mais recente para a area persistente de staging em /system/update/staged/.\n",
+        "Usage: update-stage\nCopies the newest cached manifest into the persistent staging area under /system/update/staged/.\n",
+        "Uso: update-stage\nCopia el manifiesto cacheado mas reciente al area persistente de staging en /system/update/staged/.\n"));
+    return 0;
+  }
+
+  rc = refresh_update_agent_service_state(update_agent_stage_latest(), &status);
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "nao foi possivel preparar o staging local de atualizacao",
+                                          "could not prepare the local update staging area",
+                                          "no fue posible preparar el area local de staging de actualizacion"));
+    shell_print(status.summary);
+    shell_newline();
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "atualizacao preparada em staging",
+                                     "update prepared in staging",
+                                     "actualizacion preparada en staging"));
+  shell_print(status.staged_version[0] ? status.staged_version : status.summary);
+  shell_newline();
+  update_history_append_event("stage", &status);
+  return 0;
+}
+
+static int cmd_update_arm(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_update_status status;
+  int enable = 1;
+  int rc = 0;
+  (void)ctx;
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: update-arm [on|off]\nArma ou desarma a ativacao pendente do update staged sem remover o manifesto preparado.\n",
+        "Usage: update-arm [on|off]\nArms or disarms pending activation for the staged update without removing the prepared manifest.\n",
+        "Uso: update-arm [on|off]\nArma o desarma la activacion pendiente del update staged sin eliminar el manifiesto preparado.\n"));
+    return 0;
+  }
+
+  if (argc >= 2) {
+    if (shell_string_equal(argv[1], "off") || shell_string_equal(argv[1], "0") ||
+        shell_string_equal(argv[1], "disable")) {
+      enable = 0;
+    } else if (!(shell_string_equal(argv[1], "on") ||
+                 shell_string_equal(argv[1], "1") ||
+                 shell_string_equal(argv[1], "enable"))) {
+      shell_print_error(localization_select(language,
+                                            "uso invalido",
+                                            "invalid usage",
+                                            "uso invalido"));
+      shell_suggest_help("update-arm");
+      return -1;
+    }
+  }
+
+  rc = refresh_update_agent_service_state(
+      update_agent_set_pending_activation(enable), &status);
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "nao foi possivel atualizar o estado pendente do staging",
+                                          "could not update the pending staged state",
+                                          "no fue posible actualizar el estado pendiente del staging"));
+    shell_print(status.summary);
+    shell_newline();
+    return -1;
+  }
+
+  shell_print_ok(enable ? localization_select(language,
+                                              "ativacao pendente armada",
+                                              "pending activation armed",
+                                              "activacion pendiente armada")
+                        : localization_select(language,
+                                              "ativacao pendente removida",
+                                              "pending activation cleared",
+                                              "activacion pendiente eliminada"));
+  shell_print(status.summary);
+  shell_newline();
+  update_history_append_event(enable ? "arm" : "disarm", &status);
+  return 0;
+}
+
+static int cmd_update_clear(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_update_status status;
+  int rc = 0;
+  (void)ctx;
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: update-clear\nRemove o manifesto staged e limpa o estado persistente de ativacao pendente.\n",
+        "Usage: update-clear\nRemoves the staged manifest and clears the persistent pending-activation state.\n",
+        "Uso: update-clear\nElimina el manifiesto staged y limpia el estado persistente de activacion pendiente.\n"));
+    return 0;
+  }
+
+  rc = refresh_update_agent_service_state(update_agent_clear_stage(), &status);
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "nao foi possivel limpar o staging local",
+                                          "could not clear the local staging area",
+                                          "no fue posible limpiar el area local de staging"));
+    shell_print(status.summary);
+    shell_newline();
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "staging local limpo",
+                                     "local staging cleared",
+                                     "staging local limpiado"));
+  shell_print(status.summary);
+  shell_newline();
+  update_history_append_event("clear", &status);
   return 0;
 }
 
@@ -1464,7 +1713,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[16];
+static struct shell_command g_system_control_commands[19];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -1493,23 +1742,29 @@ static void init_system_control_commands(void) {
   g_system_control_commands[9].handler = cmd_job_run;
   g_system_control_commands[10].name = "update-check";
   g_system_control_commands[10].handler = cmd_update_check;
-  g_system_control_commands[11].name = "service-target";
-  g_system_control_commands[11].handler = cmd_service_target;
-  g_system_control_commands[12].name = "recovery-resume";
-  g_system_control_commands[12].handler = cmd_recovery_resume;
-  g_system_control_commands[13].name = "recovery-verify";
-  g_system_control_commands[13].handler = cmd_recovery_verify;
-  g_system_control_commands[14].name = "recovery-login";
-  g_system_control_commands[14].handler = cmd_recovery_login;
-  g_system_control_commands[15].name = "recovery-storage-repair";
-  g_system_control_commands[15].handler = cmd_recovery_storage_repair;
+  g_system_control_commands[11].name = "update-stage";
+  g_system_control_commands[11].handler = cmd_update_stage;
+  g_system_control_commands[12].name = "update-arm";
+  g_system_control_commands[12].handler = cmd_update_arm;
+  g_system_control_commands[13].name = "update-clear";
+  g_system_control_commands[13].handler = cmd_update_clear;
+  g_system_control_commands[14].name = "service-target";
+  g_system_control_commands[14].handler = cmd_service_target;
+  g_system_control_commands[15].name = "recovery-resume";
+  g_system_control_commands[15].handler = cmd_recovery_resume;
+  g_system_control_commands[16].name = "recovery-verify";
+  g_system_control_commands[16].handler = cmd_recovery_verify;
+  g_system_control_commands[17].name = "recovery-login";
+  g_system_control_commands[17].handler = cmd_recovery_login;
+  g_system_control_commands[18].name = "recovery-storage-repair";
+  g_system_control_commands[18].handler = cmd_recovery_storage_repair;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 16;
+    *count = 19;
   }
   return g_system_control_commands;
 }

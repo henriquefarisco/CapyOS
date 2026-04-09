@@ -7,12 +7,27 @@
 #include <stddef.h>
 
 #define UPDATE_AGENT_REPOSITORY_PATH "/system/update/repository.ini"
+#define UPDATE_AGENT_STATE_PATH "/system/update/state.ini"
 #define UPDATE_AGENT_DEFAULT_MANIFEST_PATH "/system/update/cache/latest.ini"
+#define UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH "/system/update/staged/latest.ini"
 #define UPDATE_AGENT_DEFAULT_CHANNEL "stable"
 #define UPDATE_AGENT_DEFAULT_SOURCE "github:henriquefarisco/CapyOS"
 
+struct update_manifest_view {
+  char version[UPDATE_AGENT_VERSION_MAX];
+  char channel[UPDATE_AGENT_CHANNEL_MAX];
+  char published_at[24];
+};
+
+struct update_state_view {
+  uint8_t pending_activation;
+  char staged_manifest_path[UPDATE_AGENT_PATH_MAX];
+};
+
 static struct system_update_status g_update_status;
 static update_agent_read_file_fn g_update_reader = NULL;
+static update_agent_write_file_fn g_update_writer = NULL;
+static update_agent_remove_file_fn g_update_remover = NULL;
 static int g_update_ready = 0;
 
 static void local_zero(void *ptr, size_t len) {
@@ -24,16 +39,31 @@ static void local_zero(void *ptr, size_t len) {
 
 static void local_copy(char *dst, size_t dst_size, const char *src) {
   size_t i = 0;
-  if (!dst || dst_size == 0) {
+  if (!dst || dst_size == 0u) {
     return;
   }
   if (src) {
-    while (src[i] && i + 1 < dst_size) {
+    while (src[i] && i + 1u < dst_size) {
       dst[i] = src[i];
       ++i;
     }
   }
   dst[i] = '\0';
+}
+
+static void local_append(char *dst, size_t dst_size, const char *src) {
+  size_t i = 0;
+  size_t len = 0;
+  if (!dst || dst_size == 0u || !src) {
+    return;
+  }
+  while (dst[len] && len + 1u < dst_size) {
+    ++len;
+  }
+  while (src[i] && len + 1u < dst_size) {
+    dst[len++] = src[i++];
+  }
+  dst[len] = '\0';
 }
 
 static int local_equal(const char *a, const char *b) {
@@ -48,6 +78,15 @@ static int local_equal(const char *a, const char *b) {
     ++i;
   }
   return a[i] == b[i];
+}
+
+static int parse_bool_value(const char *value) {
+  if (!value) {
+    return 0;
+  }
+  return local_equal(value, "1") || local_equal(value, "yes") ||
+         local_equal(value, "true") || local_equal(value, "enabled") ||
+         local_equal(value, "on");
 }
 
 static int local_read_file(const char *path, char *buffer, size_t buffer_size,
@@ -82,8 +121,107 @@ static int local_read_file(const char *path, char *buffer, size_t buffer_size,
 #endif
 }
 
+#if !defined(UNIT_TEST)
+static int local_ensure_directory(const char *path) {
+  char build[UPDATE_AGENT_PATH_MAX];
+  size_t i = 1u;
+  size_t build_len = 1u;
+
+  if (!path || path[0] != '/') {
+    return -1;
+  }
+  build[0] = '/';
+  build[1] = '\0';
+
+  while (path[i]) {
+    struct dentry *d = NULL;
+    if (path[i] == '/') {
+      build[build_len] = '\0';
+      if (build_len > 1u && vfs_lookup(build, &d) != 0 &&
+          vfs_create(build, VFS_MODE_DIR, NULL) != 0) {
+        return -1;
+      }
+    } else {
+      if (build_len + 1u >= sizeof(build)) {
+        return -1;
+      }
+      build[build_len++] = path[i];
+    }
+    ++i;
+  }
+
+  build[build_len] = '\0';
+  if (build_len > 1u) {
+    struct dentry *d = NULL;
+    if (vfs_lookup(build, &d) != 0 &&
+        vfs_create(build, VFS_MODE_DIR, NULL) != 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int local_write_file(const char *path, const char *text) {
+  struct file *file = NULL;
+  size_t len = 0u;
+  struct dentry *d = NULL;
+
+  if (!path || !text) {
+    return -1;
+  }
+  while (text[len]) {
+    ++len;
+  }
+
+  if (vfs_lookup(path, &d) == 0) {
+    (void)vfs_unlink(path);
+  }
+  if (vfs_create(path, VFS_MODE_FILE, NULL) != 0 &&
+      vfs_lookup(path, &d) != 0) {
+    return -1;
+  }
+  file = vfs_open(path, VFS_OPEN_WRITE);
+  if (!file) {
+    return -1;
+  }
+  if (len > 0u && vfs_write(file, text, len) < 0) {
+    vfs_close(file);
+    return -1;
+  }
+  vfs_close(file);
+  return 0;
+}
+
+static int local_remove_file(const char *path) {
+  struct dentry *d = NULL;
+  if (!path) {
+    return -1;
+  }
+  if (vfs_lookup(path, &d) != 0) {
+    return 0;
+  }
+  return vfs_unlink(path);
+}
+#endif
+
 static update_agent_read_file_fn active_reader(void) {
   return g_update_reader ? g_update_reader : local_read_file;
+}
+
+static update_agent_write_file_fn active_writer(void) {
+#if defined(UNIT_TEST)
+  return g_update_writer;
+#else
+  return g_update_writer ? g_update_writer : local_write_file;
+#endif
+}
+
+static update_agent_remove_file_fn active_remover(void) {
+#if defined(UNIT_TEST)
+  return g_update_remover;
+#else
+  return g_update_remover ? g_update_remover : local_remove_file;
+#endif
 }
 
 static void update_agent_seed_defaults(const char *current_version) {
@@ -91,6 +229,8 @@ static void update_agent_seed_defaults(const char *current_version) {
   g_update_status.configured = 1u;
   g_update_status.catalog_present = 0u;
   g_update_status.update_available = 0u;
+  g_update_status.stage_ready = 0u;
+  g_update_status.pending_activation = 0u;
   g_update_status.last_result = 1;
   local_copy(g_update_status.channel, sizeof(g_update_status.channel),
              UPDATE_AGENT_DEFAULT_CHANNEL);
@@ -98,6 +238,9 @@ static void update_agent_seed_defaults(const char *current_version) {
              UPDATE_AGENT_DEFAULT_SOURCE);
   local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
              UPDATE_AGENT_DEFAULT_MANIFEST_PATH);
+  local_copy(g_update_status.staged_manifest_path,
+             sizeof(g_update_status.staged_manifest_path),
+             UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
   local_copy(g_update_status.current_version,
              sizeof(g_update_status.current_version),
              current_version ? current_version : "unknown");
@@ -105,9 +248,27 @@ static void update_agent_seed_defaults(const char *current_version) {
              "catalog cache not checked");
 }
 
+static void manifest_view_reset(struct update_manifest_view *view) {
+  if (!view) {
+    return;
+  }
+  local_zero(view, sizeof(*view));
+}
+
+static void state_view_reset(struct update_state_view *view) {
+  if (!view) {
+    return;
+  }
+  local_zero(view, sizeof(*view));
+  local_copy(view->staged_manifest_path, sizeof(view->staged_manifest_path),
+             UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
+}
+
 void update_agent_reset(void) {
   local_zero(&g_update_status, sizeof(g_update_status));
   g_update_reader = NULL;
+  g_update_writer = NULL;
+  g_update_remover = NULL;
   g_update_ready = 0;
 }
 
@@ -127,11 +288,58 @@ void update_agent_set_reader(update_agent_read_file_fn reader) {
   g_update_reader = reader;
 }
 
-static void parse_update_line(const char *line, size_t len, int is_manifest) {
+void update_agent_set_writer(update_agent_write_file_fn writer) {
+  g_update_writer = writer;
+}
+
+void update_agent_set_remover(update_agent_remove_file_fn remover) {
+  g_update_remover = remover;
+}
+
+static void parse_repo_line(const char *key, const char *value) {
+  if (local_equal(key, "channel")) {
+    local_copy(g_update_status.channel, sizeof(g_update_status.channel), value);
+  } else if (local_equal(key, "source")) {
+    local_copy(g_update_status.source, sizeof(g_update_status.source), value);
+  } else if (local_equal(key, "manifest")) {
+    local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
+               value);
+  }
+}
+
+static void parse_manifest_line(const char *key, const char *value,
+                                struct update_manifest_view *view) {
+  if (!view) {
+    return;
+  }
+  if (local_equal(key, "available_version")) {
+    local_copy(view->version, sizeof(view->version), value);
+  } else if (local_equal(key, "channel")) {
+    local_copy(view->channel, sizeof(view->channel), value);
+  } else if (local_equal(key, "published_at")) {
+    local_copy(view->published_at, sizeof(view->published_at), value);
+  }
+}
+
+static void parse_state_line(const char *key, const char *value,
+                             struct update_state_view *view) {
+  if (!view) {
+    return;
+  }
+  if (local_equal(key, "pending_activation")) {
+    view->pending_activation = parse_bool_value(value) ? 1u : 0u;
+  } else if (local_equal(key, "staged_manifest")) {
+    local_copy(view->staged_manifest_path, sizeof(view->staged_manifest_path),
+               value);
+  }
+}
+
+static void parse_buffer_line(const char *line, size_t len, int parse_mode,
+                              void *target) {
   char key[24];
   char value[UPDATE_AGENT_SOURCE_MAX];
-  size_t eq = 0;
-  size_t i = 0;
+  size_t eq = 0u;
+  size_t i = 0u;
 
   if (!line || len == 0u) {
     return;
@@ -145,7 +353,7 @@ static void parse_update_line(const char *line, size_t len, int is_manifest) {
   if (eq >= sizeof(key)) {
     eq = sizeof(key) - 1u;
   }
-  for (i = 0; i < eq; ++i) {
+  for (i = 0u; i < eq; ++i) {
     key[i] = line[i];
   }
   key[i] = '\0';
@@ -154,37 +362,23 @@ static void parse_update_line(const char *line, size_t len, int is_manifest) {
   if (len >= sizeof(value)) {
     len = sizeof(value) - 1u;
   }
-  for (i = 0; i < len; ++i) {
+  for (i = 0u; i < len; ++i) {
     value[i] = line[eq + 1u + i];
   }
   value[i] = '\0';
 
-  if (!is_manifest) {
-    if (local_equal(key, "channel")) {
-      local_copy(g_update_status.channel, sizeof(g_update_status.channel),
-                 value);
-    } else if (local_equal(key, "source")) {
-      local_copy(g_update_status.source, sizeof(g_update_status.source), value);
-    } else if (local_equal(key, "manifest")) {
-      local_copy(g_update_status.manifest_path,
-                 sizeof(g_update_status.manifest_path), value);
-    }
-    return;
-  }
-
-  if (local_equal(key, "available_version")) {
-    local_copy(g_update_status.available_version,
-               sizeof(g_update_status.available_version), value);
-  } else if (local_equal(key, "channel")) {
-    local_copy(g_update_status.channel, sizeof(g_update_status.channel), value);
-  } else if (local_equal(key, "published_at")) {
-    local_copy(g_update_status.published_at, sizeof(g_update_status.published_at),
-               value);
+  if (parse_mode == 0) {
+    parse_repo_line(key, value);
+  } else if (parse_mode == 1) {
+    parse_manifest_line(key, value, (struct update_manifest_view *)target);
+  } else if (parse_mode == 2) {
+    parse_state_line(key, value, (struct update_state_view *)target);
   }
 }
 
-static void parse_update_buffer(const char *buffer, size_t len, int is_manifest) {
-  size_t start = 0;
+static void parse_buffer(const char *buffer, size_t len, int parse_mode,
+                         void *target) {
+  size_t start = 0u;
   if (!buffer || len == 0u) {
     return;
   }
@@ -194,7 +388,7 @@ static void parse_update_buffer(const char *buffer, size_t len, int is_manifest)
       ++end;
     }
     if (end > start) {
-      parse_update_line(&buffer[start], end - start, is_manifest);
+      parse_buffer_line(&buffer[start], end - start, parse_mode, target);
     }
     start = end;
     while (start < len && (buffer[start] == '\n' || buffer[start] == '\r')) {
@@ -203,56 +397,258 @@ static void parse_update_buffer(const char *buffer, size_t len, int is_manifest)
   }
 }
 
-int update_agent_poll(void) {
+static int read_manifest_view(const char *path, struct update_manifest_view *view) {
   char buffer[768];
-  size_t read_len = 0;
-  int repo_rc = 0;
-  int manifest_rc = 0;
-  update_agent_read_file_fn reader = NULL;
+  size_t read_len = 0u;
+  int rc = 0;
+  update_agent_read_file_fn reader = active_reader();
 
-  update_agent_init(NULL);
-  reader = active_reader();
-  g_update_status.catalog_present = 0u;
-  g_update_status.update_available = 0u;
-  g_update_status.last_result = 0;
-  g_update_status.available_version[0] = '\0';
-  g_update_status.published_at[0] = '\0';
+  if (!path || !view) {
+    return -1;
+  }
+  manifest_view_reset(view);
+  rc = reader(path, buffer, sizeof(buffer), &read_len);
+  if (rc != 0 || read_len == 0u) {
+    return -1;
+  }
+  parse_buffer(buffer, read_len, 1, view);
+  return view->version[0] ? 0 : -2;
+}
 
-  repo_rc = reader(UPDATE_AGENT_REPOSITORY_PATH, buffer, sizeof(buffer),
-                   &read_len);
-  if (repo_rc == 0 && read_len > 0u) {
-    parse_update_buffer(buffer, read_len, 0);
+static int read_state_view(struct update_state_view *view) {
+  char buffer[256];
+  size_t read_len = 0u;
+  update_agent_read_file_fn reader = active_reader();
+
+  if (!view) {
+    return -1;
+  }
+  state_view_reset(view);
+  if (reader(UPDATE_AGENT_STATE_PATH, buffer, sizeof(buffer), &read_len) != 0 ||
+      read_len == 0u) {
+    return 1;
+  }
+  parse_buffer(buffer, read_len, 2, view);
+  return 0;
+}
+
+static int write_state_file(int pending_activation, const char *staged_manifest_path) {
+  char text[192];
+  update_agent_write_file_fn writer = active_writer();
+
+  if (!writer || !staged_manifest_path || !staged_manifest_path[0]) {
+    return -1;
   }
 
-  manifest_rc = reader(g_update_status.manifest_path, buffer, sizeof(buffer),
-                       &read_len);
-  if (manifest_rc != 0 || read_len == 0u) {
+  text[0] = '\0';
+  local_append(text, sizeof(text), "pending_activation=");
+  local_append(text, sizeof(text), pending_activation ? "1" : "0");
+  local_append(text, sizeof(text), "\n");
+  local_append(text, sizeof(text), "staged_manifest=");
+  local_append(text, sizeof(text), staged_manifest_path);
+  local_append(text, sizeof(text), "\n");
+  return writer(UPDATE_AGENT_STATE_PATH, text);
+}
+
+int update_agent_poll(void) {
+  char buffer[768];
+  size_t read_len = 0u;
+  int repo_rc = 0;
+  int manifest_rc = 0;
+  int state_rc = 0;
+  int staged_rc = 0;
+  int rc = 0;
+  update_agent_read_file_fn reader = active_reader();
+  struct update_manifest_view available_manifest;
+  struct update_manifest_view staged_manifest;
+  struct update_state_view state_view;
+
+  update_agent_init(NULL);
+  manifest_view_reset(&available_manifest);
+  manifest_view_reset(&staged_manifest);
+  state_view_reset(&state_view);
+
+  g_update_status.catalog_present = 0u;
+  g_update_status.update_available = 0u;
+  g_update_status.stage_ready = 0u;
+  g_update_status.pending_activation = 0u;
+  g_update_status.last_result = 0;
+  g_update_status.available_version[0] = '\0';
+  g_update_status.staged_version[0] = '\0';
+  g_update_status.published_at[0] = '\0';
+  local_copy(g_update_status.staged_manifest_path,
+             sizeof(g_update_status.staged_manifest_path),
+             UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
+
+  repo_rc = reader(UPDATE_AGENT_REPOSITORY_PATH, buffer, sizeof(buffer), &read_len);
+  if (repo_rc == 0 && read_len > 0u) {
+    parse_buffer(buffer, read_len, 0, NULL);
+  }
+
+  state_rc = read_state_view(&state_view);
+  if (state_rc == 0) {
+    g_update_status.pending_activation = state_view.pending_activation;
+    local_copy(g_update_status.staged_manifest_path,
+               sizeof(g_update_status.staged_manifest_path),
+               state_view.staged_manifest_path);
+  }
+
+  manifest_rc =
+      read_manifest_view(g_update_status.manifest_path, &available_manifest);
+  if (manifest_rc == 0) {
+    g_update_status.catalog_present = 1u;
+    local_copy(g_update_status.available_version,
+               sizeof(g_update_status.available_version),
+               available_manifest.version);
+    local_copy(g_update_status.published_at, sizeof(g_update_status.published_at),
+               available_manifest.published_at);
+    if (available_manifest.channel[0]) {
+      local_copy(g_update_status.channel, sizeof(g_update_status.channel),
+                 available_manifest.channel);
+    }
+    if (!local_equal(g_update_status.available_version,
+                     g_update_status.current_version)) {
+      g_update_status.update_available = 1u;
+    }
+  }
+
+  staged_rc = read_manifest_view(g_update_status.staged_manifest_path, &staged_manifest);
+  if (staged_rc == 0) {
+    g_update_status.stage_ready = 1u;
+    local_copy(g_update_status.staged_version,
+               sizeof(g_update_status.staged_version), staged_manifest.version);
+  }
+
+  if (manifest_rc == -2) {
+    rc = -2;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "catalog cache invalid");
+  } else if (staged_rc == -2) {
+    rc = -3;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "staged update invalid");
+  } else if (g_update_status.pending_activation && !g_update_status.stage_ready) {
+    rc = -4;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "activation pending without staged update");
+  } else if (g_update_status.pending_activation && g_update_status.stage_ready) {
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "staged update armed for activation");
+  } else if (g_update_status.stage_ready) {
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "staged update ready");
+  } else if (!g_update_status.catalog_present) {
     g_update_status.last_result = 1;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "catalog cache missing");
     return 0;
-  }
-
-  parse_update_buffer(buffer, read_len, 1);
-  if (!g_update_status.available_version[0]) {
-    g_update_status.last_result = -2;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
-               "catalog cache invalid");
-    return -2;
-  }
-
-  g_update_status.catalog_present = 1u;
-  if (!local_equal(g_update_status.available_version,
-                   g_update_status.current_version)) {
-    g_update_status.update_available = 1u;
+  } else if (g_update_status.update_available) {
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "update available in local catalog");
   } else {
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "system already matches cached catalog");
   }
-  g_update_status.last_result = 0;
-  return 0;
+
+  g_update_status.last_result = rc;
+  return rc;
+}
+
+int update_agent_stage_latest(void) {
+  char buffer[768];
+  size_t read_len = 0u;
+  update_agent_read_file_fn reader = active_reader();
+  update_agent_write_file_fn writer = active_writer();
+  int rc = update_agent_poll();
+
+  if (rc < 0) {
+    return rc;
+  }
+  if (!g_update_status.catalog_present || !g_update_status.update_available) {
+    g_update_status.last_result = -5;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "no cached update available to stage");
+    return -5;
+  }
+  if (!writer) {
+    g_update_status.last_result = -6;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "update staging writer unavailable");
+    return -6;
+  }
+  if (reader(g_update_status.manifest_path, buffer, sizeof(buffer), &read_len) != 0 ||
+      read_len == 0u) {
+    g_update_status.last_result = -7;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "failed to read cached manifest for staging");
+    return -7;
+  }
+#if !defined(UNIT_TEST)
+  if (local_ensure_directory("/system") != 0 ||
+      local_ensure_directory("/system/update") != 0 ||
+      local_ensure_directory("/system/update/staged") != 0) {
+    g_update_status.last_result = -8;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "failed to prepare update staging directories");
+    return -8;
+  }
+#endif
+  if (writer(g_update_status.staged_manifest_path, buffer) != 0 ||
+      write_state_file(0, g_update_status.staged_manifest_path) != 0) {
+    g_update_status.last_result = -9;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "failed to persist staged update");
+    return -9;
+  }
+  return update_agent_poll();
+}
+
+int update_agent_clear_stage(void) {
+  update_agent_remove_file_fn remover = active_remover();
+
+  update_agent_init(NULL);
+  if (remover) {
+    (void)remover(g_update_status.staged_manifest_path[0]
+                      ? g_update_status.staged_manifest_path
+                      : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
+    (void)remover(UPDATE_AGENT_STATE_PATH);
+  }
+  return update_agent_poll();
+}
+
+int update_agent_set_pending_activation(int enabled) {
+  int rc = update_agent_poll();
+
+  if (rc < 0) {
+    return rc;
+  }
+  if (enabled) {
+    if (!g_update_status.stage_ready) {
+      g_update_status.last_result = -10;
+      local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+                 "no staged update available to arm");
+      return -10;
+    }
+    if (write_state_file(1, g_update_status.staged_manifest_path) != 0) {
+      g_update_status.last_result = -11;
+      local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+                 "failed to arm staged update");
+      return -11;
+    }
+  } else if (g_update_status.stage_ready) {
+    if (write_state_file(0, g_update_status.staged_manifest_path) != 0) {
+      g_update_status.last_result = -12;
+      local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+                 "failed to disarm staged update");
+      return -12;
+    }
+  } else {
+    update_agent_remove_file_fn remover = active_remover();
+    if (remover) {
+      (void)remover(UPDATE_AGENT_STATE_PATH);
+    }
+  }
+  return update_agent_poll();
 }
 
 void update_agent_status_get(struct system_update_status *out) {

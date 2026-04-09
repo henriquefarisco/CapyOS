@@ -329,7 +329,8 @@ int system_prepare_update_catalog(void) {
 
   if (ensure_directory("/system") != 0 ||
       ensure_directory("/system/update") != 0 ||
-      ensure_directory("/system/update/cache") != 0) {
+      ensure_directory("/system/update/cache") != 0 ||
+      ensure_directory("/system/update/staged") != 0) {
     return -1;
   }
   if (vfs_stat_path("/system/update/repository.ini", &st) == 0) {

@@ -1,6 +1,8 @@
 #ifndef ARCH_X86_64_KERNEL_RUNTIME_CONTROL_H
 #define ARCH_X86_64_KERNEL_RUNTIME_CONTROL_H
 
+#include "core/update_agent.h"
+
 #include <stdint.h>
 
 struct x64_kernel_recovery_status {
@@ -16,6 +18,13 @@ struct x64_kernel_recovery_status {
   uint32_t requested_target;
   uint32_t boot_target;
   uint32_t active_target;
+  uint8_t update_catalog_present;
+  uint8_t update_available;
+  uint8_t update_stage_ready;
+  uint8_t update_pending_activation;
+  int32_t update_last_result;
+  char update_available_version[UPDATE_AGENT_VERSION_MAX];
+  char update_staged_version[UPDATE_AGENT_VERSION_MAX];
 };
 
 void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out);

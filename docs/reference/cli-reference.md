@@ -45,7 +45,8 @@ Contexto operacional atual:
 | `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL` e `VERSION` atuais. |
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `job-status` | `job-status [nome]` | Exibe o estado dos jobs internos do kernel/work queue, incluindo estado, ultimo resultado, numero de execucoes, falhas, intervalo e proximo tick previsto. |
-| `update-status` | `update-status` | Exibe o estado atual do catalogo local de atualizacoes, canal configurado, manifesto cacheado e versao disponivel segundo o `update-agent`. |
+| `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo versao staged e ativacao pendente. |
+| `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-stage`, `update-arm` e `update-clear` em `/var/log/update-history.log`. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
 | `recovery-report` | `recovery-report` | Exibe o ultimo relatorio persistido de boot/recovery gravado em `/var/log/recovery-boot.txt`. |
 | `recovery-history` | `recovery-history` | Exibe o historico persistido de eventos de boot/recovery gravado em `/var/log/recovery-history.log`. |
@@ -67,6 +68,9 @@ Contexto operacional atual:
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
 | `job-run` | `job-run <nome>` | Agenda um job interno do kernel/work queue para execucao imediata no proximo tick. |
 | `update-check` | `update-check` | Forca uma leitura imediata do catalogo local de atualizacoes e atualiza o estado do `update-agent`. |
+| `update-stage` | `update-stage` | Copia o manifesto cacheado mais recente para `/system/update/staged/latest.ini` e persiste o estado local de staging. |
+| `update-arm` | `update-arm [on|off]` | Arma ou desarma a ativacao pendente do update staged sem remover o manifesto preparado. |
+| `update-clear` | `update-clear` | Remove o manifesto staged e limpa o estado persistente de ativacao pendente. |
 | `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. O boot pode degradar temporariamente o alvo ativo para `core` ou `maintenance` quando detectar falha estrutural. |
 | `recovery-resume` | `recovery-resume <saved|core|network|full|maintenance>` | Em modo de recuperacao, tenta promover o runtime atual para outro alvo de servicos com guardrails minimos de storage/rede. |
 | `recovery-login` | `recovery-login [saved|core|network|full]` | Em modo de recuperacao, promove o alvo indicado e encerra a sessao atual de manutencao, retornando ao login normal sem reboot. |
@@ -170,10 +174,16 @@ Contexto operacional atual:
   `job-status recovery-snapshot` para inspecionar a cadencia e `job-run
   recovery-snapshot` para forcar uma nova gravacao no proximo tick.
 - A base persistente de atualizacao agora reserva
-  `/system/update/repository.ini` e `/system/update/cache/`. O
-  `update-agent` atual ainda e read-only: ele le esse catalogo local e indica
-  se existe versao mais nova cacheada, mas ainda nao baixa nem aplica
-  pacotes automaticamente.
+  `/system/update/repository.ini`, `/system/update/cache/`,
+  `/system/update/staged/` e `/system/update/state.ini`.
+- `update-stage` promove o manifesto cacheado atual para o staging
+  persistente; `update-arm on` marca esse staging como ativacao pendente.
+- As operacoes `update-check`, `update-stage`, `update-arm` e `update-clear`
+  acrescentam eventos em `/var/log/update-history.log`; use `update-history`
+  para auditar a trilha local de staging.
+- O `update-agent` continua sem baixar ou aplicar payloads automaticamente:
+  nesta etapa ele valida catalogo local, staging persistente e ativacao
+  pendente para preparar a trilha segura de update/rollback posterior.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,
   rede ja atendem ao alvo persistido antes de tentar a promocao.
 - Se o storage validado ainda nao estiver disponivel, o sistema recusa sair
