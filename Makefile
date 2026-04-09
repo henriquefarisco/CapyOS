@@ -187,7 +187,15 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
-	$(BUILD)/x86_64/gui/taskbar.o
+	$(BUILD)/x86_64/gui/taskbar.o \
+	$(BUILD)/x86_64/security/sha512.o \
+	$(BUILD)/x86_64/gui/desktop.o \
+	$(BUILD)/x86_64/apps/calculator.o \
+	$(BUILD)/x86_64/apps/file_manager.o \
+	$(BUILD)/x86_64/apps/text_editor.o \
+	$(BUILD)/x86_64/apps/task_manager.o \
+	$(BUILD)/x86_64/apps/html_viewer.o \
+	$(BUILD)/x86_64/apps/settings.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c

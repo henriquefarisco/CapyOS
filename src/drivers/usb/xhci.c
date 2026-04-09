@@ -299,3 +299,60 @@ int xhci_port_reset(struct xhci_controller *xhci, int port) {
 struct xhci_controller *xhci_get_controller(void) {
   return g_xhci_found ? &g_xhci : NULL;
 }
+
+/* --- Slot and device operations (minimal bring-up) --- */
+
+int xhci_enable_slot(struct xhci_controller *xhci, uint8_t *slot_id) {
+  if (!xhci || !xhci->initialized || !xhci->cmd_ring || !slot_id) return -1;
+  /* Build Enable Slot TRB */
+  struct xhci_trb trb;
+  trb.param = 0;
+  trb.status = 0;
+  trb.control = (TRB_TYPE_ENABLE_SLOT << 10) | (xhci->cmd_ring_cycle & 1);
+  uint32_t idx = xhci->cmd_ring_idx;
+  xhci->cmd_ring[idx] = trb;
+  xhci->cmd_ring_idx = (idx + 1) % 64;
+  /* Ring doorbell 0 (command) */
+  volatile uint32_t *db = (volatile uint32_t *)(xhci->db_base);
+  mmio_write32(db, 0);
+  /* Poll event ring for completion */
+  for (int i = 0; i < 500000; i++) {
+    struct xhci_trb *evt = &xhci->evt_ring[xhci->evt_ring_idx];
+    uint32_t ctrl = mmio_read32((volatile uint32_t *)&evt->control);
+    if ((ctrl >> 10 & 0x3F) == TRB_TYPE_CMD_COMPLETE) {
+      uint32_t cc = (mmio_read32((volatile uint32_t *)&evt->status) >> 24) & 0xFF;
+      *slot_id = (uint8_t)((ctrl >> 24) & 0xFF);
+      xhci->evt_ring_idx = (xhci->evt_ring_idx + 1) % 64;
+      return (cc == 1) ? 0 : -2; /* 1 = success */
+    }
+    cpu_relax();
+  }
+  return -3; /* timeout */
+}
+
+int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id, int port) {
+  if (!xhci || !xhci->initialized || slot_id == 0) return -1;
+  (void)port;
+  /* Full address_device requires Input Context + Address Device TRB.
+   * Minimal stub: mark slot as addressed for port detection. */
+  return 0;
+}
+
+int xhci_find_keyboard(struct xhci_controller *xhci, struct usb_device *kbd) {
+  if (!xhci || !xhci->initialized || !kbd) return -1;
+  /* Scan ports for connected HID device with boot protocol keyboard.
+   * Full implementation requires GET_DESCRIPTOR control transfers.
+   * Stub: report no keyboard found until descriptor parsing is added. */
+  return -1;
+}
+
+int xhci_keyboard_poll(struct xhci_controller *xhci, struct usb_device *kbd,
+                       uint8_t *key) {
+  if (!xhci || !key) return -1;
+  (void)kbd;
+  /* Full implementation requires interrupt endpoint transfer ring.
+   * Stub: no key available. */
+  *key = 0;
+  return -1;
+}
+
