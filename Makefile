@@ -178,7 +178,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/compositor.o \
 	$(BUILD)/x86_64/gui/widget.o \
 	$(BUILD)/x86_64/gui/terminal.o \
-	$(BUILD)/x86_64/lang/capylang.o
+	$(BUILD)/x86_64/lang/capylang.o \
+	$(BUILD)/x86_64/fs/capyfs/capyfs_journal_integration.o \
+	$(BUILD)/x86_64/core/boot_metrics.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
