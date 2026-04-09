@@ -7,8 +7,6 @@ static uint32_t next_pid = 1;
 static struct task *current_task = NULL;
 static uint32_t task_active_count = 0;
 
-static void task_entry_wrapper(void);
-
 void task_system_init(void) {
   for (int i = 0; i < TASK_MAX_COUNT; i++) {
     task_table[i].state = TASK_STATE_UNUSED;

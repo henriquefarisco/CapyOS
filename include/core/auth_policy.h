@@ -19,7 +19,7 @@ struct auth_attempt {
 
 struct auth_policy_config {
   uint32_t max_attempts;
-  uint32_t lockout_duration_ticks;
+  uint64_t lockout_duration_ticks;
   int audit_enabled;
 };
 

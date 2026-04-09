@@ -65,13 +65,13 @@ static int64_t sys_close(struct syscall_frame *f) {
 static int64_t sys_getpid(struct syscall_frame *f) {
   (void)f;
   struct task *t = task_current();
-  return t ? t->pid : -1;
+  return t ? (int64_t)t->pid : (int64_t)-1;
 }
 
 static int64_t sys_getppid(struct syscall_frame *f) {
   (void)f;
   struct task *t = task_current();
-  return t ? t->ppid : -1;
+  return t ? (int64_t)t->ppid : (int64_t)-1;
 }
 
 static int64_t sys_yield(struct syscall_frame *f) {
@@ -89,13 +89,13 @@ static int64_t sys_sleep(struct syscall_frame *f) {
 static int64_t sys_getuid(struct syscall_frame *f) {
   (void)f;
   struct process *proc = process_current();
-  return proc ? proc->uid : -1;
+  return proc ? (int64_t)proc->uid : (int64_t)-1;
 }
 
 static int64_t sys_getgid(struct syscall_frame *f) {
   (void)f;
   struct process *proc = process_current();
-  return proc ? proc->gid : -1;
+  return proc ? (int64_t)proc->gid : (int64_t)-1;
 }
 
 static int64_t sys_brk(struct syscall_frame *f) {

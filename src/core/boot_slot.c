@@ -15,7 +15,7 @@ static void bs_strcpy(char *dst, const char *src, size_t max) {
   dst[i] = '\0';
 }
 
-static uint32_t bs_crc32(const void *data, size_t len) {
+static uint32_t __attribute__((unused)) bs_crc32(const void *data, size_t len) {
   const uint8_t *p = (const uint8_t *)data;
   uint32_t crc = 0xFFFFFFFF;
   for (size_t i = 0; i < len; i++) {

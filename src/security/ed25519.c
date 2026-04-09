@@ -22,10 +22,10 @@ typedef struct { uint64_t v[5]; } fe25519;
 typedef struct { fe25519 X, Y, Z, T; } ge25519;
 
 static void fe_zero(fe25519 *r) { for (int i = 0; i < 5; i++) r->v[i] = 0; }
-static void fe_one(fe25519 *r)  { r->v[0] = 1; for (int i = 1; i < 5; i++) r->v[i] = 0; }
+static void __attribute__((unused)) fe_one(fe25519 *r)  { r->v[0] = 1; for (int i = 1; i < 5; i++) r->v[i] = 0; }
 static void fe_copy(fe25519 *r, const fe25519 *a) { for (int i = 0; i < 5; i++) r->v[i] = a->v[i]; }
 
-static void fe_add(fe25519 *r, const fe25519 *a, const fe25519 *b) {
+static void __attribute__((unused)) fe_add(fe25519 *r, const fe25519 *a, const fe25519 *b) {
   for (int i = 0; i < 5; i++) r->v[i] = a->v[i] + b->v[i];
 }
 
@@ -74,7 +74,7 @@ static void fe_mul(fe25519 *r, const fe25519 *a, const fe25519 *b) {
 
 static void fe_sq(fe25519 *r, const fe25519 *a) { fe_mul(r, a, a); }
 
-static void fe_pow2523(fe25519 *r, const fe25519 *a) {
+static void __attribute__((unused)) fe_pow2523(fe25519 *r, const fe25519 *a) {
   /* a^(2^255 - 23) for sqrt computation */
   fe25519 t;
   fe_copy(&t, a);
@@ -83,12 +83,12 @@ static void fe_pow2523(fe25519 *r, const fe25519 *a) {
   fe_mul(r, &t, a);
 }
 
-static void fe_neg(fe25519 *r, const fe25519 *a) {
+static void __attribute__((unused)) fe_neg(fe25519 *r, const fe25519 *a) {
   fe25519 zero; fe_zero(&zero);
   fe_sub(r, &zero, a);
 }
 
-static void fe_tobytes(uint8_t out[32], const fe25519 *a) {
+static void __attribute__((unused)) fe_tobytes(uint8_t out[32], const fe25519 *a) {
   fe25519 t;
   fe_copy(&t, a);
   fe_reduce(&t);
@@ -108,7 +108,7 @@ static void fe_tobytes(uint8_t out[32], const fe25519 *a) {
   }
 }
 
-static void fe_frombytes(fe25519 *r, const uint8_t in[32]) {
+static void __attribute__((unused)) fe_frombytes(fe25519 *r, const uint8_t in[32]) {
   /* Unpack 32 bytes (little-endian) into 5x51-bit limbs */
   uint64_t bits[256/64 + 1];
   for (int i = 0; i < 4; i++) {

@@ -34,7 +34,6 @@ int gpu_detect(void) {
 
         uint32_t class_reg = pci_read32((uint8_t)bus, dev, func, 0x08);
         uint8_t class_code = (uint8_t)(class_reg >> 24);
-        uint8_t subclass = (uint8_t)(class_reg >> 16);
 
         if (class_code != 0x03) continue; /* Display controller */
 

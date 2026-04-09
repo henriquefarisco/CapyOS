@@ -48,33 +48,23 @@ int usb_enumerate_devices(void) {
 
     if (xhci_port_reset(&g_xhci, port) != 0) continue;
 
-    uint8_t slot_id = 0;
-    if (xhci_enable_slot(&g_xhci, &slot_id) != 0) continue;
-    if (xhci_address_device(&g_xhci, slot_id, port) != 0) continue;
-
+    /* TODO: full enumeration requires xhci_enable_slot + xhci_address_device
+     * which are not yet implemented in the XHCI driver. For now, record
+     * that a device is attached on this port. */
     struct usb_device_info *dev = &g_devices[found];
     usb_memset(dev, 0, sizeof(*dev));
-    dev->slot_id = slot_id;
+    dev->slot_id = 0;
     dev->port = port;
-    dev->state = USB_DEV_CONFIGURED;
-
-    /* Try to identify device type via XHCI keyboard probe */
-    struct usb_device udev;
-    if (xhci_find_keyboard(&g_xhci, &udev) == 0) {
-      dev->class_code = udev.class_code;
-      dev->subclass = udev.subclass;
-      dev->protocol = udev.protocol;
-      dev->is_keyboard = udev.is_keyboard;
-      dev->is_mouse = (udev.protocol == USB_PROTOCOL_MOUSE) ? 1 : 0;
-      dev->descriptor.idVendor = udev.vendor_id;
-      dev->descriptor.idProduct = udev.product_id;
-    }
+    dev->state = USB_DEV_ATTACHED;
 
     found++;
-    klog_dec(KLOG_INFO, "[usb] Device on port ", port);
+    klog_dec(KLOG_INFO, "[usb] Device detected on port ", port);
   }
 
   g_device_count = found;
+  if (found > 0) {
+    klog(KLOG_INFO, "[usb] Full enumeration pending (enable_slot/address not yet implemented).");
+  }
   return found;
 }
 
@@ -102,12 +92,8 @@ int usb_device_is_hid_mouse(const struct usb_device_info *dev) {
 
 void usb_poll_all(void) {
   if (!g_usb_initialized) return;
-  for (int i = 0; i < g_device_count; i++) {
-    if (g_devices[i].is_keyboard) {
-      uint8_t key;
-      xhci_keyboard_poll(&g_xhci, NULL, &key);
-    }
-  }
+  /* TODO: USB HID polling requires endpoint transfer ring setup,
+   * which depends on xhci_enable_slot/address_device. Stub for now. */
 }
 
 void usb_hotplug_check(void) {
