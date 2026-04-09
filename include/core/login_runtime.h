@@ -43,6 +43,8 @@ struct login_runtime_ops {
   void (*ui_banner)(void);
   void (*cmd_info)(void);
   void (*service_poll)(void);
+  int (*maintenance_mode_active)(void);
+  int (*consume_recovery_login_request)(void);
 };
 
 int login_runtime_run(struct login_runtime_ops *ops);

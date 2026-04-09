@@ -15,6 +15,11 @@ static int g_banner_calls;
 static int g_clear_calls;
 static int g_splash_calls;
 static int g_should_logout;
+static int g_runtime_maintenance_active;
+static int g_recovery_login_requested;
+static const char *g_readline_sequence[8];
+static size_t g_readline_count;
+static size_t g_readline_index;
 static char g_printed[2048];
 static size_t g_printed_len;
 
@@ -32,6 +37,10 @@ static void reset_test_state(void) {
   g_clear_calls = 0;
   g_splash_calls = 0;
   g_should_logout = 0;
+  g_runtime_maintenance_active = 0;
+  g_recovery_login_requested = 0;
+  g_readline_count = 0;
+  g_readline_index = 0;
   g_printed_len = 0;
   memcpy(g_settings.language, "en", 3);
   memcpy(g_settings.hostname, "capyos", 7);
@@ -167,6 +176,11 @@ static int dispatch_shell_command_stub(char *line) {
     g_should_logout = 1;
     return 1;
   }
+  if (strings_equal(line, "resume-login")) {
+    g_runtime_maintenance_active = 0;
+    g_recovery_login_requested = 1;
+    return 1;
+  }
   return 0;
 }
 
@@ -182,6 +196,9 @@ static size_t readline_stub(char *buf, size_t maxlen, int mask) {
   (void)mask;
   if (!buf || maxlen == 0) {
     return 0;
+  }
+  if (g_readline_index < g_readline_count && g_readline_sequence[g_readline_index]) {
+    text = g_readline_sequence[g_readline_index++];
   }
   while (text[idx] && idx + 1 < maxlen) {
     buf[idx] = text[idx];
@@ -235,6 +252,16 @@ static void ui_banner_stub(void) { ++g_banner_calls; }
 
 static void cmd_info_stub(void) {}
 
+static int maintenance_mode_active_stub(void) {
+  return g_runtime_maintenance_active;
+}
+
+static int consume_recovery_login_request_stub(void) {
+  int requested = g_recovery_login_requested;
+  g_recovery_login_requested = 0;
+  return requested;
+}
+
 static int expect_true(int cond, const char *msg) {
   if (!cond) {
     fprintf(stderr, "[login_runtime] %s\n", msg);
@@ -272,6 +299,8 @@ static struct login_runtime_ops build_ops(void) {
   ops.ui_banner = ui_banner_stub;
   ops.cmd_info = cmd_info_stub;
   ops.service_poll = NULL;
+  ops.maintenance_mode_active = maintenance_mode_active_stub;
+  ops.consume_recovery_login_request = consume_recovery_login_request_stub;
   return ops;
 }
 
@@ -283,6 +312,7 @@ static int test_maintenance_mode_bypasses_login(void) {
   reset_test_state();
   ops = build_ops();
   ops.maintenance_mode = 1;
+  g_runtime_maintenance_active = 1;
   ops.maintenance_reason =
       "Boot policy forced maintenance because the storage runtime is unavailable";
 
@@ -330,10 +360,42 @@ static int test_normal_login_path_still_runs(void) {
   return fails;
 }
 
+static int test_recovery_can_return_to_normal_login(void) {
+  int fails = 0;
+  struct login_runtime_ops ops;
+  int rc = 0;
+
+  reset_test_state();
+  ops = build_ops();
+  ops.maintenance_mode = 1;
+  g_runtime_maintenance_active = 1;
+  g_readline_sequence[0] = "resume-login";
+  g_readline_sequence[1] = "logout";
+  g_readline_count = 2;
+  ops.maintenance_reason =
+      "Boot policy forced maintenance because the storage runtime is unavailable";
+
+  rc = login_runtime_run(&ops);
+  fails += expect_true(rc == -1,
+                       "recovery-to-login path should stop only when the next normal login later fails");
+  fails += expect_true(g_maintenance_calls == 1,
+                       "maintenance session should run only once before leaving recovery");
+  fails += expect_true(g_login_calls == 2,
+                       "normal login should take over after recovery exit");
+  fails += expect_true(g_dispatch_calls == 2,
+                       "both maintenance and normal shell commands should be dispatched");
+  fails += expect_true(strstr(g_printed, "Returning to the normal login") != NULL,
+                       "recovery exit message should be printed");
+  fails += expect_true(g_runtime_maintenance_active == 0,
+                       "runtime maintenance mode should be cleared after recovery exit");
+  return fails;
+}
+
 int run_login_runtime_tests(void) {
   int fails = 0;
   fails += test_maintenance_mode_bypasses_login();
   fails += test_normal_login_path_still_runs();
+  fails += test_recovery_can_return_to_normal_login();
   if (fails == 0) {
     printf("[tests] login_runtime OK\n");
   }

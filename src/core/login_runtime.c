@@ -20,9 +20,27 @@ static void login_service_poll(struct login_runtime_ops *ops) {
   }
 }
 
+static int login_maintenance_mode_active(const struct login_runtime_ops *ops) {
+  if (!ops) {
+    return 0;
+  }
+  if (ops->maintenance_mode_active) {
+    return ops->maintenance_mode_active() ? 1 : 0;
+  }
+  return ops->maintenance_mode ? 1 : 0;
+}
+
+static int login_consume_recovery_login_request(struct login_runtime_ops *ops) {
+  if (!ops || !ops->consume_recovery_login_request) {
+    return 0;
+  }
+  return ops->consume_recovery_login_request() ? 1 : 0;
+}
+
 static void login_show_maintenance_notice(struct login_runtime_ops *ops,
-                                          const char *language) {
-  if (!ops || !ops->maintenance_mode) {
+                                          const char *language,
+                                          int maintenance_mode) {
+  if (!ops || !maintenance_mode) {
     return;
   }
 
@@ -45,7 +63,8 @@ static void login_show_maintenance_notice(struct login_runtime_ops *ops,
 }
 
 static void login_render_screen(struct login_runtime_ops *ops,
-                                const char *language, int first_screen) {
+                                const char *language, int first_screen,
+                                int maintenance_mode) {
   if (!ops) {
     return;
   }
@@ -54,9 +73,9 @@ static void login_render_screen(struct login_runtime_ops *ops,
   }
   ops->clear_view();
   ops->ui_banner();
-  if (ops->maintenance_mode) {
+  if (maintenance_mode) {
     ops->print("\n");
-    login_show_maintenance_notice(ops, language);
+    login_show_maintenance_notice(ops, language, maintenance_mode);
   }
 }
 
@@ -83,8 +102,9 @@ int login_runtime_run(struct login_runtime_ops *ops) {
   login_service_poll(ops);
 
   for (;;) {
+    int maintenance_mode = login_maintenance_mode_active(ops);
     if (first_login_screen) {
-      login_render_screen(ops, system_language, 1);
+      login_render_screen(ops, system_language, 1, maintenance_mode);
       first_login_screen = 0;
     }
     ops->print("\n");
@@ -98,7 +118,7 @@ int login_runtime_run(struct login_runtime_ops *ops) {
     ops->shell_context_init(ops->shell_ctx, ops->session_ctx, ops->settings);
     login_service_poll(ops);
 
-    if (ops->maintenance_mode) {
+    if (maintenance_mode) {
       if (ops->maintenance_session_start(ops->session_ctx, ops->settings) != 0) {
         ops->print(localization_select(
             system_language,
@@ -146,10 +166,22 @@ int login_runtime_run(struct login_runtime_ops *ops) {
 
       if (ops->dispatch_shell_command(line)) {
         login_service_poll(ops);
+        if (maintenance_mode && login_consume_recovery_login_request(ops)) {
+          ops->print(localization_select(
+              system_language,
+              "[recovery] Sessao de recuperacao encerrada. Voltando para o login normal.\n",
+              "[recovery] Recovery session closed. Returning to the normal login.\n",
+              "[recovery] Sesion de recuperacion cerrada. Volviendo al inicio de sesion normal.\n"));
+          ops->session_reset(ops->session_ctx);
+          ops->session_set_active(NULL);
+          login_render_screen(ops, system_language, 0, 0);
+          break;
+        }
         if (ops->shell_context_should_logout(ops->shell_ctx)) {
           ops->session_reset(ops->session_ctx);
           ops->session_set_active(NULL);
-          login_render_screen(ops, system_language, 0);
+          login_render_screen(ops, system_language, 0,
+                              login_maintenance_mode_active(ops));
           break;
         }
         continue;

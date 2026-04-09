@@ -4,8 +4,10 @@
 #include "core/localization.h"
 #include "core/service_boot_policy.h"
 #include "core/service_manager.h"
+#include "core/update_agent.h"
 #include "core/user.h"
 #include "core/version.h"
+#include "core/work_queue.h"
 #include "drivers/timer/pit.h"
 #if defined(__x86_64__)
 #include "arch/x86_64/kernel_runtime_control.h"
@@ -14,6 +16,7 @@
 #endif
 #include "fs/capyfs.h"
 #include "fs/vfs.h"
+#include "memory/kmem.h"
 
 static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
@@ -224,6 +227,19 @@ static int service_matches_filter(const char *filter, const char *name) {
     return !filter || !filter[0] || shell_string_equal(filter, name);
 }
 
+static int work_matches_filter(const char *filter, const char *name) {
+    return !filter || !filter[0] || shell_string_equal(filter, name);
+}
+
+static void shell_print_signed_result(int32_t value) {
+    if (value < 0) {
+        shell_print("-");
+        shell_print_number((uint32_t)(-value));
+        return;
+    }
+    shell_print_number((uint32_t)value);
+}
+
 static void shell_print_service_dependencies(uint32_t dependency_mask) {
     int first = 1;
     size_t count = service_manager_count();
@@ -327,12 +343,7 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         shell_print(" critical=");
         shell_print(svc.critical ? "yes" : "no");
         shell_print(" rc=");
-        if (svc.last_result < 0) {
-            shell_print("-");
-            shell_print_number((uint32_t)(-svc.last_result));
-        } else {
-            shell_print_number((uint32_t)svc.last_result);
-        }
+        shell_print_signed_result(svc.last_result);
         shell_print(" transitions=");
         shell_print_number(svc.transitions);
         shell_print(" polls=");
@@ -358,6 +369,114 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
         shell_print(svc.summary[0] ? svc.summary : "(no summary)");
         shell_newline();
     }
+    return 0;
+}
+
+static int cmd_job_status(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    const char *filter = NULL;
+    size_t count = 0;
+    (void)ctx;
+
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: job-status [nome]\nMostra o estado dos jobs internos do kernel/work queue.\n",
+            "Usage: job-status [name]\nShows the state of the internal kernel/work queue jobs.\n",
+            "Uso: job-status [nombre]\nMuestra el estado de los jobs internos del kernel/work queue.\n"));
+        return 0;
+    }
+
+    if (argc >= 2) {
+        filter = argv[1];
+    }
+
+    count = work_queue_count();
+    for (size_t i = 0; i < count; ++i) {
+        struct system_work_status work;
+        if (work_queue_get_at(i, &work) != 0) {
+            continue;
+        }
+        if (!work_matches_filter(filter, work.name)) {
+            continue;
+        }
+        shell_print(work.name);
+        shell_print(" state=");
+        shell_print(work_queue_state_label(work.state));
+        shell_print(" rc=");
+        shell_print_signed_result(work.last_result);
+        shell_print(" runs=");
+        shell_print_number(work.runs);
+        shell_print(" failures=");
+        shell_print_number(work.failures);
+        shell_print(" every=");
+        if (work.interval_ticks == 0u) {
+            shell_print("manual");
+        } else {
+            shell_print_number(work.interval_ticks);
+        }
+        shell_print(" next=");
+        if (work.state == SYSTEM_WORK_STATE_DISABLED) {
+            shell_print("-");
+        } else {
+            shell_print_number((uint32_t)work.next_due_tick);
+        }
+        shell_newline();
+        shell_print("  summary=");
+        shell_print(work.summary[0] ? work.summary : "(no summary)");
+        shell_newline();
+    }
+    return 0;
+}
+
+static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    struct system_update_status status;
+    (void)ctx;
+
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: update-status\nMostra o estado atual do catalogo local de atualizacoes e do update-agent.\n",
+            "Usage: update-status\nShows the current state of the local update catalog and update agent.\n",
+            "Uso: update-status\nMuestra el estado actual del catalogo local de actualizaciones y del update-agent.\n"));
+        return 0;
+    }
+
+    update_agent_status_get(&status);
+    shell_print("configured=");
+    shell_print(status.configured ? "yes" : "no");
+    shell_print(" catalog=");
+    shell_print(status.catalog_present ? "present" : "missing");
+    shell_print(" update=");
+    shell_print(status.update_available ? "available" : "none");
+    shell_print(" rc=");
+    shell_print_signed_result(status.last_result);
+    shell_newline();
+
+    shell_print("channel=");
+    shell_print(status.channel[0] ? status.channel : "-");
+    shell_print(" source=");
+    shell_print(status.source[0] ? status.source : "-");
+    shell_newline();
+
+    shell_print("current=");
+    shell_print(status.current_version[0] ? status.current_version : "-");
+    shell_print(" available=");
+    shell_print(status.available_version[0] ? status.available_version : "-");
+    if (status.published_at[0]) {
+        shell_print(" published=");
+        shell_print(status.published_at);
+    }
+    shell_newline();
+
+    shell_print("manifest=");
+    shell_print(status.manifest_path[0] ? status.manifest_path : "-");
+    shell_newline();
+
+    shell_print("summary=");
+    shell_print(status.summary[0] ? status.summary : "(no summary)");
+    shell_newline();
     return 0;
 }
 
@@ -414,6 +533,7 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
         shell_print(x64_storage_runtime_has_device() ? "yes" : "no");
         shell_print(" persistent=");
         shell_print((ctx && ctx->settings) ? "configured" : "unknown");
+        shell_print(" report=/var/log/recovery-boot.txt");
         shell_newline();
 
         net_rc = net_stack_status(&net_status);
@@ -435,6 +555,64 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
     }
     return 0;
 #endif
+}
+
+static int cmd_recovery_report(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    char *content = NULL;
+    size_t content_len = 0;
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: recovery-report\nExibe o ultimo relatorio persistido do boot/recovery gravado em /var/log/recovery-boot.txt.\n",
+            "Usage: recovery-report\nShows the latest persisted boot/recovery report stored in /var/log/recovery-boot.txt.\n",
+            "Uso: recovery-report\nMuestra el ultimo informe persistido de boot/recovery guardado en /var/log/recovery-boot.txt.\n"));
+        return 0;
+    }
+
+    if (shell_read_file("/var/log/recovery-boot.txt", &content, &content_len) != 0 ||
+        !content || content_len == 0) {
+        shell_print_error(localization_select(
+            language,
+            "nenhum relatorio persistido de recovery foi encontrado em /var/log/recovery-boot.txt",
+            "no persisted recovery report was found in /var/log/recovery-boot.txt",
+            "no se encontro ningun informe persistido de recovery en /var/log/recovery-boot.txt"));
+        return -1;
+    }
+
+    shell_paginate_content(content);
+    kfree(content);
+    return 0;
+}
+
+static int cmd_recovery_history(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    char *content = NULL;
+    size_t content_len = 0;
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(localization_select(
+            language,
+            "Uso: recovery-history\nExibe o historico persistido de eventos de boot/recovery gravado em /var/log/recovery-history.log.\n",
+            "Usage: recovery-history\nShows the persisted history of boot/recovery events stored in /var/log/recovery-history.log.\n",
+            "Uso: recovery-history\nMuestra el historial persistido de eventos de boot/recovery guardado en /var/log/recovery-history.log.\n"));
+        return 0;
+    }
+
+    if (shell_read_file("/var/log/recovery-history.log", &content, &content_len) != 0 ||
+        !content || content_len == 0) {
+        shell_print_error(localization_select(
+            language,
+            "nenhum historico persistido de recovery foi encontrado em /var/log/recovery-history.log",
+            "no persisted recovery history was found in /var/log/recovery-history.log",
+            "no se encontro ningun historial persistido de recovery en /var/log/recovery-history.log"));
+        return -1;
+    }
+
+    shell_paginate_content(content);
+    kfree(content);
+    return 0;
 }
 
 static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv) {
@@ -549,9 +727,9 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
         } else {
             shell_print(localization_select(
                 language,
-                "os prerequisitos de storage parecem saudaveis para tentar recovery-resume; se quiser regravar a base persistente, use recovery-storage-repair.",
-                "storage prerequisites look healthy enough to try recovery-resume; if you want to rewrite the persistent base, use recovery-storage-repair.",
-                "los prerequisitos de almacenamiento parecen saludables para intentar recovery-resume; si quieres regrabar la base persistente, usa recovery-storage-repair."));
+                "os prerequisitos de storage parecem saudaveis para tentar recovery-login/recovery-resume; se quiser regravar a base persistente, use recovery-storage-repair.",
+                "storage prerequisites look healthy enough to try recovery-login/recovery-resume; if you want to rewrite the persistent base, use recovery-storage-repair.",
+                "los prerequisitos de almacenamiento parecen saludables para intentar recovery-login/recovery-resume; si quieres regrabar la base persistente, usa recovery-storage-repair."));
         }
         shell_newline();
     }
@@ -773,7 +951,7 @@ static int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv
 #endif
 }
 
-static struct shell_command g_system_info_commands[12];
+static struct shell_command g_system_info_commands[16];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -796,21 +974,29 @@ static void init_system_info_commands(void) {
     g_system_info_commands[6].handler = cmd_print_envs;
     g_system_info_commands[7].name = "service-status";
     g_system_info_commands[7].handler = cmd_service_status;
-    g_system_info_commands[8].name = "recovery-status";
-    g_system_info_commands[8].handler = cmd_recovery_status;
-    g_system_info_commands[9].name = "recovery-storage";
-    g_system_info_commands[9].handler = cmd_recovery_storage;
-    g_system_info_commands[10].name = "recovery-network";
-    g_system_info_commands[10].handler = cmd_recovery_network;
-    g_system_info_commands[11].name = "recovery-storage-check";
-    g_system_info_commands[11].handler = cmd_recovery_storage_check;
+    g_system_info_commands[8].name = "job-status";
+    g_system_info_commands[8].handler = cmd_job_status;
+    g_system_info_commands[9].name = "update-status";
+    g_system_info_commands[9].handler = cmd_update_status;
+    g_system_info_commands[10].name = "recovery-status";
+    g_system_info_commands[10].handler = cmd_recovery_status;
+    g_system_info_commands[11].name = "recovery-report";
+    g_system_info_commands[11].handler = cmd_recovery_report;
+    g_system_info_commands[12].name = "recovery-history";
+    g_system_info_commands[12].handler = cmd_recovery_history;
+    g_system_info_commands[13].name = "recovery-storage";
+    g_system_info_commands[13].handler = cmd_recovery_storage;
+    g_system_info_commands[14].name = "recovery-network";
+    g_system_info_commands[14].handler = cmd_recovery_network;
+    g_system_info_commands[15].name = "recovery-storage-check";
+    g_system_info_commands[15].handler = cmd_recovery_storage_check;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 12;
+        *count = 16;
     }
     return g_system_info_commands;
 }

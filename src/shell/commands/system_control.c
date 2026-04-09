@@ -5,14 +5,17 @@
 #include "core/klog_persist.h"
 #include "core/service_manager.h"
 #include "core/system_init.h"
+#include "core/update_agent.h"
 #include "core/user.h"
 #include "core/user_prefs.h"
 #include "core/version.h"
+#include "core/work_queue.h"
 #if defined(__x86_64__)
 #include "arch/x86_64/interrupts.h"
 #include "arch/x86_64/kernel_runtime_control.h"
 #include "arch/x86_64/kernel_volume_runtime.h"
 #include "arch/x86_64/storage_runtime.h"
+#include "drivers/timer/pit.h"
 #include "net/stack.h"
 #include "drivers/hyperv/hyperv.h"
 #endif
@@ -380,6 +383,9 @@ static int recovery_storage_ensure_base_layout(void) {
       return -1;
     }
   }
+  if (system_prepare_update_catalog() != 0) {
+    return -1;
+  }
   return 0;
 }
 
@@ -506,6 +512,86 @@ static int cmd_service_control(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
+static int cmd_job_run(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_work_status work;
+  int work_id = -1;
+  (void)ctx;
+
+  if (shell_help_requested(argc, argv) || argc < 2) {
+    shell_print(localization_select(
+        language,
+        "Uso: job-run <nome>\nAgenda um job interno do kernel/work queue para execucao imediata no proximo tick.\n",
+        "Usage: job-run <name>\nSchedules an internal kernel/work queue job for immediate execution on the next tick.\n",
+        "Uso: job-run <nombre>\nAgenda un job interno del kernel/work queue para ejecucion inmediata en el siguiente tick.\n"));
+    return argc < 2 ? -1 : 0;
+  }
+
+  work_id = work_queue_find(argv[1], &work);
+  if (work_id < 0) {
+    shell_print_error(localization_select(language,
+                                          "job interno desconhecido",
+                                          "unknown internal job",
+                                          "job interno desconocido"));
+    return -1;
+  }
+  if (work_queue_schedule_now((uint32_t)work_id, pit_ticks()) != 0) {
+    shell_print_error(localization_select(language,
+                                          "falha ao agendar job interno",
+                                          "failed to schedule internal job",
+                                          "fallo al programar el job interno"));
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "job agendado para execucao imediata",
+                                     "job scheduled for immediate execution",
+                                     "job programado para ejecucion inmediata"));
+  shell_print(work.name);
+  shell_newline();
+  return 0;
+}
+
+static int cmd_update_check(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  struct system_update_status status;
+  int rc = 0;
+  (void)ctx;
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: update-check\nExecuta imediatamente uma leitura do catalogo local de atualizacoes e atualiza o estado do update-agent.\n",
+        "Usage: update-check\nImmediately reads the local update catalog and refreshes the update-agent state.\n",
+        "Uso: update-check\nEjecuta inmediatamente una lectura del catalogo local de actualizaciones y actualiza el estado del update-agent.\n"));
+    return 0;
+  }
+
+  rc = update_agent_poll();
+  update_agent_status_get(&status);
+  if (rc < 0) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                    status.summary);
+    shell_print_error(localization_select(language,
+                                          "catalogo local de atualizacao invalido",
+                                          "local update catalog is invalid",
+                                          "el catalogo local de actualizacion es invalido"));
+    return -1;
+  }
+
+  (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                  SYSTEM_SERVICE_STATE_READY, status.last_result,
+                                  status.summary);
+  shell_print_ok(localization_select(language,
+                                     "catalogo local de atualizacao verificado",
+                                     "local update catalog checked",
+                                     "catalogo local de actualizacion verificado"));
+  shell_print(status.summary);
+  shell_newline();
+  return 0;
+}
+
 static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
   struct system_service_target_status target;
@@ -604,6 +690,25 @@ static int cmd_service_target(struct shell_context *ctx, int argc, char **argv) 
   return 0;
 }
 
+static int shell_resolve_recovery_target(struct shell_context *ctx,
+                                         const char *requested_name,
+                                         struct system_service_target_status *out,
+                                         const char **resolved_name) {
+  const char *target_name = requested_name;
+  int target_id = -1;
+
+  if (!target_name || shell_string_equal(target_name, "saved")) {
+    target_name = (ctx && ctx->settings && ctx->settings->service_target[0])
+                      ? ctx->settings->service_target
+                      : "network";
+  }
+  if (resolved_name) {
+    *resolved_name = target_name;
+  }
+  target_id = service_manager_target_find(target_name, out);
+  return target_id;
+}
+
 static int cmd_recovery_resume(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
 #if defined(__x86_64__)
@@ -640,15 +745,7 @@ static int cmd_recovery_resume(struct shell_context *ctx, int argc, char **argv)
     return -1;
   }
 
-  if (shell_string_equal(argv[1], "saved")) {
-    target_name = (ctx && ctx->settings && ctx->settings->service_target[0])
-                      ? ctx->settings->service_target
-                      : "network";
-  } else {
-    target_name = argv[1];
-  }
-
-  target_id = service_manager_target_find(target_name, &target);
+  target_id = shell_resolve_recovery_target(ctx, argv[1], &target, &target_name);
   if (target_id < 0) {
     shell_print_error(localization_select(language,
                                           "alvo de recuperacao desconhecido",
@@ -698,6 +795,93 @@ static int cmd_recovery_resume(struct shell_context *ctx, int argc, char **argv)
       "A sessao atual continua em modo de recuperacao ate reboot ou novo login.\n",
       "The current session remains in recovery mode until reboot or a new login.\n",
       "La sesion actual permanece en modo de recuperacion hasta reiniciar o realizar un nuevo inicio de sesion.\n"));
+  return 0;
+#endif
+}
+
+static int cmd_recovery_login(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+#if defined(__x86_64__)
+  struct x64_kernel_recovery_status status;
+  struct system_service_target_status target;
+  const char *target_name = NULL;
+  int target_id = -1;
+  int rc = 0;
+#endif
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: recovery-login [saved|core|network|full]\nPromove o alvo indicado e encerra a sessao de recuperacao, retornando ao login normal sem reboot.\n",
+        "Usage: recovery-login [saved|core|network|full]\nPromotes the selected target and leaves recovery, returning to the normal login without reboot.\n",
+        "Uso: recovery-login [saved|core|network|full]\nPromueve el objetivo indicado y cierra la sesion de recuperacion, volviendo al inicio de sesion normal sin reiniciar.\n"));
+    return 0;
+  }
+
+#if !defined(__x86_64__)
+  (void)ctx;
+  shell_print_error(localization_select(language,
+                                        "recovery-login indisponivel",
+                                        "recovery-login unavailable",
+                                        "recovery-login no disponible"));
+  return -1;
+#else
+  x64_kernel_recovery_status_get(&status);
+  if (!status.maintenance_session) {
+    shell_print_error(localization_select(language,
+                                          "o sistema nao esta em modo de recuperacao neste boot",
+                                          "the system is not running in recovery mode for this boot",
+                                          "el sistema no esta ejecutandose en modo de recuperacion en este arranque"));
+    return -1;
+  }
+
+  target_id = shell_resolve_recovery_target(ctx,
+                                            (argc >= 2) ? argv[1] : "saved",
+                                            &target, &target_name);
+  if (target_id < 0 || (uint32_t)target_id == SYSTEM_SERVICE_TARGET_MAINTENANCE) {
+    shell_print_error(localization_select(language,
+                                          "alvo de login de recuperacao invalido",
+                                          "invalid recovery login target",
+                                          "objetivo invalido para salir de recuperacion"));
+    return -1;
+  }
+
+  rc = x64_kernel_recovery_request_normal_login((uint32_t)target_id);
+  if (rc == -2) {
+    shell_print_error(localization_select(language,
+                                          "storage validado ainda nao esta disponivel para sair do modo de recuperacao",
+                                          "validated storage is still unavailable to leave recovery mode",
+                                          "el almacenamiento validado aun no esta disponible para salir del modo de recuperacion"));
+    return -1;
+  }
+  if (rc == -3) {
+    shell_print_error(localization_select(language,
+                                          "o estado da rede ainda nao pode ser validado",
+                                          "network status cannot be validated yet",
+                                          "el estado de la red aun no puede validarse"));
+    return -1;
+  }
+  if (rc == -4) {
+    shell_print_error(localization_select(language,
+                                          "o runtime de rede validado ainda nao esta disponivel para este alvo",
+                                          "validated network runtime is not available for this target yet",
+                                          "el runtime de red validado aun no esta disponible para este objetivo"));
+    return -1;
+  }
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "falha ao sair do modo de recuperacao",
+                                          "failed to leave recovery mode",
+                                          "fallo al salir del modo de recuperacion"));
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "retornando ao login normal com alvo",
+                                     "returning to the normal login with target",
+                                     "volviendo al inicio de sesion normal con el objetivo"));
+  shell_print(target.name);
+  shell_newline();
   return 0;
 #endif
 }
@@ -807,7 +991,11 @@ static int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv)
   shell_newline();
   shell_print("next: ");
   if (verify_ok) {
-    shell_print("recovery-resume ");
+    if ((uint32_t)target_id == SYSTEM_SERVICE_TARGET_MAINTENANCE) {
+      shell_print("recovery-resume ");
+    } else {
+      shell_print("recovery-login ");
+    }
     shell_print(target.name);
   } else if (!storage_ok || !fs_ok) {
     shell_print(localization_select(
@@ -943,7 +1131,7 @@ static int cmd_recovery_storage_repair(struct shell_context *ctx, int argc,
         "base persistente revalidada",
         "persistent base revalidated",
         "base persistente revalidada"));
-    shell_print("config=/system/config.ini users.db=");
+    shell_print("config=/system/config.ini repo=/system/update/repository.ini users.db=");
     shell_print(admin_exists ? "ready" : "present-without-admin");
     if (admin_password) {
       shell_print(" admin=reset");
@@ -1276,7 +1464,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[13];
+static struct shell_command g_system_control_commands[16];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -1301,21 +1489,27 @@ static void init_system_control_commands(void) {
   g_system_control_commands[7].handler = cmd_runtime_native;
   g_system_control_commands[8].name = "service-control";
   g_system_control_commands[8].handler = cmd_service_control;
-  g_system_control_commands[9].name = "service-target";
-  g_system_control_commands[9].handler = cmd_service_target;
-  g_system_control_commands[10].name = "recovery-resume";
-  g_system_control_commands[10].handler = cmd_recovery_resume;
-  g_system_control_commands[11].name = "recovery-verify";
-  g_system_control_commands[11].handler = cmd_recovery_verify;
-  g_system_control_commands[12].name = "recovery-storage-repair";
-  g_system_control_commands[12].handler = cmd_recovery_storage_repair;
+  g_system_control_commands[9].name = "job-run";
+  g_system_control_commands[9].handler = cmd_job_run;
+  g_system_control_commands[10].name = "update-check";
+  g_system_control_commands[10].handler = cmd_update_check;
+  g_system_control_commands[11].name = "service-target";
+  g_system_control_commands[11].handler = cmd_service_target;
+  g_system_control_commands[12].name = "recovery-resume";
+  g_system_control_commands[12].handler = cmd_recovery_resume;
+  g_system_control_commands[13].name = "recovery-verify";
+  g_system_control_commands[13].handler = cmd_recovery_verify;
+  g_system_control_commands[14].name = "recovery-login";
+  g_system_control_commands[14].handler = cmd_recovery_login;
+  g_system_control_commands[15].name = "recovery-storage-repair";
+  g_system_control_commands[15].handler = cmd_recovery_storage_repair;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 13;
+    *count = 16;
   }
   return g_system_control_commands;
 }

@@ -106,8 +106,8 @@ void service_manager_bootstrap_defaults(void) {
                SYSTEM_SERVICE_STARTUP_BOOT, SYSTEM_SERVICE_STATE_STARTING,
                "network bootstrap pending");
   seed_service(SYSTEM_SERVICE_UPDATE_AGENT, "update-agent", 0,
-               SYSTEM_SERVICE_STARTUP_BLOCKED, SYSTEM_SERVICE_STATE_BLOCKED,
-               "signed updates not implemented");
+               SYSTEM_SERVICE_STARTUP_MANUAL, SYSTEM_SERVICE_STATE_STOPPED,
+               "update catalog idle");
   seed_target(SYSTEM_SERVICE_TARGET_CORE, "core",
               (1u << SYSTEM_SERVICE_LOGGER));
   seed_target(SYSTEM_SERVICE_TARGET_NETWORK, "network",

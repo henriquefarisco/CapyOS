@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from smoke_x64_helpers import wait_and_send, wait_for_vm_exit
 from smoke_x64_session import SmokeSession
 
@@ -58,39 +60,80 @@ def maybe_run_first_boot_setup(
     keyboard_layout: str,
 ) -> None:
     mk = session.marker()
-    layout_prompts = [
+    legacy_layout_prompts = [
         "Keyboard layout [us]:",
         "Layout do teclado [us]:",
         "Escolha layout [us]:",
         "Layout del teclado [us]:",
     ]
+    layout_menu_titles = [
+        "Available keyboard layouts:",
+        "Layouts de teclado disponiveis:",
+        "Layouts de teclado disponibles:",
+    ]
     found = session.wait_for_any(
-        layout_prompts + ["Usuario:", "User:", "Usuario: ", "User: "],
+        legacy_layout_prompts
+        + layout_menu_titles
+        + ["Usuario:", "User:", "Usuario: ", "User: "],
         timeout=timeout * 4,
         start_at=mk,
     )
     if found in ("Usuario:", "User:", "Usuario: ", "User: "):
         return
 
-    session.send_line("" if keyboard_layout == "us" else keyboard_layout)
+    if found in layout_menu_titles:
+        session.send_text("2" if keyboard_layout == "br-abnt2" else "1", newline=False)
+    else:
+        session.send_line("" if keyboard_layout == "us" else keyboard_layout)
     wait_and_send(session, "Hostname [capyos-node]:", "smoke-node", timeout)
     mk = session.marker()
-    session.wait_for_any(["Theme [capyos]:", "Tema [capyos]:"], timeout=timeout, start_at=mk)
-    session.send_line("capyos")
-    mk = session.marker()
-    session.wait_for_any(
-        ["Enable animated splash? [Y/n]:", "Ativar splash animado? [S/n]:"],
+    theme_prompt = session.wait_for_any(
+        [
+            "Theme [capyos]:",
+            "Tema [capyos]:",
+            "Available themes: capyos, ocean, forest.",
+            "Temas disponibles: capyos, ocean, forest.",
+            "Temas disponiveis: capyos, ocean, forest.",
+        ],
         timeout=timeout,
         start_at=mk,
     )
-    session.send_line("n")
+    if theme_prompt.startswith("Theme [") or theme_prompt.startswith("Tema ["):
+        session.send_line("capyos")
+    else:
+        session.send_text("1", newline=False)
     mk = session.marker()
-    session.wait_for_any(
-        ["Administrator user [admin]:", "Usuario administrador [admin]:"],
+    splash_prompt = session.wait_for_any(
+        [
+            "Enable animated splash? [Y/n]:",
+            "Ativar splash animado? [S/n]:",
+            "Activar splash animado? [S/n]:",
+            "Animated splash",
+            "Splash animado",
+        ],
         timeout=timeout,
         start_at=mk,
     )
-    session.send_line("" if user == "admin" else user)
+    if splash_prompt in ("Animated splash", "Splash animado"):
+        session.send_text("2", newline=False)
+    else:
+        session.send_line("n")
+    mk = session.marker()
+    admin_prompt = session.wait_for_any(
+        [
+            "Administrator user [admin]:",
+            "Usuario administrador [admin]:",
+            "Set the password for user",
+            "Defina a senha para o usuario",
+        ],
+        timeout=timeout,
+        start_at=mk,
+    )
+    if admin_prompt in (
+        "Administrator user [admin]:",
+        "Usuario administrador [admin]:",
+    ):
+        session.send_line("" if user == "admin" else user)
     while True:
         mk = session.marker()
         session.wait_for_any(
@@ -108,13 +151,24 @@ def maybe_run_first_boot_setup(
         session.send_line(password)
 
         mk = session.marker()
-        outcome = session.wait_for_any(
-            ["Passwords do not match.", "As senhas nao coincidem.", "Usuario:", "User:"],
-            timeout=timeout * 4,
-            start_at=mk,
-        )
-        if outcome in ("Usuario:", "User:"):
-            break
+        with suppress(TimeoutError):
+            outcome = session.wait_for_any(
+                [
+                    "Passwords do not match.",
+                    "As senhas nao coincidem.",
+                    "Las contrasenas no coinciden.",
+                    "Usuario:",
+                    "User:",
+                    "Usuario: ",
+                    "User: ",
+                ],
+                timeout=timeout * 2,
+                start_at=mk,
+            )
+            if outcome in ("Usuario:", "User:", "Usuario: ", "User: "):
+                break
+            continue
+        return
 
 
 def login(session: SmokeSession, timeout: float, user: str, password: str) -> None:

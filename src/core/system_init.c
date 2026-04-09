@@ -320,6 +320,24 @@ static int verify_directory_exists(const char *path) {
   return 0;
 }
 
+int system_prepare_update_catalog(void) {
+  static const char *repo_defaults =
+      "channel=stable\n"
+      "source=github:henriquefarisco/CapyOS\n"
+      "manifest=/system/update/cache/latest.ini\n";
+  struct vfs_stat st;
+
+  if (ensure_directory("/system") != 0 ||
+      ensure_directory("/system/update") != 0 ||
+      ensure_directory("/system/update/cache") != 0) {
+    return -1;
+  }
+  if (vfs_stat_path("/system/update/repository.ini", &st) == 0) {
+    return 0;
+  }
+  return write_text_file("/system/update/repository.ini", repo_defaults);
+}
+
 static void sync_root_device(void) {
   struct super_block *root = vfs_root();
   if (root && root->bdev) {
@@ -1632,6 +1650,9 @@ static int first_boot_setup_impl(void) {
   } else {
     print_line(
         "   Referencia CapyCLI pronta em /docs/capyos-cli-reference.txt.");
+  }
+  if (system_prepare_update_catalog() != 0) {
+    print_line("   Aviso: nao foi possivel preparar /system/update.");
   }
   sync_root_device();
   log_process_conclude(proc_docs);

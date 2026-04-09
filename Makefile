@@ -69,6 +69,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/core/network_bootstrap_diag.o \
 	$(BUILD)/x86_64/core/network_bootstrap.o \
 	$(BUILD)/x86_64/core/system_init.o \
+	$(BUILD)/x86_64/core/update_agent.o \
 	$(BUILD)/x86_64/core/user.o \
 	$(BUILD)/x86_64/core/user_prefs.o \
 	$(BUILD)/x86_64/core/klog.o \
@@ -76,6 +77,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/core/service_boot_policy.o \
 	$(BUILD)/x86_64/core/service_manager.o \
 	$(BUILD)/x86_64/core/session.o \
+	$(BUILD)/x86_64/core/work_queue.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
@@ -254,7 +256,7 @@ HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include -DUNIT_TEST
 HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/fs/capyfs/capyfs_check.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
@@ -280,7 +282,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c \
-               src/security/csprng.c src/security/crypt.c src/core/localization.c src/core/klog.c src/core/service_manager.c
+               src/security/csprng.c src/security/crypt.c src/core/localization.c src/core/klog.c src/core/service_manager.c src/core/work_queue.c src/core/update_agent.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

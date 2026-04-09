@@ -32,8 +32,10 @@
 #include "core/service_manager.h"
 #include "core/session.h"
 #include "core/system_init.h"
+#include "core/update_agent.h"
 #include "core/user.h"
 #include "core/version.h"
+#include "core/work_queue.h"
 #include "drivers/efi/efi_console.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/input/keyboard.h"
@@ -286,6 +288,9 @@ static uint32_t kernel_service_target_from_settings(
     const struct system_settings *settings);
 static void kernel_log_boot_policy_decision(
     const struct system_service_boot_policy_decision *decision);
+static int kernel_persist_recovery_report(void);
+static int kernel_append_recovery_history_event(const char *event_name);
+static void kernel_persist_recovery_artifacts(const char *event_name);
 
 void system_platform_apply_theme(const char *theme) {
   if (!theme || streq(theme, "capyos")) {
@@ -1003,6 +1008,8 @@ static int g_shell_initialized = 0;
 static int g_shell_fs_ready = 0;
 static int g_shell_persistent_storage = 0;
 static int g_shell_recovery_ram_fallback = 0;
+static int g_runtime_maintenance_mode = 0;
+static int g_recovery_login_requested = 0;
 static size_t kernel_readline(char *buf, size_t maxlen, int mask);
 static char g_active_volume_key[X64_KERNEL_VOLUME_KEY_MAX];
 static int g_active_volume_key_ready = 0;
@@ -1028,6 +1035,402 @@ static void local_copy(char *dst, size_t dst_size, const char *src) {
     }
   }
   dst[i] = '\0';
+}
+
+static size_t local_length(const char *text) {
+  size_t len = 0;
+  if (!text) {
+    return 0;
+  }
+  while (text[len]) {
+    ++len;
+  }
+  return len;
+}
+
+static void buffer_append_text(char *dst, size_t dst_size, const char *src) {
+  size_t pos = 0;
+  size_t idx = 0;
+  if (!dst || dst_size == 0 || !src) {
+    return;
+  }
+  pos = local_length(dst);
+  while (src[idx] && pos + 1 < dst_size) {
+    dst[pos++] = src[idx++];
+  }
+  dst[pos] = '\0';
+}
+
+static void buffer_append_u32(char *dst, size_t dst_size, uint32_t value) {
+  char tmp[16];
+  size_t len = 0;
+
+  if (value == 0) {
+    tmp[len++] = '0';
+  } else {
+    char rev[16];
+    size_t rev_len = 0;
+    while (value && rev_len < sizeof(rev)) {
+      rev[rev_len++] = (char)('0' + (value % 10u));
+      value /= 10u;
+    }
+    while (rev_len) {
+      tmp[len++] = rev[--rev_len];
+    }
+  }
+  tmp[len] = '\0';
+  buffer_append_text(dst, dst_size, tmp);
+}
+
+static void buffer_append_yes_no(char *dst, size_t dst_size, int value) {
+  buffer_append_text(dst, dst_size, value ? "yes" : "no");
+}
+
+static int kernel_ensure_directory_recursive(const char *path) {
+  char build[128];
+  struct vfs_metadata meta = {0, 0, 0755};
+  struct vfs_stat st;
+  size_t build_len = 0;
+  const char *cursor = path;
+
+  if (!path || path[0] != '/') {
+    return -1;
+  }
+
+  build[build_len++] = '/';
+  build[build_len] = '\0';
+  while (*cursor == '/') {
+    ++cursor;
+  }
+  while (*cursor) {
+    const char *start = cursor;
+    size_t segment_len = 0;
+    while (cursor[segment_len] && cursor[segment_len] != '/') {
+      ++segment_len;
+    }
+    if (segment_len > 0) {
+      if (build_len > 1 && build[build_len - 1] != '/') {
+        if (build_len + 1 >= sizeof(build)) {
+          return -1;
+        }
+        build[build_len++] = '/';
+      }
+      if (build_len + segment_len >= sizeof(build)) {
+        return -1;
+      }
+      for (size_t i = 0; i < segment_len; ++i) {
+        build[build_len++] = start[i];
+      }
+      build[build_len] = '\0';
+      if (vfs_stat_path(build, &st) != 0) {
+        if (vfs_create(build, VFS_MODE_DIR, &meta) != 0) {
+          return -1;
+        }
+      } else if ((st.mode & VFS_MODE_DIR) == 0) {
+        return -1;
+      }
+    }
+    cursor += segment_len;
+    while (*cursor == '/') {
+      ++cursor;
+    }
+  }
+  return 0;
+}
+
+static int kernel_sync_root_volume(void) {
+  struct super_block *root = vfs_root();
+  if (!root || !root->bdev) {
+    return -1;
+  }
+  return buffer_cache_sync(root->bdev);
+}
+
+static int kernel_write_text_file(const char *path, const char *text) {
+  char parent[128];
+  struct vfs_metadata meta = {0, 0, 0644};
+  struct vfs_stat st;
+  struct file *file = NULL;
+  size_t path_len = 0;
+  size_t split = 0;
+  size_t len = 0;
+  long written = 0;
+
+  if (!path || path[0] != '/' || !text) {
+    return -1;
+  }
+
+  path_len = local_length(path);
+  if (path_len >= sizeof(parent)) {
+    return -1;
+  }
+  local_copy(parent, sizeof(parent), path);
+  while (split < path_len && parent[split]) {
+    ++split;
+  }
+  while (split > 1 && parent[split - 1] != '/') {
+    --split;
+  }
+  if (split == 0) {
+    return -1;
+  }
+  if (split == 1) {
+    parent[1] = '\0';
+  } else {
+    parent[split - 1] = '\0';
+  }
+  if (kernel_ensure_directory_recursive(parent) != 0) {
+    return -1;
+  }
+
+  if (vfs_stat_path(path, &st) == 0) {
+    if ((st.mode & VFS_MODE_DIR) != 0) {
+      return -1;
+    }
+    if (vfs_unlink(path) != 0) {
+      return -1;
+    }
+  }
+  if (vfs_create(path, VFS_MODE_FILE, &meta) != 0) {
+    return -1;
+  }
+  file = vfs_open(path, VFS_OPEN_WRITE);
+  if (!file) {
+    return -1;
+  }
+  len = local_length(text);
+  written = vfs_write(file, text, len);
+  vfs_close(file);
+  if (written != (long)len) {
+    return -1;
+  }
+  return kernel_sync_root_volume();
+}
+
+static int kernel_append_text_file(const char *path, const char *text) {
+  char parent[128];
+  struct vfs_metadata meta = {0, 0, 0644};
+  struct vfs_stat st;
+  struct file *file = NULL;
+  size_t path_len = 0;
+  size_t split = 0;
+  size_t len = 0;
+  long written = 0;
+
+  if (!path || path[0] != '/' || !text) {
+    return -1;
+  }
+
+  path_len = local_length(path);
+  if (path_len >= sizeof(parent)) {
+    return -1;
+  }
+  local_copy(parent, sizeof(parent), path);
+  while (split < path_len && parent[split]) {
+    ++split;
+  }
+  while (split > 1 && parent[split - 1] != '/') {
+    --split;
+  }
+  if (split == 0) {
+    return -1;
+  }
+  if (split == 1) {
+    parent[1] = '\0';
+  } else {
+    parent[split - 1] = '\0';
+  }
+  if (kernel_ensure_directory_recursive(parent) != 0) {
+    return -1;
+  }
+
+  if (vfs_stat_path(path, &st) != 0) {
+    if (vfs_create(path, VFS_MODE_FILE, &meta) != 0) {
+      return -1;
+    }
+  } else if ((st.mode & VFS_MODE_DIR) != 0) {
+    return -1;
+  }
+
+  file = vfs_open(path, VFS_OPEN_WRITE);
+  if (!file) {
+    return -1;
+  }
+  if (file->dentry && file->dentry->inode) {
+    file->position = file->dentry->inode->size;
+  }
+  len = local_length(text);
+  written = vfs_write(file, text, len);
+  vfs_close(file);
+  if (written != (long)len) {
+    return -1;
+  }
+  return kernel_sync_root_volume();
+}
+
+static const char *kernel_target_name(uint32_t target_id) {
+  return service_manager_target_label(target_id);
+}
+
+static uint32_t kernel_active_service_target(void) {
+  struct system_service_target_status active_target;
+  if (service_manager_target_current(&active_target) == 0) {
+    return active_target.id;
+  }
+  return g_boot_policy_decision.final_target;
+}
+
+static int kernel_capyfs_check_current(struct capyfs_check_report *out) {
+  struct super_block *root = vfs_root();
+  if (!root || !root->bdev || !out) {
+    return -1;
+  }
+  return capyfs_check(root->bdev, out);
+}
+
+static int kernel_persist_recovery_report(void) {
+  char report[1024];
+  struct capyfs_check_report fs_report;
+  struct net_stack_status net_status;
+  int fs_ok = 0;
+  int net_ok = 0;
+
+  if (!g_shell_fs_ready || !g_shell_persistent_storage) {
+    return -1;
+  }
+
+  report[0] = '\0';
+  fs_ok = kernel_capyfs_check_current(&fs_report) == 0;
+  net_ok = net_stack_status(&net_status) == 0;
+
+  buffer_append_text(report, sizeof(report), "CAPYOS recovery report\n");
+  buffer_append_text(report, sizeof(report), "degraded=");
+  buffer_append_yes_no(report, sizeof(report), g_boot_policy_decision.degraded);
+  buffer_append_text(report, sizeof(report), "\nmaintenance_session=");
+  buffer_append_yes_no(report, sizeof(report), g_runtime_maintenance_mode);
+  buffer_append_text(report, sizeof(report), "\nforced_maintenance=");
+  buffer_append_yes_no(report, sizeof(report),
+                       g_boot_policy_decision.forced_maintenance);
+  buffer_append_text(report, sizeof(report), "\nforced_core=");
+  buffer_append_yes_no(report, sizeof(report), g_boot_policy_decision.forced_core);
+  buffer_append_text(report, sizeof(report), "\nreason=");
+  buffer_append_text(report, sizeof(report),
+                     service_boot_policy_reason_label(g_boot_policy_decision.reason));
+  buffer_append_text(report, sizeof(report), "\nsummary=");
+  buffer_append_text(report, sizeof(report),
+                     service_boot_policy_reason_summary(g_boot_policy_decision.reason));
+  buffer_append_text(report, sizeof(report), "\nbootstrap_target=");
+  buffer_append_text(report, sizeof(report),
+                     kernel_target_name(g_boot_policy_decision.bootstrap_target));
+  buffer_append_text(report, sizeof(report), "\nrequested_target=");
+  buffer_append_text(report, sizeof(report),
+                     kernel_target_name(g_boot_policy_decision.requested_target));
+  buffer_append_text(report, sizeof(report), "\nboot_target=");
+  buffer_append_text(report, sizeof(report),
+                     kernel_target_name(g_boot_policy_decision.final_target));
+  buffer_append_text(report, sizeof(report), "\nactive_target=");
+  buffer_append_text(report, sizeof(report),
+                     kernel_target_name(kernel_active_service_target()));
+  buffer_append_text(report, sizeof(report), "\nsaved_target=");
+  buffer_append_text(report, sizeof(report),
+                     g_shell_settings.service_target[0]
+                         ? g_shell_settings.service_target
+                         : "network");
+  buffer_append_text(report, sizeof(report), "\nshell_fs_ready=");
+  buffer_append_yes_no(report, sizeof(report), g_shell_fs_ready);
+  buffer_append_text(report, sizeof(report), "\npersistent_storage=");
+  buffer_append_yes_no(report, sizeof(report), g_shell_persistent_storage);
+  buffer_append_text(report, sizeof(report), "\nrecovery_ram_fallback=");
+  buffer_append_yes_no(report, sizeof(report), g_shell_recovery_ram_fallback);
+  buffer_append_text(report, sizeof(report), "\nvalidated_storage=");
+  buffer_append_yes_no(report, sizeof(report), x64_storage_runtime_has_device());
+  buffer_append_text(report, sizeof(report), "\ncapyfs=");
+  buffer_append_text(report, sizeof(report),
+                     fs_ok ? capyfs_check_result_label(fs_report.result)
+                           : "unavailable");
+  if (fs_ok) {
+    buffer_append_text(report, sizeof(report), "\ncapyfs_root_entries=");
+    buffer_append_u32(report, sizeof(report), fs_report.root_entries);
+    buffer_append_text(report, sizeof(report), "\ncapyfs_reserved_blocks=");
+    buffer_append_u32(report, sizeof(report), fs_report.reserved_blocks_expected);
+  }
+  buffer_append_text(report, sizeof(report), "\nnetwork_status=");
+  buffer_append_text(report, sizeof(report), net_ok ? "available" : "unavailable");
+  if (net_ok) {
+    buffer_append_text(report, sizeof(report), "\nnetwork_runtime_supported=");
+    buffer_append_yes_no(report, sizeof(report), net_status.runtime_supported);
+    buffer_append_text(report, sizeof(report), "\nnetwork_ready=");
+    buffer_append_yes_no(report, sizeof(report), net_status.ready);
+  }
+  buffer_append_text(report, sizeof(report), "\n");
+
+  return kernel_write_text_file("/var/log/recovery-boot.txt", report);
+}
+
+static int kernel_append_recovery_history_event(const char *event_name) {
+  char line[768];
+  struct capyfs_check_report fs_report;
+  struct net_stack_status net_status;
+  int fs_ok = 0;
+  int net_ok = 0;
+
+  if (!g_shell_fs_ready || !g_shell_persistent_storage) {
+    return -1;
+  }
+
+  line[0] = '\0';
+  fs_ok = kernel_capyfs_check_current(&fs_report) == 0;
+  net_ok = net_stack_status(&net_status) == 0;
+
+  buffer_append_text(line, sizeof(line), "ticks=");
+  buffer_append_u32(line, sizeof(line), pit_ticks());
+  buffer_append_text(line, sizeof(line), " event=");
+  buffer_append_text(line, sizeof(line),
+                     (event_name && event_name[0]) ? event_name : "unknown");
+  buffer_append_text(line, sizeof(line), " degraded=");
+  buffer_append_yes_no(line, sizeof(line), g_boot_policy_decision.degraded);
+  buffer_append_text(line, sizeof(line), " maintenance=");
+  buffer_append_yes_no(line, sizeof(line), g_runtime_maintenance_mode);
+  buffer_append_text(line, sizeof(line), " reason=");
+  buffer_append_text(line, sizeof(line),
+                     service_boot_policy_reason_label(g_boot_policy_decision.reason));
+  buffer_append_text(line, sizeof(line), " saved=");
+  buffer_append_text(line, sizeof(line),
+                     g_shell_settings.service_target[0]
+                         ? g_shell_settings.service_target
+                         : "network");
+  buffer_append_text(line, sizeof(line), " boot=");
+  buffer_append_text(line, sizeof(line),
+                     kernel_target_name(g_boot_policy_decision.final_target));
+  buffer_append_text(line, sizeof(line), " active=");
+  buffer_append_text(line, sizeof(line),
+                     kernel_target_name(kernel_active_service_target()));
+  buffer_append_text(line, sizeof(line), " storage=");
+  buffer_append_yes_no(line, sizeof(line), x64_storage_runtime_has_device());
+  buffer_append_text(line, sizeof(line), " ram_fallback=");
+  buffer_append_yes_no(line, sizeof(line), g_shell_recovery_ram_fallback);
+  buffer_append_text(line, sizeof(line), " capyfs=");
+  buffer_append_text(line, sizeof(line),
+                     fs_ok ? capyfs_check_result_label(fs_report.result)
+                           : "unavailable");
+  buffer_append_text(line, sizeof(line), " network=");
+  if (!net_ok) {
+    buffer_append_text(line, sizeof(line), "unavailable");
+  } else if (!net_status.runtime_supported) {
+    buffer_append_text(line, sizeof(line), "unsupported");
+  } else if (!net_status.ready) {
+    buffer_append_text(line, sizeof(line), "degraded");
+  } else {
+    buffer_append_text(line, sizeof(line), "ready");
+  }
+  buffer_append_text(line, sizeof(line), "\n");
+
+  return kernel_append_text_file("/var/log/recovery-history.log", line);
+}
+
+static void kernel_persist_recovery_artifacts(const char *event_name) {
+  (void)kernel_persist_recovery_report();
+  (void)kernel_append_recovery_history_event(event_name);
 }
 
 static int handoff_keyboard_layout(char *out, size_t out_size) {
@@ -1190,8 +1593,67 @@ static int kernel_service_stop_logger(void *ctx) {
   return klog_persist_flush_default();
 }
 
+static void kernel_update_update_agent_service_status(int rc) {
+  struct system_update_status status;
+  update_agent_status_get(&status);
+  if (rc < 0) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                    status.summary);
+    return;
+  }
+  (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                  SYSTEM_SERVICE_STATE_READY, status.last_result,
+                                  status.summary);
+}
+
+static int kernel_service_poll_update_agent(void *ctx) {
+  int rc = 0;
+  (void)ctx;
+  rc = update_agent_poll();
+  kernel_update_update_agent_service_status(rc);
+  return rc;
+}
+
+static int kernel_service_start_update_agent(void *ctx) {
+  return kernel_service_poll_update_agent(ctx);
+}
+
+static int kernel_service_stop_update_agent(void *ctx) {
+  (void)ctx;
+  (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                  SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                  "update catalog idle");
+  return 0;
+}
+
+static int kernel_work_recovery_snapshot(void *ctx) {
+  (void)ctx;
+  return kernel_persist_recovery_report();
+}
+
+static void kernel_update_recovery_snapshot_work(int schedule_now) {
+  uint64_t now_ticks = pit_ticks();
+
+  if (!g_shell_fs_ready || !g_shell_persistent_storage ||
+      g_shell_recovery_ram_fallback) {
+    (void)work_queue_disable(SYSTEM_WORK_RECOVERY_SNAPSHOT);
+    return;
+  }
+
+  (void)work_queue_set_interval(SYSTEM_WORK_RECOVERY_SNAPSHOT, 600u);
+  if (schedule_now) {
+    (void)work_queue_schedule_now(SYSTEM_WORK_RECOVERY_SNAPSHOT, now_ticks);
+  } else {
+    (void)work_queue_schedule_after(SYSTEM_WORK_RECOVERY_SNAPSHOT, now_ticks,
+                                    600u);
+  }
+}
+
 static void kernel_service_poll(void) {
-  (void)service_manager_poll_due(pit_ticks());
+  uint64_t now_ticks = pit_ticks();
+  (void)service_manager_poll_due(now_ticks);
+  (void)work_queue_poll_due(now_ticks);
 }
 
 static uint32_t kernel_service_target_from_settings(
@@ -1239,7 +1701,7 @@ void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   if (!out) {
     return;
   }
-  out->maintenance_session = kernel_boots_in_maintenance_mode() ? 1u : 0u;
+  out->maintenance_session = g_runtime_maintenance_mode ? 1u : 0u;
   out->degraded = g_boot_policy_decision.degraded;
   out->forced_maintenance = g_boot_policy_decision.forced_maintenance;
   out->forced_core = g_boot_policy_decision.forced_core;
@@ -1289,7 +1751,33 @@ int x64_kernel_recovery_resume_target(uint32_t target_id) {
   if (service_manager_target_apply(target_id) < 0) {
     return -5;
   }
+  kernel_persist_recovery_artifacts("resume-target");
+  kernel_update_recovery_snapshot_work(0);
   return 0;
+}
+
+int x64_kernel_recovery_request_normal_login(uint32_t target_id) {
+  int rc = 0;
+
+  if (!g_runtime_maintenance_mode) {
+    return -6;
+  }
+  if (target_id == SYSTEM_SERVICE_TARGET_MAINTENANCE) {
+    return -7;
+  }
+  rc = x64_kernel_recovery_resume_target(target_id);
+  if (rc != 0) {
+    return rc;
+  }
+  g_runtime_maintenance_mode = 0;
+  g_recovery_login_requested = 1;
+  kernel_persist_recovery_artifacts("leave-maintenance");
+  kernel_update_recovery_snapshot_work(0);
+  return 0;
+}
+
+int x64_kernel_recovery_maintenance_active(void) {
+  return g_runtime_maintenance_mode ? 1 : 0;
 }
 
 static int
@@ -1758,6 +2246,16 @@ static int login_system_login(struct session_context *session,
   return system_login(session, settings);
 }
 
+static int login_maintenance_mode_active(void) {
+  return x64_kernel_recovery_maintenance_active();
+}
+
+static int login_consume_recovery_login_request(void) {
+  int requested = g_recovery_login_requested;
+  g_recovery_login_requested = 0;
+  return requested;
+}
+
 static void login_show_splash(const struct system_settings *settings) {
   if (!settings || !settings->splash_enabled) {
     return;
@@ -1994,6 +2492,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   kcon_init();
   kinit();
   service_manager_init();
+  work_queue_init();
+  update_agent_init(CAPYOS_VERSION_EXTENDED);
+  (void)work_queue_register(SYSTEM_WORK_RECOVERY_SNAPSHOT,
+                            "recovery-snapshot",
+                            kernel_work_recovery_snapshot, NULL);
+  (void)work_queue_set_interval(SYSTEM_WORK_RECOVERY_SNAPSHOT, 600u);
+  (void)work_queue_disable(SYSTEM_WORK_RECOVERY_SNAPSHOT);
   (void)service_manager_target_apply(g_boot_policy_decision.bootstrap_target);
 
   /* Stage 3/8: Timers */
@@ -2102,10 +2607,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                                         kernel_service_stop_logger, NULL);
       (void)service_manager_set_poll_interval(SYSTEM_SERVICE_LOGGER, 300u);
       (void)service_manager_set_restart_limit(SYSTEM_SERVICE_LOGGER, 0u);
+      kernel_update_recovery_snapshot_work(0);
     } else {
       (void)service_manager_set_state(
           SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED,
           shell_runtime_rc, "filesystem unavailable; ring buffer only");
+      (void)work_queue_disable(SYSTEM_WORK_RECOVERY_SNAPSHOT);
     }
     fbcon_set_visual_muted(1);
 
@@ -2136,6 +2643,15 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)service_manager_set_poll_interval(SYSTEM_SERVICE_NETWORKD, 10u);
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_NETWORKD, 3u);
     kernel_maybe_refresh_network_runtime();
+    (void)service_manager_set_poll(SYSTEM_SERVICE_UPDATE_AGENT,
+                                   kernel_service_poll_update_agent, NULL);
+    (void)service_manager_set_control(SYSTEM_SERVICE_UPDATE_AGENT,
+                                      kernel_service_start_update_agent,
+                                      kernel_service_stop_update_agent, NULL);
+    (void)service_manager_set_poll_interval(SYSTEM_SERVICE_UPDATE_AGENT, 1800u);
+    (void)service_manager_set_dependencies(
+        SYSTEM_SERVICE_UPDATE_AGENT, (1u << SYSTEM_SERVICE_LOGGER));
+    (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
 
     {
       struct net_stack_status net_status = {0};
@@ -2168,13 +2684,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       }
     }
 
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_UPDATE_AGENT, SYSTEM_SERVICE_STATE_BLOCKED, -5,
-        "update pipeline not implemented yet");
-    (void)service_manager_set_dependencies(
-        SYSTEM_SERVICE_UPDATE_AGENT,
-        (1u << SYSTEM_SERVICE_LOGGER) | (1u << SYSTEM_SERVICE_NETWORKD));
-    (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
     boot_policy_input.requested_target =
         kernel_service_target_from_settings(&g_shell_settings);
     boot_policy_input.shell_runtime_ready = shell_runtime_rc == 0 ? 1u : 0u;
@@ -2192,6 +2701,14 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                             g_boot_policy_decision.reason));
     }
     (void)service_manager_target_apply(g_boot_policy_decision.final_target);
+    g_runtime_maintenance_mode =
+        (g_boot_policy_decision.final_target ==
+         SYSTEM_SERVICE_TARGET_MAINTENANCE)
+            ? 1
+            : 0;
+    g_recovery_login_requested = 0;
+    kernel_persist_recovery_artifacts("boot-policy");
+    kernel_update_recovery_snapshot_work(0);
   }
 
   /* --- End splash -------------------------------------------------------- */
@@ -2247,6 +2764,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     login_ops.ui_banner = ui_banner;
     login_ops.cmd_info = cmd_info;
     login_ops.service_poll = kernel_service_poll;
+    login_ops.maintenance_mode_active = login_maintenance_mode_active;
+    login_ops.consume_recovery_login_request =
+        login_consume_recovery_login_request;
 
     if (login_runtime_run(&login_ops) != 0) {
       kernel_halt_forever();

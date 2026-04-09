@@ -21,6 +21,8 @@ struct x64_kernel_recovery_status {
 void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out);
 const char *x64_kernel_recovery_reason_summary(void);
 int x64_kernel_recovery_resume_target(uint32_t target_id);
+int x64_kernel_recovery_request_normal_login(uint32_t target_id);
+int x64_kernel_recovery_maintenance_active(void);
 
 int x64_kernel_manual_prepare_hyperv_input(void);
 int x64_kernel_manual_prepare_hyperv_storage(void);

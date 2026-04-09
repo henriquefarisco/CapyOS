@@ -15,6 +15,8 @@ int run_localization_tests(void);
 int run_capyfs_check_tests(void);
 int run_service_manager_tests(void);
 int run_service_boot_policy_tests(void);
+int run_work_queue_tests(void);
+int run_update_agent_tests(void);
 int run_net_dns_tests(void);
 int run_net_probe_tests(void);
 int run_hyperv_runtime_tests(void);
@@ -51,6 +53,8 @@ int main(void) {
     failures += run_capyfs_check_tests();
     failures += run_service_manager_tests();
     failures += run_service_boot_policy_tests();
+    failures += run_work_queue_tests();
+    failures += run_update_agent_tests();
     failures += run_net_dns_tests();
     failures += run_net_probe_tests();
     failures += run_hyperv_runtime_tests();

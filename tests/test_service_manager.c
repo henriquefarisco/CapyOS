@@ -126,7 +126,7 @@ int run_service_manager_tests(void) {
     fails += expect_true(service_manager_set_poll(
                              SYSTEM_SERVICE_UPDATE_AGENT,
                              test_poll_cb, &blocked_ctx) == 0,
-                         "blocked service poll callback registration failed");
+                         "update-agent poll callback registration failed");
     fails += expect_true(service_manager_set_control(
                              SYSTEM_SERVICE_NETWORKD,
                              test_start_cb, test_stop_cb, &control_ctx) == 0,
@@ -182,8 +182,14 @@ int run_service_manager_tests(void) {
                          "networkd should be readable after restart");
     fails += expect_true(svc.restarts == 1,
                          "restart counter should increase");
-    fails += expect_true(service_manager_start(SYSTEM_SERVICE_UPDATE_AGENT) == -2,
-                         "blocked update agent should refuse manual start");
+    fails += expect_true(service_manager_start(SYSTEM_SERVICE_UPDATE_AGENT) == 0,
+                         "update agent should accept manual start");
+    fails += expect_true(service_manager_get(SYSTEM_SERVICE_UPDATE_AGENT, &svc) == 0,
+                         "update agent should be readable after manual start");
+    fails += expect_true(svc.state == SYSTEM_SERVICE_STATE_STARTING,
+                         "update agent should enter starting state after manual start");
+    fails += expect_true(service_manager_stop(SYSTEM_SERVICE_UPDATE_AGENT) == 0,
+                         "update agent should stop cleanly");
     fails += expect_true(service_manager_target_apply(SYSTEM_SERVICE_TARGET_CORE) == 0,
                          "core target should apply cleanly");
     fails += expect_true(service_manager_target_current(&target) == 0,

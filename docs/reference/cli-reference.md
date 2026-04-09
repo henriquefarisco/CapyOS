@@ -44,7 +44,11 @@ Contexto operacional atual:
 | `list-users` | `list-users` | Lista usuarios cadastrados em `/etc/users.db`. |
 | `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL` e `VERSION` atuais. |
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
+| `job-status` | `job-status [nome]` | Exibe o estado dos jobs internos do kernel/work queue, incluindo estado, ultimo resultado, numero de execucoes, falhas, intervalo e proximo tick previsto. |
+| `update-status` | `update-status` | Exibe o estado atual do catalogo local de atualizacoes, canal configurado, manifesto cacheado e versao disponivel segundo o `update-agent`. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
+| `recovery-report` | `recovery-report` | Exibe o ultimo relatorio persistido de boot/recovery gravado em `/var/log/recovery-boot.txt`. |
+| `recovery-history` | `recovery-history` | Exibe o historico persistido de eventos de boot/recovery gravado em `/var/log/recovery-history.log`. |
 | `recovery-storage` | `recovery-storage` | Exibe o estado do runtime de storage, VFS raiz, volume persistente e caminhos criticos usados para recuperar o sistema. |
 | `recovery-storage-check` | `recovery-storage-check` | Executa uma verificacao estrutural read-only do CAPYFS e classifica se o volume esta saudavel, incompleto ou inconsistente para recuperacao. |
 | `recovery-storage-repair` | `recovery-storage-repair [reset-admin <senha>]` | Reconstroi a base persistente minima quando o volume ja esta montado e, opcionalmente, recria/redefine a conta `admin` durante a recuperacao. |
@@ -61,8 +65,11 @@ Contexto operacional atual:
 | `hey` | `hey <ip|hostname|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
 | `do-sync` | `do-sync` | Sincroniza buffers de disco. |
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
+| `job-run` | `job-run <nome>` | Agenda um job interno do kernel/work queue para execucao imediata no proximo tick. |
+| `update-check` | `update-check` | Forca uma leitura imediata do catalogo local de atualizacoes e atualiza o estado do `update-agent`. |
 | `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. O boot pode degradar temporariamente o alvo ativo para `core` ou `maintenance` quando detectar falha estrutural. |
 | `recovery-resume` | `recovery-resume <saved|core|network|full|maintenance>` | Em modo de recuperacao, tenta promover o runtime atual para outro alvo de servicos com guardrails minimos de storage/rede. |
+| `recovery-login` | `recovery-login [saved|core|network|full]` | Em modo de recuperacao, promove o alvo indicado e encerra a sessao atual de manutencao, retornando ao login normal sem reboot. |
 | `recovery-verify` | `recovery-verify [saved|core|network|full|maintenance]` | Verifica se os prerequisitos minimos para promover um alvo de recuperacao ja estao presentes, sem aplicar a mudanca. |
 | `runtime-native` | `runtime-native [show|prepare-input|prepare-storage|exit-boot-services|step]` | Exibe o gate do runtime nativo e executa passos manuais controlados do coordenador Hyper-V. O modo `show` tambem imprime `build=... feature=...`. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
@@ -127,10 +134,14 @@ Contexto operacional atual:
 - Nessa sessao, o prompt usa o usuario sintetico `maintenance` e informa o
   motivo da degradacao logo abaixo do banner.
 - Os comandos mais uteis nesse modo sao `service-status`,
-  `service-target show`, `recovery-status`, `recovery-storage`,
+  `job-status`, `job-run`, `update-status`, `update-check`,
+  `service-target show`, `recovery-status`, `recovery-report`,
+  `recovery-history`,
+  `recovery-storage`,
   `recovery-storage-check`,
   `recovery-storage-repair`,
-  `recovery-network`, `recovery-verify`, `recovery-resume`, `do-sync`,
+  `recovery-network`, `recovery-verify`, `recovery-resume`,
+  `recovery-login`, `do-sync`,
   `shutdown-reboot` e `shutdown-off`.
 - Se `recovery-storage` indicar `ram-fallback=yes`, a shell de recuperacao
   esta rodando sobre um runtime temporario em RAM. Nesse caso, os reparos nao
@@ -146,6 +157,23 @@ Contexto operacional atual:
   `recovery-storage-repair`.
 - `recovery-resume saved` tenta voltar ao alvo persistido em
   `/system/config.ini`.
+- `recovery-login saved` faz a mesma promocao, mas tambem encerra a sessao de
+  manutencao e retorna ao login normal no mesmo boot quando storage e rede ja
+  estao validos.
+- O arquivo `/var/log/recovery-boot.txt` guarda o snapshot persistido da ultima
+  decisao de boot/recovery; use `recovery-report` para le-lo pela shell.
+- O arquivo `/var/log/recovery-history.log` acumula os eventos relevantes de
+  `boot-policy`, `resume-target` e `leave-maintenance`; use
+  `recovery-history` para acompanhar degradacoes recorrentes entre boots.
+- O job interno `recovery-snapshot` atualiza periodicamente
+  `/var/log/recovery-boot.txt` quando o storage persistente esta saudavel; use
+  `job-status recovery-snapshot` para inspecionar a cadencia e `job-run
+  recovery-snapshot` para forcar uma nova gravacao no proximo tick.
+- A base persistente de atualizacao agora reserva
+  `/system/update/repository.ini` e `/system/update/cache/`. O
+  `update-agent` atual ainda e read-only: ele le esse catalogo local e indica
+  se existe versao mais nova cacheada, mas ainda nao baixa nem aplica
+  pacotes automaticamente.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,
   rede ja atendem ao alvo persistido antes de tentar a promocao.
 - Se o storage validado ainda nao estiver disponivel, o sistema recusa sair
