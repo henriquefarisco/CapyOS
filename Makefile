@@ -181,7 +181,13 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/lang/capylang.o \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_journal_integration.o \
 	$(BUILD)/x86_64/core/boot_metrics.o \
-	$(BUILD)/x86_64/arch/x86_64/smp.o
+	$(BUILD)/x86_64/arch/x86_64/smp.o \
+	$(BUILD)/x86_64/core/auth_policy.o \
+	$(BUILD)/x86_64/kernel/pipe.o \
+	$(BUILD)/x86_64/drivers/usb/usb_core.o \
+	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
+	$(BUILD)/x86_64/drivers/rtc/rtc.o \
+	$(BUILD)/x86_64/gui/taskbar.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c

@@ -60,6 +60,10 @@
 #include "kernel/scheduler.h"
 #include "arch/x86_64/smp.h"
 #include "core/boot_metrics.h"
+#include "memory/vmm.h"
+#include "kernel/syscall.h"
+#include "kernel/process.h"
+#include "fs/capyfs_journal_integration.h"
 #include "memory/pmm.h"
 #include "net/dns_cache.h"
 #include "net/socket.h"
@@ -2602,6 +2606,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_metrics_init();
   if (apic_available()) {
     smp_detect_cpus(h->rsdp);
+  }
+  vmm_init();
+  klog(KLOG_INFO, "[vmm] Virtual memory manager initialized.");
+  process_system_init();
+  if (!handoff_boot_services_active()) {
+    syscall_init();
+    klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
   }
 
   /* Stage 4/8: Keyboard */
