@@ -18,6 +18,7 @@ def smoke_first_boot(
     session: SmokeSession, timeout: float, user: str, password: str, marker: str
 ) -> None:
     deep_home = f"/home/{user}/docs/projetos/capy"
+    update_manifest = "/tmp/update-manifest.ini"
     assert_shell_identity(session, timeout=timeout, user=user)
     run_cmd(session, "config-theme show", timeout=timeout, expect="Current theme: capyos")
     run_cmd(session, "config-theme ocean", timeout=timeout, expect="theme updated")
@@ -45,6 +46,37 @@ def smoke_first_boot(
         "print-file /system/update/repository.ini",
         timeout=timeout,
         expect="source=github:henriquefarisco/CapyOS",
+    )
+    run_cmd(
+        session,
+        "update-channel show",
+        timeout=timeout,
+        expect="remote=https://raw.githubusercontent.com/henriquefarisco/CapyOS/main",
+    )
+    run_open_write(
+        session,
+        update_manifest,
+        [
+            "available_version=0.8.1-alpha.0+20260409",
+            "channel=stable",
+            "branch=main",
+            "source=github:henriquefarisco/CapyOS",
+            "published_at=2026-04-09",
+        ],
+        timeout=timeout,
+    )
+    run_cmd(
+        session,
+        f"update-import-manifest {update_manifest}",
+        timeout=timeout,
+        expect="manifest imported into the local catalog",
+    )
+    run_cmd(session, "update-status", timeout=timeout, expect="catalog=present")
+    run_cmd(
+        session,
+        "update-status",
+        timeout=timeout,
+        expect="available=0.8.1-alpha.0+20260409",
     )
     run_cmd(
         session,
@@ -187,7 +219,7 @@ def smoke_first_boot(
         session,
         "print-file /system/update/repository.ini",
         timeout=timeout,
-        expect="manifest=/system/update/cache/latest.ini",
+        expect="manifest=/system/update/latest.ini",
     )
     run_cmd(session, f"mk-dir {deep_home}", timeout=timeout, expect="[ok]")
     run_cmd_expect_prompt(
@@ -237,6 +269,13 @@ def smoke_second_boot(
     run_cmd(session, "job-status recovery-snapshot", timeout=timeout, expect="recovery-snapshot state=")
     run_cmd(session, "update-status", timeout=timeout, expect="channel=stable")
     run_cmd(session, "update-status", timeout=timeout, expect="branch=main")
+    run_cmd(session, "update-status", timeout=timeout, expect="catalog=present")
+    run_cmd(
+        session,
+        "update-status",
+        timeout=timeout,
+        expect="available=0.8.1-alpha.0+20260409",
+    )
     run_cmd(session, "update-channel show", timeout=timeout, expect="channel=stable branch=main")
     run_cmd(session, "net-mode show", timeout=timeout, expect="dhcp", expect_optional=True)
     run_cmd(session, "net-refresh", timeout=timeout, expect="driver=", expect_optional=True)
@@ -287,7 +326,7 @@ def smoke_second_boot(
         session,
         "print-file /system/update/repository.ini",
         timeout=timeout,
-        expect="manifest=/system/update/cache/latest.ini",
+        expect="manifest=/system/update/latest.ini",
     )
     marker_expect = f"marker:{marker}"
     marker_ok = False

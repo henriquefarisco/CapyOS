@@ -8,15 +8,19 @@
 
 #define UPDATE_AGENT_REPOSITORY_PATH "/system/update/repository.ini"
 #define UPDATE_AGENT_STATE_PATH "/system/update/state.ini"
-#define UPDATE_AGENT_DEFAULT_MANIFEST_PATH "/system/update/cache/latest.ini"
-#define UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH "/system/update/staged/latest.ini"
+#define UPDATE_AGENT_DEFAULT_MANIFEST_PATH "/system/update/latest.ini"
+#define UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH "/system/update/staged.ini"
 #define UPDATE_AGENT_DEFAULT_CHANNEL "stable"
 #define UPDATE_AGENT_DEFAULT_BRANCH "main"
 #define UPDATE_AGENT_DEFAULT_SOURCE "github:henriquefarisco/CapyOS"
+#define UPDATE_AGENT_GITHUB_PREFIX "github:"
+#define UPDATE_AGENT_REMOTE_MANIFEST_SUFFIX "/system/update/latest.ini"
 
 struct update_manifest_view {
   char version[UPDATE_AGENT_VERSION_MAX];
   char channel[UPDATE_AGENT_CHANNEL_MAX];
+  char branch[UPDATE_AGENT_BRANCH_MAX];
+  char source[UPDATE_AGENT_SOURCE_MAX];
   char published_at[24];
 };
 
@@ -81,8 +85,39 @@ static int local_equal(const char *a, const char *b) {
   return a[i] == b[i];
 }
 
+static int local_starts_with(const char *text, const char *prefix) {
+  size_t i = 0;
+  if (!text || !prefix) {
+    return 0;
+  }
+  while (prefix[i]) {
+    if (text[i] != prefix[i]) {
+      return 0;
+    }
+    ++i;
+  }
+  return 1;
+}
+
 static const char *branch_for_channel(const char *channel) {
   return local_equal(channel, "develop") ? "develop" : UPDATE_AGENT_DEFAULT_BRANCH;
+}
+
+static void build_remote_manifest_url(const char *source, const char *branch,
+                                      char *dst, size_t dst_size) {
+  if (!dst || dst_size == 0u) {
+    return;
+  }
+  dst[0] = '\0';
+  if (!source || !source[0] || !local_starts_with(source, UPDATE_AGENT_GITHUB_PREFIX)) {
+    return;
+  }
+  local_append(dst, dst_size, "https://raw.githubusercontent.com/");
+  local_append(dst, dst_size, source + 7u);
+  local_append(dst, dst_size, "/");
+  local_append(dst, dst_size,
+               (branch && branch[0]) ? branch : UPDATE_AGENT_DEFAULT_BRANCH);
+  local_append(dst, dst_size, UPDATE_AGENT_REMOTE_MANIFEST_SUFFIX);
 }
 
 static int parse_bool_value(const char *value) {
@@ -127,45 +162,6 @@ static int local_read_file(const char *path, char *buffer, size_t buffer_size,
 }
 
 #if !defined(UNIT_TEST)
-static int local_ensure_directory(const char *path) {
-  char build[UPDATE_AGENT_PATH_MAX];
-  size_t i = 1u;
-  size_t build_len = 1u;
-
-  if (!path || path[0] != '/') {
-    return -1;
-  }
-  build[0] = '/';
-  build[1] = '\0';
-
-  while (path[i]) {
-    struct dentry *d = NULL;
-    if (path[i] == '/') {
-      build[build_len] = '\0';
-      if (build_len > 1u && vfs_lookup(build, &d) != 0 &&
-          vfs_create(build, VFS_MODE_DIR, NULL) != 0) {
-        return -1;
-      }
-    } else {
-      if (build_len + 1u >= sizeof(build)) {
-        return -1;
-      }
-      build[build_len++] = path[i];
-    }
-    ++i;
-  }
-
-  build[build_len] = '\0';
-  if (build_len > 1u) {
-    struct dentry *d = NULL;
-    if (vfs_lookup(build, &d) != 0 &&
-        vfs_create(build, VFS_MODE_DIR, NULL) != 0) {
-      return -1;
-    }
-  }
-  return 0;
-}
-
 static int local_write_file(const char *path, const char *text) {
   struct file *file = NULL;
   size_t len = 0u;
@@ -245,6 +241,7 @@ static void update_agent_seed_defaults(const char *current_version) {
              UPDATE_AGENT_DEFAULT_SOURCE);
   local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
              UPDATE_AGENT_DEFAULT_MANIFEST_PATH);
+  g_update_status.remote_manifest_url[0] = '\0';
   local_copy(g_update_status.staged_manifest_path,
              sizeof(g_update_status.staged_manifest_path),
              UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
@@ -315,6 +312,9 @@ static void parse_repo_line(const char *key, const char *value) {
   } else if (local_equal(key, "manifest")) {
     local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
                value);
+  } else if (local_equal(key, "remote_manifest")) {
+    local_copy(g_update_status.remote_manifest_url,
+               sizeof(g_update_status.remote_manifest_url), value);
   }
 }
 
@@ -327,6 +327,10 @@ static void parse_manifest_line(const char *key, const char *value,
     local_copy(view->version, sizeof(view->version), value);
   } else if (local_equal(key, "channel")) {
     local_copy(view->channel, sizeof(view->channel), value);
+  } else if (local_equal(key, "branch")) {
+    local_copy(view->branch, sizeof(view->branch), value);
+  } else if (local_equal(key, "source")) {
+    local_copy(view->source, sizeof(view->source), value);
   } else if (local_equal(key, "published_at")) {
     local_copy(view->published_at, sizeof(view->published_at), value);
   }
@@ -348,7 +352,7 @@ static void parse_state_line(const char *key, const char *value,
 static void parse_buffer_line(const char *line, size_t len, int parse_mode,
                               void *target) {
   char key[24];
-  char value[UPDATE_AGENT_SOURCE_MAX];
+  char value[UPDATE_AGENT_REMOTE_MAX];
   size_t eq = 0u;
   size_t i = 0u;
 
@@ -384,6 +388,36 @@ static void parse_buffer_line(const char *line, size_t len, int parse_mode,
     parse_manifest_line(key, value, (struct update_manifest_view *)target);
   } else if (parse_mode == 2) {
     parse_state_line(key, value, (struct update_state_view *)target);
+  }
+}
+
+static void parse_buffer(const char *buffer, size_t len, int parse_mode,
+                         void *target);
+
+static void prepare_repository_status(void) {
+  char buffer[768];
+  char current_version[UPDATE_AGENT_VERSION_MAX];
+  size_t read_len = 0u;
+  update_agent_read_file_fn reader = active_reader();
+
+  update_agent_init(NULL);
+  local_copy(current_version, sizeof(current_version),
+             g_update_status.current_version[0] ? g_update_status.current_version
+                                                : "unknown");
+  update_agent_seed_defaults(current_version);
+
+  if (reader(UPDATE_AGENT_REPOSITORY_PATH, buffer, sizeof(buffer), &read_len) == 0 &&
+      read_len > 0u) {
+    parse_buffer(buffer, read_len, 0, NULL);
+  }
+  if (!g_update_status.branch[0]) {
+    local_copy(g_update_status.branch, sizeof(g_update_status.branch),
+               branch_for_channel(g_update_status.channel));
+  }
+  if (!g_update_status.remote_manifest_url[0]) {
+    build_remote_manifest_url(g_update_status.source, g_update_status.branch,
+                              g_update_status.remote_manifest_url,
+                              sizeof(g_update_status.remote_manifest_url));
   }
 }
 
@@ -462,21 +496,21 @@ static int write_state_file(int pending_activation, const char *staged_manifest_
 }
 
 int update_agent_poll(void) {
-  char buffer[768];
-  size_t read_len = 0u;
-  int repo_rc = 0;
   int manifest_rc = 0;
   int state_rc = 0;
   int staged_rc = 0;
   int rc = 0;
   int manifest_channel_mismatch = 0;
+  int manifest_branch_mismatch = 0;
+  int manifest_source_mismatch = 0;
   int staged_channel_mismatch = 0;
-  update_agent_read_file_fn reader = active_reader();
+  int staged_branch_mismatch = 0;
+  int staged_source_mismatch = 0;
   struct update_manifest_view available_manifest;
   struct update_manifest_view staged_manifest;
   struct update_state_view state_view;
 
-  update_agent_init(NULL);
+  prepare_repository_status();
   manifest_view_reset(&available_manifest);
   manifest_view_reset(&staged_manifest);
   state_view_reset(&state_view);
@@ -492,15 +526,6 @@ int update_agent_poll(void) {
   local_copy(g_update_status.staged_manifest_path,
              sizeof(g_update_status.staged_manifest_path),
              UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
-
-  repo_rc = reader(UPDATE_AGENT_REPOSITORY_PATH, buffer, sizeof(buffer), &read_len);
-  if (repo_rc == 0 && read_len > 0u) {
-    parse_buffer(buffer, read_len, 0, NULL);
-  }
-  if (!g_update_status.branch[0]) {
-    local_copy(g_update_status.branch, sizeof(g_update_status.branch),
-               branch_for_channel(g_update_status.channel));
-  }
 
   state_rc = read_state_view(&state_view);
   if (state_rc == 0) {
@@ -522,6 +547,12 @@ int update_agent_poll(void) {
     manifest_channel_mismatch =
         available_manifest.channel[0] &&
         !local_equal(available_manifest.channel, g_update_status.channel);
+    manifest_branch_mismatch =
+        available_manifest.branch[0] &&
+        !local_equal(available_manifest.branch, g_update_status.branch);
+    manifest_source_mismatch =
+        available_manifest.source[0] &&
+        !local_equal(available_manifest.source, g_update_status.source);
     if (!local_equal(g_update_status.available_version,
                      g_update_status.current_version)) {
       g_update_status.update_available = 1u;
@@ -536,16 +567,24 @@ int update_agent_poll(void) {
     staged_channel_mismatch =
         staged_manifest.channel[0] &&
         !local_equal(staged_manifest.channel, g_update_status.channel);
+    staged_branch_mismatch =
+        staged_manifest.branch[0] &&
+        !local_equal(staged_manifest.branch, g_update_status.branch);
+    staged_source_mismatch =
+        staged_manifest.source[0] &&
+        !local_equal(staged_manifest.source, g_update_status.source);
   }
 
-  if (manifest_channel_mismatch) {
+  if (manifest_channel_mismatch || manifest_branch_mismatch ||
+      manifest_source_mismatch) {
     rc = -13;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
-               "catalog cache does not match selected update channel");
-  } else if (staged_channel_mismatch) {
+               "catalog cache does not match selected update repository");
+  } else if (staged_channel_mismatch || staged_branch_mismatch ||
+             staged_source_mismatch) {
     rc = -14;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
-               "staged update does not match selected update channel");
+               "staged update does not match selected update repository");
   } else if (manifest_rc == -2) {
     rc = -2;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
@@ -581,6 +620,72 @@ int update_agent_poll(void) {
   return rc;
 }
 
+int update_agent_import_manifest_path(const char *path) {
+  char buffer[768];
+  size_t read_len = 0u;
+  int rc = 0;
+  update_agent_read_file_fn reader = active_reader();
+  update_agent_write_file_fn writer = active_writer();
+  struct update_manifest_view import_manifest;
+
+  if (!path || !path[0]) {
+    update_agent_init(NULL);
+    g_update_status.last_result = -15;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "manifest path not provided");
+    return -15;
+  }
+
+  prepare_repository_status();
+  manifest_view_reset(&import_manifest);
+
+  if (!writer) {
+    g_update_status.last_result = -16;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "update cache writer unavailable");
+    return -16;
+  }
+  if (reader(path, buffer, sizeof(buffer), &read_len) != 0 || read_len == 0u) {
+    g_update_status.last_result = -17;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "failed to read imported manifest");
+    return -17;
+  }
+  parse_buffer(buffer, read_len, 1, &import_manifest);
+  if (!import_manifest.version[0]) {
+    g_update_status.last_result = -18;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "imported manifest invalid");
+    return -18;
+  }
+  if ((import_manifest.channel[0] &&
+       !local_equal(import_manifest.channel, g_update_status.channel)) ||
+      (import_manifest.branch[0] &&
+       !local_equal(import_manifest.branch, g_update_status.branch)) ||
+      (import_manifest.source[0] &&
+       !local_equal(import_manifest.source, g_update_status.source))) {
+    g_update_status.last_result = -19;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "imported manifest does not match selected update repository");
+    return -19;
+  }
+  if (writer(g_update_status.manifest_path, buffer) != 0) {
+    g_update_status.last_result = -21;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "failed to persist imported manifest");
+    return -21;
+  }
+
+  rc = update_agent_poll();
+  if (rc < 0) {
+    return rc;
+  }
+  local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+             "manifest imported into local catalog");
+  g_update_status.last_result = 0;
+  return 0;
+}
+
 int update_agent_stage_latest(void) {
   char buffer[768];
   size_t read_len = 0u;
@@ -610,16 +715,6 @@ int update_agent_stage_latest(void) {
                "failed to read cached manifest for staging");
     return -7;
   }
-#if !defined(UNIT_TEST)
-  if (local_ensure_directory("/system") != 0 ||
-      local_ensure_directory("/system/update") != 0 ||
-      local_ensure_directory("/system/update/staged") != 0) {
-    g_update_status.last_result = -8;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
-               "failed to prepare update staging directories");
-    return -8;
-  }
-#endif
   if (writer(g_update_status.staged_manifest_path, buffer) != 0 ||
       write_state_file(0, g_update_status.staged_manifest_path) != 0) {
     g_update_status.last_result = -9;

@@ -175,6 +175,7 @@ static int cmd_print_insomnia(struct shell_context *ctx, int argc, char **argv) 
 
 static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
+    struct system_update_status status;
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
             language,
@@ -223,6 +224,10 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
                  shell_string_equal(ctx->settings->update_channel, "develop"))
                     ? "develop"
                     : "main");
+    shell_newline();
+    update_agent_status_get(&status);
+    shell_print("UPDATE_REMOTE_MANIFEST=");
+    shell_print(status.remote_manifest_url[0] ? status.remote_manifest_url : "-");
     shell_newline();
     shell_print("VERSION=");
     shell_print(CAPYOS_VERSION_EXTENDED);
@@ -489,6 +494,9 @@ static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
 
     shell_print("manifest=");
     shell_print(status.manifest_path[0] ? status.manifest_path : "-");
+    shell_newline();
+    shell_print("remote=");
+    shell_print(status.remote_manifest_url[0] ? status.remote_manifest_url : "-");
     shell_newline();
 
     shell_print("staged=");

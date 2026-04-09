@@ -118,7 +118,51 @@ static const char *system_update_branch_for_channel(const char *channel) {
 
 static const char *system_update_manifest_for_channel(const char *channel) {
   (void)channel;
-  return "/system/update/cache/latest.ini";
+  return "/system/update/latest.ini";
+}
+
+static int system_update_ensure_file(const char *path) {
+  struct dentry *d = NULL;
+  struct vfs_metadata meta;
+  if (!path) {
+    return -1;
+  }
+  if (vfs_lookup(path, &d) == 0) {
+    if (d && d->inode) {
+      d->inode->perm = 0666;
+    }
+    if (d && d->refcount) {
+      d->refcount--;
+    }
+    return 0;
+  }
+  meta.uid = 0;
+  meta.gid = 0;
+  meta.perm = 0666;
+  if (vfs_create(path, VFS_MODE_FILE, &meta) != 0) {
+    return -1;
+  }
+  if (vfs_lookup(path, &d) == 0) {
+    if (d && d->inode) {
+      d->inode->perm = 0666;
+    }
+    if (d && d->refcount) {
+      d->refcount--;
+    }
+  }
+  return 0;
+}
+
+static void system_update_remote_manifest_url(const char *channel, char *out,
+                                              size_t out_size) {
+  if (!out || out_size == 0u) {
+    return;
+  }
+  out[0] = '\0';
+  buffer_append(out, out_size, "https://raw.githubusercontent.com/");
+  buffer_append(out, out_size, "henriquefarisco/CapyOS/");
+  buffer_append(out, out_size, system_update_branch_for_channel(channel));
+  buffer_append(out, out_size, "/system/update/latest.ini");
 }
 
 static const char *system_service_target_or_default(const char *target) {
@@ -342,7 +386,8 @@ static int verify_directory_exists(const char *path) {
 }
 
 int system_prepare_update_catalog(void) {
-  char repo_defaults[256];
+  char repo_defaults[512];
+  char remote_manifest[192];
   struct vfs_stat st;
   const char *channel = system_update_channel_or_default(NULL);
 
@@ -355,6 +400,8 @@ int system_prepare_update_catalog(void) {
   if (vfs_stat_path("/system/update/repository.ini", &st) == 0) {
     return 0;
   }
+  system_update_remote_manifest_url(channel, remote_manifest,
+                                    sizeof(remote_manifest));
   repo_defaults[0] = '\0';
   buffer_append(repo_defaults, sizeof(repo_defaults), "channel=");
   buffer_append(repo_defaults, sizeof(repo_defaults), channel);
@@ -367,8 +414,18 @@ int system_prepare_update_catalog(void) {
   buffer_append(repo_defaults, sizeof(repo_defaults), "\nmanifest=");
   buffer_append(repo_defaults, sizeof(repo_defaults),
                 system_update_manifest_for_channel(channel));
+  buffer_append(repo_defaults, sizeof(repo_defaults), "\nremote_manifest=");
+  buffer_append(repo_defaults, sizeof(repo_defaults), remote_manifest);
   buffer_append(repo_defaults, sizeof(repo_defaults), "\n");
-  return write_text_file("/system/update/repository.ini", repo_defaults);
+  if (write_text_file("/system/update/repository.ini", repo_defaults) != 0) {
+    return -1;
+  }
+  if (system_update_ensure_file("/system/update/latest.ini") != 0 ||
+      system_update_ensure_file("/system/update/staged.ini") != 0 ||
+      system_update_ensure_file("/system/update/state.ini") != 0) {
+    return -1;
+  }
+  return 0;
 }
 
 static void sync_root_device(void) {
@@ -714,7 +771,8 @@ static int write_settings_file(const struct system_settings *settings) {
 }
 
 static int write_update_repository_file(const struct system_settings *settings) {
-  char repo_buffer[256];
+  char repo_buffer[512];
+  char remote_manifest[192];
   const char *channel =
       settings ? system_update_channel_or_default(settings->update_channel)
                : system_update_channel_or_default(NULL);
@@ -725,6 +783,8 @@ static int write_update_repository_file(const struct system_settings *settings) 
     return -1;
   }
 
+  system_update_remote_manifest_url(channel, remote_manifest,
+                                    sizeof(remote_manifest));
   repo_buffer[0] = '\0';
   buffer_append(repo_buffer, sizeof(repo_buffer), "channel=");
   buffer_append(repo_buffer, sizeof(repo_buffer), channel);
@@ -737,6 +797,8 @@ static int write_update_repository_file(const struct system_settings *settings) 
   buffer_append(repo_buffer, sizeof(repo_buffer), "\nmanifest=");
   buffer_append(repo_buffer, sizeof(repo_buffer),
                 system_update_manifest_for_channel(channel));
+  buffer_append(repo_buffer, sizeof(repo_buffer), "\nremote_manifest=");
+  buffer_append(repo_buffer, sizeof(repo_buffer), remote_manifest);
   buffer_append(repo_buffer, sizeof(repo_buffer), "\n");
   return write_text_file("/system/update/repository.ini", repo_buffer);
 }

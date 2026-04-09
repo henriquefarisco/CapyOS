@@ -42,11 +42,11 @@ Contexto operacional atual:
 | `add-user` | `add-user <usuario> <senha> [role]` | Cria usuario local (apenas admin). Roles: `user`, `admin`. |
 | `set-pass` | `set-pass <usuario> <nova_senha>` | Altera senha. Admin altera qualquer conta; usuario comum altera apenas a propria. |
 | `list-users` | `list-users` | Lista usuarios cadastrados em `/etc/users.db`. |
-| `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL` e `VERSION` atuais. |
+| `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL`, `VERSION`, `UPDATE_CHANNEL`, `UPDATE_BRANCH` e `UPDATE_REMOTE_MANIFEST`. |
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `job-status` | `job-status [nome]` | Exibe o estado dos jobs internos do kernel/work queue, incluindo estado, ultimo resultado, numero de execucoes, falhas, intervalo e proximo tick previsto. |
-| `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo canal, branch, versao staged e ativacao pendente. |
-| `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-stage`, `update-arm` e `update-clear` em `/var/log/update-history.log`. |
+| `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo canal, branch, manifesto local, URL remota, versao staged e ativacao pendente. |
+| `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-import-manifest`, `update-stage`, `update-arm`, `update-clear` e `update-channel` em `/var/log/update-history.log`. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
 | `recovery-report` | `recovery-report` | Exibe o ultimo relatorio persistido de boot/recovery gravado em `/var/log/recovery-boot.txt`. |
 | `recovery-history` | `recovery-history` | Exibe o historico persistido de eventos de boot/recovery gravado em `/var/log/recovery-history.log`. |
@@ -68,7 +68,8 @@ Contexto operacional atual:
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
 | `job-run` | `job-run <nome>` | Agenda um job interno do kernel/work queue para execucao imediata no proximo tick. |
 | `update-check` | `update-check` | Forca uma leitura imediata do catalogo local de atualizacoes e atualiza o estado do `update-agent`. |
-| `update-stage` | `update-stage` | Copia o manifesto cacheado mais recente para `/system/update/staged/latest.ini` e persiste o estado local de staging. |
+| `update-import-manifest` | `update-import-manifest <caminho>` | Importa um manifesto externo para `/system/update/latest.ini`, validando se ele combina com `channel`, `branch` e `source` da trilha selecionada. |
+| `update-stage` | `update-stage` | Copia o manifesto cacheado mais recente para `/system/update/staged.ini` e persiste o estado local de staging. |
 | `update-arm` | `update-arm [on|off]` | Arma ou desarma a ativacao pendente do update staged sem remover o manifesto preparado. |
 | `update-clear` | `update-clear` | Remove o manifesto staged e limpa o estado persistente de ativacao pendente. |
 | `update-channel` | `update-channel [list|show|stable|develop]` | Alterna entre a trilha estavel (`main`) e a trilha em desenvolvimento (`develop`), persistindo a escolha em `/system/config.ini` e `/system/update/repository.ini`. |
@@ -179,18 +180,21 @@ Contexto operacional atual:
   `/system/update/staged/` e `/system/update/state.ini`.
 - `update-channel stable` aponta o sistema para a branch `main`; `update-channel develop` aponta para a branch `develop`.
 - A escolha da trilha fica persistida tanto em `/system/config.ini` (`update_channel=`) quanto em `/system/update/repository.ini` (`channel=` e `branch=`).
+- `/system/update/repository.ini` tambem registra `source=` e `remote_manifest=`, que apontam para o manifesto bruto da branch escolhida no GitHub.
 - Se o manifesto cacheado ou staged pertencer a outra trilha, o `update-agent`
   marca o estado como inconsistente ate que o cache seja atualizado ou o
   staging antigo seja limpo.
+- `update-import-manifest <caminho>` e a ponte atual entre o manifesto remoto e o catalogo local: ele valida `channel`, `branch` e `source` antes de substituir o cache persistente.
 - `update-stage` promove o manifesto cacheado atual para o staging
   persistente; `update-arm on` marca esse staging como ativacao pendente.
-- As operacoes `update-check`, `update-stage`, `update-arm` e `update-clear`
-  acrescentam eventos em `/var/log/update-history.log`; `update-channel`
-  tambem registra trocas entre `main` e `develop`. Use `update-history` para
-  auditar a trilha local de staging e a trilha selecionada.
+- As operacoes `update-check`, `update-import-manifest`, `update-stage`,
+  `update-arm`, `update-clear` e `update-channel` acrescentam eventos em
+  `/var/log/update-history.log`. Use `update-history` para auditar a trilha
+  local de staging e a trilha selecionada.
 - O `update-agent` continua sem baixar ou aplicar payloads automaticamente:
-  nesta etapa ele valida catalogo local, staging persistente e ativacao
-  pendente para preparar a trilha segura de update/rollback posterior.
+  nesta etapa ele valida o repositorio selecionado, o catalogo local, o
+  staging persistente e a ativacao pendente para preparar a trilha segura de
+  update/rollback posterior.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,
   rede ja atendem ao alvo persistido antes de tentar a promocao.
 - Se o storage validado ainda nao estiver disponivel, o sistema recusa sair

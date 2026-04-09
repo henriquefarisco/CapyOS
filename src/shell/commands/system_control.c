@@ -661,6 +661,41 @@ static int cmd_job_run(struct shell_context *ctx, int argc, char **argv) {
   return 0;
 }
 
+static int update_runtime_writer(const char *path, const char *text) {
+  struct dentry *d = NULL;
+  struct file *f = NULL;
+  size_t len = 0u;
+
+  if (!path || !text) {
+    return -1;
+  }
+  while (text[len]) {
+    ++len;
+  }
+
+  if (vfs_lookup(path, &d) != 0) {
+    if (vfs_create(path, VFS_MODE_FILE, NULL) != 0) {
+      return -1;
+    }
+  } else if (d && d->refcount) {
+    d->refcount--;
+  }
+
+  f = vfs_open(path, VFS_OPEN_WRITE);
+  if (!f) {
+    return -1;
+  }
+  if (f->dentry && f->dentry->inode) {
+    f->position = 0;
+  }
+  if (vfs_write(f, text, len) != (long)len) {
+    vfs_close(f);
+    return -1;
+  }
+  vfs_close(f);
+  return 0;
+}
+
 static int refresh_update_agent_service_state(int rc,
                                               struct system_update_status *status) {
   struct system_update_status local_status;
@@ -743,7 +778,9 @@ static int cmd_update_stage(struct shell_context *ctx, int argc, char **argv) {
     return 0;
   }
 
+  update_agent_set_writer(update_runtime_writer);
   rc = refresh_update_agent_service_state(update_agent_stage_latest(), &status);
+  update_agent_set_writer(NULL);
   if (rc < 0) {
     shell_print_error(localization_select(language,
                                           "nao foi possivel preparar o staging local de atualizacao",
@@ -796,8 +833,10 @@ static int cmd_update_arm(struct shell_context *ctx, int argc, char **argv) {
     }
   }
 
+  update_agent_set_writer(update_runtime_writer);
   rc = refresh_update_agent_service_state(
       update_agent_set_pending_activation(enable), &status);
+  update_agent_set_writer(NULL);
   if (rc < 0) {
     shell_print_error(localization_select(language,
                                           "nao foi possivel atualizar o estado pendente do staging",
@@ -858,6 +897,61 @@ static int cmd_update_clear(struct shell_context *ctx, int argc, char **argv) {
   return 0;
 }
 
+static int cmd_update_import_manifest(struct shell_context *ctx, int argc,
+                                      char **argv) {
+  const char *language = shell_current_language();
+  struct system_update_status status;
+  char resolved_path[SHELL_PATH_BUFFER];
+  int rc = 0;
+
+  if (shell_help_requested(argc, argv) || argc < 2) {
+    shell_print(localization_select(
+        language,
+        "Uso: update-import-manifest <caminho>\nImporta um manifesto externo para o catalogo local persistente e valida se ele combina com a trilha de update selecionada.\n",
+        "Usage: update-import-manifest <path>\nImports an external manifest into the persistent local catalog and validates that it matches the selected update track.\n",
+        "Uso: update-import-manifest <ruta>\nImporta un manifiesto externo al catalogo local persistente y valida que coincida con la ruta de update seleccionada.\n"));
+    return argc < 2 ? -1 : 0;
+  }
+
+  if (shell_resolve_path(ctx, argv[1], resolved_path, sizeof(resolved_path)) !=
+      0) {
+    shell_print_error(localization_select(language,
+                                          "caminho do manifesto invalido",
+                                          "invalid manifest path",
+                                          "ruta de manifiesto invalida"));
+    return -1;
+  }
+
+  update_agent_set_writer(update_runtime_writer);
+  rc = refresh_update_agent_service_state(
+      update_agent_import_manifest_path(resolved_path), &status);
+  update_agent_set_writer(NULL);
+  if (rc < 0) {
+    shell_print_error(localization_select(
+        language,
+        "nao foi possivel importar o manifesto para o catalogo local",
+        "could not import the manifest into the local catalog",
+        "no fue posible importar el manifiesto al catalogo local"));
+    shell_print(status.summary);
+    shell_newline();
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "manifesto importado para o catalogo local",
+                                     "manifest imported into the local catalog",
+                                     "manifiesto importado al catalogo local"));
+  shell_print("available=");
+  shell_print(status.available_version[0] ? status.available_version : "-");
+  shell_print(" channel=");
+  shell_print(status.channel[0] ? status.channel : "stable");
+  shell_print(" branch=");
+  shell_print(status.branch[0] ? status.branch : "main");
+  shell_newline();
+  update_history_append_event("import", &status);
+  return 0;
+}
+
 static int cmd_update_channel(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
   const char *channel = NULL;
@@ -889,6 +983,9 @@ static int cmd_update_channel(struct shell_context *ctx, int argc, char **argv) 
     shell_print(status.branch[0] ? status.branch : "main");
     shell_print(" source=");
     shell_print(status.source[0] ? status.source : "-");
+    shell_newline();
+    shell_print("remote=");
+    shell_print(status.remote_manifest_url[0] ? status.remote_manifest_url : "-");
     shell_newline();
     return 0;
   }
@@ -947,6 +1044,9 @@ static int cmd_update_channel(struct shell_context *ctx, int argc, char **argv) 
   shell_print(status.channel);
   shell_print(" branch=");
   shell_print(status.branch);
+  shell_newline();
+  shell_print("remote=");
+  shell_print(status.remote_manifest_url[0] ? status.remote_manifest_url : "-");
   shell_newline();
   update_history_append_event("channel", &status);
   return 0;
@@ -1824,7 +1924,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[20];
+static struct shell_command g_system_control_commands[21];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -1859,25 +1959,27 @@ static void init_system_control_commands(void) {
   g_system_control_commands[12].handler = cmd_update_arm;
   g_system_control_commands[13].name = "update-clear";
   g_system_control_commands[13].handler = cmd_update_clear;
-  g_system_control_commands[14].name = "update-channel";
-  g_system_control_commands[14].handler = cmd_update_channel;
-  g_system_control_commands[15].name = "service-target";
-  g_system_control_commands[15].handler = cmd_service_target;
-  g_system_control_commands[16].name = "recovery-resume";
-  g_system_control_commands[16].handler = cmd_recovery_resume;
-  g_system_control_commands[17].name = "recovery-verify";
-  g_system_control_commands[17].handler = cmd_recovery_verify;
-  g_system_control_commands[18].name = "recovery-login";
-  g_system_control_commands[18].handler = cmd_recovery_login;
-  g_system_control_commands[19].name = "recovery-storage-repair";
-  g_system_control_commands[19].handler = cmd_recovery_storage_repair;
+  g_system_control_commands[14].name = "update-import-manifest";
+  g_system_control_commands[14].handler = cmd_update_import_manifest;
+  g_system_control_commands[15].name = "update-channel";
+  g_system_control_commands[15].handler = cmd_update_channel;
+  g_system_control_commands[16].name = "service-target";
+  g_system_control_commands[16].handler = cmd_service_target;
+  g_system_control_commands[17].name = "recovery-resume";
+  g_system_control_commands[17].handler = cmd_recovery_resume;
+  g_system_control_commands[18].name = "recovery-verify";
+  g_system_control_commands[18].handler = cmd_recovery_verify;
+  g_system_control_commands[19].name = "recovery-login";
+  g_system_control_commands[19].handler = cmd_recovery_login;
+  g_system_control_commands[20].name = "recovery-storage-repair";
+  g_system_control_commands[20].handler = cmd_recovery_storage_repair;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 20;
+    *count = 21;
   }
   return g_system_control_commands;
 }
