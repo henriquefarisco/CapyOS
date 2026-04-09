@@ -311,7 +311,11 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c \
-               src/security/csprng.c src/security/crypt.c src/core/localization.c src/core/klog.c src/core/service_manager.c src/core/work_queue.c src/core/update_agent.c
+               src/security/csprng.c src/security/crypt.c src/core/localization.c src/core/klog.c src/core/service_manager.c src/core/work_queue.c src/core/update_agent.c \
+               tests/test_pmm.c src/memory/pmm.c \
+               tests/test_task.c src/kernel/task.c \
+               tests/test_dns_cache.c src/net/dns_cache.c \
+               tests/test_boot_slot.c src/core/boot_slot.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

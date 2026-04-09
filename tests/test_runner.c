@@ -36,6 +36,11 @@ int run_storvsc_backend_tests(void);
 int run_storvsc_runtime_tests(void);
 int run_storage_runtime_hyperv_plan_tests(void);
 
+int test_pmm_run(void);
+int test_task_run(void);
+int test_dns_cache_run(void);
+int test_boot_slot_run(void);
+
 int main(void) {
     int failures = 0;
     failures += run_block_wrapper_tests();
@@ -73,6 +78,11 @@ int main(void) {
     failures += run_storvsc_backend_tests();
     failures += run_storvsc_runtime_tests();
     failures += run_storage_runtime_hyperv_plan_tests();
+
+    failures += test_pmm_run();
+    failures += test_task_run();
+    failures += test_dns_cache_run();
+    failures += test_boot_slot_run();
 
     if (failures == 0) {
         printf("Todos os testes passaram.\n");

@@ -1,4 +1,5 @@
 #include "arch/x86_64/interrupts.h"
+#include "arch/x86_64/panic.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -363,6 +364,27 @@ void x64_exception_dispatch(struct x64_exception_frame *frame) {
   }
 
   report_fault(frame);
+
+  /* Invoke structured panic handler for full dump + blue screen */
+  if (frame) {
+    struct panic_regs pregs;
+    pregs.rax = frame->rax; pregs.rbx = frame->rbx;
+    pregs.rcx = frame->rcx; pregs.rdx = frame->rdx;
+    pregs.rsi = frame->rsi; pregs.rdi = frame->rdi;
+    pregs.rbp = frame->rbp; pregs.rsp = 0;
+    pregs.r8 = frame->r8;   pregs.r9 = frame->r9;
+    pregs.r10 = frame->r10; pregs.r11 = frame->r11;
+    pregs.r12 = frame->r12; pregs.r13 = frame->r13;
+    pregs.r14 = frame->r14; pregs.r15 = frame->r15;
+    pregs.rip = frame->rip; pregs.rflags = frame->rflags;
+    pregs.cr2 = (vector == 14u) ? read_cr2_local() : 0;
+    pregs.cr3 = 0;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(pregs.cr3));
+    pregs.cs = (uint16_t)frame->cs; pregs.ss = 0;
+    pregs.error_code = (uint32_t)frame->error_code;
+    pregs.vector = (uint32_t)vector;
+    panic_with_regs(vector < 32u ? g_exception_names[vector] : "unhandled vector", &pregs);
+  }
   diag_halt_forever();
 }
 

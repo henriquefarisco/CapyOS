@@ -54,6 +54,13 @@
 #include "net/stack.h"
 #include "shell/commands.h"
 #include "shell/core.h"
+#include "arch/x86_64/panic.h"
+#include "arch/x86_64/apic.h"
+#include "kernel/task.h"
+#include "kernel/scheduler.h"
+#include "memory/pmm.h"
+#include "net/dns_cache.h"
+#include "net/socket.h"
 
 #define DEBUGCON_PORT 0xE9
 
@@ -2524,6 +2531,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   g_con.col = 0;
   g_con.row = 0;
 
+  /* Register framebuffer with panic handler for blue-screen on fault */
+  panic_set_framebuffer(g_con.fb, g_con.width, g_con.height,
+                        g_con.stride * 4);
+
   acpi_set_rsdp(h->rsdp);
   acpi_set_uefi_system_table(h->efi_system_table);
   system_platform_apply_theme("capyos");
@@ -2565,6 +2576,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   kinit();
   service_manager_init();
   work_queue_init();
+  task_system_init();
+  scheduler_init(SCHED_POLICY_COOPERATIVE);
+  dns_cache_init();
+  socket_system_init();
   update_agent_init(CAPYOS_VERSION_EXTENDED);
   (void)work_queue_register(SYSTEM_WORK_RECOVERY_SNAPSHOT,
                             "recovery-snapshot",
@@ -2578,6 +2593,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_advance(3, 8);
   x64_timebase_init();
   x64_platform_timer_init(!handoff_boot_services_active());
+  if (!handoff_boot_services_active() && apic_available()) {
+    apic_init();
+    klog(KLOG_INFO, "[apic] Local APIC initialized.");
+  }
 
   /* Stage 4/8: Keyboard */
   boot_ui_splash_set_status("Configuring keyboard...");
