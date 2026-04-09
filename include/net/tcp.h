@@ -23,12 +23,12 @@
 #define TCP_STATE_LAST_ACK    9
 #define TCP_STATE_TIME_WAIT   10
 
-#define TCP_WINDOW_SIZE  16384
+#define TCP_WINDOW_SIZE  1024
 #define TCP_MSS_DEFAULT  1460
 #define TCP_MAX_RETRIES  5
 #define TCP_RTO_INIT_MS  1000
 #define TCP_RTO_MAX_MS   60000
-#define TCP_MAX_CONNECTIONS 32
+#define TCP_MAX_CONNECTIONS 8
 
 struct tcp_header {
   uint16_t src_port;
@@ -59,10 +59,12 @@ struct tcp_connection {
   uint32_t rto_ms;
   uint32_t retries;
   uint64_t last_send_tick;
-  uint8_t  send_buf[TCP_WINDOW_SIZE];
+  uint8_t  *send_buf;
   uint32_t send_len;
-  uint8_t  recv_buf[TCP_WINDOW_SIZE];
+  uint32_t send_cap;
+  uint8_t  *recv_buf;
   uint32_t recv_len;
+  uint32_t recv_cap;
   uint32_t recv_head;
   int socket_fd;
   int active;

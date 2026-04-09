@@ -1,6 +1,7 @@
 // Minimal x86_64 kernel for bringup: shows a framebuffer UI + a tiny command
 // prompt. This is intentionally simple (no interrupts yet). It helps validate
 // disk boot end-to-end after the UEFI installer provisions GPT/ESP/BOOT.
+#pragma GCC optimize("O0")
 #include <stddef.h>
 #include <stdint.h>
 

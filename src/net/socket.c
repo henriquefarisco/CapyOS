@@ -1,5 +1,6 @@
 #include "net/socket.h"
 #include "net/stack.h"
+#include "memory/kmem.h"
 #include <stddef.h>
 
 static struct socket socket_table[SOCKET_MAX];
@@ -36,6 +37,10 @@ int socket_create(int domain, int type, int protocol) {
         (type == SOCK_STREAM ? IPPROTO_TCP : IPPROTO_UDP));
       s->state = SOCK_STATE_CREATED;
       s->timeout_ms = 5000;
+      s->recv_buf = (uint8_t *)kmalloc(SOCKET_BUF_SIZE);
+      s->send_buf = (uint8_t *)kmalloc(SOCKET_BUF_SIZE);
+      s->recv_cap = s->recv_buf ? SOCKET_BUF_SIZE : 0;
+      s->send_cap = s->send_buf ? SOCKET_BUF_SIZE : 0;
       sock_stats.active_sockets++;
       return i;
     }
@@ -162,14 +167,14 @@ int socket_recv(int fd, void *buf, size_t len, int flags) {
   }
 
   if (s->type == SOCK_DGRAM) {
-    if (s->recv_len == 0) return 0;
+    if (s->recv_len == 0 || !s->recv_buf) return 0;
     uint32_t avail = s->recv_len;
     if (avail > len) avail = (uint32_t)len;
     uint8_t *dst = (uint8_t *)buf;
     for (uint32_t i = 0; i < avail; i++) {
-      dst[i] = s->recv_buf[(s->recv_tail + i) % SOCKET_BUF_SIZE];
+      dst[i] = s->recv_buf[(s->recv_tail + i) % s->recv_cap];
     }
-    s->recv_tail = (s->recv_tail + avail) % SOCKET_BUF_SIZE;
+    s->recv_tail = (s->recv_tail + avail) % s->recv_cap;
     s->recv_len -= avail;
     sock_stats.bytes_received += avail;
     return (int)avail;
@@ -209,6 +214,10 @@ int socket_close(int fd) {
     tcp_close((int)(uintptr_t)s->protocol_data);
   }
 
+  if (s->recv_buf) { kfree(s->recv_buf); s->recv_buf = NULL; }
+  if (s->send_buf) { kfree(s->send_buf); s->send_buf = NULL; }
+  s->recv_cap = 0;
+  s->send_cap = 0;
   s->state = SOCK_STATE_UNUSED;
   if (sock_stats.active_sockets > 0) sock_stats.active_sockets--;
   return 0;
@@ -269,9 +278,10 @@ void socket_receive_packet(uint8_t protocol, uint32_t src_ip,
     if (s->protocol == protocol || s->protocol == 0) {
       s->remote_addr.sin_addr = src_ip;
       s->remote_addr.sin_port = src_port;
-      for (size_t j = 0; j < len && s->recv_len < SOCKET_BUF_SIZE; j++) {
+      if (!s->recv_buf || s->recv_cap == 0) return;
+      for (size_t j = 0; j < len && s->recv_len < s->recv_cap; j++) {
         s->recv_buf[s->recv_head] = data[j];
-        s->recv_head = (s->recv_head + 1) % SOCKET_BUF_SIZE;
+        s->recv_head = (s->recv_head + 1) % s->recv_cap;
         s->recv_len++;
       }
       return;

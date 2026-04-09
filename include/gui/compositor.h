@@ -44,10 +44,7 @@ struct compositor_stats {
   uint32_t window_count;
   uint32_t visible_count;
   uint64_t frames_rendered;
-  uint64_t
- 
-dirty_
-rects;
+  uint64_t dirty_rects;
 };
 
 void compositor_init(uint32_t *framebuffer, uint32_t width, uint32_t height,

@@ -25,4 +25,9 @@ void csprng_get_bytes(void *buf, size_t len);
  */
 uint32_t csprng_next_u32(void);
 
+/* Compatibility alias used by newer kernel modules. */
+static inline void csprng_fill(void *buf, size_t len) {
+  csprng_get_bytes(buf, len);
+}
+
 #endif

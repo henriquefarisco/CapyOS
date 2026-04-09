@@ -95,3 +95,6 @@ syscall_entry:
     sysretq
 
 .size syscall_entry, .-syscall_entry
+
+# Mark stack as non-executable to satisfy modern binutils hardening
+.section .note.GNU-stack,"",@progbits

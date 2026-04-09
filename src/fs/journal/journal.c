@@ -15,14 +15,14 @@ static uint32_t journal_crc32(const void *data, size_t len) {
 }
 
 static int journal_read_block(struct journal *j, uint64_t block, void *buf) {
-  if (!j || !j->dev || !j->dev->ops || !j->dev->ops->read) return -1;
-  return j->dev->ops->read(j->dev, (uint32_t)(j->start_block + block), 1, buf);
+  if (!j || !j->dev) return -1;
+  return block_device_read(j->dev, (uint32_t)(j->start_block + block), buf);
 }
 
 static int journal_write_block(struct journal *j, uint64_t block,
                                 const void *buf) {
-  if (!j || !j->dev || !j->dev->ops || !j->dev->ops->write) return -1;
-  return j->dev->ops->write(j->dev, (uint32_t)(j->start_block + block), 1, buf);
+  if (!j || !j->dev) return -1;
+  return block_device_write(j->dev, (uint32_t)(j->start_block + block), buf);
 }
 
 int journal_format(struct journal *j, struct block_device *dev,
@@ -137,7 +137,7 @@ int journal_replay(struct journal *j) {
           struct journal_block_ref *ref =
             (struct journal_block_ref *)(buf + sizeof(struct journal_entry_header));
           if (b < JOURNAL_ENTRY_MAX_BLOCKS) {
-            j->dev->ops->write(j->dev, (uint32_t)ref[b].target_block, 1, data_buf);
+            block_device_write(j->dev, (uint32_t)ref[b].target_block, data_buf);
           }
         }
         kfree(data_buf);

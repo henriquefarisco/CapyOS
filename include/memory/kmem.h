@@ -9,4 +9,7 @@ void   kfree(void* ptr);            // (no-op por enquanto)
 size_t kheap_used(void);            // bytes usados (debug)
 size_t kheap_size(void);            // tamanho total do heap
 
+/* Compatibility alias used by newer kernel modules (Linux-style naming). */
+static inline void *kmalloc(size_t size) { return kalloc(size); }
+
 #endif

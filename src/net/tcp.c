@@ -1,6 +1,7 @@
 #include "net/tcp.h"
 #include "net/stack.h"
 #include "security/csprng.h"
+#include "memory/kmem.h"
 #include <stddef.h>
 
 static struct tcp_connection tcp_conns[TCP_MAX_CONNECTIONS];
@@ -119,6 +120,10 @@ int tcp_open(uint32_t local_ip, uint16_t local_port,
       c->rcv_wnd = TCP_WINDOW_SIZE;
       c->mss = TCP_MSS_DEFAULT;
       c->rto_ms = TCP_RTO_INIT_MS;
+      c->send_buf = (uint8_t *)kmalloc(TCP_WINDOW_SIZE);
+      c->recv_buf = (uint8_t *)kmalloc(TCP_WINDOW_SIZE);
+      c->send_cap = c->send_buf ? TCP_WINDOW_SIZE : 0;
+      c->recv_cap = c->recv_buf ? TCP_WINDOW_SIZE : 0;
 
       tcp_send_segment(c, TCP_FLAG_SYN, NULL, 0);
       return i;
@@ -139,6 +144,10 @@ int tcp_listen(uint32_t local_ip, uint16_t local_port, int socket_fd) {
       c->state = TCP_STATE_LISTEN;
       c->rcv_wnd = TCP_WINDOW_SIZE;
       c->mss = TCP_MSS_DEFAULT;
+      c->send_buf = (uint8_t *)kmalloc(TCP_WINDOW_SIZE);
+      c->recv_buf = (uint8_t *)kmalloc(TCP_WINDOW_SIZE);
+      c->send_cap = c->send_buf ? TCP_WINDOW_SIZE : 0;
+      c->recv_cap = c->recv_buf ? TCP_WINDOW_SIZE : 0;
       return i;
     }
   }
@@ -149,6 +158,7 @@ int tcp_send(int conn_id, const void *data, size_t len) {
   if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
   struct tcp_connection *c = &tcp_conns[conn_id];
   if (!c->active || c->state != TCP_STATE_ESTABLISHED) return -1;
+  if (!c->send_buf) return -1;
 
   size_t sent = 0;
   while (sent < len) {
@@ -166,7 +176,7 @@ int tcp_recv(int conn_id, void *buf, size_t len) {
   if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
   struct tcp_connection *c = &tcp_conns[conn_id];
   if (!c->active) return -1;
-  if (c->recv_len == 0) {
+  if (c->recv_len == 0 || !c->recv_buf) {
     if (c->state == TCP_STATE_CLOSE_WAIT || c->state == TCP_STATE_CLOSED)
       return 0;
     return -1;
@@ -195,6 +205,10 @@ int tcp_close(int conn_id) {
     c->active = 0;
     c->state = TCP_STATE_CLOSED;
   }
+  if (c->send_buf) { kfree(c->send_buf); c->send_buf = NULL; }
+  if (c->recv_buf) { kfree(c->recv_buf); c->recv_buf = NULL; }
+  c->send_cap = 0;
+  c->recv_cap = 0;
   return 0;
 }
 
@@ -262,7 +276,7 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
     if (data_off < len) {
       size_t data_len = len - data_off;
       const uint8_t *payload = segment + data_off;
-      if (c->recv_len + data_len <= TCP_WINDOW_SIZE) {
+      if (c->recv_buf && c->recv_len + data_len <= c->recv_cap) {
         tcp_memcpy(c->recv_buf + c->recv_len, payload, data_len);
         c->recv_len += (uint32_t)data_len;
         c->rcv_nxt += (uint32_t)data_len;

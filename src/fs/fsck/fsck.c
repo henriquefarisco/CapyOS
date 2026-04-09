@@ -18,14 +18,14 @@ static void fsck_add_error(struct fsck_result *r, enum fsck_error_type type,
 }
 
 static int fsck_read_block(struct block_device *dev, uint32_t block, void *buf) {
-  if (!dev || !dev->ops || !dev->ops->read) return -1;
-  return dev->ops->read(dev, block, 1, buf);
+  if (!dev) return -1;
+  return block_device_read(dev, block, buf);
 }
 
 static int fsck_write_block(struct block_device *dev, uint32_t block,
                              const void *buf) {
-  if (!dev || !dev->ops || !dev->ops->write) return -1;
-  return dev->ops->write(dev, block, 1, buf);
+  if (!dev) return -1;
+  return block_device_write(dev, block, buf);
 }
 
 int fsck_check(struct block_device *dev, struct fsck_result *result) {

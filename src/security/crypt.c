@@ -701,24 +701,24 @@ void crypt_hmac_sha256(const uint8_t *key, size_t key_len,
   uint8_t tk[SHA256_DIGEST_SIZE];
   struct sha256_ctx ctx;
   if (key_len > SHA256_BLOCK_SIZE) {
-    sha256_init(\&ctx);
-    sha256_update(\&ctx, key, key_len);
-    sha256_final(\&ctx, tk);
+    sha256_init(&ctx);
+    sha256_update(&ctx, key, key_len);
+    sha256_final(&ctx, tk);
     key = tk;
     key_len = SHA256_DIGEST_SIZE;
   }
   for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++)
     k_pad[i] = (i < key_len ? key[i] : 0) ^ 0x36;
-  sha256_init(\&ctx);
-  sha256_update(\&ctx, k_pad, SHA256_BLOCK_SIZE);
-  sha256_update(\&ctx, data, data_len);
-  sha256_final(\&ctx, out);
+  sha256_init(&ctx);
+  sha256_update(&ctx, k_pad, SHA256_BLOCK_SIZE);
+  sha256_update(&ctx, data, data_len);
+  sha256_final(&ctx, out);
   for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++)
     k_pad[i] = (i < key_len ? key[i] : 0) ^ 0x5c;
-  sha256_init(\&ctx);
-  sha256_update(\&ctx, k_pad, SHA256_BLOCK_SIZE);
-  sha256_update(\&ctx, out, SHA256_DIGEST_SIZE);
-  sha256_final(\&ctx, out);
+  sha256_init(&ctx);
+  sha256_update(&ctx, k_pad, SHA256_BLOCK_SIZE);
+  sha256_update(&ctx, out, SHA256_DIGEST_SIZE);
+  sha256_final(&ctx, out);
   secure_clear(k_pad, sizeof(k_pad));
   secure_clear(tk, sizeof(tk));
 }

@@ -22,8 +22,8 @@
 #define SO_SNDBUF   7
 #define SO_ERROR    4
 
-#define SOCKET_MAX 64
-#define SOCKET_BUF_SIZE 8192
+#define SOCKET_MAX 16
+#define SOCKET_BUF_SIZE 512
 
 #define MSG_DONTWAIT 0x40
 #define MSG_PEEK     0x02
@@ -60,14 +60,16 @@ struct socket {
   enum socket_state state;
   struct sockaddr_in local_addr;
   struct sockaddr_in remote_addr;
-  uint8_t recv_buf[SOCKET_BUF_SIZE];
+  uint8_t *recv_buf;
   uint32_t recv_head;
   uint32_t recv_tail;
   uint32_t recv_len;
-  uint8_t send_buf[SOCKET_BUF_SIZE];
+  uint32_t recv_cap;
+  uint8_t *send_buf;
   uint32_t send_head;
   uint32_t send_tail;
   uint32_t send_len;
+  uint32_t send_cap;
   uint32_t timeout_ms;
   int error;
   int backlog;
