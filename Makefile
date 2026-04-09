@@ -195,7 +195,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/apps/text_editor.o \
 	$(BUILD)/x86_64/apps/task_manager.o \
 	$(BUILD)/x86_64/apps/html_viewer.o \
-	$(BUILD)/x86_64/apps/settings.o
+	$(BUILD)/x86_64/apps/settings.o \
+	$(BUILD)/x86_64/shell/commands/extended.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c

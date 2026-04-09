@@ -59,6 +59,12 @@
 #include "kernel/task.h"
 #include "kernel/scheduler.h"
 #include "arch/x86_64/smp.h"
+#include "gui/desktop.h"
+#include "drivers/input/mouse.h"
+#include "drivers/rtc/rtc.h"
+#include "drivers/gpu/gpu_core.h"
+#include "drivers/usb/usb_core.h"
+#include "core/auth_policy.h"
 #include "core/boot_metrics.h"
 #include "memory/vmm.h"
 #include "kernel/syscall.h"
@@ -2613,6 +2619,16 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   if (!handoff_boot_services_active()) {
     syscall_init();
     klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
+  }
+  auth_policy_init();
+  rtc_init();
+  gpu_init();
+  gpu_detect();
+  usb_core_init();
+  if (apic_available() && !handoff_boot_services_active()) {
+    apic_timer_set_callback(scheduler_tick);
+    apic_timer_start(100);
+    klog(KLOG_INFO, "[scheduler] Preemptive tick armed at 100Hz.");
   }
 
   /* Stage 4/8: Keyboard */

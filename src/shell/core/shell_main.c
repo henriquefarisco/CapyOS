@@ -2,6 +2,7 @@
 #include "shell/shell.h"
 #include "shell/core.h"
 #include "shell/commands.h"
+#include "shell/commands_extended.h"
 
 #include "core/localization.h"
 #include "core/klog.h"
@@ -15,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static struct shell_command_set g_command_sets[10];
+static struct shell_command_set g_command_sets[12];
 static size_t g_command_set_count = 0;
 static int g_command_sets_initialized = 0;
 static void shell_hotkey_help_docs(void)
@@ -53,6 +54,7 @@ static void shell_init_command_sets(void)
     ADD_COMMAND_SET(shell_commands_system_control);
     ADD_COMMAND_SET(shell_commands_network);
     ADD_COMMAND_SET(shell_commands_user_manage);
+    ADD_COMMAND_SET(shell_commands_extended);
 
 #undef ADD_COMMAND_SET
 
