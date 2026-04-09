@@ -32,6 +32,13 @@ def smoke_first_boot(
     run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
     run_cmd(session, "job-status recovery-snapshot", timeout=timeout, expect="recovery-snapshot state=")
     run_cmd(session, "update-status", timeout=timeout, expect="channel=stable")
+    run_cmd(session, "update-channel show", timeout=timeout, expect="channel=stable branch=main")
+    run_cmd(session, "update-channel develop", timeout=timeout, expect="channel=develop branch=develop")
+    run_cmd(session, "update-status", timeout=timeout, expect="channel=develop")
+    run_cmd(session, "update-status", timeout=timeout, expect="branch=develop")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="update_channel=develop")
+    run_cmd(session, "print-file /system/update/repository.ini", timeout=timeout, expect="branch=develop")
+    run_cmd(session, "update-channel stable", timeout=timeout, expect="channel=stable branch=main")
     run_cmd(session, "update-check", timeout=timeout, expect="catalog cache missing")
     run_cmd(
         session,
@@ -164,11 +171,18 @@ def smoke_first_boot(
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="splash=enabled")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="language=en")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="update_channel=stable")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="network_mode=dhcp")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="ipv4=10.0.2.42")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="mask=255.255.255.0")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="gateway=10.0.2.2")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="dns=1.1.1.1")
+    run_cmd(
+        session,
+        "print-file /system/update/repository.ini",
+        timeout=timeout,
+        expect="branch=main",
+    )
     run_cmd(
         session,
         "print-file /system/update/repository.ini",
@@ -222,6 +236,8 @@ def smoke_second_boot(
     run_cmd(session, "config-splash show", timeout=timeout, expect="Current splash: enabled")
     run_cmd(session, "job-status recovery-snapshot", timeout=timeout, expect="recovery-snapshot state=")
     run_cmd(session, "update-status", timeout=timeout, expect="channel=stable")
+    run_cmd(session, "update-status", timeout=timeout, expect="branch=main")
+    run_cmd(session, "update-channel show", timeout=timeout, expect="channel=stable branch=main")
     run_cmd(session, "net-mode show", timeout=timeout, expect="dhcp", expect_optional=True)
     run_cmd(session, "net-refresh", timeout=timeout, expect="driver=", expect_optional=True)
     run_cmd(
@@ -258,8 +274,15 @@ def smoke_second_boot(
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="splash=enabled")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="language=en")
+    run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="update_channel=stable")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="network_mode=dhcp")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="ipv4=10.0.2.42")
+    run_cmd(
+        session,
+        "print-file /system/update/repository.ini",
+        timeout=timeout,
+        expect="branch=main",
+    )
     run_cmd(
         session,
         "print-file /system/update/repository.ini",

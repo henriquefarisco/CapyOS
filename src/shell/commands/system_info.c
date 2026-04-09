@@ -213,6 +213,17 @@ static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     shell_print("CHANNEL=");
     shell_print(CAPYOS_VERSION_CHANNEL);
     shell_newline();
+    shell_print("UPDATE_CHANNEL=");
+    shell_print((ctx && ctx->settings && ctx->settings->update_channel[0])
+                    ? ctx->settings->update_channel
+                    : "stable");
+    shell_newline();
+    shell_print("UPDATE_BRANCH=");
+    shell_print((ctx && ctx->settings &&
+                 shell_string_equal(ctx->settings->update_channel, "develop"))
+                    ? "develop"
+                    : "main");
+    shell_newline();
     shell_print("VERSION=");
     shell_print(CAPYOS_VERSION_EXTENDED);
     shell_newline();
@@ -460,6 +471,8 @@ static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
 
     shell_print("channel=");
     shell_print(status.channel[0] ? status.channel : "-");
+    shell_print(" branch=");
+    shell_print(status.branch[0] ? status.branch : "-");
     shell_print(" source=");
     shell_print(status.source[0] ? status.source : "-");
     shell_newline();
@@ -590,6 +603,10 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
 
         shell_print("update catalog=");
         shell_print(status.update_catalog_present ? "present" : "missing");
+        shell_print(" channel=");
+        shell_print(status.update_channel[0] ? status.update_channel : "stable");
+        shell_print(" branch=");
+        shell_print(status.update_branch[0] ? status.update_branch : "main");
         shell_print(" available=");
         shell_print(status.update_available ? "yes" : "no");
         shell_print(" stage=");

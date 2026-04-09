@@ -1366,6 +1366,12 @@ static int kernel_persist_recovery_report(void) {
   update_agent_status_get(&update_status);
   buffer_append_text(report, sizeof(report), "\nupdate_catalog=");
   buffer_append_yes_no(report, sizeof(report), update_status.catalog_present);
+  buffer_append_text(report, sizeof(report), "\nupdate_channel=");
+  buffer_append_text(report, sizeof(report),
+                     update_status.channel[0] ? update_status.channel : "stable");
+  buffer_append_text(report, sizeof(report), "\nupdate_branch=");
+  buffer_append_text(report, sizeof(report),
+                     update_status.branch[0] ? update_status.branch : "main");
   buffer_append_text(report, sizeof(report), "\nupdate_available=");
   buffer_append_yes_no(report, sizeof(report), update_status.update_available);
   buffer_append_text(report, sizeof(report), "\nupdate_stage_ready=");
@@ -1460,6 +1466,12 @@ static int kernel_append_recovery_history_event(const char *event_name) {
   } else {
     buffer_append_text(line, sizeof(line), "none");
   }
+  buffer_append_text(line, sizeof(line), " channel=");
+  buffer_append_text(line, sizeof(line),
+                     update_status.channel[0] ? update_status.channel : "stable");
+  buffer_append_text(line, sizeof(line), " branch=");
+  buffer_append_text(line, sizeof(line),
+                     update_status.branch[0] ? update_status.branch : "main");
   buffer_append_text(line, sizeof(line), " update_rc=");
   if (update_status.last_result < 0) {
     buffer_append_text(line, sizeof(line), "-");
@@ -1764,6 +1776,10 @@ void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   out->update_stage_ready = update_status.stage_ready;
   out->update_pending_activation = update_status.pending_activation;
   out->update_last_result = update_status.last_result;
+  local_copy(out->update_channel, sizeof(out->update_channel),
+             update_status.channel);
+  local_copy(out->update_branch, sizeof(out->update_branch),
+             update_status.branch);
   local_copy(out->update_available_version,
              sizeof(out->update_available_version),
              update_status.available_version);

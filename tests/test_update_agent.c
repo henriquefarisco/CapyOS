@@ -130,15 +130,17 @@ int run_update_agent_tests(void) {
                          "missing catalog should not arm activation");
     fails += expect_true(strcmp(status.channel, "stable") == 0,
                          "default channel mismatch");
+    fails += expect_true(strcmp(status.branch, "main") == 0,
+                         "default branch mismatch");
     fails += expect_true(strcmp(status.source, "github:henriquefarisco/CapyOS") == 0,
                          "default source mismatch");
     fails += expect_true(strcmp(status.summary, "catalog cache missing") == 0,
                          "missing catalog summary mismatch");
 
     set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
-                  "channel=beta\nsource=github:test/CapyOS\n");
+                  "channel=develop\nbranch=develop\nsource=github:test/CapyOS\n");
     set_file_text(UPDATE_AGENT_CACHE_PATH,
-                  "available_version=0.9.0-alpha.1\nchannel=beta\npublished_at=2026-04-08\n");
+                  "available_version=0.9.0-alpha.1\nchannel=develop\npublished_at=2026-04-08\n");
     fails += expect_true(update_agent_poll() == 0,
                          "valid catalog should poll successfully");
     update_agent_status_get(&status);
@@ -148,8 +150,10 @@ int run_update_agent_tests(void) {
                          "newer cached version should signal update available");
     fails += expect_true(status.stage_ready == 0u,
                          "catalog poll should not auto-stage updates");
-    fails += expect_true(strcmp(status.channel, "beta") == 0,
+    fails += expect_true(strcmp(status.channel, "develop") == 0,
                          "repository channel should override default");
+    fails += expect_true(strcmp(status.branch, "develop") == 0,
+                         "repository branch should override default");
     fails += expect_true(strcmp(status.available_version, "0.9.0-alpha.1") == 0,
                          "available version mismatch");
     fails += expect_true(strcmp(status.summary, "update available in local catalog") == 0,
@@ -227,6 +231,20 @@ int run_update_agent_tests(void) {
     fails += expect_true(strcmp(status.summary, "catalog cache invalid") == 0,
                          "invalid manifest summary mismatch");
 
+    set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
+                  "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
+    set_file_text(UPDATE_AGENT_CACHE_PATH,
+                  "available_version=0.9.0-alpha.1\nchannel=develop\npublished_at=2026-04-08\n");
+    fails += expect_true(update_agent_poll() == -13,
+                         "catalog from a different channel should be rejected");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.channel, "stable") == 0,
+                         "selected channel should remain stable on mismatch");
+    fails += expect_true(strcmp(status.branch, "main") == 0,
+                         "selected branch should remain main on mismatch");
+    fails += expect_true(strcmp(status.summary, "catalog cache does not match selected update channel") == 0,
+                         "catalog mismatch summary mismatch");
+
     set_file_text(UPDATE_AGENT_CACHE_PATH,
                   "available_version=0.9.0-alpha.1\npublished_at=2026-04-08\n");
     set_file_text(UPDATE_AGENT_STAGE_PATH, "published_at=2026-04-08\n");
@@ -239,6 +257,20 @@ int run_update_agent_tests(void) {
                          "invalid staged manifest result mismatch");
     fails += expect_true(strcmp(status.summary, "staged update invalid") == 0,
                          "invalid staged summary mismatch");
+
+    set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
+                  "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
+    set_file_text(UPDATE_AGENT_CACHE_PATH,
+                  "available_version=0.9.0-alpha.1\nchannel=stable\npublished_at=2026-04-08\n");
+    set_file_text(UPDATE_AGENT_STAGE_PATH,
+                  "available_version=0.9.0-alpha.1\nchannel=develop\npublished_at=2026-04-08\n");
+    set_file_text(UPDATE_AGENT_STATE_PATH,
+                  "pending_activation=0\nstaged_manifest=/system/update/staged/latest.ini\n");
+    fails += expect_true(update_agent_poll() == -14,
+                         "staged update from a different channel should be rejected");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.summary, "staged update does not match selected update channel") == 0,
+                         "staged mismatch summary mismatch");
 
     update_agent_reset();
     if (fails == 0) {

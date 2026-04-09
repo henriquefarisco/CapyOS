@@ -11,6 +11,7 @@
 #define UPDATE_AGENT_DEFAULT_MANIFEST_PATH "/system/update/cache/latest.ini"
 #define UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH "/system/update/staged/latest.ini"
 #define UPDATE_AGENT_DEFAULT_CHANNEL "stable"
+#define UPDATE_AGENT_DEFAULT_BRANCH "main"
 #define UPDATE_AGENT_DEFAULT_SOURCE "github:henriquefarisco/CapyOS"
 
 struct update_manifest_view {
@@ -78,6 +79,10 @@ static int local_equal(const char *a, const char *b) {
     ++i;
   }
   return a[i] == b[i];
+}
+
+static const char *branch_for_channel(const char *channel) {
+  return local_equal(channel, "develop") ? "develop" : UPDATE_AGENT_DEFAULT_BRANCH;
 }
 
 static int parse_bool_value(const char *value) {
@@ -234,6 +239,8 @@ static void update_agent_seed_defaults(const char *current_version) {
   g_update_status.last_result = 1;
   local_copy(g_update_status.channel, sizeof(g_update_status.channel),
              UPDATE_AGENT_DEFAULT_CHANNEL);
+  local_copy(g_update_status.branch, sizeof(g_update_status.branch),
+             UPDATE_AGENT_DEFAULT_BRANCH);
   local_copy(g_update_status.source, sizeof(g_update_status.source),
              UPDATE_AGENT_DEFAULT_SOURCE);
   local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
@@ -299,6 +306,10 @@ void update_agent_set_remover(update_agent_remove_file_fn remover) {
 static void parse_repo_line(const char *key, const char *value) {
   if (local_equal(key, "channel")) {
     local_copy(g_update_status.channel, sizeof(g_update_status.channel), value);
+    local_copy(g_update_status.branch, sizeof(g_update_status.branch),
+               branch_for_channel(value));
+  } else if (local_equal(key, "branch")) {
+    local_copy(g_update_status.branch, sizeof(g_update_status.branch), value);
   } else if (local_equal(key, "source")) {
     local_copy(g_update_status.source, sizeof(g_update_status.source), value);
   } else if (local_equal(key, "manifest")) {
@@ -458,6 +469,8 @@ int update_agent_poll(void) {
   int state_rc = 0;
   int staged_rc = 0;
   int rc = 0;
+  int manifest_channel_mismatch = 0;
+  int staged_channel_mismatch = 0;
   update_agent_read_file_fn reader = active_reader();
   struct update_manifest_view available_manifest;
   struct update_manifest_view staged_manifest;
@@ -484,6 +497,10 @@ int update_agent_poll(void) {
   if (repo_rc == 0 && read_len > 0u) {
     parse_buffer(buffer, read_len, 0, NULL);
   }
+  if (!g_update_status.branch[0]) {
+    local_copy(g_update_status.branch, sizeof(g_update_status.branch),
+               branch_for_channel(g_update_status.channel));
+  }
 
   state_rc = read_state_view(&state_view);
   if (state_rc == 0) {
@@ -502,10 +519,9 @@ int update_agent_poll(void) {
                available_manifest.version);
     local_copy(g_update_status.published_at, sizeof(g_update_status.published_at),
                available_manifest.published_at);
-    if (available_manifest.channel[0]) {
-      local_copy(g_update_status.channel, sizeof(g_update_status.channel),
-                 available_manifest.channel);
-    }
+    manifest_channel_mismatch =
+        available_manifest.channel[0] &&
+        !local_equal(available_manifest.channel, g_update_status.channel);
     if (!local_equal(g_update_status.available_version,
                      g_update_status.current_version)) {
       g_update_status.update_available = 1u;
@@ -517,9 +533,20 @@ int update_agent_poll(void) {
     g_update_status.stage_ready = 1u;
     local_copy(g_update_status.staged_version,
                sizeof(g_update_status.staged_version), staged_manifest.version);
+    staged_channel_mismatch =
+        staged_manifest.channel[0] &&
+        !local_equal(staged_manifest.channel, g_update_status.channel);
   }
 
-  if (manifest_rc == -2) {
+  if (manifest_channel_mismatch) {
+    rc = -13;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "catalog cache does not match selected update channel");
+  } else if (staged_channel_mismatch) {
+    rc = -14;
+    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+               "staged update does not match selected update channel");
+  } else if (manifest_rc == -2) {
     rc = -2;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "catalog cache invalid");

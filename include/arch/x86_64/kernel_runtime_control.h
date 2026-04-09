@@ -23,6 +23,8 @@ struct x64_kernel_recovery_status {
   uint8_t update_stage_ready;
   uint8_t update_pending_activation;
   int32_t update_last_result;
+  char update_channel[UPDATE_AGENT_CHANNEL_MAX];
+  char update_branch[UPDATE_AGENT_BRANCH_MAX];
   char update_available_version[UPDATE_AGENT_VERSION_MAX];
   char update_staged_version[UPDATE_AGENT_VERSION_MAX];
 };

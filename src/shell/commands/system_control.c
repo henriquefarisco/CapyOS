@@ -439,6 +439,10 @@ static void update_history_append_event(const char *event_name,
               (event_name && event_name[0]) ? event_name : "unknown");
   append_text(line, sizeof(line), " catalog=");
   append_text(line, sizeof(line), status->catalog_present ? "present" : "missing");
+  append_text(line, sizeof(line), " channel=");
+  append_text(line, sizeof(line), status->channel[0] ? status->channel : "stable");
+  append_text(line, sizeof(line), " branch=");
+  append_text(line, sizeof(line), status->branch[0] ? status->branch : "main");
   append_text(line, sizeof(line), " update=");
   append_text(line, sizeof(line), status->update_available ? "available" : "none");
   append_text(line, sizeof(line), " stage=");
@@ -677,6 +681,19 @@ static int refresh_update_agent_service_state(int rc,
   return rc;
 }
 
+static const char *update_channel_name_or_null(const char *value) {
+  if (!value || !value[0]) {
+    return NULL;
+  }
+  if (shell_string_equal(value, "stable")) {
+    return "stable";
+  }
+  if (shell_string_equal(value, "develop")) {
+    return "develop";
+  }
+  return NULL;
+}
+
 static int cmd_update_check(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
   struct system_update_status status;
@@ -838,6 +855,100 @@ static int cmd_update_clear(struct shell_context *ctx, int argc, char **argv) {
   shell_print(status.summary);
   shell_newline();
   update_history_append_event("clear", &status);
+  return 0;
+}
+
+static int cmd_update_channel(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  const char *channel = NULL;
+  struct system_update_status status;
+  struct system_settings *mutable_settings = NULL;
+  int rc = 0;
+
+  if (shell_help_requested(argc, argv)) {
+    shell_print(localization_select(
+        language,
+        "Uso: update-channel [list|show|stable|develop]\nSeleciona a trilha de atualizacao estavel (main) ou em desenvolvimento (develop) e persiste isso no sistema.\n",
+        "Usage: update-channel [list|show|stable|develop]\nSelects the stable (main) or development (develop) update track and persists it in the system.\n",
+        "Uso: update-channel [list|show|stable|develop]\nSelecciona la rama de actualizacion estable (main) o de desarrollo (develop) y la persiste en el sistema.\n"));
+    return 0;
+  }
+
+  if (argc < 2 || shell_string_equal(argv[1], "show")) {
+    rc = refresh_update_agent_service_state(update_agent_poll(), &status);
+    if (rc < 0) {
+      shell_print_error(localization_select(language,
+                                            "estado atual de update invalido",
+                                            "current update state is invalid",
+                                            "el estado actual del update es invalido"));
+      return -1;
+    }
+    shell_print("channel=");
+    shell_print(status.channel[0] ? status.channel : "stable");
+    shell_print(" branch=");
+    shell_print(status.branch[0] ? status.branch : "main");
+    shell_print(" source=");
+    shell_print(status.source[0] ? status.source : "-");
+    shell_newline();
+    return 0;
+  }
+
+  if (shell_string_equal(argv[1], "list")) {
+    shell_print(localization_select(
+        language,
+        "stable  -> branch main (atualizacoes estaveis)\n"
+        "develop -> branch develop (atualizacoes em desenvolvimento)\n",
+        "stable  -> branch main (stable updates)\n"
+        "develop -> branch develop (development updates)\n",
+        "stable  -> branch main (actualizaciones estables)\n"
+        "develop -> branch develop (actualizaciones en desarrollo)\n"));
+    return 0;
+  }
+
+  channel = update_channel_name_or_null(argv[1]);
+  if (!channel) {
+    shell_print_error(localization_select(language,
+                                          "canal de update invalido",
+                                          "invalid update channel",
+                                          "canal de update invalido"));
+    shell_suggest_help("update-channel");
+    return -1;
+  }
+
+  if (ctx && ctx->settings) {
+    mutable_settings = (struct system_settings *)ctx->settings;
+    shell_copy(mutable_settings->update_channel,
+               sizeof(mutable_settings->update_channel), channel);
+  }
+
+  if (system_save_update_channel(channel) != 0) {
+    shell_print_ok(localization_select(language,
+                                       "canal de update alterado apenas na sessao atual",
+                                       "update channel changed only for the current session",
+                                       "canal de update cambiado solo para la sesion actual"));
+    shell_print(localization_text_for(language, LOC_TEXT_CONFIG_SAVE_WARNING));
+    return 0;
+  }
+
+  rc = refresh_update_agent_service_state(update_agent_poll(), &status);
+  if (rc < 0) {
+    shell_print_error(localization_select(language,
+                                          "canal salvo, mas o catalogo local ficou inconsistente",
+                                          "channel saved, but the local catalog became inconsistent",
+                                          "canal guardado, pero el catalogo local quedo inconsistente"));
+    return -1;
+  }
+
+  shell_print_ok(localization_select(language,
+                                     "trilha de update atualizada",
+                                     "update track updated",
+                                     "ruta de update actualizada"));
+  shell_print("channel=");
+  shell_print(status.channel);
+  shell_print(" branch=");
+  shell_print(status.branch);
+  shell_newline();
+  update_history_append_event("channel", &status);
   return 0;
 }
 
@@ -1713,7 +1824,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[19];
+static struct shell_command g_system_control_commands[20];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -1748,23 +1859,25 @@ static void init_system_control_commands(void) {
   g_system_control_commands[12].handler = cmd_update_arm;
   g_system_control_commands[13].name = "update-clear";
   g_system_control_commands[13].handler = cmd_update_clear;
-  g_system_control_commands[14].name = "service-target";
-  g_system_control_commands[14].handler = cmd_service_target;
-  g_system_control_commands[15].name = "recovery-resume";
-  g_system_control_commands[15].handler = cmd_recovery_resume;
-  g_system_control_commands[16].name = "recovery-verify";
-  g_system_control_commands[16].handler = cmd_recovery_verify;
-  g_system_control_commands[17].name = "recovery-login";
-  g_system_control_commands[17].handler = cmd_recovery_login;
-  g_system_control_commands[18].name = "recovery-storage-repair";
-  g_system_control_commands[18].handler = cmd_recovery_storage_repair;
+  g_system_control_commands[14].name = "update-channel";
+  g_system_control_commands[14].handler = cmd_update_channel;
+  g_system_control_commands[15].name = "service-target";
+  g_system_control_commands[15].handler = cmd_service_target;
+  g_system_control_commands[16].name = "recovery-resume";
+  g_system_control_commands[16].handler = cmd_recovery_resume;
+  g_system_control_commands[17].name = "recovery-verify";
+  g_system_control_commands[17].handler = cmd_recovery_verify;
+  g_system_control_commands[18].name = "recovery-login";
+  g_system_control_commands[18].handler = cmd_recovery_login;
+  g_system_control_commands[19].name = "recovery-storage-repair";
+  g_system_control_commands[19].handler = cmd_recovery_storage_repair;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 19;
+    *count = 20;
   }
   return g_system_control_commands;
 }

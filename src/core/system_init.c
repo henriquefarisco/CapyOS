@@ -19,6 +19,7 @@
 
 static int ensure_directory(const char *path);
 static int write_text_file(const char *path, const char *text);
+static void buffer_append(char *dst, size_t dst_size, const char *src);
 static int g_setup_debug =
     0; /* pode ser ativado em tempo de execucao se precisar */
 
@@ -100,6 +101,24 @@ static const char *system_network_mode_or_default(const char *mode) {
     return "dhcp";
   }
   return "static";
+}
+
+static const char *system_update_channel_or_default(const char *channel) {
+  if (channel && strings_equal(channel, "develop")) {
+    return "develop";
+  }
+  return "stable";
+}
+
+static const char *system_update_branch_for_channel(const char *channel) {
+  return strings_equal(system_update_channel_or_default(channel), "develop")
+             ? "develop"
+             : "main";
+}
+
+static const char *system_update_manifest_for_channel(const char *channel) {
+  (void)channel;
+  return "/system/update/cache/latest.ini";
 }
 
 static const char *system_service_target_or_default(const char *target) {
@@ -262,6 +281,8 @@ static void system_settings_set_defaults(struct system_settings *settings) {
                g_boot_default_keyboard_layout);
   cstring_copy(settings->language, sizeof(settings->language),
                g_boot_default_language);
+  cstring_copy(settings->update_channel, sizeof(settings->update_channel),
+               system_update_channel_or_default(NULL));
   cstring_copy(settings->network_mode, sizeof(settings->network_mode),
                "static");
   cstring_copy(settings->service_target, sizeof(settings->service_target),
@@ -321,11 +342,9 @@ static int verify_directory_exists(const char *path) {
 }
 
 int system_prepare_update_catalog(void) {
-  static const char *repo_defaults =
-      "channel=stable\n"
-      "source=github:henriquefarisco/CapyOS\n"
-      "manifest=/system/update/cache/latest.ini\n";
+  char repo_defaults[256];
   struct vfs_stat st;
+  const char *channel = system_update_channel_or_default(NULL);
 
   if (ensure_directory("/system") != 0 ||
       ensure_directory("/system/update") != 0 ||
@@ -336,6 +355,19 @@ int system_prepare_update_catalog(void) {
   if (vfs_stat_path("/system/update/repository.ini", &st) == 0) {
     return 0;
   }
+  repo_defaults[0] = '\0';
+  buffer_append(repo_defaults, sizeof(repo_defaults), "channel=");
+  buffer_append(repo_defaults, sizeof(repo_defaults), channel);
+  buffer_append(repo_defaults, sizeof(repo_defaults), "\nbranch=");
+  buffer_append(repo_defaults, sizeof(repo_defaults),
+                system_update_branch_for_channel(channel));
+  buffer_append(repo_defaults, sizeof(repo_defaults), "\nsource=");
+  buffer_append(repo_defaults, sizeof(repo_defaults),
+                "github:henriquefarisco/CapyOS");
+  buffer_append(repo_defaults, sizeof(repo_defaults), "\nmanifest=");
+  buffer_append(repo_defaults, sizeof(repo_defaults),
+                system_update_manifest_for_channel(channel));
+  buffer_append(repo_defaults, sizeof(repo_defaults), "\n");
   return write_text_file("/system/update/repository.ini", repo_defaults);
 }
 
@@ -504,6 +536,7 @@ static void log_dependency_wait(const char *dependency, const char *target) {
 
 static int verify_config_file(const char *hostname, const char *theme,
                               const char *keyboard, const char *language,
+                              const char *update_channel,
                               const char *network_mode,
                               const char *service_target, int splash_enabled,
                               uint32_t ipv4_addr,
@@ -512,6 +545,8 @@ static int verify_config_file(const char *hostname, const char *theme,
   const char *splash_value = splash_enabled ? "enabled" : "disabled";
   const char *keyboard_value = keyboard ? keyboard : "us";
   const char *language_value = system_language_or_default(language);
+  const char *update_channel_value =
+      system_update_channel_or_default(update_channel);
   const char *network_mode_value = system_network_mode_or_default(network_mode);
   const char *service_target_value =
       system_service_target_or_default(service_target);
@@ -537,6 +572,7 @@ static int verify_config_file(const char *hostname, const char *theme,
   int theme_ok = 0;
   int keyboard_ok = 0;
   int language_ok = 0;
+  int update_channel_ok = 0;
   int network_mode_ok = 0;
   int service_target_ok = 0;
   int splash_ok = 0;
@@ -565,13 +601,17 @@ static int verify_config_file(const char *hostname, const char *theme,
                    config_line_equals(&buffer[start], len, "keyboard",
                                       keyboard_value)) {
           keyboard_ok = 1;
-        } else if (!language_ok &&
-                   config_line_equals(&buffer[start], len, "language",
-                                      language_value)) {
-          language_ok = 1;
-        } else if (!network_mode_ok &&
-                   config_line_equals(&buffer[start], len, "network_mode",
-                                      network_mode_value)) {
+          } else if (!language_ok &&
+                     config_line_equals(&buffer[start], len, "language",
+                                        language_value)) {
+            language_ok = 1;
+          } else if (!update_channel_ok &&
+                     config_line_equals(&buffer[start], len, "update_channel",
+                                        update_channel_value)) {
+            update_channel_ok = 1;
+          } else if (!network_mode_ok &&
+                     config_line_equals(&buffer[start], len, "network_mode",
+                                        network_mode_value)) {
           network_mode_ok = 1;
         } else if (!service_target_ok &&
                    config_line_equals(&buffer[start], len, "service_target",
@@ -599,9 +639,10 @@ static int verify_config_file(const char *hostname, const char *theme,
     }
   }
 
-  if (!hostname_ok || !theme_ok || !keyboard_ok || !language_ok ||
-      !network_mode_ok || !service_target_ok || !splash_ok || !ipv4_ok ||
-      !mask_ok || !gateway_ok || !dns_ok) {
+    if (!hostname_ok || !theme_ok || !keyboard_ok || !language_ok ||
+        !update_channel_ok ||
+        !network_mode_ok || !service_target_ok || !splash_ok || !ipv4_ok ||
+        !mask_ok || !gateway_ok || !dns_ok) {
     vga_write("Falha ao validar conteudo de /system/config.ini.\n");
     return -1;
   }
@@ -642,6 +683,10 @@ static int write_settings_file(const struct system_settings *settings) {
   buffer_append(config_buffer, sizeof(config_buffer),
                 system_language_or_default(settings->language));
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  buffer_append(config_buffer, sizeof(config_buffer), "update_channel=");
+  buffer_append(config_buffer, sizeof(config_buffer),
+                system_update_channel_or_default(settings->update_channel));
+  buffer_append(config_buffer, sizeof(config_buffer), "\n");
   buffer_append(config_buffer, sizeof(config_buffer), "network_mode=");
   buffer_append(config_buffer, sizeof(config_buffer),
                 system_network_mode_or_default(settings->network_mode));
@@ -666,6 +711,34 @@ static int write_settings_file(const struct system_settings *settings) {
   buffer_append(config_buffer, sizeof(config_buffer), "\n");
 
   return write_text_file("/system/config.ini", config_buffer);
+}
+
+static int write_update_repository_file(const struct system_settings *settings) {
+  char repo_buffer[256];
+  const char *channel =
+      settings ? system_update_channel_or_default(settings->update_channel)
+               : system_update_channel_or_default(NULL);
+
+  if (ensure_directory("/system") != 0 || ensure_directory("/system/update") != 0 ||
+      ensure_directory("/system/update/cache") != 0 ||
+      ensure_directory("/system/update/staged") != 0) {
+    return -1;
+  }
+
+  repo_buffer[0] = '\0';
+  buffer_append(repo_buffer, sizeof(repo_buffer), "channel=");
+  buffer_append(repo_buffer, sizeof(repo_buffer), channel);
+  buffer_append(repo_buffer, sizeof(repo_buffer), "\nbranch=");
+  buffer_append(repo_buffer, sizeof(repo_buffer),
+                system_update_branch_for_channel(channel));
+  buffer_append(repo_buffer, sizeof(repo_buffer), "\nsource=");
+  buffer_append(repo_buffer, sizeof(repo_buffer),
+                "github:henriquefarisco/CapyOS");
+  buffer_append(repo_buffer, sizeof(repo_buffer), "\nmanifest=");
+  buffer_append(repo_buffer, sizeof(repo_buffer),
+                system_update_manifest_for_channel(channel));
+  buffer_append(repo_buffer, sizeof(repo_buffer), "\n");
+  return write_text_file("/system/update/repository.ini", repo_buffer);
 }
 
 static void u32_to_string(uint32_t value, char *buf, size_t buf_len) {
@@ -1904,6 +1977,7 @@ static int first_boot_setup_impl(void) {
   sync_root_device();
   if (verify_config_file(settings.hostname, settings.theme,
                          settings.keyboard_layout, settings.language,
+                         settings.update_channel,
                          settings.network_mode, settings.service_target,
                          settings.splash_enabled, settings.ipv4_addr,
                          settings.ipv4_mask, settings.ipv4_gateway,
@@ -1999,12 +2073,15 @@ static void apply_config_line(struct system_settings *settings,
   } else if (strings_equal(key, "keyboard")) {
     cstring_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout),
                  value);
-  } else if (strings_equal(key, "language")) {
-    cstring_copy(settings->language, sizeof(settings->language),
-                 system_language_or_default(value));
-  } else if (strings_equal(key, "network_mode")) {
-    cstring_copy(settings->network_mode, sizeof(settings->network_mode),
-                 system_network_mode_or_default(value));
+    } else if (strings_equal(key, "language")) {
+      cstring_copy(settings->language, sizeof(settings->language),
+                   system_language_or_default(value));
+    } else if (strings_equal(key, "update_channel")) {
+      cstring_copy(settings->update_channel, sizeof(settings->update_channel),
+                   system_update_channel_or_default(value));
+    } else if (strings_equal(key, "network_mode")) {
+      cstring_copy(settings->network_mode, sizeof(settings->network_mode),
+                   system_network_mode_or_default(value));
   } else if (strings_equal(key, "service_target")) {
     cstring_copy(settings->service_target, sizeof(settings->service_target),
                  system_service_target_or_default(value));
@@ -2101,19 +2178,24 @@ int system_save_settings(const struct system_settings *settings) {
     rc = -1;
     goto done;
   }
-  sync_root_device();
-  if (verify_config_file(settings->hostname, settings->theme,
-                         settings->keyboard_layout, settings->language,
-                         settings->network_mode, settings->service_target,
-                         settings->splash_enabled, settings->ipv4_addr,
-                         settings->ipv4_mask, settings->ipv4_gateway,
-                         settings->ipv4_dns) != 0) {
-    rc = -1;
-    goto done;
-  }
+    sync_root_device();
+    if (verify_config_file(settings->hostname, settings->theme,
+                           settings->keyboard_layout, settings->language,
+                           settings->update_channel,
+                           settings->network_mode, settings->service_target,
+                           settings->splash_enabled, settings->ipv4_addr,
+                           settings->ipv4_mask, settings->ipv4_gateway,
+                           settings->ipv4_dns) != 0) {
+      rc = -1;
+      goto done;
+    }
+    if (write_update_repository_file(settings) != 0) {
+      rc = -1;
+      goto done;
+    }
 
-done:
-  session_set_active(previous_session);
+  done:
+    session_set_active(previous_session);
   return rc;
 }
 
@@ -2176,6 +2258,15 @@ int system_save_service_target(const char *target) {
   system_load_settings(&settings);
   cstring_copy(settings.service_target, sizeof(settings.service_target),
                system_service_target_or_default(target));
+  return system_save_settings(&settings);
+}
+
+int system_save_update_channel(const char *channel) {
+  struct system_settings settings;
+  system_settings_set_defaults(&settings);
+  system_load_settings(&settings);
+  cstring_copy(settings.update_channel, sizeof(settings.update_channel),
+               system_update_channel_or_default(channel));
   return system_save_settings(&settings);
 }
 

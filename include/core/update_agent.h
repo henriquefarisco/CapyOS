@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define UPDATE_AGENT_CHANNEL_MAX 16u
+#define UPDATE_AGENT_BRANCH_MAX 16u
 #define UPDATE_AGENT_SOURCE_MAX 96u
 #define UPDATE_AGENT_VERSION_MAX 40u
 #define UPDATE_AGENT_PATH_MAX 96u
@@ -18,6 +19,7 @@ struct system_update_status {
   uint8_t pending_activation;
   int32_t last_result;
   char channel[UPDATE_AGENT_CHANNEL_MAX];
+  char branch[UPDATE_AGENT_BRANCH_MAX];
   char source[UPDATE_AGENT_SOURCE_MAX];
   char manifest_path[UPDATE_AGENT_PATH_MAX];
   char staged_manifest_path[UPDATE_AGENT_PATH_MAX];

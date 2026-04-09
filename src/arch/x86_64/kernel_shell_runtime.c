@@ -289,6 +289,8 @@ static void apply_default_settings(struct system_settings *settings) {
   local_copy(settings->theme, sizeof(settings->theme), "capyos");
   local_copy(settings->keyboard_layout, sizeof(settings->keyboard_layout), "us");
   local_copy(settings->language, sizeof(settings->language), "en");
+  local_copy(settings->update_channel, sizeof(settings->update_channel),
+             "stable");
   local_copy(settings->network_mode, sizeof(settings->network_mode), "static");
   local_copy(settings->service_target, sizeof(settings->service_target),
              "network");
