@@ -15,6 +15,11 @@ Esses documentos continuam uteis para backlog tatico. O objetivo aqui e
 organizar a arquitetura-alvo do produto inteiro e a sequencia correta de
 implantacao.
 
+Complemento operacional:
+- `docs/plans/system-execution-plan.md`
+  - traduz este plano-mestre em uma sequencia de execucao concreta, com
+    progresso estimado, gates de release e marcos imediatos
+
 ## 1. Base de validacao
 
 Este plano foi alinhado com o estado real do repositorio, principalmente a

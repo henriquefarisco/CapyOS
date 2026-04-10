@@ -4,7 +4,7 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-08
+Ultima atualizacao: 2026-04-09
 Versao de referencia: `0.8.0-alpha.0`
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
@@ -64,6 +64,7 @@ Observacao importante:
 - indice principal: `docs/README.md`
 - arquitetura atual: `docs/architecture/system-overview.md`
 - plano-mestre do sistema: `docs/plans/system-master-plan.md`
+- plano de execucao atual: `docs/plans/system-execution-plan.md`
 - roadmap tecnico por dominio: `docs/plans/system-roadmap.md`
 - hardening de plataforma: `docs/plans/platform-hardening-plan.md`
 - validacao de boot/login/CLI: `docs/testing/boot-and-cli-validation.md`

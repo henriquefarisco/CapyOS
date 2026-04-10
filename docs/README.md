@@ -24,6 +24,9 @@ Escopo atual:
 - `plans/system-master-plan.md`
   - plano-mestre de evolucao do sistema inteiro, cobrindo fundacoes faltantes,
     seguranca, performance, GUI, atualizacoes, apps e linguagem propria
+- `plans/system-execution-plan.md`
+  - sequencia de execucao recomendada a partir do estado atual do projeto,
+    incluindo progresso, gates de release e proximos marcos
 - `plans/refactor-plan.md`
   - fechamento da migracao para a trilha unica x64
 - `plans/system-roadmap.md`
@@ -64,5 +67,6 @@ Fluxo esperado:
 1. `../README.md`
 2. `architecture/system-overview.md`
 3. `plans/system-master-plan.md`
-4. `testing/boot-and-cli-validation.md`
-5. `releases/README.md`
+4. `plans/system-execution-plan.md`
+5. `testing/boot-and-cli-validation.md`
+6. `releases/README.md`
