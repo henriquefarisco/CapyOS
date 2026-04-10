@@ -25,6 +25,25 @@ Diretriz pratica:
 - para boot, instalacao, login, CLI e rede basica, use `VMware + E1000`
 - nao trate `Hyper-V` como ambiente valido de release, smoke oficial ou promessa de compatibilidade
 
+## Branches e canais
+
+Modelo atual de entrega:
+- `main`
+  - trilha estavel do projeto
+  - recebe apenas mudancas ja validadas em build, testes e smokes
+- `develop`
+  - trilha de integracao e desenvolvimento continuo
+  - concentra o que esta pronto para consolidacao, mas ainda pode evoluir antes de release
+
+Mapeamento com o sistema de updates:
+- `stable` -> branch `main`
+- `develop` -> branch `develop`
+
+Diretriz pratica:
+- trabalho novo entra por branch de feature
+- consolidacao tecnica acontece primeiro em `develop`
+- promocao para `main` acontece depois da validacao da trilha
+
 ## Licenca, autoria e uso
 
 Este repositorio usa a licenca Open Source `Apache-2.0`.

@@ -112,7 +112,8 @@ make iso-uefi
 - Anexe `build/CapyOS-Installer-UEFI.iso` como DVD SCSI na VM Gen2.
   Esse e o nome oficial atual do artefato ISO UEFI.
 - A ISO UEFI usa El Torito apontando para `EFI/BOOT/efiboot.img`.
-- O repositorio agora inclui smoke ponta a ponta da ISO oficial:
+- O repositorio inclui smoke ponta a ponta da ISO oficial para a trilha
+  suportada:
 
 ```bash
 cd /mnt/d/Projetos/CapyOS
@@ -120,8 +121,9 @@ make smoke-x64-iso
 ```
 
 - Esse smoke cobre instalacao, reboot pelo disco, login e persistencia.
-- A trilha `Hyper-V Gen2` ja foi validada nesta etapa; a checagem segue manual
-  quando o objetivo for repetir a certificacao nesse backend.
+- `Hyper-V Gen2` nao e backend certificado de release nesta fase.
+- Qualquer verificacao nesse ambiente deve ser tratada como laboratorio
+  adicional, nunca como criterio de compatibilidade oficial.
 - Durante o boot hibrido em `Hyper-V Gen2`, o kernel mantem `EFI ConIn` como
   caminho principal. Depois do `ExitBootServices`, o `VMBus keyboard` e
   promovido de forma controlada, com retentativa limitada e fallback

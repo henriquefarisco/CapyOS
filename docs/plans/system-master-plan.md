@@ -209,6 +209,26 @@ O CapyOS solido deve convergir para a arquitetura abaixo:
 5. Linguagem propria nao deve nascer antes de existir runtime de processos,
    package manager e APIs minimamente estaveis.
 
+## 5.3 Canais de entrega e governanca de branches
+
+Para evitar que o sistema de atualizacao e a governanca do repositorio sigam
+em direcoes diferentes, a politica de branch deve ser parte da arquitetura:
+
+- `main`
+  - canal estavel
+  - corresponde ao channel `stable`
+  - so recebe mudancas com build, testes e smokes fechados
+- `develop`
+  - canal de integracao
+  - corresponde ao channel `develop`
+  - recebe consolidacao de features antes de promocao
+
+Consequencia tecnica:
+- o `update-agent` precisa tratar `main` e `develop` como trilhas distintas
+- manifestos, staging e rollback devem preservar o branch/channel de origem
+- a promocao `develop -> main` deve ser uma decisao de release, nao um efeito
+  colateral de desenvolvimento diario
+
 ## 6. Metas transversais
 
 ## 6.1 Performance

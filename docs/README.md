@@ -42,6 +42,23 @@ Escopo atual:
   legados; nesses casos, trate o arquivo como contexto historico, nao como
   instrucoes atuais
 
+## Politica de branches
+
+- `main`
+  - branch estavel
+  - referencia para release e canal `stable`
+- `develop`
+  - branch de integracao
+  - referencia para o canal `develop`
+- branches de feature
+  - servem para implementacao e consolidacao tematica antes do merge
+
+Fluxo esperado:
+1. feature branch
+2. merge em `develop`
+3. validacao
+4. promocao para `main`
+
 ## Leitura recomendada
 
 1. `../README.md`

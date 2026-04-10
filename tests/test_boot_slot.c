@@ -5,9 +5,12 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
-#define TEST(name) do { tests_run++; printf("  %-40s ", name);
-#define PASS() printf("OK\n"); tests_passed++; } while(0)
-#define FAIL(msg) printf("FAIL: %s\n", msg); } while(0)
+#define TEST(name) \
+  do { tests_run++; printf("  %-40s ", name); } while (0)
+#define PASS() \
+  do { printf("OK\n"); tests_passed++; } while (0)
+#define FAIL(msg) \
+  do { printf("FAIL: %s\n", msg); } while (0)
 
 void test_boot_slot_init_and_get(void) {
   boot_slot_init();
