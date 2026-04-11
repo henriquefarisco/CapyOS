@@ -5,20 +5,48 @@ SRC_DIR   = src
 
 # Trilhas legadas BIOS/x86_32 removidas: build/release oficiais sao UEFI/x86_64.
 CROSS64 ?= x86_64-elf
+TOOLCHAIN64 ?= host
 
-# Toolchain 64-bit (fallback para x86_64-linux-gnu-* se x86_64-elf-* nao existir)
-ifeq ($(shell which $(CROSS64)-gcc 2>/dev/null),)
-  $(warning Using x86_64-linux-gnu fallback toolchain; release reproducibility still requires x86_64-elf-*)
+# Toolchain 64-bit
+# No WSL, alguns builds do x86_64-elf-ld 2.42 abortam no link do kernel atual.
+# O host toolchain (x86_64-linux-gnu-*) fica como padrao; use TOOLCHAIN64=elf
+# apenas quando quiser forcar a toolchain cruzada.
+ifeq ($(TOOLCHAIN64),elf)
+  ifeq ($(shell which $(CROSS64)-gcc 2>/dev/null),)
+    $(warning Using x86_64-linux-gnu fallback toolchain; release reproducibility still requires x86_64-elf-*)
+    CC64      := x86_64-linux-gnu-gcc
+    LD64      := x86_64-linux-gnu-ld
+    OBJCOPY64 := x86_64-linux-gnu-objcopy
+    STACKPROTECT64 := -fno-stack-protector
+    $(warning Fallback toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
+  else
+    CC64      := $(CROSS64)-gcc
+    ifeq ($(origin LD64), undefined)
+      ifneq ($(shell which x86_64-linux-gnu-ld.gold 2>/dev/null),)
+        LD64 := x86_64-linux-gnu-ld.gold
+      else ifneq ($(shell which x86_64-linux-gnu-ld 2>/dev/null),)
+        LD64 := x86_64-linux-gnu-ld
+      else
+        LD64 := $(CROSS64)-ld
+      endif
+    endif
+    OBJCOPY64 := $(CROSS64)-objcopy
+    STACKPROTECT64 := -fstack-protector-strong
+    $(warning Using $(LD64) for kernel linking; set LD64=$(CROSS64)-ld to force the cross linker)
+  endif
+else
   CC64      := x86_64-linux-gnu-gcc
-  LD64      := x86_64-linux-gnu-ld
+  ifeq ($(origin LD64), undefined)
+    ifneq ($(shell which x86_64-linux-gnu-ld.gold 2>/dev/null),)
+      LD64 := x86_64-linux-gnu-ld.gold
+    else
+      LD64 := x86_64-linux-gnu-ld
+    endif
+  endif
   OBJCOPY64 := x86_64-linux-gnu-objcopy
   STACKPROTECT64 := -fno-stack-protector
-  $(warning Fallback toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
-else
-  CC64      := $(CROSS64)-gcc
-  LD64      := $(CROSS64)-ld
-  OBJCOPY64 := $(CROSS64)-objcopy
-  STACKPROTECT64 := -fstack-protector-strong
+  $(warning Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
+  $(warning Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
 CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -fpie -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables $(STACKPROTECT64) -Iinclude -I$(BUILD_GEN)
 DEPFLAGS64 := -MMD -MP
@@ -89,6 +117,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/net/rndis.o \
 	$(BUILD)/x86_64/drivers/net/netvsc.o \
 	$(BUILD)/x86_64/drivers/net/tulip.o \
+	$(BUILD)/x86_64/drivers/net/virtio_net.o \
+	$(BUILD)/x86_64/drivers/net/rtl8139.o \
+	$(BUILD)/x86_64/drivers/net/vmxnet3.o \
 	$(BUILD)/x86_64/drivers/net/net_probe.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme.o \
 	$(BUILD)/x86_64/drivers/hyperv/hyperv_stage.o \
@@ -135,6 +166,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/security/crypt.o \
 	$(BUILD)/x86_64/security/csprng.o \
 	$(BUILD)/x86_64/util/stack_protector.o \
+	$(BUILD)/x86_64/util/kstring.o \
 	$(BUILD)/x86_64/shell/core/shell_main.o \
 	$(BUILD)/x86_64/shell/commands/help.o \
 	$(BUILD)/x86_64/shell/commands/session.o \
@@ -173,6 +205,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/core/boot_slot.o \
 	$(BUILD)/x86_64/core/package_manager.o \
 	$(BUILD)/x86_64/drivers/input/mouse.o \
+	$(BUILD)/x86_64/gui/font8x8_data.o \
 	$(BUILD)/x86_64/gui/event.o \
 	$(BUILD)/x86_64/gui/font.o \
 	$(BUILD)/x86_64/gui/compositor.o \
@@ -185,8 +218,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/core/auth_policy.o \
 	$(BUILD)/x86_64/kernel/pipe.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
+	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
+	$(BUILD)/x86_64/drivers/serial/com1.o \
 	$(BUILD)/x86_64/gui/taskbar.o \
 	$(BUILD)/x86_64/security/sha512.o \
 	$(BUILD)/x86_64/gui/desktop.o \
@@ -196,7 +231,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/apps/task_manager.o \
 	$(BUILD)/x86_64/apps/html_viewer.o \
 	$(BUILD)/x86_64/apps/settings.o \
-	$(BUILD)/x86_64/shell/commands/extended.o
+	$(BUILD)/x86_64/shell/commands/extended.o \
+	$(BUILD)/x86_64/gui/window_manager.o \
+	$(BUILD)/x86_64/gui/notification.o \
+	$(BUILD)/x86_64/gui/bmp_loader.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
@@ -330,6 +368,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c \
                src/security/csprng.c src/security/crypt.c src/core/localization.c src/core/klog.c src/core/service_manager.c src/core/work_queue.c src/core/update_agent.c \
+               src/util/kstring.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
                tests/test_dns_cache.c src/net/dns_cache.c \

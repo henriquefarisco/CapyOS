@@ -1,6 +1,7 @@
 #include "apps/text_editor.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
+#include "drivers/input/keyboard_layout.h"
 #include "fs/vfs.h"
 #include "memory/kmem.h"
 #include <stddef.h>
@@ -15,11 +16,45 @@ static void ed_strcpy(char *d, const char *s, size_t max) {
 }
 static size_t ed_strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
 
+static void text_editor_window_paint(struct gui_window *win) {
+  if (!win || !win->user_data) return;
+  text_editor_paint((struct text_editor_app *)win->user_data);
+}
+
+static void text_editor_window_key(struct gui_window *win, uint32_t keycode,
+                                   uint8_t mods) {
+  (void)mods;
+  if (!win || !win->user_data) return;
+  /* For special keys (>=0x80), ch must be 0 so the handler uses keycode. */
+  char ch = (keycode < 0x80) ? (char)keycode : 0;
+  text_editor_handle_key((struct text_editor_app *)win->user_data, keycode, ch);
+}
+
+static void text_editor_window_scroll(struct gui_window *win, int32_t delta) {
+  if (!win || !win->user_data) return;
+  struct text_editor_app *app = (struct text_editor_app *)win->user_data;
+  if (delta > 0 && app->scroll_offset > 0)
+    app->scroll_offset -= (delta > app->scroll_offset) ? app->scroll_offset : delta;
+  else if (delta < 0 && app->scroll_offset < app->line_count - 1)
+    app->scroll_offset += (-delta);
+  if (app->scroll_offset >= app->line_count && app->line_count > 0)
+    app->scroll_offset = app->line_count - 1;
+}
+
 void text_editor_open(const char *path) {
+  const struct gui_theme_palette *theme = compositor_theme();
+  uint8_t scale = compositor_ui_scale();
   ed_memset(&g_editor, 0, sizeof(g_editor));
-  g_editor.window = compositor_create_window("Text Editor", 100, 80, 600, 400);
+  g_editor.window = compositor_create_window("Text Editor", 100, 80,
+                                             600 + 160 * (scale - 1),
+                                             400 + 140 * (scale - 1));
   if (!g_editor.window) return;
-  g_editor.window->bg_color = 0x1E1E2E;
+  g_editor.window->bg_color = theme->window_bg;
+  g_editor.window->border_color = theme->window_border;
+  g_editor.window->user_data = &g_editor;
+  g_editor.window->on_paint = text_editor_window_paint;
+  g_editor.window->on_key = text_editor_window_key;
+  g_editor.window->on_scroll = text_editor_window_scroll;
   compositor_show_window(g_editor.window->id);
   compositor_focus_window(g_editor.window->id);
 
@@ -73,7 +108,33 @@ void text_editor_save(struct text_editor_app *app) {
 
 void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char ch) {
   if (!app) return;
-  (void)keycode;
+
+  /* Handle arrow keys */
+  if (keycode == KEY_UP) {
+    if (app->cursor_line > 0) {
+      app->cursor_line--;
+      int len = (int)ed_strlen(app->lines[app->cursor_line]);
+      if (app->cursor_col > len) app->cursor_col = len;
+    }
+    return;
+  }
+  if (keycode == KEY_DOWN) {
+    if (app->cursor_line < app->line_count - 1) {
+      app->cursor_line++;
+      int len = (int)ed_strlen(app->lines[app->cursor_line]);
+      if (app->cursor_col > len) app->cursor_col = len;
+    }
+    return;
+  }
+  if (keycode == KEY_LEFT) {
+    if (app->cursor_col > 0) app->cursor_col--;
+    return;
+  }
+  if (keycode == KEY_RIGHT) {
+    int len = (int)ed_strlen(app->lines[app->cursor_line]);
+    if (app->cursor_col < len) app->cursor_col++;
+    return;
+  }
 
   if (ch == '\b') {
     if (app->cursor_col > 0) {
@@ -134,16 +195,19 @@ void text_editor_paint(struct text_editor_app *app) {
   if (!app || !app->window) return;
   struct gui_surface *s = &app->window->surface;
   const struct font *f = font_default();
+  const struct gui_theme_palette *theme = compositor_theme();
   if (!f) return;
 
   for (uint32_t y = 0; y < s->height; y++) {
     uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
-    for (uint32_t x = 0; x < s->width; x++) line[x] = 0x1E1E2E;
+    for (uint32_t x = 0; x < s->width; x++) line[x] = theme->window_bg;
   }
 
   /* Title bar info */
-  font_draw_string(s, f, 4, 2, app->path, 0x89B4FA);
-  if (app->modified) font_draw_string(s, f, (int32_t)(s->width - 80), 2, "[modified]", 0xF38BA8);
+  font_draw_string(s, f, 4, 2, app->path, theme->accent);
+  if (app->modified)
+    font_draw_string(s, f, (int32_t)(s->width - 80), 2, "[modified]",
+                     theme->accent_alt);
 
   int32_t y = 20;
   uint32_t gh = f->glyph_height;
@@ -157,10 +221,10 @@ void text_editor_paint(struct text_editor_app *app) {
     while (ln > 0) { tmp[tp++] = '0' + (ln % 10); ln /= 10; }
     for (int j = tp - 1; j >= 0; j--) lnum[lp++] = tmp[j];
     lnum[lp] = '\0';
-    font_draw_string(s, f, 4, y, lnum, 0x6C7086);
+    font_draw_string(s, f, 4, y, lnum, theme->text_muted);
 
     /* Line content */
-    font_draw_string(s, f, 40, y, app->lines[i], 0xCDD6F4);
+    font_draw_string(s, f, 40, y, app->lines[i], theme->text);
 
     /* Cursor */
     if (i == app->cursor_line) {
@@ -169,7 +233,7 @@ void text_editor_paint(struct text_editor_app *app) {
         int32_t py = y + (int32_t)cy;
         if (py >= 0 && (uint32_t)py < s->height && cx >= 0 && (uint32_t)cx < s->width) {
           uint32_t *pline = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)py * s->pitch);
-          pline[cx] = 0xF5C2E7;
+          pline[cx] = theme->accent;
         }
       }
     }

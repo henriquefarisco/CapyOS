@@ -1,6 +1,7 @@
 /* system_init.c: system setup helpers (config, first-run, users, theme). */
 #include "core/system_init.h"
 
+#include "util/kstring.h"
 #include "core/localization.h"
 #include "core/service_manager.h"
 #include "core/session.h"
@@ -29,49 +30,19 @@ static size_t g_setup_log_flushed = 0;
 static int g_setup_log_ready = 0;
 
 static size_t cstring_length(const char *s) {
-  size_t len = 0;
-  if (!s) {
-    return 0;
-  }
-  while (s[len]) {
-    ++len;
-  }
-  return len;
+  return kstrlen(s);
 }
 
 static void memory_zero(void *dst, size_t len) {
-  uint8_t *p = (uint8_t *)dst;
-  while (len--) {
-    *p++ = 0;
-  }
+  kmemzero(dst, len);
 }
 
 static void cstring_copy(char *dst, size_t dst_size, const char *src) {
-  if (!dst || dst_size == 0) {
-    return;
-  }
-  size_t i = 0;
-  if (src) {
-    while (src[i] && i < dst_size - 1) {
-      dst[i] = src[i];
-      ++i;
-    }
-  }
-  dst[i] = '\0';
+  kstrcpy(dst, dst_size, src);
 }
 
 static int strings_equal(const char *a, const char *b) {
-  if (!a || !b) {
-    return 0;
-  }
-  size_t i = 0;
-  while (a[i] && b[i]) {
-    if (a[i] != b[i]) {
-      return 0;
-    }
-    ++i;
-  }
-  return a[i] == b[i];
+  return kstreq(a, b);
 }
 
 static char g_boot_default_keyboard_layout[16] = "us";

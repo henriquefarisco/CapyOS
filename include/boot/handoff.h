@@ -12,6 +12,17 @@
 #define BOOT_HANDOFF_RUNTIME_FIRMWARE_BLOCK_IO 0x00000004u
 #define BOOT_HANDOFF_RUNTIME_HYBRID_BOOT 0x00000008u
 
+#define BOOT_MEDIA_UNKNOWN  0
+#define BOOT_MEDIA_ISO      1
+#define BOOT_MEDIA_HDD      2
+#define BOOT_MEDIA_NVME     3
+#define BOOT_MEDIA_VHDX     4
+#define BOOT_MEDIA_USB      5
+
+#define BOOT_MODE_NORMAL    0
+#define BOOT_MODE_RECOVERY  1
+#define BOOT_MODE_DIAG      2
+
 struct boot_handoff_fb {
   uint64_t base;
   uint32_t size;
@@ -50,6 +61,9 @@ struct boot_handoff {
   char boot_volume_key[64];
   uint64_t efi_image_handle;
   uint64_t efi_map_key;
+  uint8_t boot_media;
+  uint8_t boot_mode;
+  uint8_t _reserved_pad[6];
 };
 
 #endif // BOOT_HANDOFF_H

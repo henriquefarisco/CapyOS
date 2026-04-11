@@ -2,7 +2,6 @@
 #include "shell/core.h"
 
 #include "core/localization.h"
-#include "drivers/video/vga.h"
 
 struct list_ctx {
     int count;
@@ -71,12 +70,12 @@ static int list_callback(const char *name, uint16_t mode, void *userdata) {
     if (!name || name[0] == '\0') {
         return 0;
     }
-    vga_write(" - ");
-    vga_write(name);
+    shell_print(" - ");
+    shell_print(name);
     if (mode & VFS_MODE_DIR) {
-        vga_write("/");
+        shell_print("/");
     }
-    vga_newline();
+    shell_newline();
     ctx->count++;
     return 0;
 }

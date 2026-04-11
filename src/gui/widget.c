@@ -14,22 +14,38 @@ static void w_strcpy(char *dst, const char *src, size_t max) {
 
 struct widget_style widget_default_style(void) {
   struct widget_style s;
-  s.bg_color = 0xF0F0F0; s.fg_color = 0x000000; s.border_color = 0xA0A0A0;
-  s.hover_color = 0xE0E0E0; s.active_color = 0xD0D0D0; s.text_color = 0x000000;
-  s.border_width = 1; s.padding = 4; s.margin = 2; s.font_size = 16;
+  const struct gui_theme_palette *theme = compositor_theme();
+  uint8_t scale = compositor_ui_scale();
+  s.bg_color = theme->window_bg;
+  s.fg_color = theme->text;
+  s.border_color = theme->window_border;
+  s.hover_color = theme->accent_alt;
+  s.active_color = theme->accent;
+  s.text_color = theme->text;
+  s.border_width = 1;
+  s.padding = (uint8_t)(4 * scale);
+  s.margin = (uint8_t)(2 * scale);
+  s.font_size = 16;
   return s;
 }
 
 struct widget_style widget_button_style(void) {
   struct widget_style s = widget_default_style();
-  s.bg_color = 0x4488CC; s.text_color = 0xFFFFFF; s.hover_color = 0x5599DD;
-  s.active_color = 0x3377BB; s.border_color = 0x336699; s.padding = 8;
+  const struct gui_theme_palette *theme = compositor_theme();
+  s.bg_color = theme->accent;
+  s.text_color = theme->accent_text;
+  s.hover_color = theme->accent_alt;
+  s.active_color = theme->title_active;
+  s.border_color = theme->window_border;
+  s.padding = (uint8_t)(8 * compositor_ui_scale());
   return s;
 }
 
 struct widget_style widget_textbox_style(void) {
   struct widget_style s = widget_default_style();
-  s.bg_color = 0xFFFFFF; s.border_color = 0x808080; s.padding = 4;
+  s.bg_color = compositor_theme()->terminal_bg;
+  s.border_color = compositor_theme()->window_border;
+  s.text_color = compositor_theme()->text;
   return s;
 }
 
@@ -146,22 +162,22 @@ void widget_paint(struct widget *w, struct gui_surface *surface) {
   if (w->type == WIDGET_CHECKBOX) {
     int32_t cx = x + (int32_t)bw - 20;
     int32_t cy = y + (int32_t)(bh / 2) - 6;
-    fill_rect(surface, cx, cy, 12, 12, 0xFFFFFF);
-    draw_border(surface, cx, cy, 12, 12, 0x404040, 1);
-    if (w->checked) fill_rect(surface, cx + 3, cy + 3, 6, 6, 0x2266AA);
+    fill_rect(surface, cx, cy, 12, 12, compositor_theme()->window_bg);
+    draw_border(surface, cx, cy, 12, 12, compositor_theme()->window_border, 1);
+    if (w->checked) fill_rect(surface, cx + 3, cy + 3, 6, 6, compositor_theme()->accent);
   }
 
   if (w->type == WIDGET_PROGRESS) {
     int32_t bx = x + w->style.padding;
     int32_t by = y + (int32_t)bh - 12;
     uint32_t bar_w = bw - 2 * w->style.padding;
-    fill_rect(surface, bx, by, bar_w, 8, 0xD0D0D0);
+    fill_rect(surface, bx, by, bar_w, 8, compositor_theme()->accent_alt);
     uint32_t fill_w = 0;
     if (w->max_value > w->min_value)
       fill_w = (uint32_t)((int64_t)(w->value - w->min_value) * (int64_t)bar_w /
                            (w->max_value - w->min_value));
     if (fill_w > bar_w) fill_w = bar_w;
-    fill_rect(surface, bx, by, fill_w, 8, 0x2266AA);
+    fill_rect(surface, bx, by, fill_w, 8, compositor_theme()->accent);
   }
 
   for (uint32_t i = 0; i < w->child_count; i++) widget_paint(w->children[i], surface);
@@ -178,11 +194,24 @@ int widget_handle_event(struct widget *w, const struct gui_event *ev) {
   if (ev->type == GUI_EVENT_MOUSE_MOVE) {
     int hover = point_in_rect(ev->mouse.x, ev->mouse.y, &w->bounds);
     w->hovered = hover;
+    /* Propagate hover tracking to children */
+    for (uint32_t i = 0; i < w->child_count; i++)
+      widget_handle_event(w->children[i], ev);
+    return 0;
+  }
+
+  /* Dispatch to children first so that items rendered on top of their
+   * parent (e.g. MENU_ITEM inside a MENUBAR) get the event before the
+   * parent consumes it.  This is the standard front-to-back hit-test
+   * order expected by any widget tree. */
+  for (uint32_t i = 0; i < w->child_count; i++) {
+    if (widget_handle_event(w->children[i], ev)) return 1;
   }
 
   if (ev->type == GUI_EVENT_MOUSE_DOWN && (ev->mouse.buttons & 1)) {
     if (point_in_rect(ev->mouse.x, ev->mouse.y, &w->bounds)) {
-      if (w->type == WIDGET_BUTTON && w->on_click)
+      if ((w->type == WIDGET_BUTTON || w->type == WIDGET_MENUBAR ||
+           w->type == WIDGET_MENU_ITEM) && w->on_click)
         w->on_click(w, w->user_data);
       if (w->type == WIDGET_CHECKBOX) {
         w->checked = !w->checked;
@@ -192,9 +221,6 @@ int widget_handle_event(struct widget *w, const struct gui_event *ev) {
     }
   }
 
-  for (uint32_t i = 0; i < w->child_count; i++) {
-    if (widget_handle_event(w->children[i], ev)) return 1;
-  }
   return 0;
 }
 

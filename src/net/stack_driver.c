@@ -3,6 +3,9 @@
 #include "core/klog.h"
 #include "drivers/net/e1000.h"
 #include "drivers/net/tulip.h"
+#include "drivers/net/virtio_net.h"
+#include "drivers/net/rtl8139.h"
+#include "drivers/net/vmxnet3.h"
 
 #include <stdint.h>
 
@@ -16,6 +19,15 @@ int net_stack_driver_send_frame(const struct net_nic_probe *nic,
   }
   if (nic->kind == NET_NIC_KIND_TULIP) {
     return tulip_send_frame(frame, len);
+  }
+  if (nic->kind == NET_NIC_KIND_VIRTIO_NET) {
+    return virtio_net_send_frame(frame, len);
+  }
+  if (nic->kind == NET_NIC_KIND_RTL8139) {
+    return rtl8139_send_frame(frame, len);
+  }
+  if (nic->kind == NET_NIC_KIND_VMXNET3) {
+    return vmxnet3_send_frame(frame, len);
   }
   /* NetVSC TX stub: the VMBus data-path for frame send is not yet wired.
    * Once delivery N5/N6 complete the TX/RX integration, this will delegate
@@ -36,6 +48,15 @@ int net_stack_driver_poll_frame(const struct net_nic_probe *nic, uint8_t *out,
   }
   if (nic->kind == NET_NIC_KIND_TULIP) {
     return tulip_poll_frame(out, cap, len);
+  }
+  if (nic->kind == NET_NIC_KIND_VIRTIO_NET) {
+    return virtio_net_poll_frame(out, cap, len);
+  }
+  if (nic->kind == NET_NIC_KIND_RTL8139) {
+    return rtl8139_poll_frame(out, cap, len);
+  }
+  if (nic->kind == NET_NIC_KIND_VMXNET3) {
+    return vmxnet3_poll_frame(out, cap, len);
   }
   /* NetVSC RX stub: no frames available until VMBus data-path is wired. */
   if (nic->kind == NET_NIC_KIND_HYPERV_NETVSC) {
@@ -67,6 +88,34 @@ int net_stack_driver_init_runtime(const struct net_nic_probe *nic,
         return 0;
       }
       klog(KLOG_ERROR, "[drv] Tulip driver init FAILED.");
+      return -1;
+    }
+    if (nic->kind == NET_NIC_KIND_VIRTIO_NET) {
+      klog(KLOG_INFO, "[drv] Initializing VirtIO-Net driver...");
+      if (virtio_net_init(nic->bar0, nic->bar0_is_io, mac) == 0 && virtio_net_ready()) {
+        klog(KLOG_INFO, "[drv] VirtIO-Net driver ready.");
+        return 0;
+      }
+      klog(KLOG_ERROR, "[drv] VirtIO-Net driver init FAILED.");
+      return -1;
+    }
+    if (nic->kind == NET_NIC_KIND_RTL8139) {
+      klog(KLOG_INFO, "[drv] Initializing RTL8139 driver...");
+      if (rtl8139_init(nic->bar0, nic->bar0_is_io, mac) == 0 && rtl8139_ready()) {
+        klog(KLOG_INFO, "[drv] RTL8139 driver ready.");
+        return 0;
+      }
+      klog(KLOG_ERROR, "[drv] RTL8139 driver init FAILED.");
+      return -1;
+    }
+    if (nic->kind == NET_NIC_KIND_VMXNET3) {
+      klog(KLOG_INFO, "[drv] Initializing VMXNET3 driver...");
+      uint64_t bar1 = 0; /* TODO: read BAR1 from PCI config */
+      if (vmxnet3_init(nic->bar0, bar1, mac) == 0 && vmxnet3_ready()) {
+        klog(KLOG_INFO, "[drv] VMXNET3 driver ready.");
+        return 0;
+      }
+      klog(KLOG_ERROR, "[drv] VMXNET3 driver init FAILED.");
       return -1;
     }
   }

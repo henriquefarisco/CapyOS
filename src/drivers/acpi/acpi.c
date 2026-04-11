@@ -3,7 +3,7 @@
  * Parses ACPI tables and provides power management functions.
  */
 #include "drivers/acpi/acpi.h"
-#include "arch/x86/hw/io.h"
+#include "drivers/io.h"
 #include "drivers/efi/efi_console.h"
 
 #include <stddef.h>

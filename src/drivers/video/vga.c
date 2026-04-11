@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include "drivers/video/vga.h"
-#include "arch/x86/hw/io.h"
+#include "drivers/io.h"
 
 // protótipos internos
 static void vga_scroll_if_needed(void);

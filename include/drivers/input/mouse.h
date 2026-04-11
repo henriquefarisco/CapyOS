@@ -26,10 +26,12 @@ struct mouse_state {
 
 void mouse_ps2_init(void);
 void mouse_ps2_irq_handler(void);
+void mouse_ps2_poll(void);
 int mouse_poll(struct mouse_event *event);
 void mouse_get_state(struct mouse_state *out);
 void mouse_set_bounds(int32_t width, int32_t height);
 void mouse_set_position(int32_t x, int32_t y);
 int mouse_available(void);
+int mouse_pending(void);
 
 #endif /* DRIVERS_INPUT_MOUSE_H */

@@ -45,6 +45,15 @@ const struct keyboard_layout g_keyboard_layout_br_abnt2 = {
         /* Teclas extras do ABNT2 */
         [0x56] = '|', [0x59] = '?', [0x73] = '?',
     },
+    .altgr = {
+        [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5',
+        [0x07] = '6', [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
+        [0x10] = '/', [0x11] = '?',
+        [0x12] = (char)0x82,  /* e acute */
+        [0x1B] = (char)0xAA,  /* ordfeminine */
+        [0x2B] = (char)0xBA,  /* ordmasculine */
+        [0x56] = '\\',
+    },
     .dead = {
         [0x07] = 0x2,   /* shift gera trema (dead_diaeresis) */
         [0x1A] = 0x3,   /* agudo / crase */

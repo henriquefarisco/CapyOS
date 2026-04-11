@@ -1,4 +1,7 @@
 #include "net/dns_cache.h"
+#ifndef UNIT_TEST
+#include "drivers/timer/pit.h"
+#endif
 #include <stddef.h>
 
 static struct dns_cache_entry cache[DNS_CACHE_MAX_ENTRIES];
@@ -30,10 +33,28 @@ void dns_cache_init(void) {
   cache_stats.expired = 0;
 }
 
+static uint64_t dns_cache_current_tick(void) {
+#ifdef UNIT_TEST
+  return 0;
+#else
+  return pit_ticks();
+#endif
+}
+
 int dns_cache_lookup(const char *name, uint32_t *out_ip) {
   if (!name || !out_ip) return -1;
+  uint64_t now = dns_cache_current_tick();
   for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
     if (cache[i].valid && dns_streq(cache[i].name, name)) {
+      if (cache[i].ttl > 0 && cache[i].created_tick > 0 &&
+          now > cache[i].created_tick &&
+          (now - cache[i].created_tick) > (uint64_t)cache[i].ttl) {
+        cache[i].valid = 0;
+        if (cache_stats.entries > 0) cache_stats.entries--;
+        cache_stats.expired++;
+        cache_stats.misses++;
+        return -1;
+      }
       *out_ip = cache[i].ip;
       cache_stats.hits++;
       return 0;

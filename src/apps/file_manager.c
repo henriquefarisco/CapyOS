@@ -26,6 +26,28 @@ static int fm_iter_cb(const char *name, uint16_t mode, void *ctx) {
   return 0;
 }
 
+static void file_manager_window_paint(struct gui_window *win) {
+  if (!win || !win->user_data) return;
+  file_manager_paint((struct file_manager_app *)win->user_data);
+}
+
+static void file_manager_window_mouse(struct gui_window *win, int32_t x, int32_t y,
+                                      uint8_t buttons) {
+  if (!win || !win->user_data || !(buttons & 1)) return;
+  file_manager_handle_click((struct file_manager_app *)win->user_data, x, y);
+}
+
+static void file_manager_window_scroll(struct gui_window *win, int32_t delta) {
+  if (!win || !win->user_data) return;
+  struct file_manager_app *app = (struct file_manager_app *)win->user_data;
+  if (delta > 0 && app->scroll_offset > 0)
+    app->scroll_offset -= (delta > app->scroll_offset) ? app->scroll_offset : delta;
+  else if (delta < 0 && app->scroll_offset + 1 < app->entry_count)
+    app->scroll_offset += (-delta);
+  if (app->scroll_offset >= app->entry_count && app->entry_count > 0)
+    app->scroll_offset = app->entry_count - 1;
+}
+
 void file_manager_navigate(struct file_manager_app *app, const char *path) {
   if (!app || !path) return;
   fm_strcpy(app->current_path, path, FM_PATH_MAX);
@@ -36,10 +58,19 @@ void file_manager_navigate(struct file_manager_app *app, const char *path) {
 }
 
 void file_manager_open(void) {
+  const struct gui_theme_palette *theme = compositor_theme();
+  uint8_t scale = compositor_ui_scale();
   fm_memset(&g_fm, 0, sizeof(g_fm));
-  g_fm.window = compositor_create_window("File Manager", 80, 60, 500, 400);
+  g_fm.window = compositor_create_window("File Manager", 80, 60,
+                                         500 + 120 * (scale - 1),
+                                         400 + 120 * (scale - 1));
   if (!g_fm.window) return;
-  g_fm.window->bg_color = 0x1E1E2E;
+  g_fm.window->bg_color = theme->window_bg;
+  g_fm.window->border_color = theme->window_border;
+  g_fm.window->user_data = &g_fm;
+  g_fm.window->on_paint = file_manager_window_paint;
+  g_fm.window->on_mouse = file_manager_window_mouse;
+  g_fm.window->on_scroll = file_manager_window_scroll;
   compositor_show_window(g_fm.window->id);
   compositor_focus_window(g_fm.window->id);
   file_manager_navigate(&g_fm, "/");
@@ -49,29 +80,30 @@ void file_manager_paint(struct file_manager_app *app) {
   if (!app || !app->window) return;
   struct gui_surface *s = &app->window->surface;
   const struct font *f = font_default();
+  const struct gui_theme_palette *theme = compositor_theme();
   if (!f) return;
 
   /* Clear background */
   for (uint32_t y = 0; y < s->height; y++) {
     uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
-    for (uint32_t x = 0; x < s->width; x++) line[x] = 0x1E1E2E;
+    for (uint32_t x = 0; x < s->width; x++) line[x] = theme->window_bg;
   }
 
   /* Path bar */
-  font_draw_string(s, f, 8, 4, app->current_path, 0x89B4FA);
+  font_draw_string(s, f, 8, 4, app->current_path, theme->accent);
 
   /* Separator */
   for (uint32_t x = 0; x < s->width; x++) {
     uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + 20 * s->pitch);
-    line[x] = 0x313244;
+    line[x] = theme->window_border;
   }
 
   /* File list */
   int32_t y = 24;
   for (int i = app->scroll_offset; i < app->entry_count && y < (int32_t)s->height - 20; i++) {
     struct fm_entry *e = &app->entries[i];
-    uint32_t color = (e->mode & 0x2) ? 0x89B4FA : 0xCDD6F4; /* dir=blue, file=white */
-    uint32_t bg = (i == app->selected) ? 0x45475A : 0x1E1E2E;
+    uint32_t color = (e->mode & 0x2) ? theme->accent : theme->text;
+    uint32_t bg = (i == app->selected) ? theme->accent_alt : theme->window_bg;
 
     /* Selection highlight */
     for (uint32_t x = 0; x < s->width; x++) {
@@ -81,7 +113,7 @@ void file_manager_paint(struct file_manager_app *app) {
 
     /* Icon: [D] for dir, [F] for file */
     const char *icon = (e->mode & 0x2) ? "[D] " : "[F] ";
-    font_draw_string(s, f, 8, y, icon, 0x6C7086);
+    font_draw_string(s, f, 8, y, icon, theme->text_muted);
     font_draw_string(s, f, 40, y, e->name, color);
     y += (int32_t)f->glyph_height + 2;
   }

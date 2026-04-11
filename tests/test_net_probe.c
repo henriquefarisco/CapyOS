@@ -181,12 +181,13 @@ int vmbus_channel_runtime_open(struct vmbus_channel_runtime *channel) {
 int run_net_probe_tests(void) {
     int fails = 0;
     struct net_nic_probe probe;
+    struct fake_pci_device *selected = NULL;
 
     if (!net_probe_kind_runtime_supported(NET_NIC_KIND_E1000) ||
         !net_probe_kind_runtime_supported(NET_NIC_KIND_TULIP) ||
-        net_probe_kind_runtime_supported(NET_NIC_KIND_RTL8139) ||
-        net_probe_kind_runtime_supported(NET_NIC_KIND_VIRTIO_NET) ||
-        net_probe_kind_runtime_supported(NET_NIC_KIND_VMXNET3) ||
+        !net_probe_kind_runtime_supported(NET_NIC_KIND_RTL8139) ||
+        !net_probe_kind_runtime_supported(NET_NIC_KIND_VIRTIO_NET) ||
+        !net_probe_kind_runtime_supported(NET_NIC_KIND_VMXNET3) ||
         !net_probe_kind_runtime_supported(NET_NIC_KIND_HYPERV_NETVSC)) {
         printf("[net] runtime capability map unexpected\n");
         fails++;
@@ -197,11 +198,12 @@ int run_net_probe_tests(void) {
     fake_pci_add(0, 2, 0, 0x8086u, 0x100Eu, 0x2000u, 0u);
     memset(&probe, 0, sizeof(probe));
     if (net_probe_first_supported(&probe) != 0 || !probe.found ||
-        probe.kind != NET_NIC_KIND_E1000 || !probe.runtime_supported) {
-        printf("[net] failed to prefer implemented backend over fallback detection\n");
+        probe.kind != NET_NIC_KIND_VIRTIO_NET || !probe.runtime_supported) {
+        printf("[net] failed to select the first runtime-capable PCI backend\n");
         fails++;
     }
-    if ((fake_pci_find(0, 2, 0)->command &
+    selected = fake_pci_find(probe.bus, probe.device, probe.function);
+    if (!selected || (selected->command &
          (PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER)) == 0u) {
         printf("[net] selected runtime backend did not enable PCI command bits\n");
         fails++;
@@ -211,8 +213,8 @@ int run_net_probe_tests(void) {
     fake_pci_add(0, 3, 0, 0x1AF4u, 0x1000u, 0x3000u, 0u);
     memset(&probe, 0, sizeof(probe));
     if (net_probe_first_supported(&probe) != 0 || !probe.found ||
-        probe.kind != NET_NIC_KIND_VIRTIO_NET || probe.runtime_supported) {
-        printf("[net] failed to preserve detected-only NIC when no runtime backend exists\n");
+        probe.kind != NET_NIC_KIND_VIRTIO_NET || !probe.runtime_supported) {
+        printf("[net] failed to surface VirtIO-Net as runtime-capable backend\n");
         fails++;
     }
 
@@ -220,8 +222,8 @@ int run_net_probe_tests(void) {
     fake_pci_add(0, 4, 0, 0x15ADu, 0x07B0u, 0x4000u, 0u);
     memset(&probe, 0, sizeof(probe));
     if (net_probe_first_supported(&probe) != 0 || !probe.found ||
-        probe.kind != NET_NIC_KIND_VMXNET3 || probe.runtime_supported) {
-        printf("[net] failed to surface VMXNET3 as detected-only backend\n");
+        probe.kind != NET_NIC_KIND_VMXNET3 || !probe.runtime_supported) {
+        printf("[net] failed to surface VMXNET3 as runtime-capable backend\n");
         fails++;
     }
 

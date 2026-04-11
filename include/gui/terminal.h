@@ -6,9 +6,9 @@
 #include "gui/compositor.h"
 #include "gui/font.h"
 
-#define TERM_MAX_COLS  120
-#define TERM_MAX_ROWS  40
-#define TERM_SCROLLBACK 500
+#define TERM_MAX_COLS  80
+#define TERM_MAX_ROWS  25
+#define TERM_SCROLLBACK 32
 #define TERM_INPUT_BUF  256
 #define TERM_TAB_SIZE   8
 

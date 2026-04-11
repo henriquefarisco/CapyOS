@@ -21,6 +21,17 @@ static int hv_strncmp(const char *a, const char *b, size_t n) {
   return 0;
 }
 
+static void html_viewer_window_paint(struct gui_window *win) {
+  if (!win || !win->user_data) return;
+  html_viewer_paint((struct html_viewer_app *)win->user_data);
+}
+
+static void html_viewer_window_scroll(struct gui_window *win, int32_t delta) {
+  if (!win || !win->user_data) return;
+  /* delta > 0 means scroll up, delta < 0 means scroll down */
+  html_viewer_scroll((struct html_viewer_app *)win->user_data, -delta);
+}
+
 int html_parse(const char *html, size_t len, struct html_document *doc) {
   if (!html || !doc) return -1;
   hv_memset(doc, 0, sizeof(*doc));
@@ -124,10 +135,18 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
 }
 
 void html_viewer_open(void) {
+  const struct gui_theme_palette *theme = compositor_theme();
+  uint8_t scale = compositor_ui_scale();
   hv_memset(&g_viewer, 0, sizeof(g_viewer));
-  g_viewer.window = compositor_create_window("CapyBrowser", 60, 40, 640, 480);
+  g_viewer.window = compositor_create_window("CapyBrowser", 60, 40,
+                                             640 + 160 * (scale - 1),
+                                             480 + 140 * (scale - 1));
   if (!g_viewer.window) return;
-  g_viewer.window->bg_color = 0x1E1E2E;
+  g_viewer.window->bg_color = theme->window_bg;
+  g_viewer.window->border_color = theme->window_border;
+  g_viewer.window->user_data = &g_viewer;
+  g_viewer.window->on_paint = html_viewer_window_paint;
+  g_viewer.window->on_scroll = html_viewer_window_scroll;
   compositor_show_window(g_viewer.window->id);
   compositor_focus_window(g_viewer.window->id);
 
@@ -182,22 +201,23 @@ void html_viewer_paint(struct html_viewer_app *app) {
   if (!app || !app->window) return;
   struct gui_surface *s = &app->window->surface;
   const struct font *f = font_default();
+  const struct gui_theme_palette *theme = compositor_theme();
   if (!f) return;
 
   /* Clear */
   for (uint32_t y = 0; y < s->height; y++) {
     uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
-    for (uint32_t x = 0; x < s->width; x++) line[x] = 0x1E1E2E;
+    for (uint32_t x = 0; x < s->width; x++) line[x] = theme->window_bg;
   }
 
   /* URL bar */
   for (uint32_t y = 0; y < 24; y++) {
-    uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
-    for (uint32_t x = 0; x < s->width; x++) {
-      row[x] = 0x313244;
-    }
+      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + y * s->pitch);
+      for (uint32_t x = 0; x < s->width; x++) {
+      row[x] = theme->accent_alt;
+      }
   }
-  font_draw_string(s, f, 4, 4, app->url, 0xA6ADC8);
+  font_draw_string(s, f, 4, 4, app->url, theme->text_muted);
 
   /* Render nodes */
   int32_t y = 28 - app->scroll_offset;
@@ -210,17 +230,17 @@ void html_viewer_paint(struct html_viewer_app *app) {
     switch (node->type) {
     case HTML_NODE_TAG_H1:
       y += 8;
-      if (y >= 0) font_draw_string(s, f, margin, y, node->text, 0xCBA6F7);
+      if (y >= 0) font_draw_string(s, f, margin, y, node->text, theme->accent);
       y += 20;
       break;
     case HTML_NODE_TAG_H2:
       y += 6;
-      if (y >= 0) font_draw_string(s, f, margin, y, node->text, 0x89DCEB);
+      if (y >= 0) font_draw_string(s, f, margin, y, node->text, theme->accent_alt);
       y += 18;
       break;
     case HTML_NODE_TAG_H3:
       y += 4;
-      if (y >= 0) font_draw_string(s, f, margin, y, node->text, 0xA6E3A1);
+      if (y >= 0) font_draw_string(s, f, margin, y, node->text, theme->text);
       y += 18;
       break;
     case HTML_NODE_TAG_P:
@@ -230,14 +250,14 @@ void html_viewer_paint(struct html_viewer_app *app) {
       break;
     case HTML_NODE_TAG_A:
       if (y >= 0) {
-        font_draw_string(s, f, margin, y, node->text, 0x89B4FA);
+        font_draw_string(s, f, margin, y, node->text, theme->accent);
         /* Underline */
         uint32_t tw = font_string_width(f, node->text);
         int32_t uy = y + (int32_t)f->glyph_height;
         if (uy >= 0 && (uint32_t)uy < s->height) {
           uint32_t *uline = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)uy * s->pitch);
           for (uint32_t ux = (uint32_t)margin; ux < (uint32_t)margin + tw && ux < s->width; ux++)
-            uline[ux] = 0x89B4FA;
+            uline[ux] = theme->accent;
         }
       }
       y += 18;
@@ -251,7 +271,7 @@ void html_viewer_paint(struct html_viewer_app *app) {
   }
 
   if (app->loading) {
-    font_draw_string(s, f, (int32_t)(s->width - 80), 4, "Loading...", 0xF9E2AF);
+    font_draw_string(s, f, (int32_t)(s->width - 80), 4, "Loading...", theme->text);
   }
 }
 

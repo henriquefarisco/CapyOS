@@ -1,10 +1,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "arch/x86/cpu/gdt.h"
-#include "arch/x86/cpu/idt.h"
-#include "arch/x86/cpu/isr.h"
-#include "arch/x86/hw/io.h"
+/* removed: legacy x86 gdt.h */
+/* removed: legacy x86 idt.h */
+#include "drivers/irq.h"
+#include "drivers/io.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/timer/pit.h"

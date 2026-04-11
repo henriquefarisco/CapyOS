@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "arch/x86_64/kernel_shell_dispatch.h"
 #include "arch/x86_64/storage_runtime.h"
 #include "core/system_init.h"
 #include "core/user.h"
@@ -43,6 +44,19 @@ static void local_copy(char *dst, size_t dst_size, const char *src) {
     }
   }
   dst[i] = '\0';
+}
+
+static int session_should_autostart_desktop(const struct user_record *user) {
+  if (!user || !user->username[0]) {
+    return 0;
+  }
+  if (shell_string_equal(user->username, "maintenance")) {
+    return 0;
+  }
+  if (shell_string_equal(user->role, "recovery")) {
+    return 0;
+  }
+  return 1;
 }
 
 static int state_ready(const struct x64_kernel_shell_runtime_state *state) {
@@ -350,5 +364,8 @@ int x64_kernel_begin_shell_session(
   }
   session_set_active(state->session_ctx);
   shell_context_init(state->shell_ctx, state->session_ctx, state->settings);
+  if (session_should_autostart_desktop(user)) {
+    state->desktop_autostart_pending = 1;
+  }
   return 0;
 }
