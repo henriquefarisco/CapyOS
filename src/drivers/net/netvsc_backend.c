@@ -1,11 +1,10 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "drivers/net/netvsc_backend.h"
 
 #ifndef UNIT_TEST
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 #endif
 
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 static void netvsc_log(const char *s) {
 #ifndef UNIT_TEST

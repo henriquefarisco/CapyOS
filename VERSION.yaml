@@ -1,5 +1,5 @@
 meta:
-  generated: 2026-03-05
+  generated: 2026-04-11
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
@@ -7,10 +7,13 @@ meta:
 channels:
   alpha:
     current: 0.8.0-alpha.0
-    extended: 0.8.0-alpha.0+20260305
+    extended: 0.8.0-alpha.0+20260411
     stability: experimental
-    summary: "Linha oficial x64 com boot por HDD provisionado, volume DATA cifrado e documentacao reorganizada"
+    summary: "Consolidacao de develop com desktop x64 estabilizado, limpeza do legado 32-bit, drivers ampliados e documentacao revisada"
     history:
+      - version: 0.8.0-alpha.0+20260411
+        date: 2026-04-11
+        summary: "Consolidacao em develop da trilha x64 com desktop mais responsivo, limpeza do legado 32-bit e refresh da documentacao"
       - version: 0.8.0-alpha.0
         date: 2026-03-05
         commit: 43e97c5

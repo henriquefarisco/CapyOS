@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "fs/block.h"
+#include "memory/kmem.h"
 #include "security/crypt.h"
 
 #define TEST_BLOCK_SIZE 4096u
@@ -33,6 +34,37 @@ static int mem_write_block(void *ctx, uint32_t block_no, const void *buffer) {
 static const struct block_device_ops k_mem_block_ops = {
     .read_block = mem_read_block,
     .write_block = mem_write_block,
+};
+
+struct mem_lba_device {
+  struct block_device dev;
+  uint8_t data[TEST_BLOCK_COUNT * 8u * 512u];
+};
+
+static int mem_lba_read_block(void *ctx, uint32_t block_no, void *buffer) {
+  struct mem_lba_device *mem = (struct mem_lba_device *)ctx;
+  if (!mem || !buffer || block_no >= mem->dev.block_count) {
+    return -1;
+  }
+  memcpy(buffer, mem->data + (size_t)block_no * mem->dev.block_size,
+         mem->dev.block_size);
+  return 0;
+}
+
+static int mem_lba_write_block(void *ctx, uint32_t block_no,
+                               const void *buffer) {
+  struct mem_lba_device *mem = (struct mem_lba_device *)ctx;
+  if (!mem || !buffer || block_no >= mem->dev.block_count) {
+    return -1;
+  }
+  memcpy(mem->data + (size_t)block_no * mem->dev.block_size, buffer,
+         mem->dev.block_size);
+  return 0;
+}
+
+static const struct block_device_ops k_mem_lba_ops = {
+    .read_block = mem_lba_read_block,
+    .write_block = mem_lba_write_block,
 };
 
 static uint8_t hex_nibble(char ch) {
@@ -198,11 +230,115 @@ static int test_aes_xts_vector(void) {
   return fails;
 }
 
+static int test_block0_with_wrappers(void) {
+  struct mem_lba_device mem512;
+  struct block_device base512;
+  struct block_device *slice = NULL;
+  struct block_device *chunked = NULL;
+  struct block_device *crypt_dev = NULL;
+  uint8_t key1[CRYPT_KEY_SIZE];
+  uint8_t key2[CRYPT_KEY_SIZE];
+  uint8_t *plain = NULL;
+  uint8_t *roundtrip = NULL;
+  int fails = 0;
+
+  memset(&mem512, 0, sizeof(mem512));
+  memset(&base512, 0, sizeof(base512));
+  mem512.dev.name = "mem512";
+  mem512.dev.block_size = 512u;
+  mem512.dev.block_count = TEST_BLOCK_COUNT * 8u;
+  mem512.dev.ctx = &mem512;
+  mem512.dev.ops = &k_mem_lba_ops;
+
+  base512 = mem512.dev;
+  slice = block_offset_wrap(&base512, 8u, TEST_BLOCK_COUNT * 8u - 8u);
+  chunked = slice ? block_chunked_wrap(slice, TEST_BLOCK_SIZE) : NULL;
+  if (!slice || !chunked) {
+    printf("[crypt_vectors] wrapper chain creation failed\n");
+    fails = 1;
+    goto cleanup;
+  }
+
+  for (uint32_t i = 0; i < CRYPT_KEY_SIZE; ++i) {
+    key1[i] = (uint8_t)(0xA0u + i);
+    key2[i] = (uint8_t)(0xC0u + i);
+  }
+
+  crypt_dev = crypt_init(chunked, key1, key2);
+  if (!crypt_dev) {
+    printf("[crypt_vectors] crypt_init(wrapper chain) failed\n");
+    fails = 1;
+    goto cleanup;
+  }
+
+  plain = (uint8_t *)kalloc(TEST_BLOCK_SIZE);
+  roundtrip = (uint8_t *)kalloc(TEST_BLOCK_SIZE);
+  if (!plain || !roundtrip) {
+    printf("[crypt_vectors] allocation failed\n");
+    fails = 1;
+    goto cleanup;
+  }
+
+  memset(plain, 0, TEST_BLOCK_SIZE);
+  plain[0] = 0x53u;
+  plain[1] = 0x46u;
+  plain[2] = 0x52u;
+  plain[3] = 0x4Eu;
+  plain[4] = 0x02u;
+  plain[8] = 0x00u;
+  plain[9] = 0x10u;
+  plain[10] = 0x00u;
+  plain[11] = 0x00u;
+  for (uint32_t i = 32u; i < TEST_BLOCK_SIZE; ++i) {
+    plain[i] = (uint8_t)((i * 13u + 7u) & 0xFFu);
+  }
+
+  if (block_device_write(crypt_dev, 0u, plain) != 0) {
+    printf("[crypt_vectors] wrapper-chain block0 write failed\n");
+    fails = 1;
+    goto cleanup;
+  }
+  memset(roundtrip, 0, TEST_BLOCK_SIZE);
+  if (block_device_read(crypt_dev, 0u, roundtrip) != 0) {
+    printf("[crypt_vectors] wrapper-chain block0 read failed\n");
+    fails = 1;
+    goto cleanup;
+  }
+  if (memcmp(plain, roundtrip, TEST_BLOCK_SIZE) != 0) {
+    printf("[crypt_vectors] wrapper-chain block0 roundtrip mismatch: "
+           "got %02X%02X%02X%02X expected %02X%02X%02X%02X\n",
+           roundtrip[0], roundtrip[1], roundtrip[2], roundtrip[3],
+           plain[0], plain[1], plain[2], plain[3]);
+    fails = 1;
+  }
+
+cleanup:
+  if (plain) {
+    kfree(plain);
+  }
+  if (roundtrip) {
+    kfree(roundtrip);
+  }
+  if (crypt_dev) {
+    crypt_free(crypt_dev);
+  }
+  if (chunked) {
+    kfree(chunked->ctx);
+    kfree(chunked);
+  }
+  if (slice) {
+    kfree(slice->ctx);
+    kfree(slice);
+  }
+  return fails;
+}
+
 int run_crypt_vector_tests(void) {
   int fails = 0;
   fails += test_sha256_vectors();
   fails += test_pbkdf2_vectors();
   fails += test_aes_xts_vector();
+  fails += test_block0_with_wrappers();
   if (fails == 0) {
     printf("[tests] crypt_vectors OK\n");
   }

@@ -74,15 +74,22 @@ static int com1_detect(void) {
   return 0;
 }
 
+extern void mouse_ps2_irq_handler(void);
+
 static int ps2_poll_scancode(uint8_t *out_scancode) {
   if (!out_scancode) {
     return 0;
   }
-  if (inb_local(0x64) & 0x01u) {
-    *out_scancode = inb_local(0x60);
-    return 1;
+  uint8_t status = inb_local(0x64);
+  if (!(status & 0x01u)) {
+    return 0;
   }
-  return 0;
+  if (status & 0x20u) {
+    mouse_ps2_irq_handler();
+    return 0;
+  }
+  *out_scancode = inb_local(0x60);
+  return 1;
 }
 
 static int com1_poll_char(char *out_char) {

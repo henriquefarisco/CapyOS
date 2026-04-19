@@ -1,8 +1,38 @@
 #include "security/crypt.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "memory/kmem.h"
+
+static inline void dbg_putc(char ch) {
+#ifdef UNIT_TEST
+  (void)ch;
+#else
+  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+#endif
+}
+
+static void dbg_puts(const char *s) {
+  while (s && *s) {
+    dbg_putc(*s++);
+  }
+}
+
+static void dbg_hex32(uint32_t value) {
+  static const char hex[] = "0123456789ABCDEF";
+  for (int shift = 28; shift >= 0; shift -= 4) {
+    dbg_putc(hex[(value >> shift) & 0xFu]);
+  }
+}
+
+static uint32_t dbg_be32(const uint8_t *buf) {
+  if (!buf) {
+    return 0;
+  }
+  return ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+         ((uint32_t)buf[2] << 8) | (uint32_t)buf[3];
+}
 
 static const uint32_t k256[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
@@ -605,10 +635,29 @@ static int crypt_read_block(void *ctx, uint32_t block_no, void *buffer) {
   }
   uint8_t *temp = crypt->scratch;
   if (block_device_read(crypt->lower, block_no, temp) != 0) {
+    dbg_puts("[crypt] lower read fail blk=");
+    dbg_hex32(block_no);
+    dbg_putc('\n');
     secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
     return -1;
   }
+  if (block_no == 0) {
+    dbg_putc('r');
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32(temp));
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32(temp + 4));
+    dbg_putc('\n');
+  }
   xts_crypt(crypt, block_no, temp, (uint8_t *)buffer, 0);
+  if (block_no == 0) {
+    dbg_putc('D');
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32((const uint8_t *)buffer));
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32((const uint8_t *)buffer + 4));
+    dbg_putc('\n');
+  }
   secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
   return 0;
 }
@@ -622,8 +671,29 @@ static int crypt_write_block(void *ctx, uint32_t block_no, const void *buffer) {
     return -1;
   }
   uint8_t *temp = crypt->scratch;
+  if (block_no == 0) {
+    dbg_putc('C');
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32((const uint8_t *)buffer));
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32((const uint8_t *)buffer + 4));
+    dbg_putc('\n');
+  }
   xts_crypt(crypt, block_no, (const uint8_t *)buffer, temp, 1);
+  if (block_no == 0) {
+    dbg_putc('c');
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32(temp));
+    dbg_putc(' ');
+    dbg_hex32(dbg_be32(temp + 4));
+    dbg_putc('\n');
+  }
   int result = block_device_write(crypt->lower, block_no, temp);
+  if (result != 0) {
+    dbg_puts("[crypt] lower write fail blk=");
+    dbg_hex32(block_no);
+    dbg_putc('\n');
+  }
   secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
   return result;
 }

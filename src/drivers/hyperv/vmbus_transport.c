@@ -1,16 +1,15 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "vmbus_transport.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "arch/x86_64/interrupts.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include "drivers/hyperv/hyperv.h"
 
 extern void *kmalloc_aligned(uint64_t size, uint64_t alignment);
 extern void kfree_aligned(void *ptr);
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 
 #define HV_HYPERCALL_ENABLE 0x00000001UL
 #define HV_SCONTROL_ENABLE 0x00000001UL

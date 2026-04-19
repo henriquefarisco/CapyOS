@@ -102,6 +102,10 @@ struct acpi_fadt {
   uint64_t hypervisor_vendor_identity;
 } __attribute__((packed));
 
+extern int g_acpi_initialized;
+extern uint64_t g_rsdp_override;
+extern uint64_t g_efi_system_table;
+
 void acpi_set_rsdp(uint64_t rsdp_addr);
 void acpi_set_uefi_system_table(uint64_t system_table_addr);
 

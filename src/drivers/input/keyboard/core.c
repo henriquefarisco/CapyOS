@@ -1,9 +1,11 @@
-/* keyboard/core.c: IRQ handler and scancode translation with dead keys. */
+/* keyboard/core.c: IRQ handler and scancode translation with dead keys.
+ * Supports Shift, AltGr (Right Alt), Caps Lock, Ctrl, arrow keys, F-keys,
+ * Home/End/PgUp/PgDn, Insert/Delete. */
 #include <stddef.h>
 #include <stdint.h>
 
-#include "arch/x86/cpu/isr.h"
-#include "arch/x86/hw/io.h"
+#include "drivers/irq.h"
+#include "drivers/io.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/input/keyboard_compose.h"
@@ -15,8 +17,11 @@ static int g_layouts_initialized = 0;
 
 static const struct keyboard_layout *current_layout = NULL;
 static int shift_on = 0;
+static int ctrl_on = 0;
+static int altgr_on = 0;
+static int capslock_on = 0;
 static int extended_prefix = 0;
-static char g_dead_accent = 0; // '\'', '`', '^', '~', '"' for diaeresis
+static char g_dead_accent = 0;
 static keyboard_hotkey_callback g_help_hotkey = NULL;
 
 static void keyboard_init_layout_table(void) {
@@ -35,57 +40,139 @@ static void keyboard_apply_layout(const struct keyboard_layout *layout) {
   }
 }
 
-static int is_dead_key(uint8_t sc, char ch, int shift_active) {
+static int is_dead_key(uint8_t sc, char ch, int shift_active, int altgr_active) {
   if (!current_layout) {
     return 0;
   }
   uint8_t flags = current_layout->dead[sc];
-  int dead = shift_active ? (flags & 0x2) : (flags & 0x1);
+  int dead = 0;
+  if (altgr_active)
+    dead = (flags & 0x4);
+  else if (shift_active)
+    dead = (flags & 0x2);
+  else
+    dead = (flags & 0x1);
   if (!dead) {
     return 0;
   }
   return keyboard_compose_is_dead_accent(ch);
 }
 
-static uint8_t normalize_extended_scancode(uint8_t scancode) {
-  if (scancode == 0x35u) {
-    return 0x73u;
+static int is_alpha(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static char toggle_case(char c) {
+  if (c >= 'a' && c <= 'z') return (char)(c - 32);
+  if (c >= 'A' && c <= 'Z') return (char)(c + 32);
+  return c;
+}
+
+static char handle_extended_key(uint8_t sc) {
+  switch (sc) {
+  case 0x48: return (char)KEY_UP;
+  case 0x50: return (char)KEY_DOWN;
+  case 0x4B: return (char)KEY_LEFT;
+  case 0x4D: return (char)KEY_RIGHT;
+  case 0x47: return (char)KEY_HOME;
+  case 0x4F: return (char)KEY_END;
+  case 0x49: return (char)KEY_PGUP;
+  case 0x51: return (char)KEY_PGDN;
+  case 0x52: return (char)KEY_INSERT;
+  case 0x53: return (char)KEY_DELETE;
+  case 0x35: return '/';
+  case 0x1C: return '\n';
+  default:   return 0;
   }
-  return scancode;
+}
+
+static char handle_fkey(uint8_t sc) {
+  if (sc >= 0x3B && sc <= 0x44)
+    return (char)(KEY_F1 + (sc - 0x3B));
+  if (sc == 0x57) return (char)KEY_F11;
+  if (sc == 0x58) return (char)KEY_F12;
+  return 0;
 }
 
 static void keyboard_irq(void) {
-  uint8_t sc = inb(0x60);
+  uint8_t status = inb(0x64);
+  if (!(status & 0x01)) return;
+  if (status & 0x20) {
+    extern void mouse_ps2_irq_handler(void);
+    mouse_ps2_irq_handler();
+    return;
+  }
+  uint8_t raw_sc = inb(0x60);
   int is_break = 0;
-  csprng_feed_entropy((uint32_t)sc);
+  int is_extended = 0;
+  uint8_t sc;
+  csprng_feed_entropy((uint32_t)raw_sc);
 
-  if (sc == 0xE0u) {
+  if (raw_sc == 0xE0u) {
     extended_prefix = 1;
     return;
   }
-
-  is_break = (sc & 0x80u) ? 1 : 0;
-  sc &= 0x7Fu;
-  if (extended_prefix) {
-    sc = normalize_extended_scancode(sc);
-    extended_prefix = 0;
+  if (raw_sc == 0xE1u) {
+    return;
   }
 
-  if (sc == 0x2A || sc == 0x36) {
+  is_break = (raw_sc & 0x80u) ? 1 : 0;
+  sc = raw_sc & 0x7Fu;
+  is_extended = extended_prefix;
+  extended_prefix = 0;
+
+  /* Modifier keys */
+  if (sc == 0x2A || (!is_extended && sc == 0x36)) {
     shift_on = is_break ? 0 : 1;
     return;
   }
+  if (!is_extended && sc == 0x1D) {
+    ctrl_on = is_break ? 0 : 1;
+    return;
+  }
+  if (is_extended && sc == 0x1D) {
+    ctrl_on = is_break ? 0 : 1;
+    return;
+  }
+  if (is_extended && sc == 0x38) {
+    altgr_on = is_break ? 0 : 1;
+    return;
+  }
+  if (!is_extended && sc == 0x38) {
+    return;
+  }
+  if (sc == 0x3A && !is_break) {
+    capslock_on = !capslock_on;
+    return;
+  }
+
   if (is_break) {
     return;
   }
 
-  if (sc == 0x3B) { // F1 - help
-    if (g_help_hotkey) {
-      g_help_hotkey();
+  /* Extended keys: arrows, home, end, pgup, pgdn, ins, del, numpad enter */
+  if (is_extended) {
+    char special = handle_extended_key(sc);
+    if (special) {
+      tty_handle_char(special);
     }
     return;
   }
 
+  /* F-keys */
+  {
+    char fk = handle_fkey(sc);
+    if (fk) {
+      if (sc == 0x3B && g_help_hotkey) {
+        g_help_hotkey();
+        return;
+      }
+      tty_handle_char(fk);
+      return;
+    }
+  }
+
+  /* Backspace / Enter */
   if (sc == 0x0E) {
     tty_handle_backspace();
     return;
@@ -99,14 +186,42 @@ static void keyboard_irq(void) {
     return;
   }
 
-  const char *mapping = shift_on ? current_layout->shift : current_layout->base;
+  /* Ctrl combos */
+  if (ctrl_on) {
+    char base_ch = current_layout->base[sc];
+    if (base_ch >= 'a' && base_ch <= 'z') {
+      char ctrl_ch = (char)(base_ch - 'a' + 1);
+      tty_handle_char(ctrl_ch);
+      return;
+    }
+    return;
+  }
+
+  /* Select mapping: AltGr > Shift > Base */
+  const char *mapping;
+  int dead_layer = 0;
+  if (altgr_on && current_layout->altgr[sc]) {
+    mapping = current_layout->altgr;
+    dead_layer = 2;
+  } else if (shift_on) {
+    mapping = current_layout->shift;
+    dead_layer = 1;
+  } else {
+    mapping = current_layout->base;
+    dead_layer = 0;
+  }
+
   char ch = mapping[sc];
   char pending = 0;
-  if (!ch)
-    return;
+  if (!ch) return;
+
+  /* Caps Lock: toggle case for alphabetic characters */
+  if (capslock_on && is_alpha(ch)) {
+    ch = toggle_case(ch);
+  }
 
   if (!keyboard_compose_step(&g_dead_accent, &pending, ch,
-                             is_dead_key(sc, ch, shift_on), &ch)) {
+                             is_dead_key(sc, ch, dead_layer == 1, dead_layer == 2), &ch)) {
     return;
   }
 

@@ -1,8 +1,7 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "drivers/storage/storvsc_backend.h"
 
 #ifndef UNIT_TEST
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 #endif
 
 static void storvsc_log(const char *s) {

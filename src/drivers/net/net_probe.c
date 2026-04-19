@@ -1,6 +1,6 @@
 #include "drivers/net/net_probe.h"
 
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/pcie.h"
 
@@ -91,6 +91,9 @@ int net_probe_kind_runtime_supported(uint8_t kind) {
   case NET_NIC_KIND_E1000:
   case NET_NIC_KIND_TULIP:
   case NET_NIC_KIND_HYPERV_NETVSC:
+  case NET_NIC_KIND_VIRTIO_NET:
+  case NET_NIC_KIND_RTL8139:
+  case NET_NIC_KIND_VMXNET3:
     return 1;
   default:
     return 0;

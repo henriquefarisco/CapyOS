@@ -1,7 +1,8 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
+#include "fs/vfs.h"
+#include "lang/localization.h"
 #include "drivers/video/vga.h"
 
 enum fs_manage_text_id {
@@ -213,10 +214,75 @@ static const char *fs_manage_text(const char *language,
     }
 }
 
+static const char *fs_manage_vfs_reason(const char *language, int rc) {
+    switch (rc < 0 ? -rc : rc) {
+    case VFS_ERR_ALREADY_EXISTS:
+        return localization_select(language, "ja existe", "already exists",
+                                   "ya existe");
+    case VFS_ERR_PERMISSION_DENIED:
+        return localization_select(language, "permissao negada",
+                                   "permission denied",
+                                   "permiso denegado");
+    case VFS_ERR_NOT_FOUND:
+        return localization_select(language, "alvo inexistente",
+                                   "target does not exist",
+                                   "objetivo inexistente");
+    case VFS_ERR_NOT_DIRECTORY:
+        return localization_select(language, "nao e diretorio",
+                                   "not a directory",
+                                   "no es un directorio");
+    case VFS_ERR_IS_DIRECTORY:
+        return localization_select(language, "e um diretorio",
+                                   "is a directory",
+                                   "es un directorio");
+    case VFS_ERR_DIR_NOT_EMPTY:
+        return localization_select(language, "diretorio nao esta vazio",
+                                   "directory is not empty",
+                                   "el directorio no esta vacio");
+    case VFS_ERR_NAME_TOO_LONG:
+        return localization_select(language, "nome muito longo",
+                                   "name too long",
+                                   "nombre demasiado largo");
+    case VFS_ERR_UNSUPPORTED:
+        return localization_select(language, "operacao nao suportada",
+                                   "operation not supported",
+                                   "operacion no soportada");
+    case VFS_ERR_INVALID_PATH:
+        return localization_select(language, "caminho invalido",
+                                   "invalid path",
+                                   "ruta invalida");
+    case VFS_ERR_INVALID_ARGUMENT:
+        return localization_select(language, "argumento invalido",
+                                   "invalid argument",
+                                   "argumento invalido");
+    case VFS_ERR_NO_MEMORY:
+        return localization_select(language, "memoria insuficiente",
+                                   "out of memory",
+                                   "memoria insuficiente");
+    case VFS_ERR_IO:
+        return localization_select(language, "falha de entrada/saida",
+                                   "input/output failure",
+                                   "fallo de entrada/salida");
+    default:
+        return vfs_error_string(rc);
+    }
+}
+
+static void fs_manage_print_vfs_error(const char *language, const char *prefix,
+                                      int rc) {
+    shell_print("[erro] ");
+    if (prefix && prefix[0]) {
+        shell_print(prefix);
+        shell_print(": ");
+    }
+    shell_print(fs_manage_vfs_reason(language, rc));
+    shell_newline();
+}
+
 static int shell_dir_recursive(struct shell_context *ctx, const char *input) {
     char abs_path[SHELL_PATH_BUFFER];
     if (session_resolve_path(ctx->session, input, abs_path, sizeof(abs_path)) != 0) {
-        return -1;
+        return -VFS_ERR_INVALID_PATH;
     }
     shell_trim_trailing_slash(abs_path);
     if (shell_cstring_length(abs_path) == 0) {
@@ -242,12 +308,12 @@ static int shell_dir_recursive(struct shell_context *ctx, const char *input) {
         if (len > 0) {
             if (build_len > 1) {
                 if (build_len + 1 >= sizeof(build)) {
-                    return -1;
+                    return -VFS_ERR_NAME_TOO_LONG;
                 }
                 build[build_len++] = '/';
             }
             if (build_len + len >= sizeof(build)) {
-                return -1;
+                return -VFS_ERR_NAME_TOO_LONG;
             }
             for (size_t i = 0; i < len; ++i) {
                 build[build_len++] = start[i];
@@ -257,8 +323,9 @@ static int shell_dir_recursive(struct shell_context *ctx, const char *input) {
             struct dentry *d = NULL;
             if (vfs_lookup(build, &d) != 0) {
                 struct vfs_metadata meta = { uid, gid, 0755 };
-                if (vfs_create(build, VFS_MODE_DIR, &meta) != 0) {
-                    return -1;
+                int rc = vfs_create(build, VFS_MODE_DIR, &meta);
+                if (rc != 0) {
+                    return rc;
                 }
             } else {
                 if (d->refcount) {
@@ -266,7 +333,7 @@ static int shell_dir_recursive(struct shell_context *ctx, const char *input) {
                 }
                 struct vfs_stat st;
                 if (vfs_stat_path(build, &st) == 0 && (st.mode & VFS_MODE_DIR) == 0) {
-                    return -2;
+                    return -VFS_ERR_NOT_DIRECTORY;
                 }
             }
         }
@@ -303,11 +370,14 @@ static int cmd_mk_file(struct shell_context *ctx, int argc, char **argv) {
     }
     struct vfs_metadata meta;
     shell_fill_metadata(ctx, VFS_MODE_FILE, &meta);
-    if (vfs_create(path, VFS_MODE_FILE, &meta) != 0) {
-        shell_print_error(
-            fs_manage_text(language, FS_MANAGE_CANNOT_CREATE_FILE));
+    {
+        int rc = vfs_create(path, VFS_MODE_FILE, &meta);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(
+            language, fs_manage_text(language, FS_MANAGE_CANNOT_CREATE_FILE), rc);
         shell_suggest_help("mk-file");
         return -1;
+        }
     }
     shell_print_ok(path);
     return 0;
@@ -324,10 +394,15 @@ static int cmd_mk_dir(struct shell_context *ctx, int argc, char **argv) {
         shell_suggest_help("mk-dir");
         return -1;
     }
-    if (shell_dir_recursive(ctx, argv[1]) != 0) {
-        shell_print_error(fs_manage_text(language, FS_MANAGE_CANNOT_CREATE_DIR));
+    {
+        int rc = shell_dir_recursive(ctx, argv[1]);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_CANNOT_CREATE_DIR),
+                                  rc);
         shell_suggest_help("mk-dir");
         return -1;
+        }
     }
     shell_print_ok(argv[1]);
     return 0;
@@ -352,10 +427,14 @@ static int cmd_kill_file(struct shell_context *ctx, int argc, char **argv) {
         return -1;
     }
     shell_trim_trailing_slash(path);
-    if (vfs_unlink(path) != 0) {
-        shell_print_error(fs_manage_text(language, FS_MANAGE_REMOVE_FAILED));
+    {
+        int rc = vfs_unlink(path);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_REMOVE_FAILED), rc);
         shell_suggest_help("kill-file");
         return -1;
+        }
     }
     shell_print_ok(fs_manage_text(language, FS_MANAGE_REMOVED));
     return 0;
@@ -380,10 +459,14 @@ static int cmd_kill_dir(struct shell_context *ctx, int argc, char **argv) {
         return -1;
     }
     shell_trim_trailing_slash(path);
-    if (vfs_rmdir(path) != 0) {
-        shell_print_error(fs_manage_text(language, FS_MANAGE_REMOVE_FAILED));
+    {
+        int rc = vfs_rmdir(path);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_REMOVE_FAILED), rc);
         shell_suggest_help("kill-dir");
         return -1;
+        }
     }
     shell_print_ok(fs_manage_text(language, FS_MANAGE_DIR_REMOVED));
     return 0;
@@ -424,10 +507,14 @@ static int cmd_move(struct shell_context *ctx, int argc, char **argv) {
         }
         shell_copy(dst_path, sizeof(dst_path), combined);
     }
-    if (vfs_rename(src_path, dst_path) != 0) {
-        shell_print_error(fs_manage_text(language, FS_MANAGE_CANNOT_MOVE));
+    {
+        int rc = vfs_rename(src_path, dst_path);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_CANNOT_MOVE), rc);
         shell_suggest_help("move");
         return -1;
+        }
     }
     shell_print_ok(dst_path);
     return 0;
@@ -481,11 +568,14 @@ static int cmd_clone(struct shell_context *ctx, int argc, char **argv) {
 
     struct vfs_metadata meta;
     shell_fill_metadata(ctx, VFS_MODE_FILE, &meta);
-    if (vfs_create(dst_path, VFS_MODE_FILE, &meta) != 0) {
-        shell_print_error(
-            fs_manage_text(language, FS_MANAGE_CANNOT_CREATE_DEST));
+    {
+        int rc = vfs_create(dst_path, VFS_MODE_FILE, &meta);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(
+            language, fs_manage_text(language, FS_MANAGE_CANNOT_CREATE_DEST), rc);
         shell_suggest_help("clone");
         return -1;
+        }
     }
 
     struct file *src = shell_open_file_read(src_path);
@@ -494,7 +584,9 @@ static int cmd_clone(struct shell_context *ctx, int argc, char **argv) {
         if (src) vfs_close(src);
         if (dst) vfs_close(dst);
         vfs_unlink(dst_path);
-        shell_print_error(fs_manage_text(language, FS_MANAGE_OPEN_FAILED));
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_OPEN_FAILED),
+                                  vfs_last_error());
         shell_suggest_help("clone");
         return -1;
     }
@@ -532,10 +624,14 @@ static int cmd_stats_file(struct shell_context *ctx, int argc, char **argv) {
     }
     shell_trim_trailing_slash(path);
     struct vfs_stat st;
-    if (vfs_stat_path(path, &st) != 0) {
-        shell_print_error(fs_manage_text(language, FS_MANAGE_CANNOT_STAT));
+    {
+        int rc = vfs_stat_path(path, &st);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_CANNOT_STAT), rc);
         shell_suggest_help("stats-file");
         return -1;
+        }
     }
     shell_print(fs_manage_text(language, FS_MANAGE_TARGET_LABEL));
     shell_print(path);
@@ -581,9 +677,13 @@ static int cmd_type(struct shell_context *ctx, int argc, char **argv) {
     }
     shell_trim_trailing_slash(path);
     struct vfs_stat st;
-    if (vfs_stat_path(path, &st) != 0) {
-        shell_print_error(fs_manage_text(language, FS_MANAGE_TARGET_MISSING));
+    {
+        int rc = vfs_stat_path(path, &st);
+        if (rc != 0) {
+        fs_manage_print_vfs_error(language,
+                                  fs_manage_text(language, FS_MANAGE_TARGET_MISSING), rc);
         return -1;
+        }
     }
     shell_print(path);
     shell_print(fs_manage_text(language, FS_MANAGE_TYPE_SUFFIX));
@@ -606,7 +706,7 @@ static int cmd_type(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static struct shell_command g_fs_manage_commands[8];
+static struct shell_command g_fs_manage_commands[10];
 static int g_fs_manage_commands_initialized = 0;
 
 static void init_fs_manage_commands(void) {
@@ -629,13 +729,17 @@ static void init_fs_manage_commands(void) {
     g_fs_manage_commands[6].handler = cmd_stats_file;
     g_fs_manage_commands[7].name = "type";
     g_fs_manage_commands[7].handler = cmd_type;
+    g_fs_manage_commands[8].name = "touch";
+    g_fs_manage_commands[8].handler = cmd_mk_file;
+    g_fs_manage_commands[9].name = "mkdir";
+    g_fs_manage_commands[9].handler = cmd_mk_dir;
     g_fs_manage_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_filesystem_manage(size_t *count) {
     init_fs_manage_commands();
     if (count) {
-        *count = 8;
+        *count = 10;
     }
     return g_fs_manage_commands;
 }

@@ -1,3 +1,4 @@
+#pragma GCC optimize("O0")
 #include "kernel/scheduler.h"
 #include "kernel/task.h"
 #include <stddef.h>
@@ -5,9 +6,11 @@
 static struct task *run_queue_head = NULL;
 static struct task *run_queue_tail = NULL;
 static struct task *idle_task = NULL;
-static enum scheduler_policy current_policy = SCHED_POLICY_ROUND_ROBIN;
+static enum scheduler_policy current_policy = SCHED_POLICY_COOPERATIVE;
 static struct scheduler_stats stats;
 static int sched_running = 0;
+
+#define SCHED_DEFAULT_QUANTUM 10
 
 extern void context_switch(struct task_context *old, struct task_context *new_ctx);
 extern void task_set_current(struct task *t);
@@ -163,6 +166,16 @@ void scheduler_tick(void) {
   stats.runnable_count = runnable;
 
   if (current_policy != SCHED_POLICY_COOPERATIVE) {
+    struct task *current = task_current();
+    if (current && current->state == TASK_STATE_RUNNING && current != idle_task) {
+      if (current->quantum_remaining > 0)
+        current->quantum_remaining--;
+      if (current->quantum_remaining == 0) {
+        current->quantum_remaining = SCHED_DEFAULT_QUANTUM;
+        schedule();
+        return;
+      }
+    }
     schedule();
   }
 }

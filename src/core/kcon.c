@@ -1,10 +1,9 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "core/kcon.h"
 
 #include <stdint.h>
 
 #ifdef __x86_64__
-extern void fbcon_print(const char *s);
-extern void fbcon_putc(char c);
 #define KCON_PUTC(c) fbcon_putc(c)
 #define KCON_PUTS(s) fbcon_print(s)
 #else

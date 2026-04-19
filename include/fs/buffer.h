@@ -27,6 +27,7 @@ void buffer_mark_dirty(struct buffer_head *bh);
 int buffer_write_back(struct buffer_head *bh);
 void buffer_release(struct buffer_head *bh);
 int buffer_cache_sync(struct block_device *dev);
+void buffer_cache_invalidate(struct block_device *dev);
 int buffer_cache_last_error_block(uint32_t *out_block_no);
 int buffer_cache_last_error_code(void);
 

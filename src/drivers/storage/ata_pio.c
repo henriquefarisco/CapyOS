@@ -1,7 +1,7 @@
 // Minimal ATA PIO with primary/secondary channels and master/slave (LBA28)
 // Enhanced logging and device detection for better diagnostics
 
-#include "arch/x86/hw/io.h"
+#include "drivers/io.h"
 #include "drivers/video/vga.h"
 #include "fs/block.h"
 #include <stdint.h>

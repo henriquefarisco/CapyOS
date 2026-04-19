@@ -1,6 +1,6 @@
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/apic.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 

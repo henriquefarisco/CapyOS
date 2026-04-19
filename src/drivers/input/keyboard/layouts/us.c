@@ -23,5 +23,6 @@ const struct keyboard_layout g_keyboard_layout_us = {
 /*0x60*/ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 /*0x70*/ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
     },
+    .altgr = { 0 },
     .dead = { 0 }
 };

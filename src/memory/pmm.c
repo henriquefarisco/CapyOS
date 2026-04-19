@@ -145,3 +145,25 @@ int pmm_is_free(uint64_t phys_addr) {
   if (page >= pmm_total_pages) return 0;
   return bitmap_test(page) ? 0 : 1;
 }
+
+int pmm_low_memory(void) {
+  uint64_t threshold = pmm_total_pages / 16;
+  if (threshold < 32) threshold = 32;
+  return pmm_free_count < threshold;
+}
+
+static void (*pmm_reclaim_cb)(void) = NULL;
+
+void pmm_set_reclaim_callback(void (*cb)(void)) {
+  pmm_reclaim_cb = cb;
+}
+
+uint64_t pmm_alloc_page_reclaim(void) {
+  uint64_t page = pmm_alloc_page();
+  if (page) return page;
+  if (pmm_reclaim_cb) {
+    pmm_reclaim_cb();
+    page = pmm_alloc_page();
+  }
+  return page;
+}

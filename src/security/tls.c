@@ -1,18 +1,315 @@
 #include "security/tls.h"
-#include "security/crypt.h"
+
 #include "security/csprng.h"
-#include "net/socket.h"
+#include "drivers/rtc/rtc.h"
 #include "memory/kmem.h"
+#include "net/socket.h"
+#include "tls_trust_anchors.h"
+
+#include "bearssl.h"
 #include <stddef.h>
 
-static void tls_memset(void *d, int v, size_t n) {
-  uint8_t *p = (uint8_t *)d; for (size_t i = 0; i < n; i++) p[i] = (uint8_t)v;
+struct tls_context {
+  int socket_fd;
+  enum tls_state state;
+  int error_code;
+  int verify_peer;
+  uint32_t timeout_ms;
+  uint16_t negotiated_version;
+  uint16_t cipher_suite;
+  uint32_t trust_anchor_count;
+  int peer_verified;
+  int hostname_validated;
+  char selected_alpn[TLS_ALPN_MAX_LEN];
+  br_x509_trust_anchor custom_anchor;
+  unsigned char *custom_anchor_dn;
+  unsigned char *custom_anchor_key_a;
+  unsigned char *custom_anchor_key_b;
+  int custom_anchor_loaded;
+  br_ssl_client_context client;
+  br_x509_minimal_context x509;
+  br_sslio_context io;
+  unsigned char *iobuf;
+};
+
+static enum tls_state g_tls_last_state = TLS_STATE_INIT;
+static int g_tls_last_error = 0;
+static struct tls_security_info g_tls_last_info;
+static const char *g_tls_alpn_protocols[] = { "http/1.1" };
+
+static void tls_memzero(void *ptr, size_t len) {
+  uint8_t *p = (uint8_t *)ptr;
+  while (len-- > 0) {
+    *p++ = 0;
+  }
 }
-static void tls_memcpy(void *d, const void *s, size_t n) {
-  uint8_t *dp = (uint8_t *)d; const uint8_t *sp = (const uint8_t *)s;
-  for (size_t i = 0; i < n; i++) dp[i] = sp[i];
+
+static void tls_copy_string(char *dst, size_t dst_len, const char *src) {
+  size_t i = 0;
+  if (!dst || dst_len == 0) {
+    return;
+  }
+  if (!src) {
+    dst[0] = '\0';
+    return;
+  }
+  while (src[i] && i + 1 < dst_len) {
+    dst[i] = src[i];
+    i++;
+  }
+  dst[i] = '\0';
 }
-static size_t tls_strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
+
+static void tls_reset_security_info(struct tls_context *ctx) {
+  if (!ctx) {
+    return;
+  }
+  ctx->negotiated_version = 0;
+  ctx->cipher_suite = 0;
+  ctx->trust_anchor_count = 0;
+  ctx->peer_verified = 0;
+  ctx->hostname_validated = 0;
+  ctx->selected_alpn[0] = '\0';
+}
+
+static void tls_reset_last_security_info(void) {
+  tls_memzero(&g_tls_last_info, sizeof(g_tls_last_info));
+}
+
+static void tls_publish_security_info(struct tls_context *ctx) {
+  if (!ctx) return;
+  g_tls_last_info.protocol_version = ctx->negotiated_version;
+  g_tls_last_info.cipher_suite = ctx->cipher_suite;
+  g_tls_last_info.trust_anchor_count = ctx->trust_anchor_count;
+  g_tls_last_info.peer_verified = ctx->peer_verified;
+  g_tls_last_info.hostname_validated = ctx->hostname_validated;
+  g_tls_last_info.custom_anchor_loaded = ctx->custom_anchor_loaded;
+  tls_copy_string(g_tls_last_info.alpn, sizeof(g_tls_last_info.alpn),
+                  ctx->selected_alpn);
+}
+
+static void tls_record_success(struct tls_context *ctx, enum tls_state state) {
+  g_tls_last_state = state;
+  g_tls_last_error = 0;
+  if (ctx) {
+    ctx->state = state;
+    ctx->error_code = 0;
+    tls_publish_security_info(ctx);
+  }
+}
+
+static void tls_record_failure(struct tls_context *ctx, int error) {
+  g_tls_last_state = TLS_STATE_ERROR;
+  g_tls_last_error = error;
+  if (ctx) {
+    ctx->state = TLS_STATE_ERROR;
+    ctx->error_code = error;
+    tls_publish_security_info(ctx);
+  }
+}
+
+static int tls_engine_error(struct tls_context *ctx, int fallback) {
+  int err;
+  if (!ctx) {
+    return fallback;
+  }
+  err = br_ssl_engine_last_error(&ctx->client.eng);
+  return err != 0 ? err : fallback;
+}
+
+static void tls_seed_engine(struct tls_context *ctx) {
+  uint8_t seed[48];
+  csprng_fill(seed, sizeof(seed));
+  br_ssl_engine_inject_entropy(&ctx->client.eng, seed, sizeof(seed));
+  tls_memzero(seed, sizeof(seed));
+}
+
+static void tls_set_validation_time(struct tls_context *ctx) {
+  uint64_t unix_time;
+  uint32_t days;
+  uint32_t seconds;
+
+  if (!ctx) {
+    return;
+  }
+  unix_time = rtc_unix_timestamp();
+  days = 719528u + (uint32_t)(unix_time / 86400ULL);
+  seconds = (uint32_t)(unix_time % 86400ULL);
+  br_x509_minimal_set_time(&ctx->x509, days, seconds);
+}
+
+static void tls_capture_session(struct tls_context *ctx) {
+  br_ssl_session_parameters session;
+  const char *selected_alpn;
+
+  if (!ctx) {
+    return;
+  }
+
+  tls_memzero(&session, sizeof(session));
+  br_ssl_engine_get_session_parameters(&ctx->client.eng, &session);
+  ctx->negotiated_version = session.version;
+  ctx->cipher_suite = session.cipher_suite;
+  ctx->trust_anchor_count = ctx->custom_anchor_loaded ? 1u
+                              : (uint32_t)capyos_tls_trust_anchor_count();
+  ctx->peer_verified = 1;
+  ctx->hostname_validated = ctx->verify_peer ? 1 : 0;
+
+  selected_alpn = br_ssl_engine_get_selected_protocol(&ctx->client.eng);
+  tls_copy_string(ctx->selected_alpn, sizeof(ctx->selected_alpn), selected_alpn);
+  tls_memzero(session.master_secret, sizeof(session.master_secret));
+  tls_publish_security_info(ctx);
+}
+
+struct tls_dn_capture {
+  unsigned char *buf;
+  size_t len;
+  size_t cap;
+  int overflow;
+};
+
+static void tls_capture_dn_append(void *capture_ctx, const void *buf, size_t len) {
+  struct tls_dn_capture *capture = (struct tls_dn_capture *)capture_ctx;
+  const unsigned char *src = (const unsigned char *)buf;
+  if (!capture || !src || len == 0) return;
+  if (capture->len + len > capture->cap) {
+    capture->overflow = 1;
+    return;
+  }
+  for (size_t i = 0; i < len; i++) {
+    capture->buf[capture->len + i] = src[i];
+  }
+  capture->len += len;
+}
+
+static void tls_free_custom_anchor(struct tls_context *ctx) {
+  if (!ctx) return;
+  if (ctx->custom_anchor_key_b) {
+    kfree(ctx->custom_anchor_key_b);
+    ctx->custom_anchor_key_b = NULL;
+  }
+  if (ctx->custom_anchor_key_a) {
+    kfree(ctx->custom_anchor_key_a);
+    ctx->custom_anchor_key_a = NULL;
+  }
+  if (ctx->custom_anchor_dn) {
+    kfree(ctx->custom_anchor_dn);
+    ctx->custom_anchor_dn = NULL;
+  }
+  tls_memzero(&ctx->custom_anchor, sizeof(ctx->custom_anchor));
+  ctx->custom_anchor_loaded = 0;
+}
+
+static int tls_load_custom_anchor(struct tls_context *ctx,
+                                  const uint8_t *cert, size_t cert_len) {
+  br_x509_decoder_context decoder;
+  struct tls_dn_capture capture;
+  br_x509_pkey *pkey;
+
+  if (!ctx || !cert || cert_len == 0 || cert_len > TLS_MAX_CERT_SIZE) {
+    return BR_ERR_BAD_PARAM;
+  }
+  if (cert_len > 27 &&
+      cert[0] == '-' && cert[1] == '-' && cert[2] == '-' && cert[3] == '-' &&
+      cert[4] == '-' && cert[5] == 'B') {
+    return BR_ERR_X509_UNSUPPORTED;
+  }
+
+  tls_free_custom_anchor(ctx);
+  capture.buf = (unsigned char *)kmalloc(cert_len);
+  if (!capture.buf) {
+    return BR_ERR_IO;
+  }
+  capture.len = 0;
+  capture.cap = cert_len;
+  capture.overflow = 0;
+
+  br_x509_decoder_init(&decoder, tls_capture_dn_append, &capture);
+  br_x509_decoder_push(&decoder, cert, cert_len);
+  if (capture.overflow || br_x509_decoder_last_error(&decoder) != 0) {
+    kfree(capture.buf);
+    return br_x509_decoder_last_error(&decoder);
+  }
+
+  pkey = br_x509_decoder_get_pkey(&decoder);
+  if (!pkey || capture.len == 0) {
+    kfree(capture.buf);
+    return BR_ERR_X509_TRUNCATED;
+  }
+
+  ctx->custom_anchor_dn = (unsigned char *)kmalloc(capture.len);
+  if (!ctx->custom_anchor_dn) {
+    kfree(capture.buf);
+    return BR_ERR_IO;
+  }
+  for (size_t i = 0; i < capture.len; i++) {
+    ctx->custom_anchor_dn[i] = capture.buf[i];
+  }
+  kfree(capture.buf);
+
+  ctx->custom_anchor.dn.data = ctx->custom_anchor_dn;
+  ctx->custom_anchor.dn.len = capture.len;
+  ctx->custom_anchor.flags = br_x509_decoder_isCA(&decoder) ? BR_X509_TA_CA : 0;
+  ctx->custom_anchor.pkey.key_type = pkey->key_type;
+
+  if (pkey->key_type == BR_KEYTYPE_RSA) {
+    ctx->custom_anchor_key_a = (unsigned char *)kmalloc(pkey->key.rsa.nlen);
+    ctx->custom_anchor_key_b = (unsigned char *)kmalloc(pkey->key.rsa.elen);
+    if (!ctx->custom_anchor_key_a || !ctx->custom_anchor_key_b) {
+      tls_free_custom_anchor(ctx);
+      return BR_ERR_IO;
+    }
+    for (size_t i = 0; i < pkey->key.rsa.nlen; i++) {
+      ctx->custom_anchor_key_a[i] = pkey->key.rsa.n[i];
+    }
+    for (size_t i = 0; i < pkey->key.rsa.elen; i++) {
+      ctx->custom_anchor_key_b[i] = pkey->key.rsa.e[i];
+    }
+    ctx->custom_anchor.pkey.key.rsa.n = ctx->custom_anchor_key_a;
+    ctx->custom_anchor.pkey.key.rsa.nlen = pkey->key.rsa.nlen;
+    ctx->custom_anchor.pkey.key.rsa.e = ctx->custom_anchor_key_b;
+    ctx->custom_anchor.pkey.key.rsa.elen = pkey->key.rsa.elen;
+  } else if (pkey->key_type == BR_KEYTYPE_EC) {
+    ctx->custom_anchor_key_a = (unsigned char *)kmalloc(pkey->key.ec.qlen);
+    if (!ctx->custom_anchor_key_a) {
+      tls_free_custom_anchor(ctx);
+      return BR_ERR_IO;
+    }
+    for (size_t i = 0; i < pkey->key.ec.qlen; i++) {
+      ctx->custom_anchor_key_a[i] = pkey->key.ec.q[i];
+    }
+    ctx->custom_anchor.pkey.key.ec.curve = pkey->key.ec.curve;
+    ctx->custom_anchor.pkey.key.ec.q = ctx->custom_anchor_key_a;
+    ctx->custom_anchor.pkey.key.ec.qlen = pkey->key.ec.qlen;
+  } else {
+    tls_free_custom_anchor(ctx);
+    return BR_ERR_X509_WRONG_KEY_TYPE;
+  }
+
+  ctx->custom_anchor_loaded = 1;
+  return BR_ERR_OK;
+}
+
+static int tls_socket_read(void *read_context, unsigned char *data, size_t len) {
+  struct tls_context *ctx = (struct tls_context *)read_context;
+  int r;
+  if (!ctx || !data || len == 0) {
+    return -1;
+  }
+  r = socket_recv(ctx->socket_fd, data, len, 0);
+  return r > 0 ? r : -1;
+}
+
+static int tls_socket_write(void *write_context, const unsigned char *data,
+                            size_t len) {
+  struct tls_context *ctx = (struct tls_context *)write_context;
+  int r;
+  if (!ctx || !data || len == 0) {
+    return -1;
+  }
+  r = socket_send(ctx->socket_fd, data, len, 0);
+  return r > 0 ? r : -1;
+}
 
 const char *tls_state_name(enum tls_state state) {
   switch (state) {
@@ -30,280 +327,329 @@ const char *tls_state_name(enum tls_state state) {
   }
 }
 
-int tls_init(void) { return 0; }
+enum tls_state tls_last_state(void) { return g_tls_last_state; }
 
-static int tls_send_record(struct tls_context *ctx, uint8_t type,
-                            const uint8_t *data, size_t len) {
-  if (!ctx || len > TLS_MAX_RECORD_SIZE) return -1;
-  uint8_t header[5];
-  header[0] = type;
-  header[1] = (uint8_t)(ctx->version >> 8);
-  header[2] = (uint8_t)(ctx->version);
-  header[3] = (uint8_t)(len >> 8);
-  header[4] = (uint8_t)(len);
-  if (socket_send(ctx->socket_fd, header, 5, 0) < 0) return -1;
-  if (len > 0 && data) {
-    if (socket_send(ctx->socket_fd, data, len, 0) < 0) return -1;
+int tls_last_error(void) { return g_tls_last_error; }
+
+const char *tls_version_name(uint16_t version) {
+  switch (version) {
+    case TLS_VERSION_10: return "TLS 1.0";
+    case TLS_VERSION_11: return "TLS 1.1";
+    case TLS_VERSION_12: return "TLS 1.2";
+    case TLS_VERSION_13: return "TLS 1.3";
+    default: return "unknown";
   }
-  ctx->client_seq++;
-  return 0;
 }
 
-static int tls_recv_record(struct tls_context *ctx, uint8_t *type,
-                            uint8_t *data, size_t *out_len, size_t max_len) {
-  uint8_t header[5];
-  int r = socket_recv(ctx->socket_fd, header, 5, 0);
-  if (r < 5) return -1;
-  *type = header[0];
-  uint16_t rec_len = ((uint16_t)header[3] << 8) | header[4];
-  if (rec_len > max_len) return -1;
-  size_t total = 0;
-  while (total < rec_len) {
-    r = socket_recv(ctx->socket_fd, data + total, rec_len - total, 0);
-    if (r <= 0) return -1;
-    total += (size_t)r;
+const char *tls_cipher_suite_name(uint16_t suite) {
+  switch (suite) {
+    case BR_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
+      return "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256";
+    case BR_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
+      return "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384";
+    case BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+      return "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256";
+    case BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
+      return "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384";
+    case BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:
+      return "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256";
+    case BR_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:
+      return "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256";
+    case BR_TLS_RSA_WITH_AES_128_GCM_SHA256:
+      return "TLS_RSA_WITH_AES_128_GCM_SHA256";
+    case BR_TLS_RSA_WITH_AES_256_GCM_SHA384:
+      return "TLS_RSA_WITH_AES_256_GCM_SHA384";
+    default: return "unknown";
   }
-  *out_len = rec_len;
-  ctx->server_seq++;
-  return 0;
 }
 
-static int tls_build_client_hello(struct tls_context *ctx, uint8_t *buf,
-                                   size_t *out_len) {
-  csprng_fill(ctx->client_random, 32);
-
-  size_t pos = 0;
-  buf[pos++] = TLS_HS_CLIENT_HELLO;
-  size_t len_pos = pos; pos += 3;
-
-  /* Protocol version */
-  buf[pos++] = 0x03; buf[pos++] = 0x03;
-
-  /* Client random */
-  tls_memcpy(buf + pos, ctx->client_random, 32); pos += 32;
-
-  /* Session ID length = 0 */
-  buf[pos++] = 0;
-
-  /* Cipher suites: TLS_RSA_WITH_AES_128_CBC_SHA (0x002F) */
-  buf[pos++] = 0; buf[pos++] = 2;
-  buf[pos++] = 0x00; buf[pos++] = 0x2F;
-
-  /* Compression: null only */
-  buf[pos++] = 1; buf[pos++] = 0;
-
-  /* Extensions: SNI if hostname available */
-  /* Minimal: no extensions for now */
-
-  size_t hs_len = pos - len_pos - 3;
-  buf[len_pos] = 0;
-  buf[len_pos + 1] = (uint8_t)(hs_len >> 8);
-  buf[len_pos + 2] = (uint8_t)(hs_len);
-
-  *out_len = pos;
-  return 0;
-}
-
-static int tls_parse_server_hello(struct tls_context *ctx, const uint8_t *data,
-                                   size_t len) {
-  if (len < 38) return -1;
-  size_t pos = 0;
-  if (data[pos++] != TLS_HS_SERVER_HELLO) return -1;
-  uint32_t hs_len = ((uint32_t)data[pos] << 16) | ((uint32_t)data[pos+1] << 8) | data[pos+2];
-  pos += 3;
-  (void)hs_len;
-
-  /* Version */
-  pos += 2;
-  /* Server random */
-  tls_memcpy(ctx->server_random, data + pos, 32); pos += 32;
-  /* Session ID */
-  uint8_t sid_len = data[pos++];
-  pos += sid_len;
-  /* Cipher suite */
-  pos += 2;
-  /* Compression */
-  pos += 1;
-
-  return 0;
-}
-
-static void tls_prf(const uint8_t *secret, size_t secret_len,
-                     const char *label, const uint8_t *seed, size_t seed_len,
-                     uint8_t *out, size_t out_len) {
-  /* TLS 1.2 PRF using HMAC-SHA256 */
-  size_t label_len = tls_strlen(label);
-  uint8_t combined[256];
-  size_t clen = 0;
-  for (size_t i = 0; i < label_len && clen < 200; i++) combined[clen++] = (uint8_t)label[i];
-  for (size_t i = 0; i < seed_len && clen < 256; i++) combined[clen++] = seed[i];
-
-  uint8_t A[32];
-  crypt_hmac_sha256(secret, secret_len, combined, clen, A);
-
-  size_t generated = 0;
-  while (generated < out_len) {
-    uint8_t input[32 + 256];
-    tls_memcpy(input, A, 32);
-    tls_memcpy(input + 32, combined, clen);
-    uint8_t block[32];
-    crypt_hmac_sha256(secret, secret_len, input, 32 + clen, block);
-    for (size_t i = 0; i < 32 && generated < out_len; i++)
-      out[generated++] = block[i];
-    crypt_hmac_sha256(secret, secret_len, A, 32, A);
+const char *tls_alert_name(int alert) {
+  if (alert >= BR_ERR_RECV_FATAL_ALERT &&
+      alert < (BR_ERR_RECV_FATAL_ALERT + 256)) {
+    switch (alert - BR_ERR_RECV_FATAL_ALERT) {
+      case TLS_ALERT_CLOSE_NOTIFY: return "recv-close-notify";
+      case TLS_ALERT_UNEXPECTED: return "recv-unexpected-message";
+      case TLS_ALERT_BAD_RECORD: return "recv-bad-record";
+      case TLS_ALERT_HANDSHAKE_FAIL: return "recv-handshake-failure";
+      case TLS_ALERT_BAD_CERT: return "recv-bad-certificate";
+      case TLS_ALERT_UNKNOWN_CA: return "recv-unknown-ca";
+      case TLS_ALERT_INTERNAL: return "recv-internal-error";
+      default: return "recv-fatal-alert";
+    }
   }
+  if (alert >= BR_ERR_SEND_FATAL_ALERT &&
+      alert < (BR_ERR_SEND_FATAL_ALERT + 256)) {
+    switch (alert - BR_ERR_SEND_FATAL_ALERT) {
+      case TLS_ALERT_CLOSE_NOTIFY: return "send-close-notify";
+      default: return "send-fatal-alert";
+    }
+  }
+
+  switch (alert) {
+    case BR_ERR_OK: return "ok";
+    case BR_ERR_BAD_PARAM: return "bad-parameter";
+    case BR_ERR_BAD_STATE: return "bad-state";
+    case BR_ERR_UNSUPPORTED_VERSION: return "unsupported-version";
+    case BR_ERR_BAD_VERSION: return "bad-version";
+    case BR_ERR_BAD_LENGTH: return "bad-length";
+    case BR_ERR_TOO_LARGE: return "record-too-large";
+    case BR_ERR_BAD_MAC: return "bad-mac";
+    case BR_ERR_NO_RANDOM: return "no-random";
+    case BR_ERR_UNKNOWN_TYPE: return "unknown-record-type";
+    case BR_ERR_UNEXPECTED: return "unexpected-message";
+    case BR_ERR_BAD_CCS: return "bad-change-cipher-spec";
+    case BR_ERR_BAD_ALERT: return "bad-alert";
+    case BR_ERR_BAD_HANDSHAKE: return "bad-handshake";
+    case BR_ERR_OVERSIZED_ID: return "oversized-session-id";
+    case BR_ERR_BAD_CIPHER_SUITE: return "bad-cipher-suite";
+    case BR_ERR_BAD_COMPRESSION: return "bad-compression";
+    case BR_ERR_BAD_FRAGLEN: return "bad-fragment-length";
+    case BR_ERR_BAD_SECRENEG: return "bad-secure-renegotiation";
+    case BR_ERR_EXTRA_EXTENSION: return "unexpected-extension";
+    case BR_ERR_BAD_SNI: return "bad-sni";
+    case BR_ERR_BAD_HELLO_DONE: return "bad-server-hello-done";
+    case BR_ERR_LIMIT_EXCEEDED: return "limit-exceeded";
+    case BR_ERR_BAD_FINISHED: return "bad-finished";
+    case BR_ERR_RESUME_MISMATCH: return "resume-mismatch";
+    case BR_ERR_INVALID_ALGORITHM: return "invalid-algorithm";
+    case BR_ERR_BAD_SIGNATURE: return "bad-signature";
+    case BR_ERR_WRONG_KEY_USAGE: return "wrong-key-usage";
+    case BR_ERR_NO_CLIENT_AUTH: return "client-auth-required";
+    case BR_ERR_IO: return "transport-io";
+    case BR_ERR_X509_INVALID_VALUE: return "x509-invalid-value";
+    case BR_ERR_X509_TRUNCATED: return "x509-truncated";
+    case BR_ERR_X509_EMPTY_CHAIN: return "x509-empty-chain";
+    case BR_ERR_X509_INNER_TRUNC: return "x509-inner-truncated";
+    case BR_ERR_X509_BAD_TAG_CLASS: return "x509-bad-tag-class";
+    case BR_ERR_X509_BAD_TAG_VALUE: return "x509-bad-tag-value";
+    case BR_ERR_X509_INDEFINITE_LENGTH: return "x509-indefinite-length";
+    case BR_ERR_X509_EXTRA_ELEMENT: return "x509-extra-element";
+    case BR_ERR_X509_UNEXPECTED: return "x509-unexpected";
+    case BR_ERR_X509_NOT_CONSTRUCTED: return "x509-not-constructed";
+    case BR_ERR_X509_NOT_PRIMITIVE: return "x509-not-primitive";
+    case BR_ERR_X509_PARTIAL_BYTE: return "x509-partial-byte";
+    case BR_ERR_X509_BAD_BOOLEAN: return "x509-bad-boolean";
+    case BR_ERR_X509_OVERFLOW: return "x509-overflow";
+    case BR_ERR_X509_BAD_DN: return "x509-bad-dn";
+    case BR_ERR_X509_BAD_TIME: return "x509-bad-time";
+    case BR_ERR_X509_UNSUPPORTED: return "x509-unsupported";
+    case BR_ERR_X509_LIMIT_EXCEEDED: return "x509-limit-exceeded";
+    case BR_ERR_X509_WRONG_KEY_TYPE: return "x509-wrong-key-type";
+    case BR_ERR_X509_BAD_SIGNATURE: return "x509-bad-signature";
+    case BR_ERR_X509_TIME_UNKNOWN: return "x509-time-unknown";
+    case BR_ERR_X509_EXPIRED: return "x509-expired";
+    case BR_ERR_X509_DN_MISMATCH: return "x509-dn-mismatch";
+    case BR_ERR_X509_BAD_SERVER_NAME: return "x509-bad-server-name";
+    case BR_ERR_X509_CRITICAL_EXTENSION: return "x509-critical-extension";
+    case BR_ERR_X509_NOT_CA: return "x509-not-ca";
+    case BR_ERR_X509_FORBIDDEN_KEY_USAGE: return "x509-forbidden-key-usage";
+    case BR_ERR_X509_WEAK_PUBLIC_KEY: return "x509-weak-public-key";
+    case BR_ERR_X509_NOT_TRUSTED: return "x509-not-trusted";
+    default: return "unknown-tls-error";
+  }
+}
+
+int tls_init(void) {
+  g_tls_last_state = TLS_STATE_INIT;
+  g_tls_last_error = 0;
+  tls_reset_last_security_info();
+  return 0;
 }
 
 int tls_handshake(struct tls_context *ctx) {
-  if (!ctx) return -1;
+  unsigned state;
 
-  /* Send ClientHello */
-  uint8_t hello_buf[256];
-  size_t hello_len;
-  if (tls_build_client_hello(ctx, hello_buf, &hello_len) != 0) return -1;
-  if (tls_send_record(ctx, TLS_RECORD_HANDSHAKE, hello_buf, hello_len) != 0) {
-    ctx->state = TLS_STATE_ERROR;
-    return -1;
-  }
-  ctx->state = TLS_STATE_CLIENT_HELLO_SENT;
-
-  /* Receive ServerHello */
-  uint8_t rec_type;
-  uint8_t rec_buf[TLS_MAX_RECORD_SIZE];
-  size_t rec_len;
-  if (tls_recv_record(ctx, &rec_type, rec_buf, &rec_len, sizeof(rec_buf)) != 0) {
-    ctx->state = TLS_STATE_ERROR;
-    return -1;
-  }
-  if (rec_type != TLS_RECORD_HANDSHAKE) { ctx->state = TLS_STATE_ERROR; return -1; }
-  if (tls_parse_server_hello(ctx, rec_buf, rec_len) != 0) {
-    ctx->state = TLS_STATE_ERROR;
-    return -1;
-  }
-  ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
-
-  /* Receive Certificate */
-  if (tls_recv_record(ctx, &rec_type, rec_buf, &rec_len, sizeof(rec_buf)) != 0) {
-    ctx->state = TLS_STATE_ERROR;
-    return -1;
-  }
-  ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
-
-  /* Receive ServerHelloDone */
-  if (tls_recv_record(ctx, &rec_type, rec_buf, &rec_len, sizeof(rec_buf)) != 0) {
-    ctx->state = TLS_STATE_ERROR;
+  if (!ctx) {
+    tls_record_failure(NULL, BR_ERR_BAD_PARAM);
     return -1;
   }
 
-  /* Generate pre-master secret */
-  uint8_t pre_master[48];
-  pre_master[0] = 0x03; pre_master[1] = 0x03;
-  csprng_fill(pre_master + 2, 46);
+  tls_record_success(ctx, TLS_STATE_CLIENT_HELLO_SENT);
+  if (br_sslio_flush(&ctx->io) < 0) {
+    tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_IO));
+    return -1;
+  }
 
-  /* Derive master secret */
-  uint8_t seed[64];
-  tls_memcpy(seed, ctx->client_random, 32);
-  tls_memcpy(seed + 32, ctx->server_random, 32);
-  tls_prf(pre_master, 48, "master secret", seed, 64, ctx->master_secret, 48);
+  state = br_ssl_engine_current_state(&ctx->client.eng);
+  if ((state & (BR_SSL_SENDAPP | BR_SSL_RECVAPP)) == 0) {
+    tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_BAD_STATE));
+    return -1;
+  }
 
-  /* Derive key material */
-  uint8_t key_block[128];
-  uint8_t key_seed[64];
-  tls_memcpy(key_seed, ctx->server_random, 32);
-  tls_memcpy(key_seed + 32, ctx->client_random, 32);
-  tls_prf(ctx->master_secret, 48, "key expansion", key_seed, 64, key_block, 128);
-
-  tls_memcpy(ctx->client_write_key, key_block + 0, 32);
-  tls_memcpy(ctx->server_write_key, key_block + 32, 32);
-  tls_memcpy(ctx->client_write_iv, key_block + 64, 16);
-  tls_memcpy(ctx->server_write_iv, key_block + 80, 16);
-
-  ctx->state = TLS_STATE_KEY_EXCHANGE_DONE;
-
-  /* Send ClientKeyExchange (simplified - send encrypted pre-master) */
-  uint8_t cke_buf[64];
-  cke_buf[0] = TLS_HS_CLIENT_KEY_EX;
-  cke_buf[1] = 0; cke_buf[2] = 0; cke_buf[3] = 48;
-  tls_memcpy(cke_buf + 4, pre_master, 48);
-  tls_send_record(ctx, TLS_RECORD_HANDSHAKE, cke_buf, 52);
-
-  /* Send ChangeCipherSpec */
-  uint8_t ccs = 1;
-  tls_send_record(ctx, TLS_RECORD_CHANGE_CIPHER, &ccs, 1);
-
-  /* Send Finished */
-  uint8_t finished_buf[16];
-  finished_buf[0] = TLS_HS_FINISHED;
-  finished_buf[1] = 0; finished_buf[2] = 0; finished_buf[3] = 12;
-  tls_prf(ctx->master_secret, 48, "client finished", seed, 64, finished_buf + 4, 12);
-  tls_send_record(ctx, TLS_RECORD_HANDSHAKE, finished_buf, 16);
-
-  /* Receive ChangeCipherSpec + Finished */
-  tls_recv_record(ctx, &rec_type, rec_buf, &rec_len, sizeof(rec_buf));
-  tls_recv_record(ctx, &rec_type, rec_buf, &rec_len, sizeof(rec_buf));
-
-  ctx->state = TLS_STATE_HANDSHAKE_COMPLETE;
-  ctx->state = TLS_STATE_APPLICATION;
+  tls_capture_session(ctx);
+  tls_record_success(ctx, TLS_STATE_HANDSHAKE_COMPLETE);
   return 0;
 }
 
 struct tls_context *tls_connect(int socket_fd, const char *hostname,
-                                 const struct tls_config *config) {
-  struct tls_context *ctx = (struct tls_context *)kmalloc(sizeof(struct tls_context));
-  if (!ctx) return NULL;
-  tls_memset(ctx, 0, sizeof(*ctx));
-  ctx->socket_fd = socket_fd;
-  ctx->version = TLS_VERSION_12;
-  ctx->state = TLS_STATE_INIT;
-  ctx->verify_peer = config ? config->verify_peer : 0;
-  (void)hostname;
+                                const struct tls_config *config) {
+  struct tls_context *ctx;
+  const br_x509_trust_anchor *trust_anchors;
+  size_t trust_anchor_count;
 
-  if (tls_handshake(ctx) != 0) {
+  if (socket_fd < 0 || !hostname || !hostname[0]) {
+    tls_record_failure(NULL, BR_ERR_BAD_PARAM);
+    return NULL;
+  }
+
+  ctx = (struct tls_context *)kmalloc(sizeof(*ctx));
+  if (!ctx) {
+    tls_record_failure(NULL, BR_ERR_IO);
+    return NULL;
+  }
+  tls_memzero(ctx, sizeof(*ctx));
+
+  ctx->iobuf = (unsigned char *)kmalloc(BR_SSL_BUFSIZE_BIDI);
+  if (!ctx->iobuf) {
     kfree(ctx);
+    tls_record_failure(NULL, BR_ERR_IO);
+    return NULL;
+  }
+
+  ctx->socket_fd = socket_fd;
+  ctx->state = TLS_STATE_INIT;
+  ctx->verify_peer = config ? config->verify_peer : 1;
+  ctx->timeout_ms = (config && config->timeout_ms) ? config->timeout_ms : 10000u;
+  tls_reset_security_info(ctx);
+  tls_reset_last_security_info();
+  if (ctx->timeout_ms > 0) {
+    (void)socket_setsockopt(ctx->socket_fd, SOL_SOCKET, SO_RCVTIMEO,
+                            &ctx->timeout_ms, sizeof(ctx->timeout_ms));
+    (void)socket_setsockopt(ctx->socket_fd, SOL_SOCKET, SO_SNDTIMEO,
+                            &ctx->timeout_ms, sizeof(ctx->timeout_ms));
+  }
+  if (config && ((config->ca_cert && config->ca_cert_len == 0) ||
+                 (!config->ca_cert && config->ca_cert_len > 0))) {
+    tls_record_failure(ctx, BR_ERR_BAD_PARAM);
+    tls_free(ctx);
+    return NULL;
+  }
+  trust_anchors = capyos_tls_trust_anchors();
+  trust_anchor_count = capyos_tls_trust_anchor_count();
+  if (config && config->ca_cert && config->ca_cert_len > 0) {
+    int anchor_rc = tls_load_custom_anchor(ctx, config->ca_cert, config->ca_cert_len);
+    if (anchor_rc != BR_ERR_OK) {
+      tls_record_failure(ctx, anchor_rc);
+      tls_free(ctx);
+      return NULL;
+    }
+    trust_anchors = &ctx->custom_anchor;
+    trust_anchor_count = 1;
+  }
+
+  br_ssl_client_init_full(&ctx->client, &ctx->x509, trust_anchors, trust_anchor_count);
+  tls_set_validation_time(ctx);
+  br_ssl_engine_set_buffer(&ctx->client.eng, ctx->iobuf, BR_SSL_BUFSIZE_BIDI, 1);
+  br_ssl_engine_set_versions(&ctx->client.eng, BR_TLS12, BR_TLS12);
+  br_ssl_engine_set_protocol_names(&ctx->client.eng,
+                                   g_tls_alpn_protocols,
+                                   sizeof(g_tls_alpn_protocols) / sizeof(g_tls_alpn_protocols[0]));
+  tls_seed_engine(ctx);
+  if (!br_ssl_client_reset(&ctx->client, ctx->verify_peer ? hostname : NULL, 0)) {
+    tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_NO_RANDOM));
+    tls_free(ctx);
+    return NULL;
+  }
+
+  br_sslio_init(&ctx->io, &ctx->client.eng, tls_socket_read, ctx,
+                tls_socket_write, ctx);
+  if (tls_handshake(ctx) != 0) {
+    tls_free(ctx);
     return NULL;
   }
   return ctx;
 }
 
 int tls_send(struct tls_context *ctx, const void *data, size_t len) {
-  if (!ctx || ctx->state != TLS_STATE_APPLICATION) return -1;
-  /* In a real implementation, data would be encrypted with the session keys.
-   * For now, send as application data record (plaintext in development). */
-  return tls_send_record(ctx, TLS_RECORD_APPLICATION, (const uint8_t *)data, len);
+  if (!ctx || (!data && len > 0)) {
+    tls_record_failure(ctx, BR_ERR_BAD_PARAM);
+    return -1;
+  }
+  if (len == 0) {
+    return 0;
+  }
+  if (br_sslio_write_all(&ctx->io, data, len) < 0 ||
+      br_sslio_flush(&ctx->io) < 0) {
+    tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_IO));
+    return -1;
+  }
+  tls_record_success(ctx, TLS_STATE_APPLICATION);
+  return (int)len;
 }
 
 int tls_recv(struct tls_context *ctx, void *buf, size_t len) {
-  if (!ctx || ctx->state != TLS_STATE_APPLICATION) return -1;
-  uint8_t rec_type;
-  size_t rec_len;
-  if (tls_recv_record(ctx, &rec_type, (uint8_t *)buf, &rec_len, len) != 0)
-    return -1;
-  if (rec_type == TLS_RECORD_ALERT) {
-    ctx->state = TLS_STATE_ERROR;
-    ctx->error_code = ((uint8_t *)buf)[1];
+  int r;
+  int err;
+  unsigned state;
+
+  if (!ctx || !buf || len == 0) {
+    tls_record_failure(ctx, BR_ERR_BAD_PARAM);
     return -1;
   }
-  if (rec_type != TLS_RECORD_APPLICATION) return -1;
-  return (int)rec_len;
+
+  r = br_sslio_read(&ctx->io, buf, len);
+  if (r >= 0) {
+    tls_record_success(ctx, TLS_STATE_APPLICATION);
+    return r;
+  }
+
+  err = br_ssl_engine_last_error(&ctx->client.eng);
+  state = br_ssl_engine_current_state(&ctx->client.eng);
+  if ((state & BR_SSL_CLOSED) != 0 && err == BR_ERR_OK) {
+    tls_record_success(ctx, TLS_STATE_CLOSED);
+    return 0;
+  }
+
+  tls_record_failure(ctx, err != 0 ? err : BR_ERR_IO);
+  return -1;
 }
 
 int tls_close(struct tls_context *ctx) {
-  if (!ctx) return -1;
-  uint8_t alert[2] = { 1, TLS_ALERT_CLOSE_NOTIFY };
-  tls_send_record(ctx, TLS_RECORD_ALERT, alert, 2);
-  ctx->state = TLS_STATE_CLOSED;
-  return 0;
+  if (!ctx) {
+    return -1;
+  }
+  ctx->state = TLS_STATE_CLOSING;
+  if (br_sslio_close(&ctx->io) != 0 ||
+      br_ssl_engine_last_error(&ctx->client.eng) == BR_ERR_OK) {
+    tls_record_success(ctx, TLS_STATE_CLOSED);
+    return 0;
+  }
+  tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_IO));
+  return -1;
 }
 
 void tls_free(struct tls_context *ctx) {
-  if (!ctx) return;
-  /* Clear sensitive material */
-  tls_memset(ctx->master_secret, 0, 48);
-  tls_memset(ctx->client_write_key, 0, 32);
-  tls_memset(ctx->server_write_key, 0, 32);
+  if (!ctx) {
+    return;
+  }
+  tls_free_custom_anchor(ctx);
+  if (ctx->iobuf) {
+    kfree(ctx->iobuf);
+    ctx->iobuf = NULL;
+  }
   kfree(ctx);
 }
 
 int tls_error(struct tls_context *ctx) {
-  return ctx ? ctx->error_code : -1;
+  return ctx ? ctx->error_code : g_tls_last_error;
+}
+
+int tls_get_security_info(struct tls_context *ctx, struct tls_security_info *info) {
+  if (!ctx || !info) {
+    return -1;
+  }
+  info->protocol_version = ctx->negotiated_version;
+  info->cipher_suite = ctx->cipher_suite;
+  info->trust_anchor_count = ctx->trust_anchor_count;
+  info->peer_verified = ctx->peer_verified;
+  info->hostname_validated = ctx->hostname_validated;
+  info->custom_anchor_loaded = ctx->custom_anchor_loaded;
+  tls_copy_string(info->alpn, sizeof(info->alpn), ctx->selected_alpn);
+  return 0;
+}
+
+int tls_get_last_security_info(struct tls_security_info *info) {
+  if (!info) return -1;
+  *info = g_tls_last_info;
+  return 0;
 }

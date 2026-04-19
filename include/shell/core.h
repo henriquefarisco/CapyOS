@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/session.h"
+#include "auth/session.h"
 #include "core/system_init.h"
 #include "fs/vfs.h"
 
@@ -32,6 +32,9 @@ struct shell_command_set {
     size_t count;
 };
 
+typedef void (*shell_output_write_fn)(const char *text);
+typedef void (*shell_output_putc_fn)(char ch);
+
 void shell_context_init(struct shell_context *ctx,
                         struct session_context *session,
                         const struct system_settings *settings);
@@ -54,6 +57,8 @@ void shell_print_error(const char *msg);
 void shell_suggest_help(const char *cmd);
 void shell_paginate_content(const char *content);
 void shell_print_number(uint32_t value);
+void shell_set_output_callbacks(shell_output_write_fn write_cb,
+                                shell_output_putc_fn putc_cb);
 
 /* String helpers */
 int shell_string_equal(const char *a, const char *b);

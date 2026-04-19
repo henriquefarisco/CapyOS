@@ -4,12 +4,12 @@
 #include "shell/commands.h"
 #include "shell/commands_extended.h"
 
-#include "core/localization.h"
-#include "core/klog.h"
+#include "lang/localization.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
-#include "core/user.h"
+#include "auth/user.h"
 #include "fs/vfs.h"
 #include "drivers/video/vga.h"
 
@@ -19,6 +19,8 @@
 static struct shell_command_set g_command_sets[12];
 static size_t g_command_set_count = 0;
 static int g_command_sets_initialized = 0;
+static shell_output_write_fn g_shell_output_write = NULL;
+static shell_output_putc_fn g_shell_output_putc = NULL;
 static void shell_hotkey_help_docs(void)
 {
     tty_inject_line("help-docs", 1);
@@ -483,31 +485,35 @@ void shell_format_perm(uint16_t perm, char out[5])
 void shell_print(const char *text)
 {
     if (text) {
-        vga_write(text);
+        if (g_shell_output_write) {
+            g_shell_output_write(text);
+        } else {
+            vga_write(text);
+        }
     }
 }
 
 void shell_newline(void)
 {
-    vga_newline();
+    if (g_shell_output_putc) {
+        g_shell_output_putc('\n');
+    } else {
+        vga_newline();
+    }
 }
 
 void shell_print_error(const char *msg)
 {
-    vga_write("[erro] ");
-    if (msg) {
-        vga_write(msg);
-    }
-    vga_newline();
+    shell_print("[erro] ");
+    if (msg) shell_print(msg);
+    shell_newline();
 }
 
 void shell_print_ok(const char *msg)
 {
-    vga_write("[ok] ");
-    if (msg) {
-        vga_write(msg);
-    }
-    vga_newline();
+    shell_print("[ok] ");
+    if (msg) shell_print(msg);
+    shell_newline();
 }
 
 void shell_print_number(uint32_t value)
@@ -638,10 +644,17 @@ int shell_stream_file(struct file *file)
     long read;
     while ((read = vfs_read(file, buffer, SHELL_READ_CHUNK)) > 0) {
         buffer[read] = '\0';
-        vga_write(buffer);
+        shell_print(buffer);
     }
-    vga_newline();
+    shell_newline();
     return 0;
+}
+
+void shell_set_output_callbacks(shell_output_write_fn write_cb,
+                                shell_output_putc_fn putc_cb)
+{
+    g_shell_output_write = write_cb;
+    g_shell_output_putc = putc_cb;
 }
 
 int shell_copy_stream(struct file *src, struct file *dst)

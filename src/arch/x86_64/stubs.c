@@ -1,3 +1,6 @@
+#include "arch/x86_64/framebuffer_console.h"
+#include "drivers/rtc/rtc.h"
+#include "bearssl.h"
 // Temporary stubs for x86_64 build until proper implementations are added.
 #include <stddef.h>
 #include <stdint.h>
@@ -33,12 +36,68 @@ int memcmp(const void *s1, const void *s2, size_t n) {
   return 0;
 }
 
+void *memmove(void *dest, const void *src, size_t n) {
+  uint8_t *d = (uint8_t *)dest;
+  const uint8_t *s = (const uint8_t *)src;
+  if (d == s || n == 0) {
+    return dest;
+  }
+  if (d < s) {
+    while (n--) {
+      *d++ = *s++;
+    }
+  } else {
+    d += n;
+    s += n;
+    while (n--) {
+      *--d = *--s;
+    }
+  }
+  return dest;
+}
+
+size_t strlen(const char *s) {
+  size_t len = 0;
+  while (s[len]) {
+    len++;
+  }
+  return len;
+}
+
+void *__memcpy_chk(void *dest, const void *src, size_t len, size_t destlen) {
+  (void)destlen;
+  return memcpy(dest, src, len);
+}
+
+void *__memmove_chk(void *dest, const void *src, size_t len, size_t destlen) {
+  (void)destlen;
+  return memmove(dest, src, len);
+}
+
+void *__memset_chk(void *dest, int c, size_t len, size_t destlen) {
+  (void)destlen;
+  return memset(dest, c, len);
+}
+
+long time(long *out) {
+  long now = (long)rtc_unix_timestamp();
+  if (out) {
+    *out = now;
+  }
+  return now;
+}
+
+br_prng_seeder br_prng_seeder_system(const char **name) {
+  if (name) {
+    *name = "none";
+  }
+  return 0;
+}
+
 /* VGA stubs - redirect to framebuffer console */
-extern void fbcon_clear_view(void);
 void vga_init(void) { fbcon_clear_view(); }
 void vga_clear(void) { fbcon_clear_view(); }
 
-extern void fbcon_putc(char c);
 void vga_putc(char c) { fbcon_putc(c); }
 
 void vga_backspace(void) { fbcon_putc('\b'); }
@@ -64,7 +123,6 @@ void vga_set_color(unsigned char fg, unsigned char bg) {
 }
 
 /* vga_write - print string to framebuffer console */
-extern void fbcon_print(const char *s);
 void vga_write(const char *s) {
   if (s)
     fbcon_print(s);
@@ -95,7 +153,6 @@ void tty_set_prompt(const char *prompt) {
 }
 
 void tty_show_prompt(void) {
-  extern void fbcon_print(const char *s);
   fbcon_print(g_tty_prompt);
 }
 
@@ -126,4 +183,3 @@ void tty_inject_line(const char *line, int echo) {
   (void)line;
   (void)echo;
 }
-

@@ -6,12 +6,38 @@ struct chunk_ctx {
     uint32_t ratio;        // chunk_size / lower->block_size
 };
 
+static inline void dbg_putc(char ch) {
+    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
+static void dbg_puts(const char *s) {
+    while (s && *s) {
+        dbg_putc(*s++);
+    }
+}
+
+static void dbg_hex32(uint32_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        dbg_putc(hex[(value >> shift) & 0xFu]);
+    }
+}
+
 static int chunk_read(void *ctx, uint32_t block_no, void *buffer){
     struct chunk_ctx *c = (struct chunk_ctx *)ctx;
     uint8_t *dst = (uint8_t *)buffer;
     uint32_t start = block_no * c->ratio;
     for (uint32_t i = 0; i < c->ratio; ++i){
-        if (block_device_read(c->lower, start + i, dst + i * c->lower->block_size) != 0) return -1;
+        if (block_device_read(c->lower, start + i, dst + i * c->lower->block_size) != 0) {
+            dbg_puts("[chunk] read fail blk=");
+            dbg_hex32(block_no);
+            dbg_puts(" sub=");
+            dbg_hex32(i);
+            dbg_puts(" abs=");
+            dbg_hex32(start + i);
+            dbg_putc('\n');
+            return -1;
+        }
     }
     return 0;
 }
@@ -21,7 +47,16 @@ static int chunk_write(void *ctx, uint32_t block_no, const void *buffer){
     const uint8_t *src = (const uint8_t *)buffer;
     uint32_t start = block_no * c->ratio;
     for (uint32_t i = 0; i < c->ratio; ++i){
-        if (block_device_write(c->lower, start + i, src + i * c->lower->block_size) != 0) return -1;
+        if (block_device_write(c->lower, start + i, src + i * c->lower->block_size) != 0) {
+            dbg_puts("[chunk] write fail blk=");
+            dbg_hex32(block_no);
+            dbg_puts(" sub=");
+            dbg_hex32(i);
+            dbg_puts(" abs=");
+            dbg_hex32(start + i);
+            dbg_putc('\n');
+            return -1;
+        }
     }
     return 0;
 }

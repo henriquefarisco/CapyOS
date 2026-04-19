@@ -1,6 +1,6 @@
 #include "drivers/usb/usb_core.h"
 #include "drivers/usb/xhci.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include <stddef.h>
 
 static struct usb_device_info g_devices[USB_MAX_DEVICES];

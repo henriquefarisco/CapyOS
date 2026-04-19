@@ -104,6 +104,7 @@ struct ahci_port_ctx {
   uint8_t *rfis;
   struct ahci_cmd_table *cmd_table;
   uint16_t *identify_data;
+  uint8_t *io_bounce;
   int initialized;
 };
 
@@ -328,8 +329,17 @@ static int ahci_read_block(void *opaque, uint32_t block_no, void *buffer) {
   if (!ctx || !buffer || (uint64_t)block_no >= ctx->lba_count) {
     return -1;
   }
-  return ahci_exec(ctx, ATA_CMD_READ_DMA_EXT, (uint64_t)block_no, 1, buffer,
-                   512u, 0);
+  if (!ctx->io_bounce) {
+    return -1;
+  }
+  if (ahci_exec(ctx, ATA_CMD_READ_DMA_EXT, (uint64_t)block_no, 1,
+                ctx->io_bounce, 512u, 0) != 0) {
+    return -1;
+  }
+  for (uint32_t i = 0; i < 512u; ++i) {
+    ((uint8_t *)buffer)[i] = ctx->io_bounce[i];
+  }
+  return 0;
 }
 
 static int ahci_write_block(void *opaque, uint32_t block_no,
@@ -338,8 +348,14 @@ static int ahci_write_block(void *opaque, uint32_t block_no,
   if (!ctx || !buffer || (uint64_t)block_no >= ctx->lba_count) {
     return -1;
   }
+  if (!ctx->io_bounce) {
+    return -1;
+  }
+  for (uint32_t i = 0; i < 512u; ++i) {
+    ctx->io_bounce[i] = ((const uint8_t *)buffer)[i];
+  }
   return ahci_exec(ctx, ATA_CMD_WRITE_DMA_EXT, (uint64_t)block_no, 1,
-                   (void *)buffer, 512u, 1);
+                   ctx->io_bounce, 512u, 1);
 }
 
 static struct block_device_ops g_ahci_block_ops;
@@ -382,7 +398,13 @@ static int ahci_setup_port(struct ahci_port_ctx *ctx) {
   ctx->cmd_table =
       (struct ahci_cmd_table *)kmalloc_aligned(sizeof(struct ahci_cmd_table), 128u);
   ctx->identify_data = (uint16_t *)kmalloc_aligned(512u, 512u);
-  if (!ctx->cmd_list || !ctx->rfis || !ctx->cmd_table || !ctx->identify_data) {
+  ctx->io_bounce = (uint8_t *)kmalloc_aligned(512u, 512u);
+  if (!ctx->cmd_list || !ctx->rfis || !ctx->cmd_table || !ctx->identify_data ||
+      !ctx->io_bounce) {
+    if (ctx->io_bounce) {
+      kfree_aligned(ctx->io_bounce);
+      ctx->io_bounce = NULL;
+    }
     if (ctx->identify_data) {
       kfree_aligned(ctx->identify_data);
       ctx->identify_data = NULL;
@@ -420,6 +442,26 @@ static int ahci_setup_port(struct ahci_port_ctx *ctx) {
   if (ahci_port_start(port) != 0) {
     dbg_puts("[ahci] port start timeout\n");
     dbg_label_hex32("[ahci] port.cmd=", mmio_read32(&port->cmd));
+    if (ctx->io_bounce) {
+      kfree_aligned(ctx->io_bounce);
+      ctx->io_bounce = NULL;
+    }
+    if (ctx->identify_data) {
+      kfree_aligned(ctx->identify_data);
+      ctx->identify_data = NULL;
+    }
+    if (ctx->cmd_table) {
+      kfree_aligned(ctx->cmd_table);
+      ctx->cmd_table = NULL;
+    }
+    if (ctx->rfis) {
+      kfree_aligned(ctx->rfis);
+      ctx->rfis = NULL;
+    }
+    if (ctx->cmd_list) {
+      kfree_aligned(ctx->cmd_list);
+      ctx->cmd_list = NULL;
+    }
     return -1;
   }
 
@@ -427,6 +469,26 @@ static int ahci_setup_port(struct ahci_port_ctx *ctx) {
   if (ahci_identify(ctx) != 0) {
     dbg_puts("[ahci] identify failed\n");
     ctx->initialized = 0;
+    if (ctx->io_bounce) {
+      kfree_aligned(ctx->io_bounce);
+      ctx->io_bounce = NULL;
+    }
+    if (ctx->identify_data) {
+      kfree_aligned(ctx->identify_data);
+      ctx->identify_data = NULL;
+    }
+    if (ctx->cmd_table) {
+      kfree_aligned(ctx->cmd_table);
+      ctx->cmd_table = NULL;
+    }
+    if (ctx->rfis) {
+      kfree_aligned(ctx->rfis);
+      ctx->rfis = NULL;
+    }
+    if (ctx->cmd_list) {
+      kfree_aligned(ctx->cmd_list);
+      ctx->cmd_list = NULL;
+    }
     return -1;
   }
 
@@ -445,20 +507,23 @@ int ahci_init(void) {
   uint64_t abar = 0;
   uint32_t implemented = 0;
 
-  if (g_ahci_scanned) {
-    return g_ahci_count > 0 ? 0 : -1;
+  if (g_ahci_scanned && g_ahci_count > 0) {
+    return 0;
   }
   g_ahci_scanned = 1;
   g_ahci_count = 0;
+  g_ahci_hba = NULL;
   ahci_init_block_ops();
 
   pci_init();
   if (pci_find_device(PCI_CLASS_STORAGE, PCI_SUBCLASS_SATA, &pci_dev) != 0) {
     dbg_puts("[ahci] no SATA controller found\n");
+    g_ahci_scanned = 0;
     return -1;
   }
   if (pci_dev.prog_if != 0x01u) {
     dbg_puts("[ahci] SATA controller is not AHCI\n");
+    g_ahci_scanned = 0;
     return -1;
   }
 
@@ -471,6 +536,7 @@ int ahci_init(void) {
   abar = pci_read_bar64(pci_dev.bus, pci_dev.device, pci_dev.function, 5);
   if (abar == 0 || (abar & 0x1u) != 0u) {
     dbg_puts("[ahci] invalid ABAR\n");
+    g_ahci_scanned = 0;
     return -1;
   }
 
@@ -514,7 +580,13 @@ int ahci_init(void) {
     }
   }
 
-  return g_ahci_count > 0 ? 0 : -1;
+  if (g_ahci_count <= 0) {
+    g_ahci_scanned = 0;
+    dbg_puts("[ahci] no SATA device ready; retry allowed\n");
+    return -1;
+  }
+
+  return 0;
 }
 
 int ahci_device_count(void) { return g_ahci_count; }

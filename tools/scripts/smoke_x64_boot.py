@@ -20,16 +20,50 @@ def smoke_first_boot(
     deep_home = f"/home/{user}/docs/projetos/capy"
     update_manifest = "/tmp/update-manifest.ini"
     assert_shell_identity(session, timeout=timeout, user=user)
-    run_cmd(session, "config-theme show", timeout=timeout, expect="Current theme: capyos")
+    run_cmd(
+        session,
+        "config-language en",
+        timeout=timeout,
+        expect=(
+            "language updated and saved",
+            "idioma atualizado e salvo",
+            "idioma actualizado y guardado",
+        ),
+    )
+    run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
+    run_cmd(
+        session,
+        "config-theme show",
+        timeout=timeout,
+        expect=("Current theme: capyos", "Tema atual: capyos", "Tema actual: capyos"),
+    )
     run_cmd(session, "config-theme ocean", timeout=timeout, expect="theme updated")
-    run_cmd(session, "config-splash show", timeout=timeout, expect="Current splash: disabled")
+    run_cmd(
+        session,
+        "config-splash show",
+        timeout=timeout,
+        expect=(
+            "Current splash: disabled",
+            "Splash atual: desabilitado",
+            "Splash actual: deshabilitado",
+        ),
+    )
     run_cmd(
         session,
         "config-splash on",
         timeout=timeout,
-        expect="splash enabled for the next boot",
+        expect=(
+            "splash enabled for the next boot",
+            "splash habilitado para o proximo boot",
+            "splash habilitado para el proximo arranque",
+        ),
     )
-    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(
+        session,
+        "config-language show",
+        timeout=timeout,
+        expect=("Current language: en", "Idioma atual: en", "Idioma actual: en"),
+    )
     run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
     run_cmd(session, "job-status recovery-snapshot", timeout=timeout, expect="recovery-snapshot state=")
     run_cmd(session, "update-status", timeout=timeout, expect="channel=stable")
@@ -137,6 +171,13 @@ def smoke_first_boot(
         expect="Resolves a hostname through DNS using the currently configured server.",
         expect_optional=True,
     )
+    run_cmd(
+        session,
+        "net-fetch -help",
+        timeout=timeout,
+        expect="Fetches an HTTP/HTTPS URL and shows status, content type, body size, relevant headers and the last TLS state.",
+        expect_optional=True,
+    )
     run_cmd(session, "net-status", timeout=timeout, expect="runtime=ready", expect_optional=True)
     run_cmd(
         session,
@@ -184,6 +225,29 @@ def smoke_first_boot(
     )
     run_cmd(
         session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="status=200",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="tls=TLS 1.2",
+        expect_optional=True,
+    )
+    # Redirect-following: https://google.com 301-redirects to https://www.google.com.
+    # If auto-follow works, we land on a 200 from www.google.com without manual hops.
+    run_cmd(
+        session,
+        "net-fetch https://google.com",
+        timeout=timeout,
+        expect="status=200",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
         "add-user smokeuser smoke user",
         timeout=timeout,
         expect="user=smokeuser",
@@ -193,7 +257,12 @@ def smoke_first_boot(
     session.wait_for("Logging out", timeout=timeout, start_at=mk)
     login(session=session, timeout=timeout, user="smokeuser", password="smoke")
     assert_shell_identity(session, timeout=timeout, user="smokeuser")
-    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(
+        session,
+        "config-language show",
+        timeout=timeout,
+        expect=("Current language: en", "Idioma atual: en", "Idioma actual: en"),
+    )
     run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
     mk = session.marker()
     session.send_line("bye")
@@ -262,10 +331,29 @@ def smoke_second_boot(
     smoke_file = "/tmp/smoke-persist/smoke.txt"
     login(session, timeout=timeout, user=user, password=password)
     assert_shell_identity(session, timeout=timeout, user=user)
-    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(
+        session,
+        "config-language show",
+        timeout=timeout,
+        expect=("Current language: en", "Idioma atual: en", "Idioma actual: en"),
+    )
     run_cmd(session, "print-envs", timeout=timeout, expect="LANG=en")
-    run_cmd(session, "config-theme show", timeout=timeout, expect="Current theme: ocean")
-    run_cmd(session, "config-splash show", timeout=timeout, expect="Current splash: enabled")
+    run_cmd(
+        session,
+        "config-theme show",
+        timeout=timeout,
+        expect=("Current theme: ocean", "Tema atual: ocean", "Tema actual: ocean"),
+    )
+    run_cmd(
+        session,
+        "config-splash show",
+        timeout=timeout,
+        expect=(
+            "Current splash: enabled",
+            "Splash atual: habilitado",
+            "Splash actual: habilitado",
+        ),
+    )
     run_cmd(session, "job-status recovery-snapshot", timeout=timeout, expect="recovery-snapshot state=")
     run_cmd(session, "update-status", timeout=timeout, expect="channel=stable")
     run_cmd(session, "update-status", timeout=timeout, expect="branch=main")
@@ -308,6 +396,28 @@ def smoke_second_boot(
         "hey gateway",
         timeout=timeout,
         expect="hello from (",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="status=200",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="tls=TLS 1.2",
+        expect_optional=True,
+    )
+    # Auto-redirect against a real modern site (google.com → www.google.com).
+    run_cmd(
+        session,
+        "net-fetch https://google.com",
+        timeout=timeout,
+        expect="status=200",
         expect_optional=True,
     )
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
@@ -355,6 +465,11 @@ def smoke_second_boot(
     session.wait_for("Logging out", timeout=timeout, start_at=mk)
     login(session=session, timeout=timeout, user="smokeuser", password="smoke")
     assert_shell_identity(session, timeout=timeout, user="smokeuser")
-    run_cmd(session, "config-language show", timeout=timeout, expect="Current language: en")
+    run_cmd(
+        session,
+        "config-language show",
+        timeout=timeout,
+        expect=("Current language: en", "Idioma atual: en", "Idioma actual: en"),
+    )
     if not trigger_poweroff(session, timeout=timeout * 2):
         raise RuntimeError("shutdown-off did not terminate the VM")

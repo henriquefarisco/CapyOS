@@ -32,6 +32,10 @@ static struct {
   uint32_t status_y;
 } g_layout;
 
+static inline void boot_ui_dbg_putc(char ch) {
+  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
 /* ---- helpers ------------------------------------------------------------ */
 
 static uint32_t str_len(const char *s) {
@@ -74,38 +78,9 @@ static void clear_text_line(uint32_t y) {
 }
 
 static void draw_progress_percent(uint32_t stage, uint32_t total) {
-  char text[8];
-  uint32_t pct = 0;
-
-  if (total == 0) {
-    return;
-  }
-  pct = (stage * 100u) / total;
-  if (pct > 100u) {
-    pct = 100u;
-  }
-
-  if (pct == 100u) {
-    text[0] = '1';
-    text[1] = '0';
-    text[2] = '0';
-    text[3] = '%';
-    text[4] = '\0';
-  } else {
-    uint32_t tens = pct / 10u;
-    uint32_t ones = pct % 10u;
-    uint32_t pos = 0;
-    if (pct >= 10u) {
-      text[pos++] = (char)('0' + tens);
-    }
-    text[pos++] = (char)('0' + ones);
-    text[pos++] = '%';
-    text[pos] = '\0';
-  }
-
+  (void)stage;
+  (void)total;
   clear_text_line(g_layout.percent_y);
-  draw_text_centered(text, g_layout.percent_y, g_io.text_muted_fg,
-                     g_io.splash_bg);
 }
 
 /* ---- public API --------------------------------------------------------- */
@@ -128,19 +103,38 @@ void boot_warnings_add(struct boot_warnings *w, const char *msg) {
   w->count++;
 }
 
+/* Keep the early splash path scalar. VMware/OVMF is sensitive to auto-
+ * vectorized XMM moves before the kernel has fully stabilized CPU/runtime
+ * state after ExitBootServices. */
+__attribute__((optimize("O0")))
 void boot_ui_init(const struct boot_ui_io *io) {
   if (!io) {
     return;
   }
-  g_io = *io;
+  g_io.screen_w = io->screen_w;
+  g_io.screen_h = io->screen_h;
+  g_io.splash_bg = io->splash_bg;
+  g_io.splash_icon = io->splash_icon;
+  g_io.splash_bar_border = io->splash_bar_border;
+  g_io.splash_bar_bg = io->splash_bar_bg;
+  g_io.splash_bar_fill = io->splash_bar_fill;
+  g_io.text_fg = io->text_fg;
+  g_io.text_muted_fg = io->text_muted_fg;
+  g_io.console_bg = io->console_bg;
+  g_io.fill_rect = io->fill_rect;
+  g_io.putch_at = io->putch_at;
+  g_io.draw_icon = io->draw_icon;
   g_ui_ready = 1;
 }
 
+__attribute__((optimize("O0")))
 void boot_ui_splash_begin(void) {
   uint32_t scale;
   uint32_t icon_w, icon_h;
   uint32_t bar_w, bar_h;
   uint32_t total_h;
+
+  boot_ui_dbg_putc('a');
 
   if (!g_ui_ready) {
     return;
@@ -204,15 +198,21 @@ void boot_ui_splash_begin(void) {
 
   /* Draw initial splash: background + icon + empty bar. */
   g_io.fill_rect(0, 0, g_io.screen_w, g_io.screen_h, g_io.splash_bg);
+  boot_ui_dbg_putc('b');
   g_io.draw_icon(g_layout.icon_x, g_layout.icon_y, g_layout.icon_scale,
                  g_io.splash_icon);
+  boot_ui_dbg_putc('c');
   g_io.fill_rect(g_layout.bar_x, g_layout.bar_y, g_layout.bar_w,
                  g_layout.bar_h, g_io.splash_bar_border);
+  boot_ui_dbg_putc('d');
   g_io.fill_rect(g_layout.inner_x, g_layout.inner_y, g_layout.inner_w,
                  g_layout.inner_h, g_io.splash_bar_bg);
+  boot_ui_dbg_putc('e');
   draw_progress_percent(0, 100u);
+  boot_ui_dbg_putc('f');
 }
 
+__attribute__((optimize("O0")))
 void boot_ui_splash_advance(uint32_t stage, uint32_t total) {
   uint32_t fill_w;
 
@@ -235,16 +235,16 @@ void boot_ui_splash_advance(uint32_t stage, uint32_t total) {
   draw_progress_percent(stage, total);
 }
 
+__attribute__((optimize("O0")))
 void boot_ui_splash_set_status(const char *text) {
   if (!g_ui_ready) {
     return;
   }
   clear_text_line(g_layout.status_y);
-  if (text) {
-    draw_text_centered(text, g_layout.status_y, g_io.text_fg, g_io.splash_bg);
-  }
+  (void)text;
 }
 
+__attribute__((optimize("O0")))
 void boot_ui_splash_end(void) {
   if (!g_ui_ready) {
     return;

@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "core/localization.h"
+#include "lang/localization.h"
 
 int run_localization_tests(void) {
     int fails = 0;

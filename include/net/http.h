@@ -4,12 +4,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define HTTP_MAX_URL       512
-#define HTTP_MAX_HOST      128
-#define HTTP_MAX_PATH      256
-#define HTTP_MAX_HEADERS   16
+#define HTTP_MAX_URL       1024
+#define HTTP_MAX_HOST      192
+#define HTTP_MAX_PATH      768
+#define HTTP_MAX_HEADERS   24
 #define HTTP_MAX_HEADER_VALUE 256
-#define HTTP_RECV_BUF_SIZE 8192
+#define HTTP_RECV_BUF_SIZE 131072
+#define HTTP_MAX_RESPONSE_SIZE (1024 * 1024)
 
 enum http_method {
   HTTP_GET = 0,
@@ -62,7 +63,8 @@ struct http_client {
   void *tls_ctx;
   enum http_state state;
   struct http_response response;
-  uint8_t recv_buf[HTTP_RECV_BUF_SIZE];
+  uint8_t *recv_buf;
+  uint32_t recv_capacity;
   uint32_t recv_len;
   int error;
 };
@@ -72,8 +74,11 @@ int http_request(const struct http_request *req, struct http_response *resp);
 int http_get(const char *url, struct http_response *resp);
 int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
                   size_t *out_len);
+int http_last_error(void);
+const char *http_error_string(int error);
 void http_response_free(struct http_response *resp);
 int http_parse_url(const char *url, char *host, size_t host_len,
                    char *path, size_t path_len, uint16_t *port, int *use_tls);
+const char *http_find_header(const struct http_response *resp, const char *name);
 
 #endif /* NET_HTTP_H */

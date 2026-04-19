@@ -1,3 +1,4 @@
+#include "arch/x86_64/framebuffer_console.h"
 /* CAPYOS Hyper-V VMBus Synthetic Keyboard Driver */
 #include <stddef.h>
 #include <stdint.h>
@@ -10,8 +11,6 @@
 
 extern void *kmalloc_aligned(uint64_t size, uint64_t alignment);
 extern void kfree_aligned(void *ptr);
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 
 #define KBD_VSC_SEND_RING_BUFFER_SIZE (36u * 1024u)
 #define KBD_VSC_RECV_RING_BUFFER_SIZE (36u * 1024u)

@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "core/service_manager.h"
+#include "services/service_manager.h"
 
 static int g_poll_hits = 0;
 static int g_start_hits = 0;

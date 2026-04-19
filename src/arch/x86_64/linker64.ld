@@ -4,8 +4,11 @@ ENTRY(_start)
 
 SECTIONS
 {
-    /* Keep kernel in low memory, but avoid the ~1MiB area some firmwares/hypervisors use. */
-    . = 4M;
+    /* Carregar em 4M (0x400000): VMware UEFI reserva paginas internas
+       em 16M+ (gera firmware exception na escrita) e tambem em 256M+.
+       4M e seguro: acima do BIOS-compat (~1MB) e fora das janelas
+       internas do firmware VMware. Verificado em sessao anterior. */
+    . = 256M;
 
     .text : ALIGN(4K) {
         *(.text)
@@ -22,9 +25,23 @@ SECTIONS
         *(.data.*)
     }
 
-    .bss : ALIGN(4K) {
+    .got : ALIGN(8) {
+        *(.got)
+        *(.got.*)
+        *(.got.plt)
+        *(.got.plt.*)
+    }
+
+    .bss (NOLOAD) : ALIGN(4K) {
+        PROVIDE(__bss_start = .);
         *(.bss)
         *(.bss.*)
         *(COMMON)
+        PROVIDE(__bss_end = .);
+    }
+
+    .bootstrap_stack (NOLOAD) : ALIGN(4K) {
+        KEEP(*(.bootstrap_stack))
+        KEEP(*(.bootstrap_stack.*))
     }
 }

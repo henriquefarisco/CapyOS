@@ -4,20 +4,32 @@
 #include "kernel/scheduler.h"
 #include "memory/pmm.h"
 #include "memory/vmm.h"
-#include "core/boot_metrics.h"
-#include "core/boot_slot.h"
-#include "core/auth_policy.h"
+#include "boot/boot_metrics.h"
+#include "boot/boot_slot.h"
+#include "auth/auth_policy.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/apic.h"
+#include "arch/x86_64/kernel_shell_dispatch.h"
 #include "drivers/gpu/gpu_core.h"
 #include "drivers/rtc/rtc.h"
+#include "drivers/timer/pit.h"
 #include "net/socket.h"
 #include "net/dns_cache.h"
 #include "fs/fsck.h"
+#include "gui/desktop.h"
+#include "gui/desktop_runtime.h"
+#include "drivers/input/mouse.h"
+#include "drivers/input/keyboard_layout.h"
+#include "apps/calculator.h"
+#include "apps/file_manager.h"
+#include "apps/text_editor.h"
+#include "apps/task_manager.h"
+#include "apps/settings.h"
+#include "apps/html_viewer.h"
+#include "security/tls.h"
+#include "arch/x86_64/framebuffer_console.h"
+#include "drivers/pcie.h"
 #include <stddef.h>
-
-extern void fbcon_print(const char *s);
-extern void fbcon_putc(char c);
 
 static void print_adapter(const char *s) { fbcon_print(s); }
 
@@ -39,6 +51,77 @@ static void print_u64(uint64_t v) {
   for (int i = tp - 1; i >= 0; i--) buf[p++] = tmp[i];
   buf[p] = 0;
   fbcon_print(buf);
+}
+
+static void print_hex16(uint16_t v) {
+  static const char hex[] = "0123456789ABCDEF";
+  fbcon_putc(hex[(v >> 12) & 0xF]);
+  fbcon_putc(hex[(v >> 8) & 0xF]);
+  fbcon_putc(hex[(v >> 4) & 0xF]);
+  fbcon_putc(hex[v & 0xF]);
+}
+
+static void print_hex8(uint8_t v) {
+  static const char hex[] = "0123456789ABCDEF";
+  fbcon_putc(hex[(v >> 4) & 0xF]);
+  fbcon_putc(hex[v & 0xF]);
+}
+
+static const char *pci_class_name(uint8_t cls) {
+  switch (cls) {
+  case 0x00: return "Unclassified";
+  case 0x01: return "Storage";
+  case 0x02: return "Network";
+  case 0x03: return "Display";
+  case 0x04: return "Multimedia";
+  case 0x05: return "Memory";
+  case 0x06: return "Bridge";
+  case 0x07: return "Communication";
+  case 0x08: return "System";
+  case 0x09: return "Input";
+  case 0x0C: return "Serial Bus";
+  case 0x0D: return "Wireless";
+  default:   return "Other";
+  }
+}
+
+/* --- print-pci: scan and list all PCI devices --- */
+static int cmd_print_pci(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx; (void)argc; (void)argv;
+  int count = 0;
+  fbcon_print("PCI devices:\n");
+  fbcon_print("  Bus Dev Fn  Vendor Device Class    Name\n");
+  for (uint16_t bus = 0; bus < 256; bus++) {
+    for (uint8_t dev = 0; dev < 32; dev++) {
+      for (uint8_t func = 0; func < 8; func++) {
+        uint16_t vendor = pci_config_read16((uint8_t)bus, dev, func, PCI_VENDOR_ID);
+        if (vendor == 0xFFFF || vendor == 0x0000) {
+          if (func == 0) break;
+          continue;
+        }
+        uint16_t device_id = pci_config_read16((uint8_t)bus, dev, func, PCI_DEVICE_ID);
+        uint32_t class_rev = pci_config_read32((uint8_t)bus, dev, func, PCI_CLASS_REVISION);
+        uint8_t class_code = (uint8_t)(class_rev >> 24);
+        uint8_t subclass = (uint8_t)(class_rev >> 16);
+        fbcon_print("  ");
+        print_hex8((uint8_t)bus); fbcon_print("  ");
+        print_hex8(dev); fbcon_print("  ");
+        print_hex8(func); fbcon_print("  ");
+        print_hex16(vendor); fbcon_print("  ");
+        print_hex16(device_id); fbcon_print("  ");
+        print_hex8(class_code); fbcon_putc('.'); print_hex8(subclass);
+        fbcon_print("  "); fbcon_print(pci_class_name(class_code));
+        fbcon_putc('\n');
+        count++;
+        if (func == 0) {
+          uint8_t hdr = pci_config_read8((uint8_t)bus, dev, func, PCI_HEADER_TYPE);
+          if ((hdr & 0x80) == 0) break;
+        }
+      }
+    }
+  }
+  fbcon_print("Total: "); print_u32((uint32_t)count); fbcon_print(" devices\n");
+  return 0;
 }
 
 /* --- print-tasks: show running tasks --- */
@@ -146,6 +229,27 @@ static int cmd_print_dns_cache(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
+static int cmd_print_last_tls(struct shell_context *ctx, int argc, char **argv) {
+  struct tls_security_info info;
+  (void)ctx; (void)argc; (void)argv;
+
+  fbcon_print("TLS last session:\n");
+  fbcon_print("  state: "); fbcon_print(tls_state_name(tls_last_state())); fbcon_putc('\n');
+  fbcon_print("  error: "); fbcon_print(tls_alert_name(tls_last_error())); fbcon_putc('\n');
+  if (tls_get_last_security_info(&info) != 0 || info.protocol_version == 0) {
+    fbcon_print("  no negotiated session data\n");
+    return 0;
+  }
+  fbcon_print("  version: "); fbcon_print(tls_version_name(info.protocol_version)); fbcon_putc('\n');
+  fbcon_print("  cipher:  "); fbcon_print(tls_cipher_suite_name(info.cipher_suite)); fbcon_putc('\n');
+  fbcon_print("  anchors: "); print_u32(info.trust_anchor_count); fbcon_putc('\n');
+  fbcon_print("  peer verified: "); fbcon_print(info.peer_verified ? "yes" : "no"); fbcon_putc('\n');
+  fbcon_print("  hostname ok:   "); fbcon_print(info.hostname_validated ? "yes" : "no"); fbcon_putc('\n');
+  fbcon_print("  custom anchor: "); fbcon_print(info.custom_anchor_loaded ? "yes" : "no"); fbcon_putc('\n');
+  fbcon_print("  alpn: "); fbcon_print(info.alpn[0] ? info.alpn : "(none)"); fbcon_putc('\n');
+  return 0;
+}
+
 /* --- print-boot-slot: show A/B slot status --- */
 static int cmd_print_boot_slot(struct shell_context *ctx, int argc, char **argv) {
   (void)ctx; (void)argc; (void)argv;
@@ -175,23 +279,107 @@ static int cmd_scheduler_stats(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
-static const struct shell_command extended_commands[] = {
-  {"print-tasks",      cmd_print_tasks},
-  {"print-mem",        cmd_print_mem},
-  {"print-cpus",       cmd_print_cpus},
-  {"print-gpu",        cmd_print_gpu},
-  {"print-clock",      cmd_print_clock},
-  {"print-boot-times", cmd_print_boot_times},
-  {"print-sockets",    cmd_print_sockets},
-  {"print-dns-cache",  cmd_print_dns_cache},
-  {"print-boot-slot",  cmd_print_boot_slot},
-  {"auth-status",      cmd_auth_status},
-  {"scheduler-stats",  cmd_scheduler_stats},
-};
-
-const struct shell_command *shell_commands_extended(size_t *count) {
-  if (count) *count = sizeof(extended_commands) / sizeof(extended_commands[0]);
-  return extended_commands;
+static int ensure_desktop(struct shell_context *ctx) {
+  if (desktop_is_active()) return 0;
+  if (!ctx) { fbcon_print("No shell context for desktop.\n"); return -1; }
+  return desktop_runtime_start(ctx);
 }
 
-__asm__(".section .note.GNU-stack,\"\",@progbits");
+static int cmd_desktop_start(struct shell_context *ctx, int argc, char **argv) {
+  (void)argc; (void)argv;
+  return desktop_runtime_start(ctx);
+}
+
+static int cmd_open_calc(struct shell_context *c, int a, char **v) {
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  calculator_open(); return 0;
+}
+static int cmd_open_files(struct shell_context *c, int a, char **v) {
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  file_manager_open(); return 0;
+}
+static int cmd_open_editor(struct shell_context *c, int a, char **v) {
+  (void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  text_editor_open(a > 1 ? v[1] : NULL); return 0;
+}
+static int cmd_open_tasks(struct shell_context *c, int a, char **v) {
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  task_manager_open(); return 0;
+}
+static int cmd_open_settings(struct shell_context *c, int a, char **v) {
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  settings_open(); return 0;
+}
+static int cmd_open_browser(struct shell_context *c, int a, char **v) {
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  html_viewer_open(); return 0;
+}
+
+#define EXT_CMD_COUNT 24
+#define EXT_EARLY_COUNT 6
+
+static struct shell_command g_extended_commands[EXT_CMD_COUNT];
+static struct shell_command g_extended_early_commands[EXT_EARLY_COUNT];
+static int g_extended_initialized = 0;
+
+static void set_cmd(struct shell_command *c, const char *n, shell_command_handler h) {
+  c->name = n;
+  c->handler = h;
+}
+
+static void extended_init(void) {
+  if (g_extended_initialized) return;
+  int i = 0;
+  set_cmd(&g_extended_commands[i++], "desktop",          cmd_desktop_start);
+  set_cmd(&g_extended_commands[i++], "desktopstart",     cmd_desktop_start);
+  set_cmd(&g_extended_commands[i++], "desktop-start",    cmd_desktop_start);
+  set_cmd(&g_extended_commands[i++], "clock",            cmd_print_clock);
+  set_cmd(&g_extended_commands[i++], "printclock",       cmd_print_clock);
+  set_cmd(&g_extended_commands[i++], "open-calculator",  cmd_open_calc);
+  set_cmd(&g_extended_commands[i++], "open-files",       cmd_open_files);
+  set_cmd(&g_extended_commands[i++], "open-editor",      cmd_open_editor);
+  set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_open_tasks);
+  set_cmd(&g_extended_commands[i++], "open-settings",    cmd_open_settings);
+  set_cmd(&g_extended_commands[i++], "open-browser",     cmd_open_browser);
+  set_cmd(&g_extended_commands[i++], "print-tasks",      cmd_print_tasks);
+  set_cmd(&g_extended_commands[i++], "print-mem",        cmd_print_mem);
+  set_cmd(&g_extended_commands[i++], "print-cpus",       cmd_print_cpus);
+  set_cmd(&g_extended_commands[i++], "print-gpu",        cmd_print_gpu);
+  set_cmd(&g_extended_commands[i++], "print-clock",      cmd_print_clock);
+  set_cmd(&g_extended_commands[i++], "print-boot-times", cmd_print_boot_times);
+  set_cmd(&g_extended_commands[i++], "print-sockets",    cmd_print_sockets);
+  set_cmd(&g_extended_commands[i++], "print-dns-cache",  cmd_print_dns_cache);
+  set_cmd(&g_extended_commands[i++], "print-last-tls",   cmd_print_last_tls);
+  set_cmd(&g_extended_commands[i++], "print-boot-slot",  cmd_print_boot_slot);
+  set_cmd(&g_extended_commands[i++], "auth-status",      cmd_auth_status);
+  set_cmd(&g_extended_commands[i++], "scheduler-stats",  cmd_scheduler_stats);
+  set_cmd(&g_extended_commands[i++], "print-pci",        cmd_print_pci);
+
+  i = 0;
+  set_cmd(&g_extended_early_commands[i++], "clock",          cmd_print_clock);
+  set_cmd(&g_extended_early_commands[i++], "printclock",     cmd_print_clock);
+  set_cmd(&g_extended_early_commands[i++], "print-clock",    cmd_print_clock);
+  set_cmd(&g_extended_early_commands[i++], "desktop",        cmd_desktop_start);
+  set_cmd(&g_extended_early_commands[i++], "desktopstart",   cmd_desktop_start);
+  set_cmd(&g_extended_early_commands[i++], "desktop-start",  cmd_desktop_start);
+
+  g_extended_initialized = 1;
+}
+
+const struct shell_command *shell_commands_extended(size_t *count) {
+  extended_init();
+  if (count) *count = EXT_CMD_COUNT;
+  return g_extended_commands;
+}
+
+const struct shell_command *shell_commands_extended_early(size_t *count) {
+  extended_init();
+  if (count) *count = EXT_EARLY_COUNT;
+  return g_extended_early_commands;
+}

@@ -13,6 +13,6 @@ struct task_manager_app {
 void task_manager_open(void);
 void task_manager_refresh(struct task_manager_app *app);
 void task_manager_paint(struct task_manager_app *app);
-void task_manager_kill_selected(struct task_manager_app *app);
+void task_manager_restart_selected(struct task_manager_app *app);
 
 #endif

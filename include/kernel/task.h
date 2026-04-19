@@ -58,6 +58,7 @@ struct task {
   uint64_t cpu_time_ns;
   uint64_t wake_tick;
   int exit_code;
+  uint32_t quantum_remaining;
   struct task *next;
   struct task *prev;
   void *wait_channel;
@@ -79,6 +80,7 @@ void task_sleep(uint64_t ticks);
 void task_wake(struct task *t);
 void task_block(struct task *t, void *channel);
 void task_unblock_channel(void *channel);
+struct task *task_at_index(size_t index);
 size_t task_count(void);
 void task_list(void (*print)(const char *));
 

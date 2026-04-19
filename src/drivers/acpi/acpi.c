@@ -3,7 +3,7 @@
  * Parses ACPI tables and provides power management functions.
  */
 #include "drivers/acpi/acpi.h"
-#include "arch/x86/hw/io.h"
+#include "drivers/io.h"
 #include "drivers/efi/efi_console.h"
 
 #include <stddef.h>
@@ -37,15 +37,15 @@ typedef struct {
 } EFI_RUNTIME_SERVICES_K;
 
 /* Global ACPI state */
-static int g_acpi_initialized = 0;
+int g_acpi_initialized = 0;
 static uint16_t g_pm1a_cnt = 0;
 static uint16_t g_pm1b_cnt = 0;
 static uint16_t g_slp_typa = ACPI_SLP_TYP_S5;
 static uint16_t g_slp_typb = ACPI_SLP_TYP_S5;
 static struct acpi_gas g_reset_reg = {0};
 static uint8_t g_reset_value = 0;
-static uint64_t g_rsdp_override = 0;
-static uint64_t g_efi_system_table = 0;
+uint64_t g_rsdp_override = 0;
+uint64_t g_efi_system_table = 0;
 
 /* String comparison helper */
 static int mem_compare(const void *a, const void *b, size_t len) {

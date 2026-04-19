@@ -1,7 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
+#include "lang/localization.h"
 #include "memory/kmem.h"
 
 static void buffer_append_local(char *dst, size_t dst_size, const char *src)

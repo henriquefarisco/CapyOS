@@ -4,7 +4,7 @@
 #include "drivers/video/vga.h"
 
 #ifndef KHEAP_SIZE
-#define KHEAP_SIZE (2 * 1024 * 1024)     // 2 MiB
+#define KHEAP_SIZE (16 * 1024 * 1024)    // 16 MiB
 #endif
 
 /*

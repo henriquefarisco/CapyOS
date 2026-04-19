@@ -1,8 +1,8 @@
 #include <stdint.h>
-#include "arch/x86/cpu/isr.h"     // registro de IRQ handler
+#include "drivers/irq.h"     // registro de IRQ handler
 #include "drivers/timer/pit.h"
 #include "security/csprng.h"
-#include "arch/x86/hw/io.h"      // garante protótipos de outb/inb (I/O ports)
+#include "drivers/io.h"      // garante protótipos de outb/inb (I/O ports)
 
 #define PIT_CH0   0x40
 #define PIT_CMD   0x43

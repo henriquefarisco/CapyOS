@@ -1,9 +1,9 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
-#include "core/user.h"
-#include "core/user_prefs.h"
+#include "lang/localization.h"
+#include "auth/user.h"
+#include "auth/user_prefs.h"
 #include "fs/vfs.h"
 #include "memory/kmem.h"
 

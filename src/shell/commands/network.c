@@ -1,6 +1,6 @@
 #include "network_internal.h"
 
-static struct shell_command g_network_commands[10];
+static struct shell_command g_network_commands[11];
 static int g_network_commands_initialized = 0;
 
 static int net_cmd_ping_entry(struct shell_context *ctx, int argc, char **argv) {
@@ -44,6 +44,10 @@ static int net_cmd_mode_entry(struct shell_context *ctx, int argc, char **argv) 
   return net_cmd_mode(ctx, argc, argv);
 }
 
+static int net_cmd_fetch_entry(struct shell_context *ctx, int argc, char **argv) {
+  return net_cmd_fetch(ctx, argc, argv);
+}
+
 static void init_network_commands(void) {
   if (g_network_commands_initialized) {
     return;
@@ -68,13 +72,15 @@ static void init_network_commands(void) {
   g_network_commands[8].handler = net_cmd_set_entry;
   g_network_commands[9].name = "net-mode";
   g_network_commands[9].handler = net_cmd_mode_entry;
+  g_network_commands[10].name = "net-fetch";
+  g_network_commands[10].handler = net_cmd_fetch_entry;
   g_network_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_network(size_t *count) {
   init_network_commands();
   if (count) {
-    *count = 10;
+    *count = 11;
   }
   return g_network_commands;
 }

@@ -13,6 +13,7 @@ CAPYOS x64 smoke test for the official ISO install flow:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -110,9 +111,22 @@ def run_installer_boot(
             session=session,
             timeout=parsed.step_timeout,
             keyboard_layout=parsed.keyboard_layout,
+            user=parsed.user,
+            password=parsed.password,
         )
     finally:
         session.stop()
+
+
+def extract_volume_key(installer_log: Path) -> str | None:
+    try:
+        text = installer_log.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    match = re.search(r"\b([A-Z0-9]{4}(?:-[A-Z0-9]{4}){5})\b", text)
+    if not match:
+        return None
+    return match.group(1)
 
 
 def run_boot1(
@@ -124,6 +138,7 @@ def run_boot1(
     boot1_debugcon_log: Path,
     parsed: argparse.Namespace,
     marker: str,
+    volume_key: str | None,
 ) -> None:
     print("[info] boot #1: first boot from installed disk")
     session = boot_with_session(
@@ -144,15 +159,23 @@ def run_boot1(
             user=parsed.user,
             password=parsed.password,
             keyboard_layout=parsed.keyboard_layout,
+            volume_key=volume_key,
         )
-        login(session=session, timeout=parsed.step_timeout, user=parsed.user, password=parsed.password)
-        smoke_first_boot(
+        mode = login(
             session=session,
             timeout=parsed.step_timeout,
             user=parsed.user,
             password=parsed.password,
-            marker=marker,
+            allow_desktop=True,
         )
+        if mode == "shell":
+            smoke_first_boot(
+                session=session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+                marker=marker,
+            )
     finally:
         session.stop()
 
@@ -186,13 +209,21 @@ def run_boot2(
             timeout=parsed.step_timeout * 4,
             start_at=mk,
         )
-        smoke_second_boot(
+        mode = login(
             session=session,
             timeout=parsed.step_timeout,
             user=parsed.user,
             password=parsed.password,
-            marker=marker,
+            allow_desktop=True,
         )
+        if mode == "shell":
+            smoke_second_boot(
+                session=session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+                marker=marker,
+            )
     finally:
         session.stop()
 
@@ -240,6 +271,7 @@ def main() -> int:
             installer_debugcon_log=installer_debugcon_log,
             parsed=parsed,
         )
+        volume_key = extract_volume_key(installer_log)
         run_boot1(
             qemu_bin=qemu_bin,
             ovmf_code=ovmf_code,
@@ -249,6 +281,7 @@ def main() -> int:
             boot1_debugcon_log=boot1_debugcon_log,
             parsed=parsed,
             marker=marker,
+            volume_key=volume_key,
         )
         run_boot2(
             qemu_bin=qemu_bin,

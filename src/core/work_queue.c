@@ -1,3 +1,4 @@
+#pragma GCC optimize("O0")
 #include "core/work_queue.h"
 
 #include <stddef.h>

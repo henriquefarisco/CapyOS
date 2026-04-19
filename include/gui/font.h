@@ -8,7 +8,7 @@
 #define FONT_GLYPH_WIDTH  8
 #define FONT_GLYPH_HEIGHT 16
 #define FONT_FIRST_CHAR   32
-#define FONT_LAST_CHAR    126
+#define FONT_LAST_CHAR    255
 #define FONT_GLYPH_COUNT  (FONT_LAST_CHAR - FONT_FIRST_CHAR + 1)
 
 struct font {

@@ -12,7 +12,7 @@
 #define PS2_MOUSE_CMD_GET_ID      0xF2
 #define PS2_MOUSE_CMD_SET_RATE    0xF3
 
-#define MOUSE_EVENT_QUEUE_SIZE 64
+#define MOUSE_EVENT_QUEUE_SIZE 256
 
 static struct mouse_state mouse_current;
 static struct mouse_event event_queue[MOUSE_EVENT_QUEUE_SIZE];
@@ -61,7 +61,11 @@ static uint8_t ps2_mouse_read(void) {
 }
 
 static void mouse_push_event(const struct mouse_event *ev) {
-  if (event_count >= MOUSE_EVENT_QUEUE_SIZE) return;
+  if (!ev) return;
+  if (event_count >= MOUSE_EVENT_QUEUE_SIZE) {
+    event_tail = (event_tail + 1) % MOUSE_EVENT_QUEUE_SIZE;
+    event_count--;
+  }
   event_queue[event_head] = *ev;
   event_head = (event_head + 1) % MOUSE_EVENT_QUEUE_SIZE;
   event_count++;
@@ -103,12 +107,15 @@ void mouse_ps2_init(void) {
 }
 
 void mouse_ps2_irq_handler(void) {
-  if (!mouse_inited) return;
-  uint8_t status = ps2_inb(PS2_STATUS_PORT);
-  if (!(status & 0x20)) return;
   uint8_t data = ps2_inb(PS2_DATA_PORT);
+  if (!mouse_inited) return;
 
   int packet_size = mouse_has_wheel ? 4 : 3;
+
+  if (mouse_packet_idx == 0 && !(data & 0x08)) {
+    return;
+  }
+
   mouse_packet[mouse_packet_idx++] = data;
 
   if (mouse_packet_idx < packet_size) return;
@@ -145,6 +152,20 @@ void mouse_ps2_irq_handler(void) {
   mouse_push_event(&ev);
 }
 
+void mouse_ps2_poll(void) {
+  if (!mouse_inited) return;
+  /* Drain every pending PS/2 mouse byte in one shot.  The keyboard polling
+   * path (ps2_poll_scancode) only consumes one byte per call and stops as
+   * soon as a mouse byte is seen, which would otherwise spread a single
+   * 3-4 byte packet over several frames and leave clicks feeling dead. */
+  for (int i = 0; i < 64; i++) {
+    uint8_t status = ps2_inb(PS2_STATUS_PORT);
+    if (!(status & 0x01)) return;       /* output buffer empty */
+    if (!(status & 0x20)) return;       /* keyboard byte — leave it */
+    mouse_ps2_irq_handler();
+  }
+}
+
 int mouse_poll(struct mouse_event *event) {
   if (!event || event_count == 0) return -1;
   *event = event_queue[event_tail];
@@ -169,4 +190,8 @@ void mouse_set_position(int32_t x, int32_t y) {
 
 int mouse_available(void) {
   return mouse_inited;
+}
+
+int mouse_pending(void) {
+  return event_count != 0;
 }

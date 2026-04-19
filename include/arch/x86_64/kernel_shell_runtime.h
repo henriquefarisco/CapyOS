@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "boot/handoff.h"
-#include "core/session.h"
+#include "auth/session.h"
 #include "core/system_init.h"
-#include "core/user.h"
+#include "auth/user.h"
 #include "fs/block.h"
 #include "shell/core.h"
 
@@ -23,6 +23,7 @@ struct x64_kernel_shell_runtime_state {
   uint8_t *data_io_probe;
   size_t data_io_probe_size;
   uint8_t allow_recovery_ram_fallback;
+  uint8_t desktop_autostart_pending;
 };
 
 struct x64_kernel_shell_runtime_io {

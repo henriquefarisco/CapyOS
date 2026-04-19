@@ -6,9 +6,9 @@
 #include "gui/compositor.h"
 #include "gui/font.h"
 
-#define TERM_MAX_COLS  120
-#define TERM_MAX_ROWS  40
-#define TERM_SCROLLBACK 500
+#define TERM_MAX_COLS  200
+#define TERM_MAX_ROWS  60
+#define TERM_SCROLLBACK 64
 #define TERM_INPUT_BUF  256
 #define TERM_TAB_SIZE   8
 
@@ -39,6 +39,11 @@ struct terminal {
   uint32_t input_len;
   uint32_t input_pos;
   int echo;
+  uint32_t default_fg;
+  uint32_t default_bg;
+  int ansi_state;
+  char ansi_buf[16];
+  int ansi_len;
   void (*output_callback)(struct terminal *term, const char *data, size_t len);
   void *user_data;
 };

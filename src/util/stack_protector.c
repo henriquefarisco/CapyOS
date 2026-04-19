@@ -1,6 +1,6 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include <stdint.h>
 
-extern void fbcon_print(const char *s);
 
 uintptr_t __stack_chk_guard = (uintptr_t)0x595e9fbd3c2a1f07ULL;
 

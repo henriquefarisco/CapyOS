@@ -1,7 +1,7 @@
 #ifndef SYSTEM_INIT_H
 #define SYSTEM_INIT_H
 
-#include "core/session.h"
+#include "auth/session.h"
 
 #include <stdint.h>
 
@@ -64,6 +64,17 @@ enum system_hyperv_input_gate {
 };
 
 void system_set_boot_defaults(const char *keyboard_layout, const char *language);
+void system_set_installer_config(const char *hostname, const char *theme,
+                                 const char *admin_username,
+                                 const char *admin_password,
+                                 int splash_enabled);
+int system_installer_config_available(void);
+const char *system_installer_hostname(void);
+const char *system_installer_theme(void);
+const char *system_installer_admin_username(void);
+const char *system_installer_admin_password(void);
+int system_installer_splash_enabled(void);
+void system_installer_clear_password(void);
 int system_load_settings(struct system_settings *out);
 int system_save_settings(const struct system_settings *settings);
 int system_save_keyboard_layout(const char *layout);

@@ -4,8 +4,9 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-09
+Ultima atualizacao: 2026-04-11
 Versao de referencia: `0.8.0-alpha.0`
+Consolidacao atual de `develop`: desktop x64 estabilizado, limpeza da trilha 32-bit, ampliacao de drivers e documentacao revisada.
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -64,6 +65,7 @@ Observacao importante:
 - indice principal: `docs/README.md`
 - arquitetura atual: `docs/architecture/system-overview.md`
 - plano-mestre do sistema: `docs/plans/system-master-plan.md`
+- plano-mestre de consolidacao atual: `docs/plans/capyos-master-improvement-plan.md`
 - plano de execucao atual: `docs/plans/system-execution-plan.md`
 - roadmap tecnico por dominio: `docs/plans/system-roadmap.md`
 - hardening de plataforma: `docs/plans/platform-hardening-plan.md`

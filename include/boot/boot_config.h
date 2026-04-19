@@ -4,10 +4,11 @@
 #include <stdint.h>
 
 #define BOOT_CONFIG_MAGIC 0xB001CF61
-#define BOOT_CONFIG_VERSION 3
+#define BOOT_CONFIG_VERSION 4
 #define BOOT_CONFIG_LBA 1
 
 #define BOOT_CONFIG_FLAG_HAS_VOLUME_KEY 0x0001u
+#define BOOT_CONFIG_FLAG_HAS_SETUP_DATA 0x0002u
 
 struct boot_config_sector {
   uint32_t magic;           // BOOT_CONFIG_MAGIC
@@ -16,7 +17,12 @@ struct boot_config_sector {
   char keyboard_layout[16]; // "us", "br-abnt2", etc.
   char language[16];        // "en", "pt-BR", "es", etc.
   char volume_key[64];      // Canonical: A-Z0-9, no hyphens
-  uint8_t reserved[408];    // Padding to 512 bytes
+  char hostname[32];         // e.g. "capyos-node"
+  char theme[16];            // "capyos", "ocean", "forest"
+  char admin_username[32];   // e.g. "admin"
+  char admin_password[64];   // plaintext, zeroed by kernel after use
+  uint8_t splash_enabled;    // 0 or 1
+  uint8_t reserved[263];     // Padding to 512 bytes
 } __attribute__((packed));
 
 #endif

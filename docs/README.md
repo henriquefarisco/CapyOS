@@ -24,6 +24,9 @@ Escopo atual:
 - `plans/system-master-plan.md`
   - plano-mestre de evolucao do sistema inteiro, cobrindo fundacoes faltantes,
     seguranca, performance, GUI, atualizacoes, apps e linguagem propria
+- `plans/capyos-master-improvement-plan.md`
+  - consolidacao tecnica mais recente da trilha x64, com foco em desktop,
+    limpeza do legado 32-bit, drivers e verificacao para `develop`
 - `plans/system-execution-plan.md`
   - sequencia de execucao recomendada a partir do estado atual do projeto,
     incluindo progresso, gates de release e proximos marcos

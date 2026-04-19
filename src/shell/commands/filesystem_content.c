@@ -1,8 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
-#include "drivers/video/vga.h"
+#include "lang/localization.h"
 #include "drivers/console/tty.h"
 #include "memory/kmem.h"
 #include "fs/vfs.h"
@@ -198,14 +197,17 @@ static int cmd_print_file_begin(struct shell_context *ctx, int argc, char **argv
     }
     int count = 0;
     for (size_t i = 0; i < len; ++i) {
-        vga_putc(buffer[i]);
+        char ch[2];
+        ch[0] = buffer[i];
+        ch[1] = '\0';
+        shell_print(ch);
         if (buffer[i] == '\n') {
             if (++count >= lines) {
                 break;
             }
         }
     }
-    vga_newline();
+    shell_newline();
     kfree(buffer);
     return 0;
 }
@@ -264,14 +266,14 @@ static int cmd_print_file_end(struct shell_context *ctx, int argc, char **argv) 
             if (newline_count > lines) {
                 buffer[i - 1] = '\0';
                 shell_print(&buffer[i]);
-                vga_newline();
+                shell_newline();
                 kfree(buffer);
                 return 0;
             }
         }
     }
     shell_print(buffer);
-    vga_newline();
+    shell_newline();
     kfree(buffer);
     return 0;
 }
@@ -317,8 +319,8 @@ static int cmd_open(struct shell_context *ctx, int argc, char **argv) {
     size_t len = 0;
     if (shell_read_file(path, &buffer, &len) == 0 && buffer) {
         shell_print(fs_content_text(language, FS_CONTENT_CURRENT_CONTENT_HEADER));
-        vga_write(buffer);
-        vga_newline();
+        shell_print(buffer);
+        shell_newline();
         shell_print(fs_content_text(language, FS_CONTENT_CURRENT_CONTENT_FOOTER));
         kfree(buffer);
     } else {

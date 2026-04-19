@@ -4,6 +4,23 @@
 
 #include "memory/kmem.h"
 
+static inline void dbg_putc(char ch) {
+  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
+static void dbg_puts(const char *s) {
+  while (s && *s) {
+    dbg_putc(*s++);
+  }
+}
+
+static void dbg_hex32(uint32_t value) {
+  static const char hex[] = "0123456789ABCDEF";
+  for (int shift = 28; shift >= 0; shift -= 4) {
+    dbg_putc(hex[(value >> shift) & 0xFu]);
+  }
+}
+
 static void *align_ptr_local(void *ptr, uint32_t align) {
   if (!ptr || align <= 1) {
     return ptr;
@@ -167,6 +184,15 @@ static int efi_do_io(struct efi_block_ctx *bctx, uint32_t block_no, void *buffer
     bctx->last_error_block_no = block_no;
     bctx->last_error_media_id = bctx->last_media_id;
     bctx->error_count += 1U;
+    dbg_puts("[efi] io fail op=");
+    dbg_putc(is_write ? 'w' : 'r');
+    dbg_puts(" blk=");
+    dbg_hex32(block_no);
+    dbg_puts(" media=");
+    dbg_hex32(bctx->last_media_id);
+    dbg_puts(" code=");
+    dbg_hex32((uint32_t)(st & 0xFFFFFFFFULL));
+    dbg_putc('\n');
     return -1;
   }
 
@@ -188,21 +214,54 @@ static int efi_block_read(void *ctx, uint32_t block_no, void *buffer) {
 
 static int efi_block_write(void *ctx, uint32_t block_no, const void *buffer) {
   struct efi_block_ctx *bctx = (struct efi_block_ctx *)ctx;
+  uint32_t verify_media_id = 0;
+  EFI_STATUS_K verify_status = 0;
   if (!bctx || !bctx->bio || !bctx->bio->write_blocks || !buffer) {
     return -1;
   }
-  if (efi_do_io(bctx, block_no, (void *)buffer, 1) != 0) {
-    return -1;
-  }
-  if (bctx->bio->flush_blocks) {
-    EFI_STATUS_K st = bctx->bio->flush_blocks(bctx->bio);
-    if (efi_status_is_error(st)) {
-      /* Some firmware paths report flush as unsupported/error even when
-       * WriteBlocks succeeded. Keep write success and expose status for debug. */
-      bctx->last_status = st;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (efi_do_io(bctx, block_no, (void *)buffer, 1) != 0) {
+      return -1;
+    }
+    if (bctx->bio->flush_blocks) {
+      EFI_STATUS_K st = bctx->bio->flush_blocks(bctx->bio);
+      if (efi_status_is_error(st)) {
+        /* Some firmware paths report flush as unsupported/error even when
+         * WriteBlocks succeeded. Keep write success and expose status for debug. */
+        bctx->last_status = st;
+      }
+    }
+
+    verify_media_id = bctx->media_id;
+    if (bctx->bio->media && bctx->bio->media->media_id != 0U) {
+      verify_media_id = bctx->bio->media->media_id;
+    }
+    verify_status = efi_read_try(bctx, verify_media_id, block_no,
+                                 bctx->bounce_aligned);
+    bctx->last_status = verify_status;
+    bctx->last_block_no = block_no;
+    bctx->last_media_id = verify_media_id;
+    if (!efi_status_is_error(verify_status) &&
+        buffers_equal_local(bctx->bounce_aligned, buffer, bctx->block_size)) {
+      return 0;
     }
   }
-  return 0;
+
+  bctx->last_error_status =
+      efi_status_is_error(verify_status)
+          ? verify_status
+          : (EFI_STATUS_K)(EFI_STATUS_ERROR_BIT_K | 7ULL /* DEVICE_ERROR */);
+  bctx->last_error_block_no = block_no;
+  bctx->last_error_media_id = verify_media_id;
+  bctx->error_count += 1U;
+  dbg_puts("[efi] verify fail blk=");
+  dbg_hex32(block_no);
+  dbg_puts(" media=");
+  dbg_hex32(verify_media_id);
+  dbg_puts(" code=");
+  dbg_hex32((uint32_t)(bctx->last_error_status & 0xFFFFFFFFULL));
+  dbg_putc('\n');
+  return -1;
 }
 
 static struct block_device_ops g_efi_block_ops;
