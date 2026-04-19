@@ -62,6 +62,8 @@ struct tls_security_info {
   uint16_t cipher_suite;
   uint32_t trust_anchor_count;
   int peer_verified;
+  int hostname_validated;
+  int custom_anchor_loaded;
   char alpn[TLS_ALPN_MAX_LEN];
 };
 
@@ -79,6 +81,7 @@ int tls_last_error(void);
 const char *tls_alert_name(int alert);
 int tls_error(struct tls_context *ctx);
 int tls_get_security_info(struct tls_context *ctx, struct tls_security_info *info);
+int tls_get_last_security_info(struct tls_security_info *info);
 const char *tls_version_name(uint16_t version);
 const char *tls_cipher_suite_name(uint16_t suite);
 

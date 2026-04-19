@@ -77,5 +77,6 @@ int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
 void http_response_free(struct http_response *resp);
 int http_parse_url(const char *url, char *host, size_t host_len,
                    char *path, size_t path_len, uint16_t *port, int *use_tls);
+const char *http_find_header(const struct http_response *resp, const char *name);
 
 #endif /* NET_HTTP_H */

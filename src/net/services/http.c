@@ -2,6 +2,7 @@
 #include "net/socket.h"
 #include "net/dns_cache.h"
 #include "net/stack.h"
+#include "net/http_encoding.h"
 #include "security/tls.h"
 #include "memory/kmem.h"
 #include <stddef.h>
@@ -104,6 +105,7 @@ enum http_error {
   HTTP_ERR_SEND,
   HTTP_ERR_RECV,
   HTTP_ERR_RESPONSE_TOO_LARGE,
+  HTTP_ERR_RESPONSE_ENCODING,
   HTTP_ERR_RESPONSE_PARSE,
   HTTP_ERR_NO_MEMORY
 };
@@ -135,6 +137,7 @@ const char *http_error_string(int error) {
     case HTTP_ERR_SEND: return "request send failed";
     case HTTP_ERR_RECV: return "response receive failed";
     case HTTP_ERR_RESPONSE_TOO_LARGE: return "response too large";
+    case HTTP_ERR_RESPONSE_ENCODING: return "unsupported response encoding";
     case HTTP_ERR_RESPONSE_PARSE: return "response parse failed";
     case HTTP_ERR_NO_MEMORY: return "out of memory";
     default: return "network error";
@@ -390,7 +393,8 @@ static int http_build_request(const struct http_request *req, char *buf, size_t 
     return -1;
   }
   if (!http_request_has_header(req, "Accept-Encoding") &&
-      http_buf_append_str(buf, buf_size, &pos, "\r\nAccept-Encoding: identity") != 0) {
+      http_buf_append_str(buf, buf_size, &pos,
+                          "\r\nAccept-Encoding: gzip, deflate, identity") != 0) {
     return -1;
   }
   if (req->method == HTTP_GET &&
@@ -533,6 +537,26 @@ static void http_transport_close(struct http_transport *transport) {
   http_transport_reset(transport);
 }
 
+const char *http_find_header(const struct http_response *resp, const char *name) {
+  if (!resp || !name) return NULL;
+  for (uint32_t i = 0; i < resp->header_count; i++) {
+    if (http_streq_ci(resp->headers[i].name, name)) {
+      return resp->headers[i].value;
+    }
+  }
+  return NULL;
+}
+
+static void http_set_header_value(struct http_response *resp, const char *name,
+                                  const char *value) {
+  if (!resp || !name || !value) return;
+  for (uint32_t i = 0; i < resp->header_count; i++) {
+    if (!http_streq_ci(resp->headers[i].name, name)) continue;
+    http_strcpy(resp->headers[i].value, value, sizeof(resp->headers[i].value));
+    return;
+  }
+}
+
 int http_request(const struct http_request *req, struct http_response *resp) {
   uint32_t ip = 0;
   struct http_transport transport;
@@ -672,6 +696,7 @@ int http_request(const struct http_request *req, struct http_response *resp) {
   }
 
   if (body_received > 0 && body_start) {
+    const char *content_encoding;
     resp->body = (uint8_t *)kmalloc(body_received + 1);
     if (!resp->body) {
       result = http_fail(HTTP_ERR_NO_MEMORY);
@@ -688,6 +713,38 @@ int http_request(const struct http_request *req, struct http_response *resp) {
         goto cleanup;
       }
       resp->body_len = decoded_len;
+    }
+
+    content_encoding = http_find_header(resp, "Content-Encoding");
+    if (http_encoding_requires_decode(content_encoding)) {
+      uint8_t *decoded_body = NULL;
+      size_t decoded_len = 0;
+      int decode_rc = http_encoding_decode_body(content_encoding,
+                                                resp->body,
+                                                resp->body_len,
+                                                HTTP_MAX_RESPONSE_SIZE,
+                                                &decoded_body,
+                                                &decoded_len);
+      if (decode_rc == HTTP_ENCODING_ERR_NO_MEMORY) {
+        http_response_free(resp);
+        result = http_fail(HTTP_ERR_NO_MEMORY);
+        goto cleanup;
+      }
+      if (decode_rc == HTTP_ENCODING_ERR_TOO_LARGE) {
+        http_response_free(resp);
+        result = http_fail(HTTP_ERR_RESPONSE_TOO_LARGE);
+        goto cleanup;
+      }
+      if (decode_rc != HTTP_ENCODING_OK) {
+        http_response_free(resp);
+        result = http_fail(HTTP_ERR_RESPONSE_ENCODING);
+        goto cleanup;
+      }
+      kfree(resp->body);
+      resp->body = decoded_body;
+      resp->body_len = decoded_len;
+      resp->content_length = decoded_len;
+      http_set_header_value(resp, "Content-Encoding", "identity");
     }
   }
 

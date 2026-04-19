@@ -76,10 +76,42 @@ static int test_html_skips_script_and_keeps_noscript(void) {
   return fails;
 }
 
+static int test_html_parses_basic_forms(void) {
+  struct html_document doc;
+  const struct html_node *search = NULL;
+  const struct html_node *hidden = NULL;
+  const struct html_node *button = NULL;
+  int fails = 0;
+  const char *html =
+      "<body><form action=\"/search\" method=\"get\">"
+      "<input type=\"hidden\" name=\"source\" value=\"capy\">"
+      "<input type=\"search\" name=\"q\" value=\"hello\">"
+      "<button type=\"submit\">Go</button>"
+      "</form></body>";
+
+  html_parse(html, strlen(html), &doc);
+  search = find_node(HTML_NODE_TAG_INPUT, &doc, "hello");
+  hidden = find_node(HTML_NODE_TAG_INPUT, &doc, "capy");
+  button = find_node(HTML_NODE_TAG_BUTTON, &doc, "Go");
+
+  fails += expect_true(search != NULL, "search input should be parsed");
+  fails += expect_true(search && strcmp(search->name, "q") == 0,
+                       "search input name should be preserved");
+  fails += expect_true(search && strcmp(search->href, "/search") == 0,
+                       "form action should be copied to input");
+  fails += expect_true(hidden != NULL && hidden->hidden,
+                       "hidden input should be preserved for submission");
+  fails += expect_true(button != NULL, "submit button should be parsed");
+  fails += expect_true(button && strcmp(button->href, "/search") == 0,
+                       "submit button should use form action");
+  return fails;
+}
+
 int run_html_viewer_tests(void) {
   int fails = 0;
   fails += test_html_entities_and_links();
   fails += test_html_skips_script_and_keeps_noscript();
+  fails += test_html_parses_basic_forms();
   if (fails == 0) printf("[PASS] html_viewer\n");
   return fails;
 }
@@ -281,6 +313,10 @@ int tls_error(struct tls_context *ctx) {
 }
 int tls_get_security_info(struct tls_context *ctx, struct tls_security_info *info) {
   (void)ctx;
+  (void)info;
+  return -1;
+}
+int tls_get_last_security_info(struct tls_security_info *info) {
   (void)info;
   return -1;
 }
