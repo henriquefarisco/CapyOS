@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 static char g_flush_capture[65536];
 static int g_flush_calls = 0;

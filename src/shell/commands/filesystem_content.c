@@ -1,7 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
+#include "lang/localization.h"
 #include "drivers/console/tty.h"
 #include "memory/kmem.h"
 #include "fs/vfs.h"

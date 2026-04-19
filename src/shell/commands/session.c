@@ -1,7 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
+#include "lang/localization.h"
 #include "drivers/video/vga.h"
 
 static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {

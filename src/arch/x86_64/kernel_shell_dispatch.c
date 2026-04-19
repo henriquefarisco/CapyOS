@@ -1,3 +1,4 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
 
 #include <stddef.h>
@@ -5,7 +6,6 @@
 #include "shell/commands.h"
 #include "shell/commands_extended.h"
 
-extern void fbcon_print(const char *s);
 
 static int command_name_matches(const char *input, const char *registered) {
   if (!input || !registered) {

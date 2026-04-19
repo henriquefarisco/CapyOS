@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "core/update_agent.h"
+#include "services/update_agent.h"
 
 #define UPDATE_AGENT_REPOSITORY_PATH "/system/update/repository.ini"
 #define UPDATE_AGENT_CACHE_PATH "/system/update/latest.ini"

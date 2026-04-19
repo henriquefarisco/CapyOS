@@ -70,10 +70,13 @@ void x64_platform_timer_init(int native_runtime_ready) {
   }
 
   pit_init(100u);
-  x64_irq_unmask(0);
-  x64_interrupts_enable();
-  g_platform_timer_active = 1;
-  g_platform_timer_status = "pit-irq0-active";
+  /* Keep IRQ0 masked during early boot. The startup path is still bringing
+   * core subsystems online, and periodic timer interrupts here have been
+   * causing re-entrant faults and corrupted returns on UEFI/VM guests.
+   * Consumers fall back to the calibrated timebase until the timer is
+   * explicitly activated later. */
+  g_platform_timer_active = 0;
+  g_platform_timer_status = "pit-programmed-irq-deferred";
 }
 
 int x64_platform_timer_active(void) { return g_platform_timer_active; }

@@ -1,7 +1,7 @@
 #include <stdio.h>
 
-#include "core/service_boot_policy.h"
-#include "core/service_manager.h"
+#include "services/service_boot_policy.h"
+#include "services/service_manager.h"
 
 static int expect_true(int cond, const char *msg) {
   if (!cond) {

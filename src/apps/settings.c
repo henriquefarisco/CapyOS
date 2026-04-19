@@ -2,17 +2,62 @@
 #include "gui/compositor.h"
 #include "gui/font.h"
 #include "gui/widget.h"
+#include "util/kstring.h"
+#include "core/system_init.h"
+#include "core/version.h"
+#include "drivers/input/keyboard.h"
+#include "net/stack.h"
+#include "auth/user.h"
+#include "services/update_agent.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 
+static void settings_u32_str(uint32_t v, char *buf, int len) {
+  int p = 0;
+  if (v == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
+  char t[12]; int tp = 0;
+  while (v && tp < 11) { t[tp++] = '0' + (v % 10); v /= 10; }
+  for (int i = tp - 1; i >= 0 && p < len - 1; i--) buf[p++] = t[i];
+  buf[p] = '\0';
+}
+
+static void ipv4_str(uint32_t ip, char *out, int len) {
+  char tmp[4];
+  int p = 0;
+  for (int i = 3; i >= 0; i--) {
+    settings_u32_str((ip >> (i * 8)) & 0xFF, tmp, 4);
+    for (int j = 0; tmp[j] && p < len - 1; j++) out[p++] = tmp[j];
+    if (i > 0 && p < len - 1) out[p++] = '.';
+  }
+  out[p] = '\0';
+}
+
 static struct settings_app g_settings;
+static int g_settings_open = 0;
 
 static const char *tab_names[SETTINGS_TAB_COUNT] = {
   "Display", "Network", "Keyboard", "Language", "Users", "Updates", "About"
 };
 
-static void settings_memset(void *d, int v, size_t n) {
-  uint8_t *p = (uint8_t *)d; for (size_t i = 0; i < n; i++) p[i] = (uint8_t)v;
+static void settings_cleanup(void) {
+  /* Free tab button widgets */
+  for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
+    if (g_settings.tab_buttons[i]) {
+      widget_destroy(g_settings.tab_buttons[i]);
+      g_settings.tab_buttons[i] = NULL;
+    }
+  }
+  if (g_settings.content_panel) {
+    widget_destroy(g_settings.content_panel);
+    g_settings.content_panel = NULL;
+  }
+  g_settings.window = NULL;
+  g_settings_open = 0;
+}
+
+static void settings_on_close(struct gui_window *win) {
+  (void)win;
+  settings_cleanup();
 }
 
 static void on_tab_click(struct widget *w, void *data) {
@@ -37,7 +82,7 @@ static void settings_window_mouse(struct gui_window *win, int32_t x, int32_t y,
   struct gui_event ev;
   if (!win || !win->user_data || !(buttons & 1)) return;
   app = (struct settings_app *)win->user_data;
-  settings_memset(&ev, 0, sizeof(ev));
+  kmemzero(&ev, sizeof(ev));
   ev.type = GUI_EVENT_MOUSE_DOWN;
   ev.mouse.x = x;
   ev.mouse.y = y;
@@ -55,7 +100,18 @@ void settings_open(void) {
   uint32_t tab_w = 120 + 32 * (scale - 1);
   uint32_t tab_h = 32 + 8 * (scale - 1);
   uint32_t tab_gap = 4 + 4 * (scale - 1);
-  settings_memset(&g_settings, 0, sizeof(g_settings));
+
+  /* If already open, just focus the existing window */
+  if (g_settings_open && g_settings.window) {
+    compositor_show_window(g_settings.window->id);
+    compositor_focus_window(g_settings.window->id);
+    return;
+  }
+
+  /* Clean up stale state */
+  settings_cleanup();
+  kmemzero(&g_settings, sizeof(g_settings));
+
   g_settings.window = compositor_create_window("Settings", 100, 70, width, height);
   if (!g_settings.window) return;
   g_settings.window->bg_color = theme->window_bg;
@@ -63,16 +119,18 @@ void settings_open(void) {
   g_settings.window->user_data = &g_settings;
   g_settings.window->on_paint = settings_window_paint;
   g_settings.window->on_mouse = settings_window_mouse;
+  g_settings.window->on_close = settings_on_close;
   compositor_show_window(g_settings.window->id);
   compositor_focus_window(g_settings.window->id);
 
   /* Create tab buttons on the left sidebar */
   for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
     struct widget *btn = widget_create(WIDGET_BUTTON, g_settings.window);
+    struct widget_style st;
     if (!btn) continue;
     widget_set_bounds(btn, 4, 4 + i * (int32_t)(tab_h + tab_gap), tab_w, tab_h);
     widget_set_text(btn, tab_names[i]);
-    struct widget_style st = widget_button_style();
+    st = widget_button_style();
     st.bg_color = (i == 0) ? theme->accent : theme->accent_alt;
     st.text_color = (i == 0) ? theme->accent_text : theme->text;
     widget_set_style(btn, &st);
@@ -81,6 +139,7 @@ void settings_open(void) {
   }
 
   g_settings.active_tab = SETTINGS_TAB_DISPLAY;
+  g_settings_open = 1;
 }
 
 void settings_switch_tab(struct settings_app *app, enum settings_tab tab) {
@@ -145,34 +204,96 @@ void settings_paint(struct settings_app *app) {
   cy += 8;
 
   switch (app->active_tab) {
-  case SETTINGS_TAB_DISPLAY:
-    font_draw_string(s, f, cx, cy, "Resolution: UEFI GOP default", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "Theme: active user theme", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "Splash: enabled", theme->text); cy += 18;
+  case SETTINGS_TAB_DISPLAY: {
+    struct system_settings live;
+    char line[80];
+    if (system_load_settings(&live) == 0) {
+      line[0] = '\0'; kbuf_append(line, sizeof(line), "Theme: ");
+      kbuf_append(line, sizeof(line), live.theme[0] ? live.theme : "capyos");
+      font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+      font_draw_string(s, f, cx, cy, live.splash_enabled ? "Splash: enabled" : "Splash: disabled", theme->text); cy += 18;
+    } else {
+      font_draw_string(s, f, cx, cy, "(config not loaded)", theme->text_muted); cy += 18;
+    }
+    font_draw_string(s, f, cx, cy, "Themes: capyos, ocean, forest", theme->text_muted); cy += 18;
+    font_draw_string(s, f, cx, cy, "Use CLI config-theme / config-splash", theme->text_muted); cy += 18;
     break;
-  case SETTINGS_TAB_NETWORK:
-    font_draw_string(s, f, cx, cy, "Mode: DHCP", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "IPv4: (see net-status)", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "DNS: (see net-dns)", theme->text); cy += 18;
+  }
+  case SETTINGS_TAB_NETWORK: {
+    struct net_stack_status ns;
+    char line[80];
+    if (net_stack_status(&ns) == 0) {
+      font_draw_string(s, f, cx, cy, ns.ready ? "Status: ready" : "Status: not ready", theme->text); cy += 18;
+      line[0] = '\0'; kbuf_append(line, sizeof(line), "IPv4: ");
+      { char ip[16]; ipv4_str(ns.ipv4.addr, ip, 16); kbuf_append(line, sizeof(line), ip); }
+      font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+      line[0] = '\0'; kbuf_append(line, sizeof(line), "Gateway: ");
+      { char ip[16]; ipv4_str(ns.ipv4.gateway, ip, 16); kbuf_append(line, sizeof(line), ip); }
+      font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+      line[0] = '\0'; kbuf_append(line, sizeof(line), "DNS: ");
+      { char ip[16]; ipv4_str(ns.ipv4.dns, ip, 16); kbuf_append(line, sizeof(line), ip); }
+      font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+    } else {
+      font_draw_string(s, f, cx, cy, "Network: unavailable", theme->text_muted); cy += 18;
+    }
+    font_draw_string(s, f, cx, cy, "Use CLI net-set to configure", theme->text_muted); cy += 18;
     break;
-  case SETTINGS_TAB_KEYBOARD:
-    font_draw_string(s, f, cx, cy, "Layout: us", theme->text); cy += 18;
+  }
+  case SETTINGS_TAB_KEYBOARD: {
+    char line[80];
+    const char *layout = keyboard_current_layout();
+    line[0] = '\0'; kbuf_append(line, sizeof(line), "Current: ");
+    kbuf_append(line, sizeof(line), layout ? layout : "us");
+    font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
     font_draw_string(s, f, cx, cy, "Available: us, br-abnt2", theme->text); cy += 18;
+    font_draw_string(s, f, cx, cy, "Use CLI config-keyboard <layout>", theme->text_muted); cy += 18;
     break;
-  case SETTINGS_TAB_LANGUAGE:
-    font_draw_string(s, f, cx, cy, "System: pt-BR", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "Available: pt-BR, en, es", theme->text); cy += 18;
+  }
+  case SETTINGS_TAB_LANGUAGE: {
+    struct system_settings live;
+    char line[80];
+    if (system_load_settings(&live) == 0 && live.language[0]) {
+      line[0] = '\0'; kbuf_append(line, sizeof(line), "Current: ");
+      kbuf_append(line, sizeof(line), live.language);
+      font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+    } else {
+      font_draw_string(s, f, cx, cy, "Current: en", theme->text); cy += 18;
+    }
+    font_draw_string(s, f, cx, cy, "Available: en, pt-BR, es", theme->text); cy += 18;
+    font_draw_string(s, f, cx, cy, "Use CLI config-language <lang>", theme->text_muted); cy += 18;
     break;
-  case SETTINGS_TAB_USERS:
-    font_draw_string(s, f, cx, cy, "admin (UID 0)", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "Use CLI 'add-user' to create users", theme->text_muted); cy += 18;
+  }
+  case SETTINGS_TAB_USERS: {
+    char line[80];
+    int has_users = userdb_has_any_user();
+    line[0] = '\0'; kbuf_append(line, sizeof(line), "Users: ");
+    kbuf_append(line, sizeof(line), has_users ? "configured" : "none");
+    font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+    font_draw_string(s, f, cx, cy, "Use CLI list-users to view", theme->text_muted); cy += 18;
+    font_draw_string(s, f, cx, cy, "Use CLI add-user to create", theme->text_muted); cy += 18;
     break;
-  case SETTINGS_TAB_UPDATES:
-    font_draw_string(s, f, cx, cy, "Channel: stable", theme->text); cy += 18;
-    font_draw_string(s, f, cx, cy, "Use 'update-status' in CLI for details", theme->text_muted); cy += 18;
+  }
+  case SETTINGS_TAB_UPDATES: {
+    struct system_update_status us;
+    char line[80];
+    update_agent_status_get(&us);
+    line[0] = '\0'; kbuf_append(line, sizeof(line), "Channel: ");
+    kbuf_append(line, sizeof(line), us.channel[0] ? us.channel : "stable");
+    font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+    line[0] = '\0'; kbuf_append(line, sizeof(line), "Branch: ");
+    kbuf_append(line, sizeof(line), us.branch[0] ? us.branch : "main");
+    font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+    font_draw_string(s, f, cx, cy, us.update_available ? "Update: available" : "Update: up to date", theme->text); cy += 18;
+    if (us.available_version[0]) {
+      line[0] = '\0'; kbuf_append(line, sizeof(line), "Version: ");
+      kbuf_append(line, sizeof(line), us.available_version);
+      font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
+    }
     break;
+  }
   case SETTINGS_TAB_ABOUT:
-    font_draw_string(s, f, cx, cy, "CapyOS 0.8.0-alpha.0", theme->text); cy += 18;
+    font_draw_string(s, f, cx, cy, "CapyOS " CAPYOS_VERSION_FULL, theme->text); cy += 18;
+    font_draw_string(s, f, cx, cy, "Channel: " CAPYOS_VERSION_CHANNEL, theme->text); cy += 18;
     font_draw_string(s, f, cx, cy, "Developer: Henrique Schwarz Souza Farisco", theme->text); cy += 18;
     font_draw_string(s, f, cx, cy, "License: Apache-2.0", theme->text); cy += 18;
     font_draw_string(s, f, cx, cy, "Track: UEFI/GPT/x86_64", theme->text_muted); cy += 18;

@@ -66,10 +66,11 @@ uint8_t hyperv_runtime_stage_for(uint8_t vmbus_stage, uint8_t configured,
              : vmbus_stage;
 }
 
-struct netvsc_backend_ops netvsc_vmbus_ops(void) {
-  struct netvsc_backend_ops ops;
-  memset(&ops, 0, sizeof(ops));
-  return ops;
+void netvsc_vmbus_ops_init(struct netvsc_backend_ops *out) {
+  if (!out) {
+    return;
+  }
+  memset(out, 0, sizeof(*out));
 }
 
 int netvsc_vmbus_offer_cached(struct vmbus_offer_info *out) {

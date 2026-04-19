@@ -12,14 +12,17 @@ def run_cmd(
     session: SmokeSession,
     cmd: str,
     timeout: float,
-    expect: str | None = None,
+    expect: str | list[str] | tuple[str, ...] | None = None,
     expect_optional: bool = False,
 ) -> None:
     mk = session.marker()
     session.send_line(cmd)
     if expect:
         try:
-            session.wait_for(expect, timeout=timeout, start_at=mk)
+            if isinstance(expect, (list, tuple)):
+                session.wait_for_any(list(expect), timeout=timeout, start_at=mk)
+            else:
+                session.wait_for(expect, timeout=timeout, start_at=mk)
         except TimeoutError:
             if not expect_optional:
                 raise

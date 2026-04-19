@@ -4,12 +4,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define HTTP_MAX_URL       512
-#define HTTP_MAX_HOST      128
-#define HTTP_MAX_PATH      256
-#define HTTP_MAX_HEADERS   16
+#define HTTP_MAX_URL       1024
+#define HTTP_MAX_HOST      192
+#define HTTP_MAX_PATH      768
+#define HTTP_MAX_HEADERS   24
 #define HTTP_MAX_HEADER_VALUE 256
-#define HTTP_RECV_BUF_SIZE 8192
+#define HTTP_RECV_BUF_SIZE 131072
+#define HTTP_MAX_RESPONSE_SIZE (1024 * 1024)
 
 enum http_method {
   HTTP_GET = 0,
@@ -62,7 +63,8 @@ struct http_client {
   void *tls_ctx;
   enum http_state state;
   struct http_response response;
-  uint8_t recv_buf[HTTP_RECV_BUF_SIZE];
+  uint8_t *recv_buf;
+  uint32_t recv_capacity;
   uint32_t recv_len;
   int error;
 };

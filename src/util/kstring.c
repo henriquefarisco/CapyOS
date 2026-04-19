@@ -29,12 +29,30 @@ int kstreq(const char *a, const char *b) {
 
 void kmemzero(void *dst, size_t len) {
   uint8_t *p = (uint8_t *)dst;
+  /* Align to 8-byte boundary */
+  while (len && ((uintptr_t)p & 7)) { *p++ = 0; --len; }
+  /* Zero 8 bytes at a time */
+  uint64_t *w = (uint64_t *)p;
+  while (len >= 8) { *w++ = 0; len -= 8; }
+  /* Remaining tail bytes */
+  p = (uint8_t *)w;
   while (len--) *p++ = 0;
 }
 
 void kmemcpy(void *dst, const void *src, size_t len) {
   uint8_t *d = (uint8_t *)dst;
   const uint8_t *s = (const uint8_t *)src;
+  /* Align to 8-byte boundary */
+  while (len && ((uintptr_t)d & 7)) { *d++ = *s++; --len; }
+  /* Copy 8 bytes at a time when both pointers are aligned */
+  if (((uintptr_t)s & 7) == 0) {
+    uint64_t *dw = (uint64_t *)d;
+    const uint64_t *sw = (const uint64_t *)s;
+    while (len >= 8) { *dw++ = *sw++; len -= 8; }
+    d = (uint8_t *)dw;
+    s = (const uint8_t *)sw;
+  }
+  /* Remaining tail bytes */
   while (len--) *d++ = *s++;
 }
 

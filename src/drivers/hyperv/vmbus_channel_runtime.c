@@ -1,17 +1,16 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "vmbus_channel_runtime.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include "drivers/hyperv/hyperv.h"
 #include "vmbus_ring.h"
 
 extern void *kmalloc_aligned(uint64_t size, uint64_t alignment);
 extern void kfree_aligned(void *ptr);
 #ifndef UNIT_TEST
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 #endif
 
 static void runtime_log(const char *s) {

@@ -4,9 +4,9 @@
 #include "kernel/scheduler.h"
 #include "memory/pmm.h"
 #include "memory/vmm.h"
-#include "core/boot_metrics.h"
-#include "core/boot_slot.h"
-#include "core/auth_policy.h"
+#include "boot/boot_metrics.h"
+#include "boot/boot_slot.h"
+#include "auth/auth_policy.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/apic.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
@@ -17,6 +17,7 @@
 #include "net/dns_cache.h"
 #include "fs/fsck.h"
 #include "gui/desktop.h"
+#include "gui/desktop_runtime.h"
 #include "drivers/input/mouse.h"
 #include "drivers/input/keyboard_layout.h"
 #include "apps/calculator.h"
@@ -25,11 +26,9 @@
 #include "apps/task_manager.h"
 #include "apps/settings.h"
 #include "apps/html_viewer.h"
+#include "arch/x86_64/framebuffer_console.h"
 #include "drivers/pcie.h"
 #include <stddef.h>
-
-extern void fbcon_print(const char *s);
-extern void fbcon_putc(char c);
 
 static void print_adapter(const char *s) { fbcon_print(s); }
 
@@ -258,139 +257,45 @@ static int cmd_scheduler_stats(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
-extern uint32_t *kernel_desktop_get_fb(void);
-extern uint32_t kernel_desktop_get_width(void);
-extern uint32_t kernel_desktop_get_height(void);
-extern uint32_t kernel_desktop_get_pitch(void);
-extern int kernel_input_trygetc(char *out_char);
-
-static inline void desktop_frame_delay(void) {
-  uint64_t start = pit_ticks();
-  uint32_t spins = 0;
-  while (pit_ticks() == start && spins++ < 200000u) {
-    if (mouse_pending()) break;
-    __asm__ volatile("pause");
-  }
-}
-
-static struct desktop_session g_desktop;
-static int g_desktop_active = 0;
-static struct shell_context *g_desktop_shell_ctx = NULL;
-
-int desktop_is_active(void) { return g_desktop_active; }
-
-int kernel_desktop_dispatch_shell_command(char *line) {
-  if (!g_desktop_shell_ctx || !line) return 0;
-  return x64_kernel_try_shell_command(g_desktop_shell_ctx, 1, line);
-}
-
-void desktop_stop(void) {
-  if (g_desktop_active) {
-    g_desktop_active = 0;
-  }
+static int ensure_desktop(struct shell_context *ctx) {
+  if (desktop_is_active()) return 0;
+  if (!ctx) { fbcon_print("No shell context for desktop.\n"); return -1; }
+  return desktop_runtime_start(ctx);
 }
 
 static int cmd_desktop_start(struct shell_context *ctx, int argc, char **argv) {
-  (void)ctx; (void)argc; (void)argv;
-  if (g_desktop_active) { fbcon_print("Desktop already running.\n"); return 0; }
-  uint32_t *fb = kernel_desktop_get_fb();
-  uint32_t w = kernel_desktop_get_width();
-  uint32_t h = kernel_desktop_get_height();
-  uint32_t pitch = kernel_desktop_get_pitch();
-  if (!fb || w == 0 || h == 0) { fbcon_print("Error: no framebuffer.\n"); return -1; }
-
-  mouse_ps2_init();
-  g_desktop_shell_ctx = ctx;
-  desktop_init(&g_desktop, fb, w, h, pitch, ctx ? ctx->settings : NULL);
-  desktop_open_terminal(&g_desktop);
-  g_desktop_active = 1;
-
-  /* Small state machine to distinguish a bare ESC press (exit desktop)
-   * from a VT100 arrow-key escape sequence (ESC [ A/B/C/D).
-   * escape_state: 0 = idle, 1 = saw ESC, 2 = saw ESC+[ */
-  int escape_state = 0;
-
-  while (g_desktop_active) {
-    char ch = 0;
-    int had_activity = 0;
-    while (kernel_input_trygetc(&ch)) {
-      had_activity = 1;
-      if (escape_state == 2) {
-        /* We already consumed ESC + '['.  The next char is the direction. */
-        escape_state = 0;
-        switch (ch) {
-          case 'A': desktop_handle_input(&g_desktop, KEY_UP, 0); break;
-          case 'B': desktop_handle_input(&g_desktop, KEY_DOWN, 0); break;
-          case 'C': desktop_handle_input(&g_desktop, KEY_RIGHT, 0); break;
-          case 'D': desktop_handle_input(&g_desktop, KEY_LEFT, 0); break;
-          default:  /* Unknown sequence — drop it */                break;
-        }
-        continue;
-      }
-      if (escape_state == 1) {
-        escape_state = 0;
-        if (ch == '[') { escape_state = 2; continue; }
-        /* Bare ESC followed by something other than '[' → exit */
-        g_desktop_active = 0;
-        break;
-      }
-      if (ch == 0x1B) { escape_state = 1; continue; }
-      desktop_handle_input(&g_desktop, (uint32_t)(uint8_t)ch, ch);
-    }
-    /* If we ended the poll loop while waiting for the second byte of an
-     * escape sequence, give it one more frame to arrive before treating
-     * it as a bare ESC press.  Only a truly bare ESC (no follow-up byte
-     * after a full frame delay) should exit the desktop. */
-    if (escape_state == 1 && !kernel_input_trygetc(&ch)) {
-      /* No follow-up → bare ESC → exit */
-      g_desktop_active = 0;
-    } else if (escape_state == 1) {
-      /* Follow-up arrived during the extra poll */
-      if (ch == '[') { escape_state = 2; }
-      else { g_desktop_active = 0; }
-    }
-    if (!g_desktop_active) break;
-    if (desktop_run_frame(&g_desktop)) had_activity = 1;
-    if (!had_activity && !mouse_pending()) desktop_frame_delay();
-  }
-
-  desktop_shutdown(&g_desktop);
-  g_desktop_active = 0;
-  g_desktop_shell_ctx = NULL;
-
-  extern void fbcon_clear_view(void);
-  fbcon_clear_view();
-  return 0;
+  (void)argc; (void)argv;
+  return desktop_runtime_start(ctx);
 }
 
 static int cmd_open_calc(struct shell_context *c, int a, char **v) {
-  (void)c;(void)a;(void)v;
-  if (!g_desktop_active) { fbcon_print("Run desktop-start first\n"); return -1; }
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   calculator_open(); return 0;
 }
 static int cmd_open_files(struct shell_context *c, int a, char **v) {
-  (void)c;(void)a;(void)v;
-  if (!g_desktop_active) { fbcon_print("Run desktop-start first\n"); return -1; }
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   file_manager_open(); return 0;
 }
 static int cmd_open_editor(struct shell_context *c, int a, char **v) {
-  (void)c;(void)v;
-  if (!g_desktop_active) { fbcon_print("Run desktop-start first\n"); return -1; }
+  (void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   text_editor_open(a > 1 ? v[1] : NULL); return 0;
 }
 static int cmd_open_tasks(struct shell_context *c, int a, char **v) {
-  (void)c;(void)a;(void)v;
-  if (!g_desktop_active) { fbcon_print("Run desktop-start first\n"); return -1; }
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   task_manager_open(); return 0;
 }
 static int cmd_open_settings(struct shell_context *c, int a, char **v) {
-  (void)c;(void)a;(void)v;
-  if (!g_desktop_active) { fbcon_print("Run desktop-start first\n"); return -1; }
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   settings_open(); return 0;
 }
 static int cmd_open_browser(struct shell_context *c, int a, char **v) {
-  (void)c;(void)a;(void)v;
-  if (!g_desktop_active) { fbcon_print("Run desktop-start first\n"); return -1; }
+  (void)a;(void)v;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   html_viewer_open(); return 0;
 }
 

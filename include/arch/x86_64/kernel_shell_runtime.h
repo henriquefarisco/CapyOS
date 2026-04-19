@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "boot/handoff.h"
-#include "core/session.h"
+#include "auth/session.h"
 #include "core/system_init.h"
-#include "core/user.h"
+#include "auth/user.h"
 #include "fs/block.h"
 #include "shell/core.h"
 

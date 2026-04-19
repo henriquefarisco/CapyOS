@@ -18,6 +18,22 @@
 #define VFS_OPEN_READ   0x1
 #define VFS_OPEN_WRITE  0x2
 
+enum vfs_error {
+    VFS_OK = 0,
+    VFS_ERR_INVALID_ARGUMENT = 1,
+    VFS_ERR_INVALID_PATH,
+    VFS_ERR_NAME_TOO_LONG,
+    VFS_ERR_NOT_FOUND,
+    VFS_ERR_ALREADY_EXISTS,
+    VFS_ERR_NOT_DIRECTORY,
+    VFS_ERR_IS_DIRECTORY,
+    VFS_ERR_PERMISSION_DENIED,
+    VFS_ERR_DIR_NOT_EMPTY,
+    VFS_ERR_UNSUPPORTED,
+    VFS_ERR_NO_MEMORY,
+    VFS_ERR_IO,
+};
+
 struct vfs_metadata {
     uint32_t uid;
     uint32_t gid;
@@ -105,5 +121,7 @@ int vfs_rmdir(const char *path);
 int vfs_rename(const char *src_path, const char *dst_path);
 int vfs_stat_path(const char *path, struct vfs_stat *out);
 int vfs_set_metadata(const char *path, const struct vfs_metadata *meta);
+int vfs_last_error(void);
+const char *vfs_error_string(int error);
 
 #endif

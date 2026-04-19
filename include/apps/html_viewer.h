@@ -4,9 +4,15 @@
 #include "gui/compositor.h"
 #include <stdint.h>
 
-#define HTML_MAX_NODES 256
-#define HTML_TEXT_MAX  512
-#define HTML_URL_MAX   512
+#define HTML_MAX_NODES 384
+#define HTML_TEXT_MAX  256
+#define HTML_TITLE_MAX 192
+#define HTML_URL_MAX   768
+#define HTML_MAX_COOKIES 24
+#define HTML_COOKIE_NAME_MAX 64
+#define HTML_COOKIE_VALUE_MAX 256
+#define HTML_COOKIE_DOMAIN_MAX 160
+#define HTML_COOKIE_PATH_MAX 256
 
 enum html_node_type {
   HTML_NODE_TEXT = 0,
@@ -29,7 +35,7 @@ enum html_node_type {
 
 struct html_node {
   enum html_node_type type;
-  char text[128];
+  char text[HTML_TEXT_MAX];
   char href[HTML_URL_MAX];
   uint32_t color;
   uint32_t font_size;
@@ -39,7 +45,16 @@ struct html_node {
 struct html_document {
   struct html_node nodes[HTML_MAX_NODES];
   int node_count;
-  char title[128];
+  char title[HTML_TITLE_MAX];
+};
+
+struct html_cookie {
+  char name[HTML_COOKIE_NAME_MAX];
+  char value[HTML_COOKIE_VALUE_MAX];
+  char domain[HTML_COOKIE_DOMAIN_MAX];
+  char path[HTML_COOKIE_PATH_MAX];
+  uint8_t secure;
+  uint8_t host_only;
 };
 
 struct html_viewer_app {
@@ -48,6 +63,11 @@ struct html_viewer_app {
   char url[HTML_URL_MAX];
   int scroll_offset;
   int loading;
+  int url_editing;
+  int url_cursor;
+  int content_height;
+  struct html_cookie cookies[HTML_MAX_COOKIES];
+  uint32_t cookie_count;
 };
 
 void html_viewer_open(void);

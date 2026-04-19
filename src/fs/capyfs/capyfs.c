@@ -6,6 +6,35 @@
 
 #define CAPYFS_DEBUG_CREATE 0
 
+static inline void dbg_putc_serial(char ch) {
+    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
+static void dbg_hex32_serial(uint32_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        dbg_putc_serial(hex[(value >> shift) & 0xFu]);
+    }
+}
+
+static uint32_t dbg_be32_serial_load(const uint8_t *src) {
+    if (!src) {
+        return 0;
+    }
+    return ((uint32_t)src[0] << 24) | ((uint32_t)src[1] << 16) |
+           ((uint32_t)src[2] << 8) | (uint32_t)src[3];
+}
+
+static void store_u32_le_volatile(volatile uint8_t *dst, uint32_t value) {
+    if (!dst) {
+        return;
+    }
+    dst[0] = (uint8_t)(value & 0xFFu);
+    dst[1] = (uint8_t)((value >> 8) & 0xFFu);
+    dst[2] = (uint8_t)((value >> 16) & 0xFFu);
+    dst[3] = (uint8_t)((value >> 24) & 0xFFu);
+}
+
 static void capyfs_dbg_puts(const char *msg) {
 #if CAPYFS_DEBUG_CREATE
     if (msg) {
@@ -131,6 +160,13 @@ static void memory_zero(void *dst, size_t len) {
     }
 }
 
+static int capyfs_format_finish(uint8_t *scratch, int scratch_heap, int rc) {
+    if (scratch_heap && scratch) {
+        kfree(scratch);
+    }
+    return rc;
+}
+
 static void zero_block(struct buffer_head *bh) {
     if (!bh) {
         return;
@@ -159,6 +195,10 @@ int capyfs_format(struct block_device *dev,
                   uint32_t inode_count,
                   uint32_t block_count,
                   capyfs_progress_cb progress) {
+    uint8_t scratch_local[CAPYFS_BLOCK_SIZE];
+    uint8_t *scratch = scratch_local;
+    volatile uint8_t *vscratch = scratch_local;
+    int scratch_heap = 0;
     if (!dev || dev->block_size != CAPYFS_BLOCK_SIZE) {
         return -10;
     }
@@ -186,43 +226,41 @@ int capyfs_format(struct block_device *dev,
         progress("Preparando", 0);
     }
 
-    struct capy_super super;
-    super.magic = CAPYFS_MAGIC;
-    super.version = CAPYFS_VERSION;
-    super.block_size = CAPYFS_BLOCK_SIZE;
-    super.block_count = block_count;
-    super.inode_count = inode_count;
-    super.bmap_start = bmap_start;
-    super.imap_start = imap_start;
-    super.inode_start = inode_start;
-    super.data_start = data_start;
-
-    // Escreve superbloco via buffer cache (um bloco completo)
-    struct buffer_head *sbh = buffer_get(dev, 0);
-    if (!sbh) {
-        return -12;
+    /* Formatting is part of the boot-critical path.  Bypass the buffer cache
+     * entirely here so the initial superblock and metadata do not depend on
+     * any stale cached state from previous retries or transient firmware I/O. */
+    buffer_cache_invalidate(dev);
+    memory_zero(scratch, CAPYFS_BLOCK_SIZE);
+    store_u32_le_volatile(vscratch + 0, CAPYFS_MAGIC);
+    store_u32_le_volatile(vscratch + 4, CAPYFS_VERSION);
+    store_u32_le_volatile(vscratch + 8, CAPYFS_BLOCK_SIZE);
+    store_u32_le_volatile(vscratch + 12, block_count);
+    store_u32_le_volatile(vscratch + 16, inode_count);
+    store_u32_le_volatile(vscratch + 20, bmap_start);
+    store_u32_le_volatile(vscratch + 24, imap_start);
+    store_u32_le_volatile(vscratch + 28, inode_start);
+    store_u32_le_volatile(vscratch + 32, data_start);
+    dbg_putc_serial('F');
+    dbg_putc_serial(' ');
+    dbg_hex32_serial(dbg_be32_serial_load(scratch));
+    dbg_putc_serial(' ');
+    dbg_hex32_serial(dbg_be32_serial_load(scratch + 4));
+    dbg_putc_serial('\n');
+    if (block_device_write(dev, 0, scratch) != 0) {
+        return capyfs_format_finish(scratch, scratch_heap, -12);
     }
-    zero_block(sbh);
-    for (size_t i = 0; i < sizeof(struct capy_super); ++i) {
-        sbh->data[i] = ((const uint8_t *)&super)[i];
-    }
-    buffer_mark_dirty(sbh);
-    buffer_release(sbh);
 
     if (progress) {
         progress("Superbloco", 5);
     }
 
-    struct buffer_head *bh;
     uint32_t meta_blocks = (data_start > bmap_start) ? (data_start - bmap_start) : 0;
     capyfs_dbg_puts("[CAPYFS] limpando metadados begin");
+    memory_zero(scratch, CAPYFS_BLOCK_SIZE);
     for (uint32_t i = bmap_start; i < data_start; ++i) {
-        bh = buffer_get(dev, i);
-        if (!bh) {
-            return -13;
+        if (block_device_write(dev, i, scratch) != 0) {
+            return capyfs_format_finish(scratch, scratch_heap, -13);
         }
-        zero_block(bh);
-        buffer_release(bh);
 
         if (progress && meta_blocks) {
             uint32_t done = (i - bmap_start) + 1;
@@ -241,22 +279,24 @@ int capyfs_format(struct block_device *dev,
     if (progress) {
         progress("Reservando blocos", 72);
     }
-    for (uint32_t blk = 0; blk < used_blocks; ++blk) {
-        uint32_t index = blk;
-        uint32_t rel = index % (CAPYFS_BLOCK_SIZE * 8);
-        uint32_t block_idx = super.bmap_start + index / (CAPYFS_BLOCK_SIZE * 8);
-        struct buffer_head *map_bh = buffer_get(dev, block_idx);
-        if (!map_bh) {
-            return -14;
+    for (uint32_t map = 0; map < block_bitmap_blocks; ++map) {
+        uint32_t bit_start = map * bits_per_block;
+        uint32_t bit_end = bit_start + bits_per_block;
+        if (bit_end > used_blocks) {
+            bit_end = used_blocks;
         }
-        uint32_t byte = rel / 8;
-        uint32_t bit = rel % 8;
-        map_bh->data[byte] |= (1u << bit);
-        buffer_mark_dirty(map_bh);
-        buffer_release(map_bh);
-
-        if (progress && used_blocks) {
-            uint32_t pct = 70 + ((blk + 1) * 15) / used_blocks;
+        memory_zero(scratch, CAPYFS_BLOCK_SIZE);
+        for (uint32_t blk = bit_start; blk < bit_end; ++blk) {
+            uint32_t rel = blk - bit_start;
+            uint32_t byte = rel / 8;
+            uint32_t bit = rel % 8;
+            scratch[byte] |= (uint8_t)(1u << bit);
+        }
+        if (block_device_write(dev, bmap_start + map, scratch) != 0) {
+            return capyfs_format_finish(scratch, scratch_heap, -14);
+        }
+        if (progress && block_bitmap_blocks) {
+            uint32_t pct = 70 + ((map + 1) * 15) / block_bitmap_blocks;
             if (pct > 85) pct = 85;
             progress("Reservando blocos", pct);
         }
@@ -267,74 +307,62 @@ int capyfs_format(struct block_device *dev,
     }
 
     uint32_t root_ino = 0;
-    uint32_t rel = root_ino % (CAPYFS_BLOCK_SIZE * 8);
-    uint32_t map_block = super.imap_start + root_ino / (CAPYFS_BLOCK_SIZE * 8);
-    struct buffer_head *imap_bh = buffer_get(dev, map_block);
-    if (!imap_bh) {
-        return -15;
+    memory_zero(scratch, CAPYFS_BLOCK_SIZE);
+    scratch[0] |= 0x01u;
+    if (block_device_write(dev, imap_start + root_ino / bits_per_block,
+                           scratch) != 0) {
+        return capyfs_format_finish(scratch, scratch_heap, -15);
     }
-    uint32_t byte = rel / 8;
-    uint32_t bit = rel % 8;
-    imap_bh->data[byte] |= (1u << bit);
-    buffer_mark_dirty(imap_bh);
-    buffer_release(imap_bh);
 
     struct capy_inode_disk root_disk;
+    memory_zero(&root_disk, sizeof(root_disk));
     root_disk.mode = VFS_MODE_DIR;
     root_disk.links = 1;
     root_disk.size = 0;
     root_disk.uid = 0;
     root_disk.gid = 0;
     root_disk.perm = 0755;
-    root_disk.reserved = 0;
-    for (size_t i = 0; i < 12; ++i) {
-        root_disk.direct[i] = 0;
+    memory_zero(scratch, CAPYFS_BLOCK_SIZE);
+    for (size_t i = 0; i < sizeof(root_disk); ++i) {
+        scratch[i] = ((const uint8_t *)&root_disk)[i];
     }
-    root_disk.indirect = 0;
-    struct capyfs_mount fake_mount = { .dev = dev, .super = super };
-    if (capyfs_write_inode_disk(&fake_mount, root_ino, &root_disk) != 0) {
-        return -16;
+    if (block_device_write(dev, inode_start, scratch) != 0) {
+        return capyfs_format_finish(scratch, scratch_heap, -16);
     }
 
     if (progress) {
         progress("Criando raiz", 95);
     }
-    if (buffer_cache_sync(dev) != 0) {
-        /* Firmware BlockIO paths can fail the first write after media-id
-         * renegotiation; retry one full sync pass before failing format. */
-        if (buffer_cache_sync(dev) != 0) {
-            return -17;
-        }
-    }
+    buffer_cache_invalidate(dev);
     if (progress) {
         progress("Concluido", 100);
     }
-    return 0;
+    return capyfs_format_finish(scratch, scratch_heap, 0);
 }
 
 int mount_capyfs(struct block_device *dev, struct super_block *sb) {
     if (!dev || !sb) {
-        return -1;
+        return -10;
     }
     if (dev->block_size != CAPYFS_BLOCK_SIZE) {
-        return -1;
+        return -11;
     }
 
     struct buffer_head *bh = buffer_get(dev, 0);
     if (!bh) {
-        return -1;
+        return -12;
     }
 
     struct capy_super *disk_super = (struct capy_super *)bh->data;
     if (disk_super->magic != CAPYFS_MAGIC || disk_super->block_size != CAPYFS_BLOCK_SIZE) {
         buffer_release(bh);
-        return -1;
+        return -13;
     }
 
     struct capyfs_mount *mnt = (struct capyfs_mount *)kalloc(sizeof(struct capyfs_mount));
     if (!mnt) {
         buffer_release(bh);
-        return -1;
+        return -14;
     }
     mnt->dev = dev;
     mnt->super = *disk_super;
@@ -346,13 +374,13 @@ int mount_capyfs(struct block_device *dev, struct super_block *sb) {
     struct capy_inode_disk root_disk;
     if (capyfs_read_inode_disk(mnt, 0, &root_disk) != 0) {
         kfree(mnt);
-        return -1;
+        return -15;
     }
 
     struct inode *root_inode = capyfs_create_vfs_inode(sb, mnt, 0, &root_disk);
     if (!root_inode) {
         kfree(mnt);
-        return -1;
+        return -16;
     }
 
     struct dentry *root_dentry = (struct dentry *)kalloc(sizeof(struct dentry));
@@ -360,7 +388,7 @@ int mount_capyfs(struct block_device *dev, struct super_block *sb) {
         kfree(root_inode->private_data);
         kfree(root_inode);
         kfree(mnt);
-        return -1;
+        return -17;
     }
     root_dentry->parent = NULL;
     root_dentry->first_child = NULL;
@@ -992,9 +1020,12 @@ static void capyfs_free_block(struct capyfs_mount *mnt, uint32_t block) {
     buffer_release(bh);
 }
 
-static int capyfs_alloc_block(struct capyfs_mount *mnt, uint32_t *out_block) {
+static uint32_t g_next_fit_hint = 0;
+
+static int capyfs_try_alloc_range(struct capyfs_mount *mnt, uint32_t start,
+                                  uint32_t end, uint32_t *out_block) {
     uint32_t bits_per_block = CAPYFS_BLOCK_SIZE * 8;
-    for (uint32_t blk = mnt->super.data_start; blk < mnt->super.block_count; ++blk) {
+    for (uint32_t blk = start; blk < end; ++blk) {
         uint32_t block = mnt->super.bmap_start + blk / bits_per_block;
         uint32_t rel = blk % bits_per_block;
         uint32_t byte = rel / 8;
@@ -1015,10 +1046,21 @@ static int capyfs_alloc_block(struct capyfs_mount *mnt, uint32_t *out_block) {
             zero_block(data_bh);
             buffer_release(data_bh);
             *out_block = blk;
+            g_next_fit_hint = blk + 1;
             return 0;
         }
         buffer_release(bh);
     }
+    return -1;
+}
+
+static int capyfs_alloc_block(struct capyfs_mount *mnt, uint32_t *out_block) {
+    uint32_t ds = mnt->super.data_start;
+    uint32_t bc = mnt->super.block_count;
+    uint32_t hint = g_next_fit_hint;
+    if (hint < ds || hint >= bc) hint = ds;
+    if (capyfs_try_alloc_range(mnt, hint, bc, out_block) == 0) return 0;
+    if (hint > ds) return capyfs_try_alloc_range(mnt, ds, hint, out_block);
     return -1;
 }
 

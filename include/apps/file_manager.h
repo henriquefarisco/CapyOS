@@ -19,6 +19,8 @@ struct file_manager_app {
   int entry_count;
   int selected;
   int scroll_offset;
+  char status_text[96];
+  uint32_t status_color;
 };
 
 void file_manager_open(void);

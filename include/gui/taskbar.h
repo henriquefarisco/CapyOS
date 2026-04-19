@@ -7,9 +7,10 @@
 #define TASKBAR_HEIGHT 32
 #define TASKBAR_MAX_ITEMS 16
 #define TASKBAR_ITEM_NAME_MAX 24
-#define TASKBAR_MENU_MAX_ENTRIES 8
+#define TASKBAR_MENU_MAX_ENTRIES 16
 #define TASKBAR_MENU_ENTRY_HEIGHT 28
-#define TASKBAR_MENU_WIDTH 160
+#define TASKBAR_MENU_SEP_HEIGHT 12
+#define TASKBAR_MENU_WIDTH 180
 
 enum taskbar_position {
   TASKBAR_BOTTOM = 0,
@@ -27,6 +28,7 @@ struct taskbar_menu_entry {
   char label[TASKBAR_ITEM_NAME_MAX];
   void (*action)(void *user_data);
   void *user_data;
+  int is_separator;
 };
 
 struct taskbar {
@@ -55,6 +57,7 @@ void taskbar_handle_click(struct taskbar *tb, int32_t x, int32_t y);
 void taskbar_toggle_menu(struct taskbar *tb);
 void taskbar_add_menu_entry(struct taskbar *tb, const char *label,
                             void (*action)(void *), void *user_data);
+void taskbar_add_menu_separator(struct taskbar *tb);
 int taskbar_handle_menu_click(struct taskbar *tb, int32_t screen_x,
                               int32_t screen_y);
 

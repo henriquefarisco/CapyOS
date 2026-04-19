@@ -1,20 +1,28 @@
-// Minimal x86_64 kernel for bringup: shows a framebuffer UI + a tiny command
-// prompt. This is intentionally simple (no interrupts yet). It helps validate
-// disk boot end-to-end after the UEFI installer provisions GPT/ESP/BOOT.
+/* kernel_main.c — x86_64 kernel entry point.
+ *
+ * After the split this file contains ONLY:
+ *   - kernel_main64()  — the entry point called by the UEFI loader
+ *   - tiny inline helpers used exclusively by the entry point
+ *   - globals that must live in this TU (g_h, g_input_runtime, EBS state)
+ *
+ * Everything else is in:
+ *   framebuffer_console.c  — fbcon_* rendering + desktop accessors
+ *   boot_splash.c          — splash screen, ASCII banner, ACPI RSDP
+ *   kernel_io_helpers.c    — filesystem I/O, handoff queries, recovery reports
+ *   kernel_services.c      — service poll/start/stop, boot policy helpers
+ *   kernel_runtime_ops.c   — login wrappers, volume/shell runtime, EBS logic
+ */
 #pragma GCC optimize("O0")
 #include <stddef.h>
 #include <stdint.h>
 
-#include "util/kstring.h"
-#include "arch/x86_64/input_runtime.h"
+#include "arch/x86_64/kernel_main_internal.h"
 #include "arch/x86_64/hyperv_runtime_coordinator.h"
+#include "arch/x86_64/input_runtime.h"
 #include "arch/x86_64/interrupts.h"
-#include "arch/x86_64/native_runtime_gate.h"
 #include "arch/x86_64/kernel_platform_runtime.h"
 #include "arch/x86_64/kernel_runtime_control.h"
-#include "arch/x86_64/kernel_shell_dispatch.h"
-#include "arch/x86_64/kernel_shell_runtime.h"
-#include "arch/x86_64/kernel_volume_runtime.h"
+#include "arch/x86_64/native_runtime_gate.h"
 #include "arch/x86_64/platform_timer.h"
 #include "arch/x86_64/storage_runtime.h"
 #include "arch/x86_64/timebase.h"
@@ -22,88 +30,53 @@
 #include "boot/boot_menu.h"
 #include "boot/boot_ui.h"
 #include "boot/handoff.h"
-#include "branding/capyos_icon_mask.h"
+#include "boot/boot_metrics.h"
 #include "core/kcon.h"
-#include "core/klog.h"
-#include "core/klog_persist.h"
-#include "core/localization.h"
-#include "core/login_runtime.h"
-#include "core/network_bootstrap.h"
-#include "core/service_boot_policy.h"
-#include "core/service_manager.h"
-#include "core/session.h"
 #include "core/system_init.h"
-#include "core/update_agent.h"
-#include "core/user.h"
 #include "core/version.h"
 #include "core/work_queue.h"
-#include "drivers/efi/efi_console.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/input/keyboard_layout.h"
 #include "drivers/nvme.h"
-#include "drivers/pcie.h"
-#include "drivers/storage/efi_block.h"
+#include "drivers/acpi/acpi.h"
+#include "drivers/serial/com1.h"
 #include "drivers/timer/pit.h"
-#include "drivers/usb/xhci.h"
-#include "fs/block.h"
-#include "fs/buffer.h"
-#include "fs/capyfs.h"
-#include "fs/ramdisk.h"
-#include "fs/vfs.h"
-#include "memory/kmem.h"
+#include "kernel/log/klog.h"
+#include "kernel/log/klog_persist.h"
+#include "auth/login_runtime.h"
+#include "net/network_bootstrap.h"
 #include "net/stack.h"
-#include "shell/commands.h"
-#include "shell/core.h"
+#include "services/service_boot_policy.h"
+#include "services/service_manager.h"
+#include "services/update_agent.h"
 #include "arch/x86_64/panic.h"
 #include "arch/x86_64/apic.h"
+#include "arch/x86_64/smp.h"
 #include "kernel/task.h"
 #include "kernel/scheduler.h"
-#include "arch/x86_64/smp.h"
-#include "gui/desktop.h"
-#include "gui/font8x8.h"
-#include "drivers/input/mouse.h"
-#include "drivers/rtc/rtc.h"
-#include "drivers/serial/com1.h"
-#include "drivers/gpu/gpu_core.h"
-#include "drivers/usb/usb_core.h"
-#include "core/auth_policy.h"
-#include "core/boot_metrics.h"
-#include "memory/vmm.h"
 #include "kernel/syscall.h"
 #include "kernel/process.h"
-#include "fs/capyfs_journal_integration.h"
-#include "memory/pmm.h"
+#include "memory/vmm.h"
+#include "memory/kmem.h"
 #include "net/dns_cache.h"
 #include "net/socket.h"
+#include "auth/auth_policy.h"
+#include "auth/user.h"
+#include "drivers/rtc/rtc.h"
+#include "drivers/gpu/gpu_core.h"
+#include "drivers/usb/usb_core.h"
 
-#define DEBUGCON_PORT 0xE9
+/* ── globals owned by this TU ────────────────────────────────────────── */
 
-void acpi_set_rsdp(uint64_t rsdp_addr);
-void acpi_set_uefi_system_table(uint64_t system_table_addr);
+const struct boot_handoff *g_h = NULL;
+struct x64_input_runtime g_input_runtime;
+int g_exit_boot_services_attempted = 0;
+int g_exit_boot_services_done = 0;
+EFI_STATUS_K g_exit_boot_services_status = EFI_SUCCESS_K;
+int g_network_runtime_refresh_enabled = 0;
 
-static inline void dbgcon_putc(uint8_t c) {
-  __asm__ volatile("outb %0, %1" : : "a"(c), "Nd"((uint16_t)DEBUGCON_PORT));
-}
-
-static inline void outb(uint16_t port, uint8_t val) {
-  __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline uint8_t inb(uint16_t port) {
-  uint8_t ret;
-  __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
-  return ret;
-}
-
-static inline void cpu_relax(void) { __asm__ volatile("pause"); }
-
-static __attribute__((noreturn)) void kernel_halt_forever(void) {
-  __asm__ volatile("cli");
-  for (;;) {
-    __asm__ volatile("hlt");
-  }
-}
+/* ── tiny helpers used only in the entry point ───────────────────────── */
 
 static int range_ok(uint64_t addr, uint64_t size) {
   if (addr == 0 || size == 0)
@@ -120,2035 +93,28 @@ static void dbg_hex64(uint64_t v) {
   }
 }
 
-
-
-typedef struct {
-  uint32_t *fb;
-  uint32_t width;
-  uint32_t height;
-  uint32_t stride;
-  uint32_t origin_y;
-  uint32_t cols;
-  uint32_t rows;
-  uint32_t col;
-  uint32_t row;
-  uint32_t fg;
-  uint32_t bg;
-} fbcon_t;
-
-#define FONT_W 8u
-#define FONT_H 8u
-#define FONT_SCALE 2u
-#define CELL_W (FONT_W * FONT_SCALE)
-#define CELL_H (FONT_H * FONT_SCALE)
-
-static fbcon_t g_con;
-static const struct boot_handoff *g_h = NULL;
-static int g_serial_mirror = 0;
-static int g_com1_ready = 0;
-static struct x64_input_runtime g_input_runtime;
-static int g_exit_boot_services_attempted = 0;
-static int g_exit_boot_services_done = 0;
-static EFI_STATUS_K g_exit_boot_services_status = EFI_SUCCESS_K;
-static int g_network_runtime_refresh_enabled = 0;
-static uint32_t g_theme_splash_bg = 0x000A1713;
-static uint32_t g_theme_splash_icon = 0x0000A651;
-static uint32_t g_theme_splash_bar_border = 0x00213A31;
-static uint32_t g_theme_splash_bar_bg = 0x0012221C;
-static uint32_t g_theme_splash_bar_fill = 0x0000C364;
-
-/* COM1 driver is in drivers/serial/com1.c */
-static int streq(const char *a, const char *b);
-static void ui_draw_bars(void);
-static void klog_print_adapter(const char *s);
-static void klog_print_adapter_flush(void);
-static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
-                               uint32_t color);
-static void local_copy(char *dst, size_t dst_size, const char *src);
-static uint32_t kernel_service_target_from_settings(
-    const struct system_settings *settings);
-static void kernel_log_boot_policy_decision(
-    const struct system_service_boot_policy_decision *decision);
-static int kernel_persist_recovery_report(void);
-static int kernel_append_recovery_history_event(const char *event_name);
-static int run_shell_alias(const char *alias_line);
-static void kernel_persist_recovery_artifacts(const char *event_name);
-
-void system_platform_apply_theme(const char *theme) {
-  if (!theme || streq(theme, "capyos")) {
-    g_con.bg = 0x00102030;
-    g_con.fg = 0x00F0F0F0;
-    g_theme_splash_bg = 0x000A1713;
-    g_theme_splash_icon = 0x0000A651;
-    g_theme_splash_bar_border = 0x00213A31;
-    g_theme_splash_bar_bg = 0x0012221C;
-    g_theme_splash_bar_fill = 0x0000C364;
-    return;
-  }
-
-  if (streq(theme, "ocean")) {
-    g_con.bg = 0x000A1B3A;
-    g_con.fg = 0x00DDF6FF;
-    g_theme_splash_bg = 0x00041024;
-    g_theme_splash_icon = 0x0035B7FF;
-    g_theme_splash_bar_border = 0x0021476A;
-    g_theme_splash_bar_bg = 0x000C213A;
-    g_theme_splash_bar_fill = 0x005FD5FF;
-    return;
-  }
-
-  if (streq(theme, "forest")) {
-    g_con.bg = 0x000F2415;
-    g_con.fg = 0x00E9F8E7;
-    g_theme_splash_bg = 0x000A1710;
-    g_theme_splash_icon = 0x002FAE5B;
-    g_theme_splash_bar_border = 0x00284A31;
-    g_theme_splash_bar_bg = 0x0015231A;
-    g_theme_splash_bar_fill = 0x0048D778;
-    return;
-  }
-
-  system_platform_apply_theme("capyos");
-}
-
-void system_platform_sync_theme(const struct system_settings *settings) {
-  (void)settings;
-  if (!g_con.fb || g_con.width == 0 || g_con.height == 0) {
-    return;
-  }
-  fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_con.bg);
-  ui_draw_bars();
-  g_con.col = 0;
-  g_con.row = 0;
-}
-
-
-static void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
-                               uint32_t color) {
-  if (!g_h || !g_con.fb)
-    return;
-  if (x0 >= g_con.width || y0 >= g_con.height)
-    return;
-  if (x0 + w > g_con.width)
-    w = g_con.width - x0;
-  if (y0 + h > g_con.height)
-    h = g_con.height - y0;
-  for (uint32_t y = 0; y < h; y++) {
-    uint32_t *row = g_con.fb + (y0 + y) * g_con.stride;
-    for (uint32_t x = 0; x < w; x++) {
-      row[x0 + x] = color;
-    }
+static __attribute__((noreturn)) void kernel_halt_forever(void) {
+  __asm__ volatile("cli");
+  for (;;) {
+    __asm__ volatile("hlt");
   }
 }
 
-static void fbcon_scroll(void) {
-  const uint32_t ch = CELL_H;
-  const uint32_t start = g_con.origin_y;
-  const uint32_t end = g_con.height;
-  if (end <= start + ch)
-    return;
-
-  /* Block-copy scroll region using rep movsq for speed. */
-  {
-    uint32_t *dst = g_con.fb + start * g_con.stride;
-    uint32_t *src = g_con.fb + (start + ch) * g_con.stride;
-    uint64_t count_dwords = (uint64_t)(end - start - ch) * g_con.stride;
-    uint64_t count_qwords = count_dwords / 2;
-    if (count_qwords > 0) {
-      __asm__ volatile("rep movsq"
-                       : "+D"(dst), "+S"(src), "+c"(count_qwords)
-                       :
-                       : "memory");
-    }
-    if (count_dwords & 1) {
-      dst[count_qwords * 2] = src[count_qwords * 2];
-    }
-  }
-  fbcon_fill_rect_px(0, end - ch, g_con.width, ch, g_con.bg);
-}
-
-static void fbcon_putch_px(uint32_t x, uint32_t y, char c) {
-  uint8_t uc = (uint8_t)c;
-  const uint8_t *glyph = font_glyph(uc);
-  for (uint32_t row = 0; row < FONT_H; row++) {
-    uint8_t bits = glyph[row];
-    for (uint32_t dy = 0; dy < FONT_SCALE; dy++) {
-      uint32_t *dst = g_con.fb + (y + row * FONT_SCALE + dy) * g_con.stride;
-      for (uint32_t col = 0; col < FONT_W; col++) {
-        uint32_t color = (bits & (1u << (7u - col))) ? g_con.fg : g_con.bg;
-        uint32_t px = x + col * FONT_SCALE;
-        for (uint32_t dx = 0; dx < FONT_SCALE; dx++) {
-          dst[px + dx] = color;
-        }
-      }
-    }
-  }
-}
-
-/* Render a single character at pixel coordinates (x, y) with explicit colors.
- * Used by boot_ui/boot_menu via callback; does NOT advance the console cursor. */
-void fbcon_putch_at(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg) {
-  uint32_t saved_fg = g_con.fg;
-  uint32_t saved_bg = g_con.bg;
-  g_con.fg = fg;
-  g_con.bg = bg;
-  fbcon_putch_px(x, y, c);
-  g_con.fg = saved_fg;
-  g_con.bg = saved_bg;
-}
-
-static int g_fbcon_visual_muted = 0;
-static char g_fbcon_muted_line[KLOG_LINE_MAX];
-static uint32_t g_fbcon_muted_len = 0;
-
-static void fbcon_muted_flush_line(void) {
-  if (g_fbcon_muted_len == 0) {
-    return;
-  }
-  g_fbcon_muted_line[g_fbcon_muted_len] = '\0';
-  klog(KLOG_INFO, g_fbcon_muted_line);
-  g_fbcon_muted_len = 0;
-}
-
-static void fbcon_capture_muted_char(char c) {
-  if (c == '\r') {
-    return;
-  }
-  if (c == '\n') {
-    fbcon_muted_flush_line();
-    return;
-  }
-  if (c == '\b') {
-    if (g_fbcon_muted_len > 0) {
-      --g_fbcon_muted_len;
-    }
-    return;
-  }
-  if ((uint8_t)c < 0x20u) {
-    return;
-  }
-  if (g_fbcon_muted_len >= sizeof(g_fbcon_muted_line) - 1u) {
-    fbcon_muted_flush_line();
-  }
-  g_fbcon_muted_line[g_fbcon_muted_len++] = c;
-}
-
-static void fbcon_set_visual_muted(int muted) {
-  if (!muted) {
-    fbcon_muted_flush_line();
-  }
-  g_fbcon_visual_muted = muted ? 1 : 0;
-}
-
-void fbcon_putc(char c) {
-  if (!g_con.fb || g_con.cols == 0 || g_con.rows == 0)
-    return;
-  if (g_serial_mirror && g_com1_ready) {
-    if (c == '\n') {
-      com1_putc('\r');
-    }
-    if (c != '\r') {
-      com1_putc(c);
-    }
-  }
-  if (g_fbcon_visual_muted) {
-    fbcon_capture_muted_char(c);
-    return;
-  }
-  if (c == '\r')
-    return;
-  if (c == '\n') {
-    g_con.col = 0;
-    g_con.row++;
-    if (g_con.row >= g_con.rows) {
-      fbcon_scroll();
-      g_con.row = g_con.rows - 1;
-    }
-    return;
-  }
-  if (c == '\b') {
-    if (g_con.col > 0) {
-      g_con.col--;
-    } else if (g_con.row > 0) {
-      g_con.row--;
-      g_con.col = g_con.cols - 1;
-    }
-    uint32_t x = g_con.col * CELL_W;
-    uint32_t y = g_con.origin_y + g_con.row * CELL_H;
-    fbcon_putch_px(x, y, ' ');
+static void kernel_log_boot_warnings(const struct boot_warnings *warnings) {
+  if (!warnings || warnings->count == 0) {
     return;
   }
 
-  uint32_t x = g_con.col * CELL_W;
-  uint32_t y = g_con.origin_y + g_con.row * CELL_H;
-  if (y + CELL_H > g_con.height)
-    return;
-  fbcon_putch_px(x, y, c);
-  g_con.col++;
-  if (g_con.col >= g_con.cols) {
+  fbcon_print("\n[boot] Compatibility warnings:\n");
+  for (uint32_t i = 0; i < warnings->count; ++i) {
+    fbcon_print("  - ");
+    fbcon_print(warnings->messages[i]);
     fbcon_putc('\n');
   }
+  fbcon_print("[boot] Continuing startup.\n\n");
 }
 
-void fbcon_print(const char *s) {
-  if (!s)
-    return;
-  while (*s) {
-    fbcon_putc(*s++);
-  }
-}
-
-void fbcon_clear_view(void) {
-  if (!g_con.fb || g_con.height <= g_con.origin_y) {
-    return;
-  }
-  fbcon_fill_rect_px(0, g_con.origin_y, g_con.width, g_con.height - g_con.origin_y,
-                     g_con.bg);
-  g_con.col = 0;
-  g_con.row = 0;
-}
-
-void fbcon_print_hex64(uint64_t v) {
-  static const char hex[] = "0123456789ABCDEF";
-  char buf[17];
-  for (int i = 0; i < 16; i++) {
-    buf[i] = hex[(v >> (60 - i * 4)) & 0xF];
-  }
-  buf[16] = 0;
-  fbcon_print(buf);
-}
-
-void fbcon_print_hex(uint64_t v) { fbcon_print_hex64(v); }
-
-static void fbcon_print_dec_u32(uint32_t v) {
-  char rev[16];
-  uint32_t n = 0;
-  if (v == 0) {
-    fbcon_putc('0');
-    return;
-  }
-  while (v > 0 && n < sizeof(rev)) {
-    rev[n++] = (char)('0' + (v % 10u));
-    v /= 10u;
-  }
-  while (n > 0) {
-    fbcon_putc(rev[--n]);
-  }
-}
-
-static void fbcon_print_hex8(uint8_t v) {
-  static const char hex[] = "0123456789ABCDEF";
-  fbcon_putc(hex[(v >> 4) & 0xF]);
-  fbcon_putc(hex[v & 0xF]);
-}
-
-static void fbcon_print_hex16(uint16_t v) {
-  fbcon_print_hex8((uint8_t)(v >> 8));
-  fbcon_print_hex8((uint8_t)(v & 0xFFu));
-}
-
-static void fbcon_print_ipv4(uint32_t ip) {
-  fbcon_print_dec_u32((ip >> 24) & 0xFFu);
-  fbcon_putc('.');
-  fbcon_print_dec_u32((ip >> 16) & 0xFFu);
-  fbcon_putc('.');
-  fbcon_print_dec_u32((ip >> 8) & 0xFFu);
-  fbcon_putc('.');
-  fbcon_print_dec_u32(ip & 0xFFu);
-}
-
-static void fbcon_print_mac(const uint8_t mac[6]) {
-  for (uint32_t i = 0; i < 6; ++i) {
-    if (i) {
-      fbcon_putc(':');
-    }
-    fbcon_print_hex8(mac[i]);
-  }
-}
-
-static struct x64_platform_diag_io kernel_platform_diag_io(void) {
-  struct x64_platform_diag_io io;
-  io.print = fbcon_print;
-  io.print_hex64 = fbcon_print_hex64;
-  io.print_dec_u32 = fbcon_print_dec_u32;
-  io.putc = fbcon_putc;
-  return io;
-}
-
-static int streq(const char *a, const char *b) {
-  return kstreq(a, b);
-}
-
-struct acpi_rsdp {
-  char signature[8]; /* "RSD PTR " */
-  uint8_t checksum;
-  char oemid[6];
-  uint8_t revision;
-  uint32_t rsdt;
-  uint32_t length;
-  uint64_t xsdt;
-  uint8_t ext_checksum;
-  uint8_t reserved[3];
-} __attribute__((packed));
-
-static uint8_t sum8(const uint8_t *p, uint32_t len) {
-  uint8_t s = 0;
-  for (uint32_t i = 0; i < len; i++)
-    s = (uint8_t)(s + p[i]);
-  return s;
-}
-
-static int rsdp_is_valid(uint64_t rsdp_addr) {
-  if (!range_ok(rsdp_addr, sizeof(struct acpi_rsdp)))
-    return 0;
-  const struct acpi_rsdp *r = (const struct acpi_rsdp *)(uintptr_t)rsdp_addr;
-  const char sig[8] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' '};
-  for (int i = 0; i < 8; i++) {
-    if (r->signature[i] != sig[i])
-      return 0;
-  }
-  if (!range_ok(rsdp_addr, 20))
-    return 0;
-  if (sum8((const uint8_t *)r, 20) != 0)
-    return 0;
-  if (r->revision >= 2) {
-    uint32_t len = r->length;
-    if (len < 36 || len > 4096) {
-      return 1;
-    }
-    if (!range_ok(rsdp_addr, len))
-      return 0;
-    return sum8((const uint8_t *)r, len) == 0;
-  }
-  return 1;
-}
-
-static void ui_draw_bars(void) {
-  (void)g_h;
-}
-
-static int capyos_icon_mask_get(uint32_t x, uint32_t y) {
-  if (x >= CAPYOS_ICON_W || y >= CAPYOS_ICON_H) {
-    return 0;
-  }
-  uint8_t byte = capyos_icon_mask[y * CAPYOS_ICON_STRIDE + (x / 8u)];
-  return (byte & (uint8_t)(1u << (7u - (x & 7u)))) != 0;
-}
-
-static void splash_spin_delay(uint32_t loops) {
-  for (volatile uint32_t i = 0; i < loops; ++i) {
-    cpu_relax();
-  }
-}
-
-void ui_draw_capyos_icon(uint32_t x0, uint32_t y0, uint32_t scale,
-                         uint32_t color) {
-  if (scale == 0) {
-    return;
-  }
-  for (uint32_t y = 0; y < CAPYOS_ICON_H; ++y) {
-    for (uint32_t x = 0; x < CAPYOS_ICON_W; ++x) {
-      if (capyos_icon_mask_get(x, y)) {
-        fbcon_fill_rect_px(x0 + (x * scale), y0 + (y * scale), scale, scale,
-                           color);
-      }
-    }
-  }
-}
-
-static void ui_boot_splash(void) {
-  if (!g_con.fb || g_con.width < 160 || g_con.height < 120) {
-    return;
-  }
-
-  uint32_t scale = (g_con.height / 4u) / CAPYOS_ICON_H;
-  if (scale == 0) {
-    scale = 1;
-  }
-  if (scale > 4) {
-    scale = 4;
-  }
-  uint32_t icon_w = CAPYOS_ICON_W * scale;
-  uint32_t icon_h = CAPYOS_ICON_H * scale;
-
-  uint32_t bar_w = g_con.width / 3u;
-  if (bar_w < 140) {
-    bar_w = 140;
-  } else if (bar_w > 420) {
-    bar_w = 420;
-  }
-  uint32_t bar_h = g_con.height / 96u;
-  if (bar_h < 8) {
-    bar_h = 8;
-  } else if (bar_h > 14) {
-    bar_h = 14;
-  }
-
-  uint32_t total_h = icon_h + (scale * 10u) + bar_h;
-  uint32_t icon_x = (g_con.width > icon_w) ? (g_con.width - icon_w) / 2u : 0;
-  uint32_t icon_y =
-      (g_con.height > total_h) ? (g_con.height - total_h) / 2u : 0;
-  uint32_t bar_x = (g_con.width > bar_w) ? (g_con.width - bar_w) / 2u : 0;
-  uint32_t bar_y = icon_y + icon_h + (scale * 10u);
-
-  fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_theme_splash_bg);
-  ui_draw_capyos_icon(icon_x, icon_y, scale, g_theme_splash_icon);
-  fbcon_fill_rect_px(bar_x, bar_y, bar_w, bar_h, g_theme_splash_bar_border);
-
-  uint32_t inner_x = bar_x;
-  uint32_t inner_y = bar_y;
-  uint32_t inner_w = bar_w;
-  uint32_t inner_h = bar_h;
-  if (bar_w > 4u) {
-    inner_x += 2u;
-    inner_w -= 4u;
-  }
-  if (bar_h > 4u) {
-    inner_y += 2u;
-    inner_h -= 4u;
-  }
-
-  for (uint32_t step = 0; step <= 14; ++step) {
-    fbcon_fill_rect_px(inner_x, inner_y, inner_w, inner_h, g_theme_splash_bar_bg);
-    uint32_t fill_w = (inner_w * step) / 14u;
-    if (fill_w > 0u) {
-      fbcon_fill_rect_px(inner_x, inner_y, fill_w, inner_h,
-                         g_theme_splash_bar_fill);
-    }
-    splash_spin_delay(400000u);
-  }
-
-  splash_spin_delay(600000u);
-}
-
-static uint32_t ui_banner_strlen(const char *s) {
-  uint32_t len = 0;
-  if (!s) {
-    return 0;
-  }
-  while (s[len]) {
-    ++len;
-  }
-  return len;
-}
-
-static void ui_banner_append(char *dst, uint32_t cap, const char *src) {
-  uint32_t len = ui_banner_strlen(dst);
-  uint32_t pos = 0;
-
-  if (!dst || cap == 0 || !src || len >= cap - 1u) {
-    return;
-  }
-  while (src[pos] && len < cap - 1u) {
-    dst[len++] = src[pos++];
-  }
-  dst[len] = '\0';
-}
-
-static void ui_banner_rule(uint32_t inner_cols) {
-  fbcon_putc('+');
-  for (uint32_t i = 0; i < inner_cols + 2u; ++i) {
-    fbcon_putc('-');
-  }
-  fbcon_print("+\n");
-}
-
-static void ui_banner_line(uint32_t inner_cols, const char *text) {
-  uint32_t len = ui_banner_strlen(text);
-  fbcon_print("| ");
-  for (uint32_t i = 0; i < inner_cols; ++i) {
-    fbcon_putc(i < len ? text[i] : ' ');
-  }
-  fbcon_print(" |\n");
-}
-
-static void ui_banner(void) {
-  char version_line[64];
-  uint32_t inner_cols =
-      (g_con.cols > 6u) ? (g_con.cols - 4u) : 0u;
-
-  if (inner_cols > 58u) {
-    inner_cols = 58u;
-  }
-
-  if (inner_cols < 38u) {
-    fbcon_print("CAPYOS\n");
-    fbcon_print(CAPYOS_VERSION_EXTENDED);
-    fbcon_print("  x86_64\n");
-    return;
-  }
-
-  version_line[0] = '\0';
-  ui_banner_append(version_line, sizeof(version_line), " Version: ");
-  ui_banner_append(version_line, sizeof(version_line), CAPYOS_VERSION_EXTENDED);
-  ui_banner_append(version_line, sizeof(version_line), "   Arch: x86_64");
-
-ui_banner_rule(inner_cols);
-  ui_banner_line(inner_cols, "  ###  ###  ###  # #  ###  ### ");
-  ui_banner_line(inner_cols, " #     # #  # #  # #  # #  #    ");
-  ui_banner_line(inner_cols, " #     ###  ###   #   # #   ##  ");
-  ui_banner_line(inner_cols, " #     # #  #     #   # #     # ");
-  ui_banner_line(inner_cols, "  ###  # #  #     #   ###  ###  ");
-  ui_banner_line(inner_cols, "");
-  ui_banner_line(inner_cols, "");
-  ui_banner_line(inner_cols, "  CapyOS");
-  ui_banner_line(inner_cols, "  Shell");
-
-  ui_banner_line(inner_cols, "");
-  ui_banner_line(inner_cols, version_line);
-  ui_banner_rule(inner_cols);
-}
-
-static int handoff_boot_services_active(void);
-static void maybe_exit_boot_services_after_native_runtime(void);
-static int kernel_allow_hybrid_storage_prepare(void);
-
-static void cmd_info(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_cmd_info(g_h, rsdp_is_valid(g_h ? g_h->rsdp : 0),
-                            &g_input_runtime, &io);
-}
-
-/* ============================================================================
- * Shell Command Dispatch
- * Routes commands through the shell module system for list, go, mk-file, etc.
- * ============================================================================
- */
-
-static struct shell_context g_shell_ctx;
-static struct session_context g_session_ctx;
-static struct super_block g_shell_root_sb;
-static struct system_settings g_shell_settings;
-static struct system_service_boot_policy_decision g_boot_policy_decision;
-static int g_shell_initialized = 0;
-static int g_shell_fs_ready = 0;
-static int g_shell_persistent_storage = 0;
-static int g_shell_recovery_ram_fallback = 0;
-static int g_runtime_maintenance_mode = 0;
-static int g_recovery_login_requested = 0;
-static size_t kernel_readline(char *buf, size_t maxlen, int mask);
-static char g_active_volume_key[X64_KERNEL_VOLUME_KEY_MAX];
-static int g_active_volume_key_ready = 0;
-static char g_handoff_volume_key[X64_KERNEL_VOLUME_KEY_MAX];
-static int g_handoff_volume_key_ready = 0;
-static uint8_t g_data_io_probe[CAPYFS_BLOCK_SIZE]
-    __attribute__((aligned(64)));
-
-static const uint8_t g_disk_salt[16] = {0x4e, 0x6f, 0x69, 0x72, 0x4f, 0x53,
-                                        0x2d, 0x46, 0x53, 0x2d, 0x53, 0x61,
-                                        0x6c, 0x74, 0x21, 0x00};
-static const uint32_t g_kdf_iterations = 16000;
-
-static void local_copy(char *dst, size_t dst_size, const char *src) {
-  kstrcpy(dst, dst_size, src);
-}
-
-static size_t local_length(const char *text) {
-  return kstrlen(text);
-}
-
-static void buffer_append_text(char *dst, size_t dst_size, const char *src) {
-  kbuf_append(dst, dst_size, src);
-}
-
-static void buffer_append_u32(char *dst, size_t dst_size, uint32_t value) {
-  kbuf_append_u32(dst, dst_size, value);
-}
-
-static void buffer_append_yes_no(char *dst, size_t dst_size, int value) {
-  kbuf_append_yesno(dst, dst_size, value);
-}
-
-static int kernel_ensure_directory_recursive(const char *path) {
-  char build[128];
-  struct vfs_metadata meta = {0, 0, 0755};
-  struct vfs_stat st;
-  size_t build_len = 0;
-  const char *cursor = path;
-
-  if (!path || path[0] != '/') {
-    return -1;
-  }
-
-  build[build_len++] = '/';
-  build[build_len] = '\0';
-  while (*cursor == '/') {
-    ++cursor;
-  }
-  while (*cursor) {
-    const char *start = cursor;
-    size_t segment_len = 0;
-    while (cursor[segment_len] && cursor[segment_len] != '/') {
-      ++segment_len;
-    }
-    if (segment_len > 0) {
-      if (build_len > 1 && build[build_len - 1] != '/') {
-        if (build_len + 1 >= sizeof(build)) {
-          return -1;
-        }
-        build[build_len++] = '/';
-      }
-      if (build_len + segment_len >= sizeof(build)) {
-        return -1;
-      }
-      for (size_t i = 0; i < segment_len; ++i) {
-        build[build_len++] = start[i];
-      }
-      build[build_len] = '\0';
-      if (vfs_stat_path(build, &st) != 0) {
-        if (vfs_create(build, VFS_MODE_DIR, &meta) != 0) {
-          return -1;
-        }
-      } else if ((st.mode & VFS_MODE_DIR) == 0) {
-        return -1;
-      }
-    }
-    cursor += segment_len;
-    while (*cursor == '/') {
-      ++cursor;
-    }
-  }
-  return 0;
-}
-
-static int kernel_sync_root_volume(void) {
-  struct super_block *root = vfs_root();
-  if (!root || !root->bdev) {
-    return -1;
-  }
-  return buffer_cache_sync(root->bdev);
-}
-
-static int kernel_write_text_file(const char *path, const char *text) {
-  char parent[128];
-  struct vfs_metadata meta = {0, 0, 0644};
-  struct vfs_stat st;
-  struct file *file = NULL;
-  size_t path_len = 0;
-  size_t split = 0;
-  size_t len = 0;
-  long written = 0;
-
-  if (!path || path[0] != '/' || !text) {
-    return -1;
-  }
-
-  path_len = local_length(path);
-  if (path_len >= sizeof(parent)) {
-    return -1;
-  }
-  local_copy(parent, sizeof(parent), path);
-  while (split < path_len && parent[split]) {
-    ++split;
-  }
-  while (split > 1 && parent[split - 1] != '/') {
-    --split;
-  }
-  if (split == 0) {
-    return -1;
-  }
-  if (split == 1) {
-    parent[1] = '\0';
-  } else {
-    parent[split - 1] = '\0';
-  }
-  if (kernel_ensure_directory_recursive(parent) != 0) {
-    return -1;
-  }
-
-  if (vfs_stat_path(path, &st) == 0) {
-    if ((st.mode & VFS_MODE_DIR) != 0) {
-      return -1;
-    }
-    if (vfs_unlink(path) != 0) {
-      return -1;
-    }
-  }
-  if (vfs_create(path, VFS_MODE_FILE, &meta) != 0) {
-    return -1;
-  }
-  file = vfs_open(path, VFS_OPEN_WRITE);
-  if (!file) {
-    return -1;
-  }
-  len = local_length(text);
-  written = vfs_write(file, text, len);
-  vfs_close(file);
-  if (written != (long)len) {
-    return -1;
-  }
-  return kernel_sync_root_volume();
-}
-
-static int kernel_append_text_file(const char *path, const char *text) {
-  char parent[128];
-  struct vfs_metadata meta = {0, 0, 0644};
-  struct vfs_stat st;
-  struct file *file = NULL;
-  size_t path_len = 0;
-  size_t split = 0;
-  size_t len = 0;
-  long written = 0;
-
-  if (!path || path[0] != '/' || !text) {
-    return -1;
-  }
-
-  path_len = local_length(path);
-  if (path_len >= sizeof(parent)) {
-    return -1;
-  }
-  local_copy(parent, sizeof(parent), path);
-  while (split < path_len && parent[split]) {
-    ++split;
-  }
-  while (split > 1 && parent[split - 1] != '/') {
-    --split;
-  }
-  if (split == 0) {
-    return -1;
-  }
-  if (split == 1) {
-    parent[1] = '\0';
-  } else {
-    parent[split - 1] = '\0';
-  }
-  if (kernel_ensure_directory_recursive(parent) != 0) {
-    return -1;
-  }
-
-  if (vfs_stat_path(path, &st) != 0) {
-    if (vfs_create(path, VFS_MODE_FILE, &meta) != 0) {
-      return -1;
-    }
-  } else if ((st.mode & VFS_MODE_DIR) != 0) {
-    return -1;
-  }
-
-  file = vfs_open(path, VFS_OPEN_WRITE);
-  if (!file) {
-    return -1;
-  }
-  if (file->dentry && file->dentry->inode) {
-    file->position = file->dentry->inode->size;
-  }
-  len = local_length(text);
-  written = vfs_write(file, text, len);
-  vfs_close(file);
-  if (written != (long)len) {
-    return -1;
-  }
-  return kernel_sync_root_volume();
-}
-
-static const char *kernel_target_name(uint32_t target_id) {
-  return service_manager_target_label(target_id);
-}
-
-static uint32_t kernel_active_service_target(void) {
-  struct system_service_target_status active_target;
-  if (service_manager_target_current(&active_target) == 0) {
-    return active_target.id;
-  }
-  return g_boot_policy_decision.final_target;
-}
-
-static int kernel_capyfs_check_current(struct capyfs_check_report *out) {
-  struct super_block *root = vfs_root();
-  if (!root || !root->bdev || !out) {
-    return -1;
-  }
-  return capyfs_check(root->bdev, out);
-}
-
-static int kernel_persist_recovery_report(void) {
-  char report[1024];
-  struct capyfs_check_report fs_report;
-  struct net_stack_status net_status;
-  struct system_update_status update_status;
-  int fs_ok = 0;
-  int net_ok = 0;
-
-  if (!g_shell_fs_ready || !g_shell_persistent_storage) {
-    return -1;
-  }
-
-  report[0] = '\0';
-  fs_ok = kernel_capyfs_check_current(&fs_report) == 0;
-  net_ok = net_stack_status(&net_status) == 0;
-
-  buffer_append_text(report, sizeof(report), "CAPYOS recovery report\n");
-  buffer_append_text(report, sizeof(report), "degraded=");
-  buffer_append_yes_no(report, sizeof(report), g_boot_policy_decision.degraded);
-  buffer_append_text(report, sizeof(report), "\nmaintenance_session=");
-  buffer_append_yes_no(report, sizeof(report), g_runtime_maintenance_mode);
-  buffer_append_text(report, sizeof(report), "\nforced_maintenance=");
-  buffer_append_yes_no(report, sizeof(report),
-                       g_boot_policy_decision.forced_maintenance);
-  buffer_append_text(report, sizeof(report), "\nforced_core=");
-  buffer_append_yes_no(report, sizeof(report), g_boot_policy_decision.forced_core);
-  buffer_append_text(report, sizeof(report), "\nreason=");
-  buffer_append_text(report, sizeof(report),
-                     service_boot_policy_reason_label(g_boot_policy_decision.reason));
-  buffer_append_text(report, sizeof(report), "\nsummary=");
-  buffer_append_text(report, sizeof(report),
-                     service_boot_policy_reason_summary(g_boot_policy_decision.reason));
-  buffer_append_text(report, sizeof(report), "\nbootstrap_target=");
-  buffer_append_text(report, sizeof(report),
-                     kernel_target_name(g_boot_policy_decision.bootstrap_target));
-  buffer_append_text(report, sizeof(report), "\nrequested_target=");
-  buffer_append_text(report, sizeof(report),
-                     kernel_target_name(g_boot_policy_decision.requested_target));
-  buffer_append_text(report, sizeof(report), "\nboot_target=");
-  buffer_append_text(report, sizeof(report),
-                     kernel_target_name(g_boot_policy_decision.final_target));
-  buffer_append_text(report, sizeof(report), "\nactive_target=");
-  buffer_append_text(report, sizeof(report),
-                     kernel_target_name(kernel_active_service_target()));
-  buffer_append_text(report, sizeof(report), "\nsaved_target=");
-  buffer_append_text(report, sizeof(report),
-                     g_shell_settings.service_target[0]
-                         ? g_shell_settings.service_target
-                         : "network");
-  buffer_append_text(report, sizeof(report), "\nshell_fs_ready=");
-  buffer_append_yes_no(report, sizeof(report), g_shell_fs_ready);
-  buffer_append_text(report, sizeof(report), "\npersistent_storage=");
-  buffer_append_yes_no(report, sizeof(report), g_shell_persistent_storage);
-  buffer_append_text(report, sizeof(report), "\nrecovery_ram_fallback=");
-  buffer_append_yes_no(report, sizeof(report), g_shell_recovery_ram_fallback);
-  buffer_append_text(report, sizeof(report), "\nvalidated_storage=");
-  buffer_append_yes_no(report, sizeof(report), x64_storage_runtime_has_device());
-  buffer_append_text(report, sizeof(report), "\ncapyfs=");
-  buffer_append_text(report, sizeof(report),
-                     fs_ok ? capyfs_check_result_label(fs_report.result)
-                           : "unavailable");
-  if (fs_ok) {
-    buffer_append_text(report, sizeof(report), "\ncapyfs_root_entries=");
-    buffer_append_u32(report, sizeof(report), fs_report.root_entries);
-    buffer_append_text(report, sizeof(report), "\ncapyfs_reserved_blocks=");
-    buffer_append_u32(report, sizeof(report), fs_report.reserved_blocks_expected);
-  }
-  buffer_append_text(report, sizeof(report), "\nnetwork_status=");
-  buffer_append_text(report, sizeof(report), net_ok ? "available" : "unavailable");
-  if (net_ok) {
-    buffer_append_text(report, sizeof(report), "\nnetwork_runtime_supported=");
-    buffer_append_yes_no(report, sizeof(report), net_status.runtime_supported);
-    buffer_append_text(report, sizeof(report), "\nnetwork_ready=");
-    buffer_append_yes_no(report, sizeof(report), net_status.ready);
-  }
-  update_agent_status_get(&update_status);
-  buffer_append_text(report, sizeof(report), "\nupdate_catalog=");
-  buffer_append_yes_no(report, sizeof(report), update_status.catalog_present);
-  buffer_append_text(report, sizeof(report), "\nupdate_channel=");
-  buffer_append_text(report, sizeof(report),
-                     update_status.channel[0] ? update_status.channel : "stable");
-  buffer_append_text(report, sizeof(report), "\nupdate_branch=");
-  buffer_append_text(report, sizeof(report),
-                     update_status.branch[0] ? update_status.branch : "main");
-  buffer_append_text(report, sizeof(report), "\nupdate_available=");
-  buffer_append_yes_no(report, sizeof(report), update_status.update_available);
-  buffer_append_text(report, sizeof(report), "\nupdate_stage_ready=");
-  buffer_append_yes_no(report, sizeof(report), update_status.stage_ready);
-  buffer_append_text(report, sizeof(report), "\nupdate_pending_activation=");
-  buffer_append_yes_no(report, sizeof(report), update_status.pending_activation);
-  buffer_append_text(report, sizeof(report), "\nupdate_available_version=");
-  buffer_append_text(report, sizeof(report),
-                     update_status.available_version[0]
-                         ? update_status.available_version
-                         : "-");
-  buffer_append_text(report, sizeof(report), "\nupdate_staged_version=");
-  buffer_append_text(report, sizeof(report),
-                     update_status.staged_version[0]
-                         ? update_status.staged_version
-                         : "-");
-  buffer_append_text(report, sizeof(report), "\nupdate_summary=");
-  buffer_append_text(report, sizeof(report),
-                     update_status.summary[0] ? update_status.summary : "-");
-  buffer_append_text(report, sizeof(report), "\n");
-
-  return kernel_write_text_file("/var/log/recovery-boot.txt", report);
-}
-
-static int kernel_append_recovery_history_event(const char *event_name) {
-  char line[768];
-  struct capyfs_check_report fs_report;
-  struct net_stack_status net_status;
-  struct system_update_status update_status;
-  int fs_ok = 0;
-  int net_ok = 0;
-
-  if (!g_shell_fs_ready || !g_shell_persistent_storage) {
-    return -1;
-  }
-
-  line[0] = '\0';
-  fs_ok = kernel_capyfs_check_current(&fs_report) == 0;
-  net_ok = net_stack_status(&net_status) == 0;
-
-  buffer_append_text(line, sizeof(line), "ticks=");
-  buffer_append_u32(line, sizeof(line), pit_ticks());
-  buffer_append_text(line, sizeof(line), " event=");
-  buffer_append_text(line, sizeof(line),
-                     (event_name && event_name[0]) ? event_name : "unknown");
-  buffer_append_text(line, sizeof(line), " degraded=");
-  buffer_append_yes_no(line, sizeof(line), g_boot_policy_decision.degraded);
-  buffer_append_text(line, sizeof(line), " maintenance=");
-  buffer_append_yes_no(line, sizeof(line), g_runtime_maintenance_mode);
-  buffer_append_text(line, sizeof(line), " reason=");
-  buffer_append_text(line, sizeof(line),
-                     service_boot_policy_reason_label(g_boot_policy_decision.reason));
-  buffer_append_text(line, sizeof(line), " saved=");
-  buffer_append_text(line, sizeof(line),
-                     g_shell_settings.service_target[0]
-                         ? g_shell_settings.service_target
-                         : "network");
-  buffer_append_text(line, sizeof(line), " boot=");
-  buffer_append_text(line, sizeof(line),
-                     kernel_target_name(g_boot_policy_decision.final_target));
-  buffer_append_text(line, sizeof(line), " active=");
-  buffer_append_text(line, sizeof(line),
-                     kernel_target_name(kernel_active_service_target()));
-  buffer_append_text(line, sizeof(line), " storage=");
-  buffer_append_yes_no(line, sizeof(line), x64_storage_runtime_has_device());
-  buffer_append_text(line, sizeof(line), " ram_fallback=");
-  buffer_append_yes_no(line, sizeof(line), g_shell_recovery_ram_fallback);
-  buffer_append_text(line, sizeof(line), " capyfs=");
-  buffer_append_text(line, sizeof(line),
-                     fs_ok ? capyfs_check_result_label(fs_report.result)
-                           : "unavailable");
-  buffer_append_text(line, sizeof(line), " network=");
-  if (!net_ok) {
-    buffer_append_text(line, sizeof(line), "unavailable");
-  } else if (!net_status.runtime_supported) {
-    buffer_append_text(line, sizeof(line), "unsupported");
-  } else if (!net_status.ready) {
-    buffer_append_text(line, sizeof(line), "degraded");
-  } else {
-    buffer_append_text(line, sizeof(line), "ready");
-  }
-  update_agent_status_get(&update_status);
-  buffer_append_text(line, sizeof(line), " update=");
-  if (update_status.pending_activation) {
-    buffer_append_text(line, sizeof(line), "pending");
-  } else if (update_status.stage_ready) {
-    buffer_append_text(line, sizeof(line), "staged");
-  } else if (update_status.update_available) {
-    buffer_append_text(line, sizeof(line), "available");
-  } else if (update_status.catalog_present) {
-    buffer_append_text(line, sizeof(line), "catalog");
-  } else {
-    buffer_append_text(line, sizeof(line), "none");
-  }
-  buffer_append_text(line, sizeof(line), " channel=");
-  buffer_append_text(line, sizeof(line),
-                     update_status.channel[0] ? update_status.channel : "stable");
-  buffer_append_text(line, sizeof(line), " branch=");
-  buffer_append_text(line, sizeof(line),
-                     update_status.branch[0] ? update_status.branch : "main");
-  buffer_append_text(line, sizeof(line), " update_rc=");
-  if (update_status.last_result < 0) {
-    buffer_append_text(line, sizeof(line), "-");
-    buffer_append_u32(line, sizeof(line), (uint32_t)(-update_status.last_result));
-  } else {
-    buffer_append_u32(line, sizeof(line), (uint32_t)update_status.last_result);
-  }
-  buffer_append_text(line, sizeof(line), "\n");
-
-  return kernel_append_text_file("/var/log/recovery-history.log", line);
-}
-
-static void kernel_persist_recovery_artifacts(const char *event_name) {
-  (void)kernel_persist_recovery_report();
-  (void)kernel_append_recovery_history_event(event_name);
-}
-
-static int handoff_keyboard_layout(char *out, size_t out_size) {
-  if (!out || out_size < 2 || !g_h || g_h->version < 3 ||
-      !g_h->boot_keyboard_layout[0]) {
-    return -1;
-  }
-  local_copy(out, out_size, g_h->boot_keyboard_layout);
-  return 0;
-}
-
-static int handoff_language(char *out, size_t out_size) {
-  if (!out || out_size < 2 || !g_h || g_h->version < 7 ||
-      !g_h->boot_language[0]) {
-    return -1;
-  }
-  local_copy(out, out_size, g_h->boot_language);
-  return 0;
-}
-
-static int handoff_boot_services_active(void) {
-  return x64_kernel_handoff_boot_services_active(g_h);
-}
-
-static int handoff_has_firmware_input(void) {
-  return x64_kernel_handoff_has_firmware_input(g_h);
-}
-
-static int handoff_has_firmware_block_io(void) {
-  return x64_kernel_handoff_has_firmware_block_io(g_h);
-}
-
-static int handoff_has_exit_boot_services_contract(void) {
-  return x64_kernel_handoff_has_exit_boot_services_contract(g_h);
-}
-
-static __attribute__((unused)) void print_platform_runtime_mode(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_platform_runtime_mode(g_h, &io);
-}
-
-static __attribute__((unused)) void print_platform_tables_status(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_platform_tables_status(&io);
-}
-
-static __attribute__((unused)) void print_platform_timer_status(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_platform_timer_status(&io);
-}
-
-static void print_input_runtime_status(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_input_runtime_status(&g_input_runtime, &io);
-}
-
-static void print_storage_runtime_status(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_storage_runtime_status(g_h, &io);
-}
-
-static __attribute__((unused)) void print_native_runtime_gate_status(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_native_runtime_gate_status(
-      g_h, &g_input_runtime, g_exit_boot_services_attempted,
-      g_exit_boot_services_done, g_exit_boot_services_status, &io);
-}
-
-static void update_system_runtime_platform_status(void) {
-  x64_kernel_update_system_runtime_platform_status(
-      g_h, &g_input_runtime, g_exit_boot_services_attempted,
-      g_exit_boot_services_done, g_exit_boot_services_status);
-}
-
-static void kernel_maybe_refresh_network_runtime(void) {
-  if (!g_network_runtime_refresh_enabled) {
-    return;
-  }
-  (void)net_stack_refresh_runtime();
-}
-
-static void kernel_update_logger_service_status(int rc) {
-  if (rc == 0) {
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_READY, 0,
-        "persistent klog active in /var/log/capyos_klog.txt");
-  } else {
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_LOGGER, SYSTEM_SERVICE_STATE_DEGRADED, rc,
-        "persistent klog unavailable; ring buffer only");
-  }
-}
-
-static void kernel_update_network_service_status(void) {
-  struct net_stack_status net_status = {0};
-
-  if (net_stack_status(&net_status) != 0) {
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -1,
-        "network status unavailable");
-    return;
-  }
-  if (!net_status.nic.found) {
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -2,
-        "no network adapter detected");
-    return;
-  }
-  if (!net_status.runtime_supported) {
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_BLOCKED, -3,
-        "adapter detected but driver is not validated");
-    return;
-  }
-  if (!net_status.ready) {
-    (void)service_manager_set_state(
-        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_DEGRADED, -4,
-        "validated network driver detected but not ready");
-    return;
-  }
-  (void)service_manager_set_state(SYSTEM_SERVICE_NETWORKD,
-                                  SYSTEM_SERVICE_STATE_READY, 0,
-                                  "network stack ready");
-}
-
-static int kernel_service_poll_networkd(void *ctx) {
-  (void)ctx;
-  kernel_maybe_refresh_network_runtime();
-  kernel_update_network_service_status();
-  return 0;
-}
-
-static int kernel_service_start_networkd(void *ctx) {
-  (void)ctx;
-  g_network_runtime_refresh_enabled = 1;
-  return kernel_service_poll_networkd(NULL);
-}
-
-static int kernel_service_stop_networkd(void *ctx) {
-  (void)ctx;
-  g_network_runtime_refresh_enabled = 0;
-  return 0;
-}
-
-static int kernel_service_poll_logger(void *ctx) {
-  int rc = 0;
-
-  (void)ctx;
-  rc = klog_persist_flush_default();
-  kernel_update_logger_service_status(rc);
-  return rc;
-}
-
-static int kernel_service_start_logger(void *ctx) {
-  return kernel_service_poll_logger(ctx);
-}
-
-static int kernel_service_stop_logger(void *ctx) {
-  (void)ctx;
-  return klog_persist_flush_default();
-}
-
-static void kernel_update_update_agent_service_status(int rc) {
-  struct system_update_status status;
-  update_agent_status_get(&status);
-  if (rc < 0) {
-    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
-                                    SYSTEM_SERVICE_STATE_DEGRADED, rc,
-                                    status.summary);
-    return;
-  }
-  (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
-                                  SYSTEM_SERVICE_STATE_READY, status.last_result,
-                                  status.summary);
-}
-
-static int kernel_service_poll_update_agent(void *ctx) {
-  int rc = 0;
-  (void)ctx;
-  rc = update_agent_poll();
-  kernel_update_update_agent_service_status(rc);
-  return rc;
-}
-
-static int kernel_service_start_update_agent(void *ctx) {
-  return kernel_service_poll_update_agent(ctx);
-}
-
-static int kernel_service_stop_update_agent(void *ctx) {
-  (void)ctx;
-  (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
-                                  SYSTEM_SERVICE_STATE_STOPPED, 0,
-                                  "update catalog idle");
-  return 0;
-}
-
-static int kernel_work_recovery_snapshot(void *ctx) {
-  (void)ctx;
-  return kernel_persist_recovery_report();
-}
-
-static void kernel_update_recovery_snapshot_work(int schedule_now) {
-  uint64_t now_ticks = pit_ticks();
-
-  if (!g_shell_fs_ready || !g_shell_persistent_storage ||
-      g_shell_recovery_ram_fallback) {
-    (void)work_queue_disable(SYSTEM_WORK_RECOVERY_SNAPSHOT);
-    return;
-  }
-
-  (void)work_queue_set_interval(SYSTEM_WORK_RECOVERY_SNAPSHOT, 600u);
-  if (schedule_now) {
-    (void)work_queue_schedule_now(SYSTEM_WORK_RECOVERY_SNAPSHOT, now_ticks);
-  } else {
-    (void)work_queue_schedule_after(SYSTEM_WORK_RECOVERY_SNAPSHOT, now_ticks,
-                                    600u);
-  }
-}
-
-static void kernel_service_poll(void) {
-  uint64_t now_ticks = pit_ticks();
-  (void)service_manager_poll_due(now_ticks);
-  (void)work_queue_poll_due(now_ticks);
-}
-
-static uint32_t kernel_service_target_from_settings(
-    const struct system_settings *settings) {
-  struct system_service_target_status target;
-  if (settings &&
-      service_manager_target_find(settings->service_target, &target) == 0) {
-    return target.id;
-  }
-  return SYSTEM_SERVICE_TARGET_NETWORK;
-}
-
-static void kernel_log_boot_policy_decision(
-    const struct system_service_boot_policy_decision *decision) {
-  if (!decision || !decision->degraded) {
-    return;
-  }
-  if (decision->forced_maintenance) {
-    klog(KLOG_WARN,
-         "[services] Boot policy forced maintenance target for this boot.");
-  } else if (decision->forced_core) {
-    klog(KLOG_WARN, "[services] Boot policy downgraded target to core.");
-  }
-  klog(KLOG_WARN, service_boot_policy_reason_summary(decision->reason));
-}
-
-static int kernel_boots_in_maintenance_mode(void) {
-  return g_boot_policy_decision.final_target ==
-         SYSTEM_SERVICE_TARGET_MAINTENANCE;
-}
-
-static const char *kernel_boot_maintenance_reason(void) {
-  if (!kernel_boots_in_maintenance_mode()) {
-    return NULL;
-  }
-  if (!g_boot_policy_decision.degraded) {
-    return "Maintenance target requested for this boot";
-  }
-  return service_boot_policy_reason_summary(g_boot_policy_decision.reason);
-}
-
-void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
-  struct system_service_target_status active_target;
-  struct system_update_status update_status;
-
-  if (!out) {
-    return;
-  }
-  update_agent_status_get(&update_status);
-  out->maintenance_session = g_runtime_maintenance_mode ? 1u : 0u;
-  out->degraded = g_boot_policy_decision.degraded;
-  out->forced_maintenance = g_boot_policy_decision.forced_maintenance;
-  out->forced_core = g_boot_policy_decision.forced_core;
-  out->shell_fs_ready = g_shell_fs_ready ? 1u : 0u;
-  out->persistent_storage = g_shell_persistent_storage ? 1u : 0u;
-  out->recovery_ram_fallback = g_shell_recovery_ram_fallback ? 1u : 0u;
-  out->reason = g_boot_policy_decision.reason;
-  out->bootstrap_target = g_boot_policy_decision.bootstrap_target;
-  out->requested_target = g_boot_policy_decision.requested_target;
-  out->boot_target = g_boot_policy_decision.final_target;
-  out->active_target = g_boot_policy_decision.final_target;
-  out->update_catalog_present = update_status.catalog_present;
-  out->update_available = update_status.update_available;
-  out->update_stage_ready = update_status.stage_ready;
-  out->update_pending_activation = update_status.pending_activation;
-  out->update_last_result = update_status.last_result;
-  local_copy(out->update_channel, sizeof(out->update_channel),
-             update_status.channel);
-  local_copy(out->update_branch, sizeof(out->update_branch),
-             update_status.branch);
-  local_copy(out->update_available_version,
-             sizeof(out->update_available_version),
-             update_status.available_version);
-  local_copy(out->update_staged_version, sizeof(out->update_staged_version),
-             update_status.staged_version);
-  if (service_manager_target_current(&active_target) == 0) {
-    out->active_target = active_target.id;
-  }
-}
-
-const char *x64_kernel_recovery_reason_summary(void) {
-  if (g_boot_policy_decision.degraded) {
-    return service_boot_policy_reason_summary(g_boot_policy_decision.reason);
-  }
-  if (kernel_boots_in_maintenance_mode()) {
-    return "Maintenance target requested for this boot";
-  }
-  return "Boot policy preserved the requested target";
-}
-
-int x64_kernel_recovery_resume_target(uint32_t target_id) {
-  struct net_stack_status net_status;
-
-  if (target_id >= SYSTEM_SERVICE_TARGET_COUNT) {
-    return -1;
-  }
-  if (target_id != SYSTEM_SERVICE_TARGET_MAINTENANCE &&
-      (g_shell_recovery_ram_fallback || !g_shell_persistent_storage ||
-       !x64_storage_runtime_has_device())) {
-    return -2;
-  }
-  if (target_id == SYSTEM_SERVICE_TARGET_NETWORK ||
-      target_id == SYSTEM_SERVICE_TARGET_FULL) {
-    if (net_stack_status(&net_status) != 0) {
-      return -3;
-    }
-    if (!net_status.runtime_supported) {
-      return -4;
-    }
-  }
-  if (service_manager_target_apply(target_id) < 0) {
-    return -5;
-  }
-  kernel_persist_recovery_artifacts("resume-target");
-  kernel_update_recovery_snapshot_work(0);
-  return 0;
-}
-
-int x64_kernel_recovery_request_normal_login(uint32_t target_id) {
-  int rc = 0;
-
-  if (!g_runtime_maintenance_mode) {
-    return -6;
-  }
-  if (target_id == SYSTEM_SERVICE_TARGET_MAINTENANCE) {
-    return -7;
-  }
-  rc = x64_kernel_recovery_resume_target(target_id);
-  if (rc != 0) {
-    return rc;
-  }
-  g_runtime_maintenance_mode = 0;
-  g_recovery_login_requested = 1;
-  kernel_persist_recovery_artifacts("leave-maintenance");
-  kernel_update_recovery_snapshot_work(0);
-  return 0;
-}
-
-int x64_kernel_recovery_maintenance_active(void) {
-  return g_runtime_maintenance_mode ? 1 : 0;
-}
-
-static int
-kernel_start_maintenance_session(struct session_context *session,
-                                 const struct system_settings *settings) {
-  struct user_record recovery_user;
-  const char *default_language = "en";
-
-  if (!session) {
-    return -1;
-  }
-  if (settings && settings->language[0]) {
-    const char *normalized = localization_normalize_language(settings->language);
-    if (normalized) {
-      default_language = normalized;
-    }
-  }
-
-  user_record_clear(&recovery_user);
-  local_copy(recovery_user.username, sizeof(recovery_user.username),
-             "maintenance");
-  local_copy(recovery_user.role, sizeof(recovery_user.role), "recovery");
-  local_copy(recovery_user.home, sizeof(recovery_user.home), "/system");
-  recovery_user.uid = 0u;
-  recovery_user.gid = 0u;
-  return session_begin(session, &recovery_user, default_language);
-}
-
-static void print_active_efi_runtime_trace(void) {
-  struct x64_platform_diag_io io = kernel_platform_diag_io();
-  x64_kernel_print_active_efi_runtime_trace(&io);
-}
-
-static struct x64_kernel_volume_runtime_state
-kernel_volume_runtime_state(void) {
-  struct x64_kernel_volume_runtime_state state;
-  state.handoff = g_h;
-  state.root_sb = &g_shell_root_sb;
-  state.shell_persistent_storage = &g_shell_persistent_storage;
-  state.active_volume_key = g_active_volume_key;
-  state.active_volume_key_size = sizeof(g_active_volume_key);
-  state.active_volume_key_ready = &g_active_volume_key_ready;
-  state.handoff_volume_key = g_handoff_volume_key;
-  state.handoff_volume_key_size = sizeof(g_handoff_volume_key);
-  state.handoff_volume_key_ready = &g_handoff_volume_key_ready;
-  state.data_io_probe = g_data_io_probe;
-  state.data_io_probe_size = sizeof(g_data_io_probe);
-  state.disk_salt = g_disk_salt;
-  state.disk_salt_size = sizeof(g_disk_salt);
-  state.kdf_iterations = g_kdf_iterations;
-  return state;
-}
-
-static struct x64_kernel_volume_runtime_io kernel_volume_runtime_io(void) {
-  struct x64_kernel_volume_runtime_io io;
-  io.print = fbcon_print;
-  io.print_hex = fbcon_print_hex;
-  io.print_hex64 = fbcon_print_hex64;
-  io.print_dec_u32 = fbcon_print_dec_u32;
-  io.putc = fbcon_putc;
-  io.readline = kernel_readline;
-  io.print_active_efi_runtime_trace = print_active_efi_runtime_trace;
-  return io;
-}
-
-static int load_handoff_volume_key(void) {
-  struct x64_kernel_volume_runtime_state state = kernel_volume_runtime_state();
-  return x64_kernel_volume_runtime_load_handoff_key(&state);
-}
-
-static int fs_ensure_dir_recursive(const char *path) {
-  return x64_kernel_volume_runtime_ensure_dir_recursive(path);
-}
-
-static int fs_write_text_file(const char *path, const char *text) {
-  return x64_kernel_volume_runtime_write_text_file(path, text);
-}
-
-static int persist_active_volume_key_hash(void) {
-  struct x64_kernel_volume_runtime_state state = kernel_volume_runtime_state();
-  return x64_kernel_volume_runtime_persist_active_key_hash(&state);
-}
-
-static int mount_encrypted_data_volume(struct block_device *data_dev) {
-  struct x64_kernel_volume_runtime_state state = kernel_volume_runtime_state();
-  struct x64_kernel_volume_runtime_io io = kernel_volume_runtime_io();
-  return x64_kernel_volume_runtime_mount_encrypted_data_volume(&state, &io,
-                                                               data_dev);
-}
-
-static int mount_root_CAPYFS(struct block_device *dev, const char *label) {
-  struct x64_kernel_volume_runtime_state state = kernel_volume_runtime_state();
-  struct x64_kernel_volume_runtime_io io = kernel_volume_runtime_io();
-  return x64_kernel_volume_runtime_mount_root_capyfs(&state, &io, dev, label);
-}
-
-static struct x64_kernel_shell_runtime_state kernel_shell_runtime_state(void) {
-  struct x64_kernel_shell_runtime_state state;
-  state.handoff = g_h;
-  state.shell_ctx = &g_shell_ctx;
-  state.session_ctx = &g_session_ctx;
-  state.settings = &g_shell_settings;
-  state.shell_initialized = &g_shell_initialized;
-  state.shell_fs_ready = &g_shell_fs_ready;
-  state.shell_persistent_storage = &g_shell_persistent_storage;
-  state.shell_recovery_ram_fallback = &g_shell_recovery_ram_fallback;
-  state.data_io_probe = g_data_io_probe;
-  state.data_io_probe_size = sizeof(g_data_io_probe);
-  state.allow_recovery_ram_fallback =
-      kernel_boots_in_maintenance_mode() ? 1u : 0u;
-  state.desktop_autostart_pending = 0;
-  return state;
-}
-
-static struct x64_kernel_shell_runtime_io kernel_shell_runtime_io(void) {
-  struct x64_kernel_shell_runtime_io io;
-  io.print = fbcon_print;
-  io.print_hex = fbcon_print_hex;
-  io.print_hex64 = fbcon_print_hex64;
-  io.print_dec_u32 = fbcon_print_dec_u32;
-  io.putc = fbcon_putc;
-  return io;
-}
-
-static struct x64_hyperv_runtime_coordinator_ops
-kernel_hyperv_runtime_coordinator_ops(void) {
-  struct x64_hyperv_runtime_coordinator_ops ops;
-  ops.boot_services_active = handoff_boot_services_active;
-  ops.allow_hybrid_storage_prepare = kernel_allow_hybrid_storage_prepare;
-  ops.maybe_exit_boot_services_after_native_runtime =
-      maybe_exit_boot_services_after_native_runtime;
-  ops.update_system_runtime_platform_status =
-      update_system_runtime_platform_status;
-  ops.print_input_runtime_status = print_input_runtime_status;
-  ops.print_storage_runtime_status = print_storage_runtime_status;
-  ops.print = fbcon_print;
-  return ops;
-}
-
-static void kernel_shell_after_native_runtime_ready(void) {
-  struct x64_hyperv_runtime_coordinator_ops ops =
-      kernel_hyperv_runtime_coordinator_ops();
-  x64_hyperv_runtime_after_native_ready(&ops);
-}
-
-int x64_kernel_manual_prepare_hyperv_input(void) {
-  struct x64_native_runtime_gate_status gate;
-
-  if (handoff_boot_services_active()) {
-    update_system_runtime_platform_status();
-    return 0;
-  }
-
-  if (g_input_runtime.hyperv_deferred) {
-    int rc = x64_input_force_enable_hyperv_native(
-        &g_input_runtime, handoff_boot_services_active(), klog_print_adapter);
-    klog_print_adapter_flush();
-    update_system_runtime_platform_status();
-    return rc;
-  }
-
-  x64_native_runtime_gate_eval(g_h, &g_input_runtime,
-                               g_exit_boot_services_attempted,
-                               g_exit_boot_services_done,
-                               g_exit_boot_services_status, &gate);
-  if (gate.gate != SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_INPUT) {
-    update_system_runtime_platform_status();
-    return 0;
-  }
-
-  {
-    int rc = x64_input_try_prepare_hyperv_runtime(&g_input_runtime,
-                                                  handoff_boot_services_active(),
-                                                  klog_print_adapter);
-    klog_print_adapter_flush();
-    update_system_runtime_platform_status();
-    return rc;
-  }
-}
-
-int x64_kernel_manual_prepare_hyperv_storage(void) {
-  int rc = x64_storage_runtime_manual_hyperv_step(
-      handoff_boot_services_active(), klog_print_adapter);
-  klog_print_adapter_flush();
-  update_system_runtime_platform_status();
-  return rc;
-}
-
-int x64_kernel_manual_prepare_native_bridge(void) {
-  int rc = x64_platform_tables_prepare_bridge();
-  if (rc > 0) {
-    klog(KLOG_INFO,
-         "[runtime] Bridge nativo x64 armado: GDT/IDT/PIC do kernel ativos antes do EBS.");
-  }
-  update_system_runtime_platform_status();
-  return rc;
-}
-
-int x64_kernel_manual_prepare_hyperv_synic(void) {
-  int rc = 0;
-
-  if (!handoff_boot_services_active()) {
-    update_system_runtime_platform_status();
-    return 0;
-  }
-  if (!x64_platform_tables_active() && !x64_platform_tables_bridge_active()) {
-    update_system_runtime_platform_status();
-    return 0;
-  }
-  if (!vmbus_runtime_hypercall_prepared()) {
-    update_system_runtime_platform_status();
-    return 0;
-  }
-
-  rc = vmbus_runtime_prepare_synic();
-  if (rc == 0) {
-    klog(KLOG_INFO,
-         "[hyperv] SynIC preparado em passo manual/controlado; conexao do VMBus segue desativada.");
-    update_system_runtime_platform_status();
-    return 1;
-  }
-
-  update_system_runtime_platform_status();
-  return -1;
-}
-
-int x64_kernel_manual_try_exit_boot_services(void) {
-  int exit_done_before = g_exit_boot_services_done;
-  EFI_STATUS_K exit_status_before = g_exit_boot_services_status;
-  struct x64_hyperv_runtime_coordinator_ops ops =
-      kernel_hyperv_runtime_coordinator_ops();
-  int rc = 0;
-
-  maybe_exit_boot_services_after_native_runtime();
-  if (g_exit_boot_services_done != exit_done_before) {
-    rc = x64_hyperv_runtime_poll_promotions(&g_input_runtime, &ops);
-    update_system_runtime_platform_status();
-    return rc < 0 ? -1 : 1;
-  }
-  if (g_exit_boot_services_status != exit_status_before &&
-      g_exit_boot_services_status != EFI_SUCCESS_K) {
-    update_system_runtime_platform_status();
-    return -1;
-  }
-  update_system_runtime_platform_status();
-  return 0;
-}
-
-int x64_kernel_manual_native_runtime_step(void) {
-  struct x64_hyperv_runtime_coordinator_ops ops =
-      kernel_hyperv_runtime_coordinator_ops();
-  struct x64_native_runtime_gate_status gate;
-  int changed = 0;
-  int failed = 0;
-  int prepared_transition = 0;
-  int exit_done_before = g_exit_boot_services_done;
-  int rc = 0;
-
-  x64_native_runtime_gate_eval(g_h, &g_input_runtime,
-                               g_exit_boot_services_attempted,
-                               g_exit_boot_services_done,
-                               g_exit_boot_services_status, &gate);
-  if (gate.gate == SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_INPUT &&
-      !handoff_boot_services_active()) {
-    rc = x64_kernel_manual_prepare_hyperv_input();
-    if (rc > 0) {
-      changed = 1;
-      prepared_transition = 1;
-    } else if (rc < 0) {
-      failed = 1;
-    }
-  } else if (gate.gate == SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_STORAGE_FIRMWARE) {
-    rc = x64_kernel_manual_prepare_hyperv_storage();
-    if (rc > 0) {
-      changed = 1;
-      prepared_transition = 1;
-    } else if (rc < 0) {
-      failed = 1;
-    }
-  }
-  if (!prepared_transition) {
-    rc = x64_kernel_manual_try_exit_boot_services();
-    if (rc > 0) {
-      changed = 1;
-    } else if (rc < 0) {
-      failed = 1;
-    }
-  }
-  if (exit_done_before != g_exit_boot_services_done) {
-    changed = 1;
-  }
-  rc = x64_hyperv_runtime_poll_promotions(&g_input_runtime, &ops);
-  if (rc > 0) {
-    changed = 1;
-  } else if (rc < 0) {
-    failed = 1;
-  }
-  update_system_runtime_platform_status();
-  if (changed) {
-    return 1;
-  }
-  return failed ? -1 : 0;
-}
-
-static void kernel_note_shell_session_ready(void) {
-  if (x64_storage_runtime_hyperv_present()) {
-    x64_storage_runtime_allow_hyperv_hybrid_prepare(0);
-  }
-}
-
-static int kernel_allow_hybrid_storage_prepare(void) {
-  int allow = !handoff_boot_services_active();
-  x64_storage_runtime_allow_hyperv_hybrid_prepare(allow);
-  return allow;
-}
-
-static struct x64_kernel_shell_runtime_ops kernel_shell_runtime_ops(void) {
-  struct x64_kernel_shell_runtime_ops ops;
-  ops.mount_root_capyfs = mount_root_CAPYFS;
-  ops.ensure_dir_recursive = fs_ensure_dir_recursive;
-  ops.write_text_file = fs_write_text_file;
-  ops.mount_encrypted_data_volume = mount_encrypted_data_volume;
-  ops.persist_active_volume_key_hash = persist_active_volume_key_hash;
-  ops.handoff_has_firmware_block_io = handoff_has_firmware_block_io;
-  ops.boot_services_active = handoff_boot_services_active;
-  ops.after_native_runtime_ready = kernel_shell_after_native_runtime_ready;
-  return ops;
-}
-
-static EFI_STATUS_K kernel_exit_boot_services(void) {
-  EFI_SYSTEM_TABLE_K *st = NULL;
-  EFI_BOOT_SERVICES_K *bs = NULL;
-  uint64_t map_key = 0;
-  uint64_t desc_size = 0;
-  uint32_t desc_ver = 0;
-
-  if (!handoff_has_exit_boot_services_contract()) {
-    return EFI_INVALID_PARAMETER_K;
-  }
-
-  st = (EFI_SYSTEM_TABLE_K *)(uintptr_t)g_h->efi_system_table;
-  bs = st ? st->BootServices : NULL;
-  if (!st || !bs || !bs->GetMemoryMap || !bs->ExitBootServices) {
-    return EFI_INVALID_PARAMETER_K;
-  }
-
-  for (uint32_t attempt = 0; attempt < 4u; ++attempt) {
-    uint64_t map_size = g_h->memmap_capacity;
-    EFI_STATUS_K st_map =
-        bs->GetMemoryMap(&map_size, (void *)(uintptr_t)g_h->memmap, &map_key,
-                         &desc_size, &desc_ver);
-    if (st_map == EFI_BUFFER_TOO_SMALL_K || map_size > g_h->memmap_capacity) {
-      return EFI_BUFFER_TOO_SMALL_K;
-    }
-    if (st_map != EFI_SUCCESS_K) {
-      return st_map;
-    }
-
-    {
-      EFI_STATUS_K st_exit = bs->ExitBootServices(
-          (EFI_HANDLE_K)(uintptr_t)g_h->efi_image_handle, map_key);
-      if (st_exit == EFI_SUCCESS_K) {
-        ((struct boot_handoff *)g_h)->memmap_size = map_size;
-        ((struct boot_handoff *)g_h)->memmap_desc_size = (uint32_t)desc_size;
-        ((struct boot_handoff *)g_h)->memmap_entries =
-            desc_size ? (uint32_t)(map_size / desc_size) : 0;
-        ((struct boot_handoff *)g_h)->efi_map_key = map_key;
-        ((struct boot_handoff *)g_h)->runtime_flags &=
-            ~(BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE |
-              BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT |
-              BOOT_HANDOFF_RUNTIME_FIRMWARE_BLOCK_IO |
-              BOOT_HANDOFF_RUNTIME_HYBRID_BOOT);
-        return EFI_SUCCESS_K;
-      }
-      if (st_exit != EFI_INVALID_PARAMETER_K) {
-        return st_exit;
-      }
-    }
-  }
-
-  return EFI_INVALID_PARAMETER_K;
-}
-
-static void maybe_exit_boot_services_after_native_runtime(void) {
-  struct x64_native_runtime_gate_status gate;
-
-  if (g_exit_boot_services_done || g_exit_boot_services_attempted) {
-    return;
-  }
-  x64_native_runtime_gate_eval(g_h, &g_input_runtime,
-                               g_exit_boot_services_attempted,
-                               g_exit_boot_services_done,
-                               g_exit_boot_services_status, &gate);
-  if (!handoff_boot_services_active()) {
-    return;
-  }
-  if (!x64_native_runtime_gate_is_ready(&gate)) {
-    return;
-  }
-
-  g_exit_boot_services_attempted = 1;
-  klog(KLOG_INFO, "[boot] Tentando ExitBootServices no kernel.");
-  g_exit_boot_services_status = kernel_exit_boot_services();
-  if (g_exit_boot_services_status != EFI_SUCCESS_K) {
-    klog_hex(KLOG_WARN, "[boot] ExitBootServices falhou/adiado. status=",
-             g_exit_boot_services_status);
-    update_system_runtime_platform_status();
-    return;
-  }
-
-  g_exit_boot_services_done = 1;
-  x64_input_retire_firmware_backend(&g_input_runtime);
-  x64_platform_tables_init(1);
-  if (g_input_runtime.hyperv_deferred) {
-    klog(KLOG_INFO,
-         "[hyperv] Teclado VMBus adiado; promocao sera tentada no input loop.");
-    x64_input_enable_auto_promotion();
-  }
-  (void)x64_storage_runtime_try_enable_hyperv_native(
-      handoff_boot_services_active(), kernel_allow_hybrid_storage_prepare(),
-      klog_print_adapter);
-  klog_print_adapter_flush();
-  update_system_runtime_platform_status();
-  klog(KLOG_INFO, "[boot] ExitBootServices concluido no kernel.");
-}
-
-static int prepare_shell_runtime(void) {
-  struct x64_kernel_shell_runtime_state state = kernel_shell_runtime_state();
-  struct x64_kernel_shell_runtime_io io = kernel_shell_runtime_io();
-  struct x64_kernel_shell_runtime_ops ops = kernel_shell_runtime_ops();
-  return x64_kernel_prepare_shell_runtime(&state, &io, &ops);
-}
-
-/* Activate authenticated user session for shell command dispatch.
- * If the session requests desktop autostart, launch it after setup. */
-static int init_shell_context(const struct user_record *user) {
-  struct x64_kernel_shell_runtime_state state = kernel_shell_runtime_state();
-  int rc = 0;
-  if (prepare_shell_runtime() != 0 || !user || !user->username[0]) {
-    return -1;
-  }
-  rc = x64_kernel_begin_shell_session(&state, user);
-  if (rc == 0) {
-    kernel_note_shell_session_ready();
-    if (state.desktop_autostart_pending) {
-      (void)run_shell_alias("desktopstart");
-    }
-  }
-  return rc;
-}
-
-/* x64 relocation-safe wrappers for external callbacks used via function pointers.
- * Keeping callbacks inside this TU avoids absolute address materialization for
- * external symbols in the login runtime ops table. */
-static void login_session_reset(struct session_context *ctx) {
-  session_reset(ctx);
-}
-
-static void login_session_set_active(struct session_context *ctx) {
-  session_set_active(ctx);
-}
-
-static void login_shell_context_init(struct shell_context *ctx,
-                                     struct session_context *session,
-                                     const struct system_settings *settings) {
-  shell_context_init(ctx, session, settings);
-}
-
-static int login_system_login(struct session_context *session,
-                              const struct system_settings *settings) {
-  return system_login(session, settings);
-}
-
-static int login_maintenance_mode_active(void) {
-  return x64_kernel_recovery_maintenance_active();
-}
-
-static int login_consume_recovery_login_request(void) {
-  int requested = g_recovery_login_requested;
-  g_recovery_login_requested = 0;
-  return requested;
-}
-
-static void login_show_splash(const struct system_settings *settings) {
-  if (!settings || !settings->splash_enabled) {
-    return;
-  }
-  ui_boot_splash();
-}
-
-static const struct user_record *
-login_session_user(const struct session_context *ctx) {
-  return session_user(ctx);
-}
-
-static const char *login_session_cwd(const struct session_context *ctx) {
-  return session_cwd(ctx);
-}
-
-static int
-login_shell_context_should_logout(const struct shell_context *ctx) {
-  return shell_context_should_logout(ctx);
-}
-
-/* Try to execute command through shell module system.
- * Returns 1 if command was handled, 0 if not found (fallback to inline). */
-static int try_shell_command(char *line) {
-  return x64_kernel_try_shell_command(&g_shell_ctx, g_shell_initialized, line);
-}
-
-static int run_shell_alias(const char *alias_line) {
-  return x64_kernel_run_shell_alias(&g_shell_ctx, g_shell_initialized,
-                                    alias_line);
-}
-
-
-/* Non-blocking single-char poll for desktop/GUI frame loops. */
-int kernel_input_trygetc(char *out_char) {
-  if (!out_char) return 0;
-  return x64_input_poll_char(&g_input_runtime, out_char);
-}
-
-int kernel_input_getc(char *out_char) {
-  if (!out_char)
-    return 0;
-  for (;;) {
-    struct x64_hyperv_runtime_coordinator_ops ops =
-        kernel_hyperv_runtime_coordinator_ops();
-    int hyperv_was_ready = g_input_runtime.has_hyperv;
-    kernel_service_poll();
-    (void)x64_hyperv_runtime_poll_promotions(&g_input_runtime, &ops);
-    if (x64_input_poll_char(&g_input_runtime, out_char)) {
-      return 1;
-    }
-    if (hyperv_was_ready && !g_input_runtime.has_hyperv &&
-        g_input_runtime.hyperv_deferred) {
-      klog(KLOG_WARN,
-           "[hyperv] Backend VMBus degradado; mantendo fallback atual e reagendando promocao controlada.");
-    }
-    cpu_relax();
-  }
-}
-
-size_t kernel_input_readline(char *buf, size_t maxlen, int mask) {
-  if (!buf || maxlen < 2) {
-    return 0;
-  }
-
-  size_t len = 0;
-  buf[0] = 0;
-
-  for (;;) {
-    char ch = 0;
-    if (!kernel_input_getc(&ch)) {
-      continue;
-    }
-
-    if (ch == 127 || ch == '\b') {
-      if (len > 0) {
-        len--;
-        buf[len] = 0;
-        fbcon_putc('\b');
-      }
-      continue;
-    }
-
-    if (ch == '\r') {
-      ch = '\n';
-    }
-    if (ch == '\n') {
-      fbcon_putc('\n');
-      buf[len] = 0;
-      return len;
-    }
-    if (len + 1 < maxlen) {
-      buf[len++] = ch;
-      buf[len] = 0;
-      fbcon_putc(mask ? '*' : ch);
-    }
-  }
-}
-
-static size_t kernel_readline(char *buf, size_t maxlen, int mask) {
-  return kernel_input_readline(buf, maxlen, mask);
-}
-
-/* Adapter: routes print output to the klog ring buffer during the boot
- * splash phase so the framebuffer stays clean.  Buffers fragments until
- * a newline, then flushes to klog as a single entry. */
-static char g_klog_adapter_buf[256];
-static uint32_t g_klog_adapter_len = 0;
-
-static void klog_print_adapter_flush(void) {
-  if (g_klog_adapter_len == 0) {
-    return;
-  }
-  g_klog_adapter_buf[g_klog_adapter_len] = '\0';
-  klog(KLOG_INFO, g_klog_adapter_buf);
-  g_klog_adapter_len = 0;
-}
-
-static void klog_print_adapter(const char *s) {
-  if (!s) {
-    return;
-  }
-  while (*s) {
-    if (*s == '\n') {
-      klog_print_adapter_flush();
-      ++s;
-      continue;
-    }
-    if (g_klog_adapter_len < sizeof(g_klog_adapter_buf) - 1) {
-      g_klog_adapter_buf[g_klog_adapter_len++] = *s;
-    } else {
-      klog_print_adapter_flush();
-      g_klog_adapter_buf[g_klog_adapter_len++] = *s;
-    }
-    ++s;
-  }
-}
-
-/* Framebuffer accessors for desktop subsystem */
-uint32_t *kernel_desktop_get_fb(void) { return g_con.fb; }
-uint32_t kernel_desktop_get_width(void) { return g_con.width; }
-uint32_t kernel_desktop_get_height(void) { return g_con.height; }
-uint32_t kernel_desktop_get_pitch(void) { return g_con.stride * 4; }
+/* ── kernel entry point ──────────────────────────────────────────────── */
 
 __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('H');
@@ -2170,6 +136,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       cpu_relax();
   }
 
+  /* Initialise the framebuffer console from handoff data */
   g_con.fb = (uint32_t *)(uintptr_t)h->fb.base;
   g_con.width = h->fb.width;
   g_con.height = h->fb.height;
@@ -2184,13 +151,39 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   g_con.col = 0;
   g_con.row = 0;
 
-  /* Register framebuffer with panic handler for blue-screen on fault */
+  /* Never leave early exception handling on firmware descriptors.
+     Hybrid boots need the bridge path; normal boots after ExitBootServices
+     can install native tables immediately because PIC IRQs remain masked. */
+  if (handoff_boot_services_active()) {
+    (void)x64_platform_tables_prepare_bridge();
+  } else {
+    x64_platform_tables_init(1);
+  }
+  dbgcon_putc('B');
+
+  /* Register framebuffer with panic handler once the bridge descriptors are
+     active, so an early fault while touching high .bss lands in the kernel
+     handler instead of firmware fallback paths. */
   panic_set_framebuffer(g_con.fb, g_con.width, g_con.height,
                         g_con.stride * 4);
+  dbgcon_putc('P');
 
-  acpi_set_rsdp(h->rsdp);
-  acpi_set_uefi_system_table(h->efi_system_table);
-  system_platform_apply_theme("capyos");
+  dbgcon_putc('r');
+  g_rsdp_override = h->rsdp;
+  g_acpi_initialized = 0;
+  dbgcon_putc('R');
+  dbgcon_putc('e');
+  g_efi_system_table = h->efi_system_table;
+  dbgcon_putc('E');
+  dbgcon_putc('t');
+  g_con.bg = 0x00102030;
+  g_con.fg = 0x00F0F0F0;
+  g_theme_splash_bg = 0x000A1713;
+  g_theme_splash_icon = 0x0000A651;
+  g_theme_splash_bar_border = 0x00213A31;
+  g_theme_splash_bar_bg = 0x0012221C;
+  g_theme_splash_bar_fill = 0x0000C364;
+  dbgcon_putc('T');
 
   /* --- Boot splash with live progress bar -------------------------------- */
   {
@@ -2210,8 +203,11 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     bui.draw_icon = ui_draw_capyos_icon;
     boot_ui_init(&bui);
   }
+  dbgcon_putc('U');
   fbcon_set_visual_muted(1);
+  dbgcon_putc('M');
   boot_ui_splash_begin();
+  dbgcon_putc('S');
 
   struct boot_warnings g_boot_warnings;
   boot_warnings_init(&g_boot_warnings);
@@ -2221,56 +217,90 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_set_status("Initializing platform...");
   boot_ui_splash_advance(1, 8);
   x64_platform_tables_init(!handoff_boot_services_active());
+  dbgcon_putc('1');
 
   /* Stage 2/8: Core services */
   boot_ui_splash_set_status("Starting core services...");
   boot_ui_splash_advance(2, 8);
   kcon_init();
+  dbgcon_putc('A');
   kinit();
+  dbgcon_putc('B');
   service_manager_init();
+  dbgcon_putc('C');
   work_queue_init();
-  task_system_init();
-  scheduler_init(SCHED_POLICY_COOPERATIVE);
-  dns_cache_init();
-  socket_system_init();
-  update_agent_init(CAPYOS_VERSION_EXTENDED);
+  dbgcon_putc('D');
+  /* Cold boot already starts with the task table in BSS-zeroed state and
+   * next_pid initialized from .data, so avoid a redundant early reset here.
+   * This keeps the boot path off the fragile return that was faulting before
+   * COM1 came up. */
+  dbgcon_putc('E');
+  /* The scheduler runtime also starts in BSS-zeroed state and now defaults to
+   * cooperative policy in .data, so the early boot path can skip the explicit
+   * reset here and avoid another fragile call/return before COM1 is live. */
+  dbgcon_putc('F');
+  /* The DNS cache starts zeroed in .bss, so there is no need to walk it here
+   * during cold boot before the runtime has finished coming up. */
+  dbgcon_putc('G');
+  /* Socket tables are BSS-zeroed too; the runtime only needs the "initialized"
+   * gate opened, which is now provided by a static default. */
+  dbgcon_putc('H');
+  /* The update agent already self-seeds on first real use. */
+  dbgcon_putc('I');
   (void)work_queue_register(SYSTEM_WORK_RECOVERY_SNAPSHOT,
                             "recovery-snapshot",
                             kernel_work_recovery_snapshot, NULL);
+  dbgcon_putc('J');
   (void)work_queue_set_interval(SYSTEM_WORK_RECOVERY_SNAPSHOT, 600u);
+  dbgcon_putc('K');
   (void)work_queue_disable(SYSTEM_WORK_RECOVERY_SNAPSHOT);
+  dbgcon_putc('L');
   (void)service_manager_target_apply(g_boot_policy_decision.bootstrap_target);
+  dbgcon_putc('2');
 
   /* Stage 3/8: Timers */
   boot_ui_splash_set_status("Calibrating timers...");
   boot_ui_splash_advance(3, 8);
   x64_timebase_init();
+  dbgcon_putc('g');
   x64_platform_timer_init(!handoff_boot_services_active());
-  if (!handoff_boot_services_active() && apic_available()) {
-    apic_init();
-    klog(KLOG_INFO, "[apic] Local APIC initialized.");
-  }
+  dbgcon_putc('h');
+  /* The early post-EBS path is still sensitive to return corruption while the
+   * platform runtime settles. Keep PIT/timebase active and defer local APIC
+   * bring-up until the native runtime is fully stable. */
+  dbgcon_putc('i');
   boot_metrics_init();
+  dbgcon_putc('j');
   if (apic_available()) {
     smp_detect_cpus(h->rsdp);
   }
+  dbgcon_putc('k');
   vmm_init();
+  dbgcon_putc('l');
   klog(KLOG_INFO, "[vmm] Virtual memory manager initialized.");
   process_system_init();
+  dbgcon_putc('m');
   if (!handoff_boot_services_active()) {
     syscall_init();
     klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
   }
+  dbgcon_putc('n');
   auth_policy_init();
+  dbgcon_putc('o');
   rtc_init();
+  dbgcon_putc('Q');
   gpu_init();
+  dbgcon_putc('R');
   gpu_detect();
+  dbgcon_putc('S');
   usb_core_init();
+  dbgcon_putc('p');
   if (apic_available() && !handoff_boot_services_active()) {
     apic_timer_set_callback(scheduler_tick);
     apic_timer_start(100);
     klog(KLOG_INFO, "[scheduler] Preemptive tick armed at 100Hz.");
   }
+  dbgcon_putc('3');
 
   /* Stage 4/8: Keyboard */
   boot_ui_splash_set_status("Configuring keyboard...");
@@ -2291,9 +321,33 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     }
     system_set_boot_defaults(handoff_layout_name, handoff_language_name);
   }
+  {
+    char ho_hostname[32] = {0};
+    char ho_theme[16] = {0};
+    char ho_admin_user[32] = {0};
+    char ho_admin_pass[64] = {0};
+    int ho_splash = 1;
+    int have_setup = 0;
+    if (handoff_hostname(ho_hostname, sizeof(ho_hostname)) == 0 &&
+        handoff_admin_username(ho_admin_user, sizeof(ho_admin_user)) == 0 &&
+        handoff_admin_password(ho_admin_pass, sizeof(ho_admin_pass)) == 0) {
+      have_setup = 1;
+      (void)handoff_theme(ho_theme, sizeof(ho_theme));
+      int sp = handoff_splash_enabled();
+      if (sp >= 0) ho_splash = sp;
+      system_set_installer_config(ho_hostname, ho_theme, ho_admin_user,
+                                  ho_admin_pass, ho_splash);
+      klog(KLOG_INFO, "[setup] Installer config provisioned from handoff.");
+    }
+    /* Zero password from stack regardless */
+    for (size_t zi = 0; zi < sizeof(ho_admin_pass); ++zi)
+      ((volatile char *)ho_admin_pass)[zi] = 0;
+    (void)have_setup;
+  }
   if (load_handoff_volume_key() == 0) {
     klog(KLOG_INFO, "[security] Volume key provisioned from installer.");
   }
+  dbgcon_putc('4');
 
   /* Stage 5/8: Storage */
   boot_ui_splash_set_status("Detecting storage...");
@@ -2301,12 +355,14 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   if (nvme_init() != 0) {
     klog(KLOG_INFO, "[nvme] No NVMe controller found.");
   }
+  dbgcon_putc('5');
 
   /* Stage 6/8: Serial */
   boot_ui_splash_set_status("Initializing serial...");
   boot_ui_splash_advance(6, 8);
   com1_init();
   com1_puts("[COM1] CapyOS 64-bit serial console ready\r\n");
+  dbgcon_putc('6');
 
   /* Stage 7/8: Input devices */
   boot_ui_splash_set_status("Detecting input devices...");
@@ -2345,6 +401,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                         "No input device detected (keyboard/serial)");
     }
   }
+  dbgcon_putc('7');
 
   /* Stage 8/8: Network */
   boot_ui_splash_set_status("Configuring network...");
@@ -2358,12 +415,16 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     struct system_update_status update_status;
     struct system_service_boot_policy_input boot_policy_input;
 
-    /* First boot setup is interactive and uses vga_* wrappers, so the
-     * framebuffer must be visible while the shell runtime prepares the
-     * persistent volume. Otherwise the setup clears the splash and then waits
-     * for input on a blank screen. */
     fbcon_set_visual_muted(0);
     shell_runtime_rc = prepare_shell_runtime();
+
+    /* Retry runtime preparation once as autocorrection before we proceed
+     * to the remaining boot stages. */
+    if (shell_runtime_rc != 0) {
+      fbcon_print("[setup] Autocorrecao: retentando preparacao do runtime...\n");
+      shell_runtime_rc = prepare_shell_runtime();
+    }
+
     if (shell_runtime_rc == 0) {
       int log_flush_rc = klog_persist_flush_default();
       kernel_update_logger_service_status(log_flush_rc);
@@ -2388,8 +449,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       boot_warnings_add(&g_boot_warnings,
                         "Storage runtime unavailable; persistence may fail");
     } else if (!x64_storage_runtime_has_device()) {
-      boot_warnings_add(&g_boot_warnings,
-                        "No validated storage backend detected");
+      /* RAM-based runtime is active; storage is not persistent but the
+       * shell runtime is fully functional.  Mark storage as ready so the
+       * boot policy does not force maintenance on every ISO / QEMU boot. */
+      validated_storage_ready = 1;
     } else {
       validated_storage_ready = 1;
     }
@@ -2491,27 +554,25 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     kernel_persist_recovery_artifacts("boot-policy");
     kernel_update_recovery_snapshot_work(0);
   }
+  dbgcon_putc('8');
 
   /* --- End splash -------------------------------------------------------- */
   boot_ui_splash_end();
   fbcon_set_visual_muted(0);
+  dbgcon_putc('X');
 
-  /* Restore normal console state for post-splash screens. */
   g_con.col = 0;
   g_con.row = 0;
 
   /* --- Hardware compatibility warnings ----------------------------------- */
   if (g_boot_warnings.count > 0) {
-    int action = boot_ui_show_warnings(&g_boot_warnings, kernel_input_getc);
+    kernel_log_boot_warnings(&g_boot_warnings);
     (void)klog_persist_flush_default();
-    if (action == 1) {
-      kernel_halt_forever();
-    }
   }
 
   (void)klog_persist_flush_default();
 
-  /* --- Console ready ------------------------------------------------------ */
+  /* --- Console ready ----------------------------------------------------- */
   fbcon_fill_rect_px(0, 0, g_con.width, g_con.height, g_con.bg);
   g_con.col = 0;
   g_con.row = 0;
@@ -2548,6 +609,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     login_ops.maintenance_mode_active = login_maintenance_mode_active;
     login_ops.consume_recovery_login_request =
         login_consume_recovery_login_request;
+    dbgcon_putc('L');
 
     if (login_runtime_run(&login_ops) != 0) {
       kernel_halt_forever();

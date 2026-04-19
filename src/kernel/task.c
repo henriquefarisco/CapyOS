@@ -1,3 +1,4 @@
+#pragma GCC optimize("O0")
 #include "kernel/task.h"
 #include "memory/kmem.h"
 #include <stddef.h>
@@ -105,6 +106,13 @@ struct task *task_by_pid(uint32_t pid) {
       return &task_table[i];
   }
   return NULL;
+}
+
+struct task *task_at_index(size_t index) {
+  if (index >= TASK_MAX_COUNT) {
+    return NULL;
+  }
+  return &task_table[index];
 }
 
 int task_kill(uint32_t pid) {

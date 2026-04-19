@@ -74,12 +74,12 @@ static int netvsc_vmbus_recv_control(struct vmbus_channel_runtime *channel,
   return 1;
 }
 
-struct netvsc_backend_ops netvsc_vmbus_ops(void) {
-  struct netvsc_backend_ops ops;
-
-  ops.query_offer = netvsc_vmbus_query_offer;
-  ops.open_channel = netvsc_vmbus_open_channel;
-  ops.send_control = netvsc_vmbus_send_control;
-  ops.recv_control = netvsc_vmbus_recv_control;
-  return ops;
+void netvsc_vmbus_ops_init(struct netvsc_backend_ops *out) {
+  if (!out) {
+    return;
+  }
+  out->query_offer = netvsc_vmbus_query_offer;
+  out->open_channel = netvsc_vmbus_open_channel;
+  out->send_control = netvsc_vmbus_send_control;
+  out->recv_control = netvsc_vmbus_recv_control;
 }

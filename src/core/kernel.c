@@ -6,7 +6,7 @@
 #include "drivers/io.h"
 #include "boot/boot_writer.h"
 #include "core/system_init.h"
-#include "core/user.h"
+#include "auth/user.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/timer/pit.h"

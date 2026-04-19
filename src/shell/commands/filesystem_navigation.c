@@ -1,7 +1,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
+#include "lang/localization.h"
 
 struct list_ctx {
     int count;

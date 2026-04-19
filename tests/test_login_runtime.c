@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "core/login_runtime.h"
+#include "auth/login_runtime.h"
 
 static struct shell_context g_shell_ctx;
 static struct session_context g_session_ctx;

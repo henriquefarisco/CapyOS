@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -89,10 +90,160 @@ def validate_installed_disk_artifacts(repo_root: Path) -> tuple[Path, Path, Path
 
 
 def validate_iso_artifact(repo_root: Path, iso_relpath: str) -> Path:
-    iso_path = (repo_root / iso_relpath).resolve()
+    iso_path = _resolve_iso_artifact(repo_root, iso_relpath)
     if not iso_path.exists():
         raise FileNotFoundError(f"required ISO missing: {iso_path}")
+    _validate_iso_tree(repo_root)
+    _validate_efiboot_image(repo_root)
     return iso_path
+
+
+def _resolve_iso_artifact(repo_root: Path, iso_relpath: str) -> Path:
+    requested = (repo_root / iso_relpath).resolve()
+    sidecar = (repo_root / "build/CapyOS-Installer-UEFI.last-built.txt").resolve()
+
+    if sidecar.exists():
+      try:
+          recorded = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
+      except OSError:
+          recorded = ""
+      if recorded:
+          recorded_path = Path(recorded)
+          if not recorded_path.is_absolute():
+              recorded_path = (repo_root / recorded).resolve()
+          if recorded_path.exists():
+              if requested == (repo_root / "build/CapyOS-Installer-UEFI.iso").resolve():
+                  print(f"[info] using latest recorded ISO: {recorded_path}")
+                  return recorded_path
+              if requested == recorded_path:
+                  return recorded_path
+
+    if requested.exists():
+        return requested
+
+    matches = sorted(
+        (repo_root / "build").glob("CapyOS-Installer-UEFI.iso.*.iso"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if matches:
+        print(f"[info] requested ISO not found; using newest fallback: {matches[0]}")
+        return matches[0].resolve()
+    return requested
+
+
+def _read_fat16_dir(
+    image: bytes,
+    *,
+    bytes_per_sector: int,
+    sectors_per_cluster: int,
+    root_lba: int | None = None,
+    root_dir_sectors: int | None = None,
+    data_lba: int,
+    cluster: int | None = None,
+) -> dict[str, tuple[int, int, int]]:
+    if cluster is None:
+        if root_lba is None or root_dir_sectors is None:
+            raise ValueError("root directory geometry is required")
+        offset = root_lba * bytes_per_sector
+        length = root_dir_sectors * bytes_per_sector
+    else:
+        offset = (data_lba + (cluster - 2) * sectors_per_cluster) * bytes_per_sector
+        length = sectors_per_cluster * bytes_per_sector
+
+    entries: dict[str, tuple[int, int, int]] = {}
+    directory = image[offset : offset + length]
+    for i in range(0, len(directory), 32):
+        entry = directory[i : i + 32]
+        if len(entry) < 32 or entry[0] == 0x00:
+            break
+        if entry[0] == 0xE5 or entry[11] == 0x0F:
+            continue
+        name = entry[0:8].decode("ascii", errors="ignore").rstrip()
+        ext = entry[8:11].decode("ascii", errors="ignore").rstrip()
+        full_name = f"{name}.{ext}" if ext else name
+        attr = entry[11]
+        start_cluster = struct.unpack_from("<H", entry, 26)[0]
+        size = struct.unpack_from("<I", entry, 28)[0]
+        entries[full_name] = (attr, start_cluster, size)
+    return entries
+
+
+def _require_dir_entry(
+    entries: dict[str, tuple[int, int, int]], name: str, *, directory: bool = False
+) -> tuple[int, int, int]:
+    entry = entries.get(name)
+    if entry is None:
+        raise FileNotFoundError(f"missing {name} in efiboot.img")
+    if directory and (entry[0] & 0x10) == 0:
+        raise FileNotFoundError(f"{name} is not a directory in efiboot.img")
+    return entry
+
+
+def _validate_iso_tree(repo_root: Path) -> None:
+    iso_tree = (repo_root / "build/iso-uefi-root/boot").resolve()
+    required = ("capyos64.bin", "manifest.bin", "capycfg.bin")
+    for name in required:
+        path = iso_tree / name
+        if not path.exists():
+            raise FileNotFoundError(f"missing ISO tree payload: {path}")
+
+
+def _validate_efiboot_image(repo_root: Path) -> None:
+    image_path = (repo_root / "build/iso-uefi-root/EFI/BOOT/efiboot.img").resolve()
+    if not image_path.exists():
+        raise FileNotFoundError(f"missing efiboot image: {image_path}")
+
+    image = image_path.read_bytes()
+    bytes_per_sector = struct.unpack_from("<H", image, 11)[0]
+    sectors_per_cluster = image[13]
+    reserved = struct.unpack_from("<H", image, 14)[0]
+    num_fats = image[16]
+    root_entries = struct.unpack_from("<H", image, 17)[0]
+    fat_size = struct.unpack_from("<H", image, 22)[0]
+    root_dir_sectors = (root_entries * 32 + bytes_per_sector - 1) // bytes_per_sector
+    root_lba = reserved + num_fats * fat_size
+    data_lba = root_lba + root_dir_sectors
+
+    root = _read_fat16_dir(
+        image,
+        bytes_per_sector=bytes_per_sector,
+        sectors_per_cluster=sectors_per_cluster,
+        root_lba=root_lba,
+        root_dir_sectors=root_dir_sectors,
+        data_lba=data_lba,
+    )
+    efi = _require_dir_entry(root, "EFI", directory=True)
+    boot = _require_dir_entry(root, "BOOT", directory=True)
+    _require_dir_entry(root, "CAPYOS.INI")
+
+    efi_dir = _read_fat16_dir(
+        image,
+        bytes_per_sector=bytes_per_sector,
+        sectors_per_cluster=sectors_per_cluster,
+        data_lba=data_lba,
+        cluster=efi[1],
+    )
+    efi_boot = _require_dir_entry(efi_dir, "BOOT", directory=True)
+    efi_boot_dir = _read_fat16_dir(
+        image,
+        bytes_per_sector=bytes_per_sector,
+        sectors_per_cluster=sectors_per_cluster,
+        data_lba=data_lba,
+        cluster=efi_boot[1],
+    )
+    _require_dir_entry(efi_boot_dir, "BOOTX64.EFI")
+
+    boot_dir = _read_fat16_dir(
+        image,
+        bytes_per_sector=bytes_per_sector,
+        sectors_per_cluster=sectors_per_cluster,
+        data_lba=data_lba,
+        cluster=boot[1],
+    )
+    _require_dir_entry(boot_dir, "CAPYOS64.BIN")
+    _require_dir_entry(boot_dir, "MANIFEST.BIN")
+    _require_dir_entry(boot_dir, "CAPYCFG.BIN")
 
 
 def prepare_target_disk(disk_path: Path, disk_size: str) -> None:

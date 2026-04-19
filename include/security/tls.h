@@ -4,8 +4,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define TLS_VERSION_10 0x0301
+#define TLS_VERSION_11 0x0302
 #define TLS_VERSION_12 0x0303
 #define TLS_VERSION_13 0x0304
+
+#define TLS_ALPN_MAX_LEN 16
 
 #define TLS_RECORD_CHANGE_CIPHER 20
 #define TLS_RECORD_ALERT         21
@@ -44,32 +48,21 @@ enum tls_state {
   TLS_STATE_ERROR
 };
 
-struct tls_context {
-  int socket_fd;
-  enum tls_state state;
-  uint16_t version;
-  uint8_t client_random[32];
-  uint8_t server_random[32];
-  uint8_t master_secret[48];
-  uint8_t client_write_key[32];
-  uint8_t server_write_key[32];
-  uint8_t client_write_iv[16];
-  uint8_t server_write_iv[16];
-  uint64_t client_seq;
-  uint64_t server_seq;
-  uint8_t recv_buf[TLS_MAX_RECORD_SIZE + 256];
-  uint32_t recv_len;
-  uint8_t send_buf[TLS_MAX_RECORD_SIZE + 256];
-  uint32_t send_len;
-  int verify_peer;
-  int error_code;
-};
+struct tls_context;
 
 struct tls_config {
   int verify_peer;
   const uint8_t *ca_cert;
   size_t ca_cert_len;
   uint32_t timeout_ms;
+};
+
+struct tls_security_info {
+  uint16_t protocol_version;
+  uint16_t cipher_suite;
+  uint32_t trust_anchor_count;
+  int peer_verified;
+  char alpn[TLS_ALPN_MAX_LEN];
 };
 
 int tls_init(void);
@@ -81,6 +74,12 @@ int tls_close(struct tls_context *ctx);
 void tls_free(struct tls_context *ctx);
 int tls_handshake(struct tls_context *ctx);
 const char *tls_state_name(enum tls_state state);
+enum tls_state tls_last_state(void);
+int tls_last_error(void);
+const char *tls_alert_name(int alert);
 int tls_error(struct tls_context *ctx);
+int tls_get_security_info(struct tls_context *ctx, struct tls_security_info *info);
+const char *tls_version_name(uint16_t version);
+const char *tls_cipher_suite_name(uint16_t suite);
 
 #endif /* SECURITY_TLS_H */

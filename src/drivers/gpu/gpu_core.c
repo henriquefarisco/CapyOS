@@ -1,6 +1,6 @@
 #include "drivers/gpu/gpu_core.h"
 #include "drivers/pcie.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include <stddef.h>
 
 static struct gpu_device g_gpu;

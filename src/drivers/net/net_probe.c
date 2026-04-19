@@ -1,6 +1,6 @@
 #include "drivers/net/net_probe.h"
 
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/pcie.h"
 

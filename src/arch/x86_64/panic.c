@@ -4,10 +4,10 @@
 #define COM1_PORT 0x3F8
 #define DEBUGCON_PORT 0xE9
 
-static uint32_t *panic_fb = NULL;
-static uint32_t panic_fb_width = 0;
-static uint32_t panic_fb_height = 0;
-static uint32_t panic_fb_pitch = 0;
+uint32_t *g_panic_fb = NULL;
+uint32_t g_panic_fb_width = 0;
+uint32_t g_panic_fb_height = 0;
+uint32_t g_panic_fb_pitch = 0;
 
 static inline void panic_outb(uint16_t port, uint8_t val) {
   __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -54,20 +54,13 @@ static const char *exception_names[] = {
   "Hypervisor Injection", "VMM Communication", "Security Exception", "Reserved"
 };
 
-void panic_set_framebuffer(uint32_t *fb, uint32_t width, uint32_t height,
-                           uint32_t pitch) {
-  panic_fb = fb;
-  panic_fb_width = width;
-  panic_fb_height = height;
-  panic_fb_pitch = pitch;
-}
-
 static void panic_fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                                 uint32_t color) {
-  if (!panic_fb) return;
-  for (uint32_t row = y; row < y + h && row < panic_fb_height; row++) {
-    uint32_t *line = (uint32_t *)((uint8_t *)panic_fb + row * panic_fb_pitch);
-    for (uint32_t col = x; col < x + w && col < panic_fb_width; col++) {
+  if (!g_panic_fb) return;
+  for (uint32_t row = y; row < y + h && row < g_panic_fb_height; row++) {
+    uint32_t *line =
+        (uint32_t *)((uint8_t *)g_panic_fb + row * g_panic_fb_pitch);
+    for (uint32_t col = x; col < x + w && col < g_panic_fb_width; col++) {
       line[col] = color;
     }
   }
@@ -129,8 +122,8 @@ void panic_with_regs(const char *message, const struct panic_regs *regs) {
 
   panic_dump_to_serial(regs);
 
-  if (panic_fb) {
-    panic_fb_fill_rect(0, 0, panic_fb_width, panic_fb_height, 0x000044AA);
+  if (g_panic_fb) {
+    panic_fb_fill_rect(0, 0, g_panic_fb_width, g_panic_fb_height, 0x000044AA);
   }
 
   for (;;) __asm__ volatile("hlt");

@@ -2,13 +2,17 @@
 BUILD     = build
 BUILD_GEN = $(BUILD)/generated
 SRC_DIR   = src
+BEARSSL_DIR = third_party/bearssl
+BEARSSL_SRCS := $(filter-out $(BEARSSL_DIR)/src/rand/sysrng.c,$(shell find $(BEARSSL_DIR)/src -type f -name '*.c' | sort))
+BEARSSL_OBJS := $(patsubst $(BEARSSL_DIR)/%.c,$(BUILD)/x86_64/third_party/bearssl/%.o,$(BEARSSL_SRCS))
 
 # Trilhas legadas BIOS/x86_32 removidas: build/release oficiais sao UEFI/x86_64.
 CROSS64 ?= x86_64-elf
 TOOLCHAIN64 ?= host
 
 # Toolchain 64-bit
-# No WSL, alguns builds do x86_64-elf-ld 2.42 abortam no link do kernel atual.
+# Caminho oficial suportado em WSL/Linux host: make all64 iso-uefi
+# No WSL, alguns builds do x86_64-linux-gnu-ld.gold abortam no link do kernel.
 # O host toolchain (x86_64-linux-gnu-*) fica como padrao; use TOOLCHAIN64=elf
 # apenas quando quiser forcar a toolchain cruzada.
 ifeq ($(TOOLCHAIN64),elf)
@@ -22,9 +26,7 @@ ifeq ($(TOOLCHAIN64),elf)
   else
     CC64      := $(CROSS64)-gcc
     ifeq ($(origin LD64), undefined)
-      ifneq ($(shell which x86_64-linux-gnu-ld.gold 2>/dev/null),)
-        LD64 := x86_64-linux-gnu-ld.gold
-      else ifneq ($(shell which x86_64-linux-gnu-ld 2>/dev/null),)
+      ifneq ($(shell which x86_64-linux-gnu-ld 2>/dev/null),)
         LD64 := x86_64-linux-gnu-ld
       else
         LD64 := $(CROSS64)-ld
@@ -37,27 +39,42 @@ ifeq ($(TOOLCHAIN64),elf)
 else
   CC64      := x86_64-linux-gnu-gcc
   ifeq ($(origin LD64), undefined)
-    ifneq ($(shell which x86_64-linux-gnu-ld.gold 2>/dev/null),)
-      LD64 := x86_64-linux-gnu-ld.gold
-    else
-      LD64 := x86_64-linux-gnu-ld
-    endif
+    LD64 := x86_64-linux-gnu-ld
   endif
   OBJCOPY64 := x86_64-linux-gnu-objcopy
   STACKPROTECT64 := -fno-stack-protector
   $(warning Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
   $(warning Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
-CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -fpie -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables $(STACKPROTECT64) -Iinclude -I$(BUILD_GEN)
+CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src
 DEPFLAGS64 := -MMD -MP
 LDFLAGS64 := -nostdlib
 
 # Toolchain EFI (gnu-efi)
 EFI_CC := x86_64-linux-gnu-gcc
 EFI_LD := x86_64-linux-gnu-ld
-EFI_CFLAGS := -I/usr/include/efi -I/usr/include/efi/x86_64 -Iinclude -fno-stack-protector -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
+EFI_CFLAGS := -I/usr/include/efi -I/usr/include/efi/x86_64 -Iinclude -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
 EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L/usr/lib -T /usr/lib/elf_x86_64_efi.lds
 EFI_LIBS := /usr/lib/crt0-efi-x86_64.o -lefi -lgnuefi
+
+# --- Host compiler (used by C host tools and unit tests) ---
+HOST_CC     ?= gcc
+HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include
+
+# Ferramentas host C (substituem scripts Python).
+GEN_MANIFEST_HOST := $(BUILD)/tools/gen_manifest
+MK_EFIBOOT_HOST := $(BUILD)/tools/mk_efiboot_img
+GEN_BOOT_CONFIG := $(BUILD)/tools/gen_boot_config
+MANIFEST64 := $(BUILD)/manifest.bin
+BOOT_CONFIG_BIN := $(BUILD)/boot_config.bin
+
+BOOT_LAYOUT ?= us
+BOOT_LANGUAGE ?= en
+BOOT_HOSTNAME ?=
+BOOT_THEME ?=
+BOOT_ADMIN_USER ?=
+BOOT_ADMIN_PASS ?=
+BOOT_SPLASH ?=
 
 # Artefatos 64-bit (UEFI/long mode)
 CAPYOS_ELF64    = $(BUILD)/capyos64.bin
@@ -74,6 +91,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_input_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_runtime_coordinator.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
+	$(BUILD)/x86_64/arch/x86_64/framebuffer_console.o \
+	$(BUILD)/x86_64/arch/x86_64/boot_splash.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_io_helpers.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_services.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_runtime_ops.o \
 	$(BUILD)/x86_64/arch/x86_64/native_runtime_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_platform_runtime.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_shell_dispatch.o \
@@ -91,20 +113,24 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/boot/boot_menu.o \
 	$(BUILD)/x86_64/boot/boot_ui.o \
 	$(BUILD)/x86_64/core/kcon.o \
-	$(BUILD)/x86_64/core/localization.o \
-	$(BUILD)/x86_64/core/login_runtime.o \
-	$(BUILD)/x86_64/core/network_bootstrap_config.o \
-	$(BUILD)/x86_64/core/network_bootstrap_diag.o \
-	$(BUILD)/x86_64/core/network_bootstrap.o \
-	$(BUILD)/x86_64/core/system_init.o \
-	$(BUILD)/x86_64/core/update_agent.o \
-	$(BUILD)/x86_64/core/user.o \
-	$(BUILD)/x86_64/core/user_prefs.o \
-	$(BUILD)/x86_64/core/klog.o \
-	$(BUILD)/x86_64/core/klog_persist.o \
-	$(BUILD)/x86_64/core/service_boot_policy.o \
-	$(BUILD)/x86_64/core/service_manager.o \
-	$(BUILD)/x86_64/core/session.o \
+	$(BUILD)/x86_64/lang/localization.o \
+	$(BUILD)/x86_64/auth/login_runtime.o \
+	$(BUILD)/x86_64/net/bootstrap/network_bootstrap_config.o \
+	$(BUILD)/x86_64/net/bootstrap/network_bootstrap_diag.o \
+	$(BUILD)/x86_64/net/bootstrap/network_bootstrap.o \
+	$(BUILD)/x86_64/config/system_setup.o \
+	$(BUILD)/x86_64/config/system_setup_wizard.o \
+	$(BUILD)/x86_64/config/system_settings.o \
+	$(BUILD)/x86_64/config/first_boot.o \
+	$(BUILD)/x86_64/services/update_agent.o \
+	$(BUILD)/x86_64/auth/user.o \
+	$(BUILD)/x86_64/auth/user_prefs.o \
+	$(BUILD)/x86_64/kernel/log/klog.o \
+	$(BUILD)/x86_64/kernel/log/klog_persist.o \
+	$(BUILD)/x86_64/services/service_boot_policy.o \
+	$(BUILD)/x86_64/services/service_manager.o \
+	$(BUILD)/x86_64/auth/session.o \
+	$(BUILD)/x86_64/auth/user_home.o \
 	$(BUILD)/x86_64/core/work_queue.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
@@ -142,19 +168,19 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/storage/storvsp.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_session.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_vmbus.o \
-	$(BUILD)/x86_64/net/dns.o \
-	$(BUILD)/x86_64/net/hyperv_runtime.o \
-	$(BUILD)/x86_64/net/hyperv_runtime_gate.o \
-	$(BUILD)/x86_64/net/hyperv_runtime_policy.o \
-	$(BUILD)/x86_64/net/hyperv_platform_diag.o \
-	$(BUILD)/x86_64/net/stack_arp.o \
-	$(BUILD)/x86_64/net/stack_driver.o \
-	$(BUILD)/x86_64/net/stack_icmp.o \
-	$(BUILD)/x86_64/net/stack_ipv4.o \
-	$(BUILD)/x86_64/net/stack_services.o \
-	$(BUILD)/x86_64/net/stack_selftest.o \
-	$(BUILD)/x86_64/net/stack_utils.o \
-	$(BUILD)/x86_64/net/stack.o \
+	$(BUILD)/x86_64/net/services/dns.o \
+	$(BUILD)/x86_64/net/hyperv/hyperv_runtime.o \
+	$(BUILD)/x86_64/net/hyperv/hyperv_runtime_gate.o \
+	$(BUILD)/x86_64/net/hyperv/hyperv_runtime_policy.o \
+	$(BUILD)/x86_64/net/hyperv/hyperv_platform_diag.o \
+	$(BUILD)/x86_64/net/protocols/stack_arp.o \
+	$(BUILD)/x86_64/net/core/stack_driver.o \
+	$(BUILD)/x86_64/net/protocols/stack_icmp.o \
+	$(BUILD)/x86_64/net/protocols/stack_ipv4.o \
+	$(BUILD)/x86_64/net/core/stack_services.o \
+	$(BUILD)/x86_64/net/core/stack_selftest.o \
+	$(BUILD)/x86_64/net/core/stack_utils.o \
+	$(BUILD)/x86_64/net/core/stack.o \
 	$(BUILD)/x86_64/fs/cache/buffer_cache.o \
 	$(BUILD)/x86_64/fs/storage/block_device.o \
 	$(BUILD)/x86_64/fs/storage/offset_wrapper.o \
@@ -165,6 +191,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/fs/vfs/vfs.o \
 	$(BUILD)/x86_64/security/crypt.o \
 	$(BUILD)/x86_64/security/csprng.o \
+	$(BUILD)/x86_64/security/tls.o \
+	$(BUILD)/x86_64/security/tls_trust_anchors.o \
+	$(BEARSSL_OBJS) \
 	$(BUILD)/x86_64/util/stack_protector.o \
 	$(BUILD)/x86_64/util/kstring.o \
 	$(BUILD)/x86_64/shell/core/shell_main.o \
@@ -197,34 +226,35 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/memory/vmm.o \
 	$(BUILD)/x86_64/fs/journal/journal.o \
 	$(BUILD)/x86_64/fs/fsck/fsck.o \
-	$(BUILD)/x86_64/net/socket.o \
-	$(BUILD)/x86_64/net/tcp.o \
-	$(BUILD)/x86_64/net/dns_cache.o \
-	$(BUILD)/x86_64/net/http.o \
+	$(BUILD)/x86_64/net/services/socket.o \
+	$(BUILD)/x86_64/net/protocols/tcp.o \
+	$(BUILD)/x86_64/net/services/dns_cache.o \
+	$(BUILD)/x86_64/net/services/http.o \
 	$(BUILD)/x86_64/security/ed25519.o \
-	$(BUILD)/x86_64/core/boot_slot.o \
-	$(BUILD)/x86_64/core/package_manager.o \
+	$(BUILD)/x86_64/boot/boot_slot.o \
+	$(BUILD)/x86_64/services/package_manager.o \
 	$(BUILD)/x86_64/drivers/input/mouse.o \
-	$(BUILD)/x86_64/gui/font8x8_data.o \
-	$(BUILD)/x86_64/gui/event.o \
-	$(BUILD)/x86_64/gui/font.o \
-	$(BUILD)/x86_64/gui/compositor.o \
-	$(BUILD)/x86_64/gui/widget.o \
-	$(BUILD)/x86_64/gui/terminal.o \
+	$(BUILD)/x86_64/gui/core/font8x8_data.o \
+	$(BUILD)/x86_64/gui/core/event.o \
+	$(BUILD)/x86_64/gui/core/font.o \
+	$(BUILD)/x86_64/gui/core/compositor.o \
+	$(BUILD)/x86_64/gui/widgets/widget.o \
+	$(BUILD)/x86_64/gui/terminal/terminal.o \
 	$(BUILD)/x86_64/lang/capylang.o \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_journal_integration.o \
-	$(BUILD)/x86_64/core/boot_metrics.o \
+	$(BUILD)/x86_64/boot/boot_metrics.o \
 	$(BUILD)/x86_64/arch/x86_64/smp.o \
-	$(BUILD)/x86_64/core/auth_policy.o \
+	$(BUILD)/x86_64/auth/auth_policy.o \
 	$(BUILD)/x86_64/kernel/pipe.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
 	$(BUILD)/x86_64/drivers/serial/com1.o \
-	$(BUILD)/x86_64/gui/taskbar.o \
+	$(BUILD)/x86_64/gui/desktop/taskbar.o \
 	$(BUILD)/x86_64/security/sha512.o \
-	$(BUILD)/x86_64/gui/desktop.o \
+	$(BUILD)/x86_64/gui/desktop/desktop.o \
+	$(BUILD)/x86_64/gui/desktop/desktop_runtime.o \
 	$(BUILD)/x86_64/apps/calculator.o \
 	$(BUILD)/x86_64/apps/file_manager.o \
 	$(BUILD)/x86_64/apps/text_editor.o \
@@ -232,9 +262,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/apps/html_viewer.o \
 	$(BUILD)/x86_64/apps/settings.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
-	$(BUILD)/x86_64/gui/window_manager.o \
-	$(BUILD)/x86_64/gui/notification.o \
-	$(BUILD)/x86_64/gui/bmp_loader.o
+	$(BUILD)/x86_64/gui/window/window_manager.o \
+	$(BUILD)/x86_64/gui/window/notification.o \
+	$(BUILD)/x86_64/gui/core/bmp_loader.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
@@ -260,6 +290,10 @@ $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
 
+$(BUILD)/x86_64/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
 $(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
 	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(CAPYOS64_OBJS)
 
@@ -279,21 +313,22 @@ $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
 	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
 
 .PHONY: iso-uefi
-iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64)
+# Official WSL/Linux host path: make all64 iso-uefi
+iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
-	# Opcional: incluir kernel64 em /boot
 	mkdir -p $(ISO_DIR_EFI)/boot
 	cp $(CAPYOS_ELF64) $(ISO_DIR_EFI)/boot/capyos64.bin
-	# Hyper-V Gen2 requer que o El Torito UEFI aponte para uma imagem FAT (nao para o .EFI direto)
-	python3 tools/scripts/mk_efiboot_img.py --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64)
-	@ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); echo "[ok] ISO UEFI gerada em $$ISO_OUT"
+	cp $(MANIFEST64) $(ISO_DIR_EFI)/boot/manifest.bin
+	cp $(BOOT_CONFIG_BIN) $(ISO_DIR_EFI)/boot/capycfg.bin
+	$(MK_EFIBOOT_HOST) --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64) --manifest $(MANIFEST64) --bootcfg $(BOOT_CONFIG_BIN)
+	@ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); printf '%s\n' "$$ISO_OUT" > $(BUILD)/CapyOS-Installer-UEFI.last-built.txt; echo "[ok] ISO UEFI gerada em $$ISO_OUT"; echo "[ok] Ultima ISO registrada em $(BUILD)/CapyOS-Installer-UEFI.last-built.txt"
 
 # Manifest 64-bit (para BOOT partition GPT) - LBA relativo default = 1 (logo apÃƒÆ’Ã‚Â³s o manifest)
-MANIFEST64 := $(BUILD)/manifest.bin
-
-$(MANIFEST64): $(CAPYOS_ELF64) tools/scripts/gen_manifest.py | $(BUILD)
-	python3 tools/scripts/gen_manifest.py --kernel $(CAPYOS_ELF64) --out $(MANIFEST64) --kernel-lba 1
+$(MANIFEST64): $(CAPYOS_ELF64) | $(BUILD)
+	@mkdir -p $(BUILD)/tools
+	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $(GEN_MANIFEST_HOST) tools/host/src/gen_manifest.c
+	$(GEN_MANIFEST_HOST) --kernel $(CAPYOS_ELF64) --out $(MANIFEST64) --kernel-lba 1
 
 .PHONY: manifest64
 manifest64: $(MANIFEST64)
@@ -321,12 +356,18 @@ legacy-disabled:
 	@echo "[legacy] Alvos suportados: all64, iso-uefi, disk-gpt, provision-vhd, inspect-disk, smoke-x64-cli, smoke-x64-iso, test"
 	@exit 2
 
-# Ferramentas host para testes auxiliares (mantidas para compatibilidade de testes).
+$(GEN_MANIFEST_HOST): tools/host/src/gen_manifest.c | $(BUILD)
+	@mkdir -p $(BUILD)/tools
+	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ $<
+
+$(MK_EFIBOOT_HOST): tools/host/src/mk_efiboot_img.c | $(BUILD)
+	@mkdir -p $(BUILD)/tools
+	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ $<
+
+# Ferramentas host legadas (mantidas para compatibilidade de testes).
 GRUB_CFG_GEN := $(BUILD)/tools/gen_grub_cfg
 GRUB_CFG_ISO := $(BUILD)/grub.iso.cfg
 GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
-GEN_BOOT_CONFIG := $(BUILD)/tools/gen_boot_config
-BOOT_CONFIG_BIN := $(BUILD)/boot_config.bin
 
 ISO_DIR_EFI ?= build/iso-uefi-root
 ISO_IMG_EFI ?= build/CapyOS-Installer-UEFI.iso
@@ -337,22 +378,20 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CC     ?= gcc
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include -DUNIT_TEST
-HOST_TOOL_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/stub_kmem.c tests/stub_scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_html_viewer.c tests/stub_kmem.c tests/stub_scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/fs/capyfs/capyfs_check.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
                tests/test_efi_block.c src/drivers/storage/efi_block.c \
-               tests/test_net_dns.c src/net/dns.c \
+               tests/test_net_dns.c src/net/services/dns.c \
                tests/test_net_probe.c src/drivers/net/net_probe.c src/drivers/net/netvsc.c \
-               src/core/login_runtime.c src/core/service_boot_policy.c \
-               tests/test_hyperv_runtime.c src/net/hyperv_runtime.c \
+               src/auth/login_runtime.c src/auth/user_home.c src/services/service_boot_policy.c \
+               tests/test_hyperv_runtime.c src/net/hyperv/hyperv_runtime.c \
                tests/test_input_hyperv_gate.c src/arch/x86_64/hyperv_input_gate.c \
-               tests/test_hyperv_runtime_gate.c src/net/hyperv_runtime_gate.c \
-               tests/test_hyperv_runtime_policy.c src/net/hyperv_runtime_policy.c \
+               tests/test_hyperv_runtime_gate.c src/net/hyperv/hyperv_runtime_gate.c \
+               tests/test_hyperv_runtime_policy.c src/net/hyperv/hyperv_runtime_policy.c \
                tests/test_native_runtime_gate.c src/arch/x86_64/native_runtime_gate.c \
                tests/test_netvsc_backend.c src/drivers/net/netvsc_backend.c \
                tests/test_netvsc_runtime.c src/drivers/net/netvsc_runtime.c \
@@ -366,13 +405,13 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
-               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c \
-               src/security/csprng.c src/security/crypt.c src/core/localization.c src/core/klog.c src/core/service_manager.c src/core/work_queue.c src/core/update_agent.c \
+               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
+               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer.c \
                src/util/kstring.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
-               tests/test_dns_cache.c src/net/dns_cache.c \
-               tests/test_boot_slot.c src/core/boot_slot.c
+               tests/test_dns_cache.c src/net/services/dns_cache.c \
+               tests/test_boot_slot.c src/boot/boot_slot.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools
@@ -383,7 +422,8 @@ $(GEN_BOOT_CONFIG): tools/host/src/gen_boot_config.c | $(BUILD)
 	$(HOST_CC) $(HOST_TOOL_CFLAGS) -o $@ tools/host/src/gen_boot_config.c
 
 $(BOOT_CONFIG_BIN): $(GEN_BOOT_CONFIG) | $(BUILD)
-	$(GEN_BOOT_CONFIG) $@ --layout us
+	@if [ -n "$(strip $(BOOT_HOSTNAME)$(BOOT_THEME)$(BOOT_ADMIN_USER)$(BOOT_ADMIN_PASS)$(BOOT_SPLASH))" ] && { [ -z "$(BOOT_HOSTNAME)" ] || [ -z "$(BOOT_THEME)" ] || [ -z "$(BOOT_ADMIN_USER)" ] || [ -z "$(BOOT_ADMIN_PASS)" ]; }; then echo "[err] BOOT_HOSTNAME, BOOT_THEME, BOOT_ADMIN_USER and BOOT_ADMIN_PASS must all be set when preseeding installer setup"; exit 2; fi
+	$(GEN_BOOT_CONFIG) $@ --layout "$(BOOT_LAYOUT)" --language "$(BOOT_LANGUAGE)" $(if $(strip $(BOOT_HOSTNAME)),--hostname "$(BOOT_HOSTNAME)",) $(if $(strip $(BOOT_THEME)),--theme "$(BOOT_THEME)",) $(if $(strip $(BOOT_ADMIN_USER)),--admin-user "$(BOOT_ADMIN_USER)",) $(if $(strip $(BOOT_ADMIN_PASS)),--admin-pass "$(BOOT_ADMIN_PASS)",) $(if $(strip $(BOOT_SPLASH)),--splash "$(BOOT_SPLASH)",)
 
 $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ iso
@@ -397,7 +437,12 @@ test: $(TEST_BIN)
 
 .PHONY: check-toolchain
 check-toolchain:
-	python3 tools/scripts/check_deps.py
+	@echo "Verificando dependencias do toolchain..."
+	@which $(CC64) >/dev/null 2>&1 || (echo "[err] $(CC64) nao encontrado"; exit 1)
+	@which $(LD64) >/dev/null 2>&1 || (echo "[err] $(LD64) nao encontrado"; exit 1)
+	@which $(OBJCOPY64) >/dev/null 2>&1 || (echo "[err] $(OBJCOPY64) nao encontrado"; exit 1)
+	@which xorriso >/dev/null 2>&1 || (echo "[err] xorriso nao encontrado (necessario para iso-uefi)"; exit 1)
+	@echo "[ok] Todas as dependencias encontradas."
 
 smoke-x64-cli: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia)..."
@@ -440,4 +485,3 @@ clean:
 .PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test check-toolchain smoke-x64-cli smoke-x64-cli-nvme smoke-x64-iso inspect-disk
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEP)
-

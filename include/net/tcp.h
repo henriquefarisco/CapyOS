@@ -90,5 +90,6 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
 void tcp_timer_tick(void);
 void tcp_stats_get(struct tcp_stats *out);
 int tcp_connection_state(int conn_id);
+size_t tcp_available(int conn_id);
 
 #endif /* NET_TCP_H */

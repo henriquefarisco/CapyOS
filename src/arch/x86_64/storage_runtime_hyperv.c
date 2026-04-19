@@ -1,3 +1,4 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "storage_runtime_hyperv.h"
 
 #include "arch/x86_64/storage_runtime_hyperv_plan.h"
@@ -5,8 +6,6 @@
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/storage/storvsc_vmbus.h"
 
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 
 static const char *bool_label(int value) { return value ? "yes" : "no"; }
 
@@ -280,7 +279,7 @@ void x64_storage_hyperv_runtime_reset(
   if (!state->present) {
     return;
   }
-  ops = storvsc_vmbus_ops();
+  storvsc_vmbus_ops_init(&ops);
   if (storvsc_runtime_configure(&state->runtime, 1, &ops) == 0) {
     storvsc_runtime_set_enabled(&state->runtime, 0);
   }

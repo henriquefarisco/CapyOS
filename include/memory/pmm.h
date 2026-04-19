@@ -30,5 +30,8 @@ void pmm_free_pages(uint64_t phys_addr, size_t count);
 void pmm_reserve_range(uint64_t start, uint64_t length);
 void pmm_stats_get(struct pmm_stats *out);
 int pmm_is_free(uint64_t phys_addr);
+int pmm_low_memory(void);
+void pmm_set_reclaim_callback(void (*cb)(void));
+uint64_t pmm_alloc_page_reclaim(void);
 
 #endif /* MEMORY_PMM_H */

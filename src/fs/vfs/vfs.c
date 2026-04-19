@@ -3,9 +3,31 @@
 #include "fs/capyfs.h"
 
 #include "memory/kmem.h"
-#include "core/session.h"
+#include "auth/session.h"
 
 static struct super_block *root_sb = NULL;
+static int g_vfs_last_error = VFS_OK;
+
+static int vfs_normalize_error(int error) {
+    return error < 0 ? -error : error;
+}
+
+static void vfs_set_error(int error) {
+    g_vfs_last_error = vfs_normalize_error(error);
+}
+
+static void vfs_set_ok(void) {
+    g_vfs_last_error = VFS_OK;
+}
+
+static int vfs_fail(int error) {
+    vfs_set_error(error);
+    return -g_vfs_last_error;
+}
+
+static int vfs_fail_last_or(int fallback) {
+    return vfs_fail(g_vfs_last_error != VFS_OK ? g_vfs_last_error : fallback);
+}
 
 static void dentry_free_tree(struct dentry *d) {
     if (!d) {
@@ -166,9 +188,11 @@ static int path_next(const char **path, char component[VFS_NAME_MAX]) {
 
 static struct dentry *vfs_resolve(const char *path, int parent_only, char *last_component) {
     if (!root_sb || !root_sb->root || !path) {
+        vfs_set_error(path ? VFS_ERR_IO : VFS_ERR_INVALID_ARGUMENT);
         return NULL;
     }
     if (path[0] == '\0' || path[0] != '/') {
+        vfs_set_error(VFS_ERR_INVALID_PATH);
         return NULL;
     }
 
@@ -179,6 +203,7 @@ static struct dentry *vfs_resolve(const char *path, int parent_only, char *last_
     while (1) {
         int res = path_next(&p, component);
         if (res < 0) {
+            vfs_set_error(VFS_ERR_NAME_TOO_LONG);
             return NULL;
         }
         if (res == 0) {
@@ -198,14 +223,17 @@ static struct dentry *vfs_resolve(const char *path, int parent_only, char *last_
         struct dentry *child = dentry_lookup_child(current, component);
         if (!child) {
             if (!current->inode || !current->inode->ops || !current->inode->ops->lookup) {
+                vfs_set_error(VFS_ERR_UNSUPPORTED);
                 return NULL;
             }
             struct inode *new_inode = NULL;
             if (current->inode->ops->lookup(current->inode, component, &new_inode) != 0 || !new_inode) {
+                vfs_set_error(VFS_ERR_NOT_FOUND);
                 return NULL;
             }
             child = dentry_alloc(component, new_inode, current);
             if (!child) {
+                vfs_set_error(VFS_ERR_NO_MEMORY);
                 return NULL;
             }
             dentry_attach_child(current, child);
@@ -214,8 +242,28 @@ static struct dentry *vfs_resolve(const char *path, int parent_only, char *last_
     }
 }
 
+static int vfs_iter_stop_after_one(const char *name, uint16_t mode, void *ctx) {
+    int *found = (int *)ctx;
+    (void)name;
+    (void)mode;
+    if (found) {
+        *found = 1;
+    }
+    return 1;
+}
+
+static int vfs_directory_has_entries(struct dentry *d) {
+    int found = 0;
+    if (!d || !d->inode || !d->inode->ops || !d->inode->ops->iterate) {
+        return 0;
+    }
+    (void)d->inode->ops->iterate(d->inode, vfs_iter_stop_after_one, &found);
+    return found;
+}
+
 int vfs_init(void) {
     root_sb = NULL;
+    vfs_set_ok();
     return 0;
 }
 
@@ -233,29 +281,37 @@ struct super_block *vfs_root(void) {
 
 int vfs_lookup(const char *path, struct dentry **out) {
     if (!out) {
-        return -1;
+        return vfs_fail(VFS_ERR_INVALID_ARGUMENT);
     }
+    vfs_set_ok();
     struct dentry *d = vfs_resolve(path, 0, NULL);
     if (!d) {
-        return -1;
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
     }
     *out = d;
     d->refcount++;
+    vfs_set_ok();
     return 0;
 }
 
 int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta) {
+    vfs_set_ok();
     char name[VFS_NAME_MAX];
     struct dentry *parent = vfs_resolve(path, 1, name);
+    struct dentry *existing = NULL;
     if (!parent) {
-        return -1;
+        return vfs_fail_last_or(VFS_ERR_INVALID_PATH);
     }
     if (name[0] == '\0') {
-        return -1;
+        return vfs_fail(VFS_ERR_INVALID_PATH);
     }
 
-    if (dentry_lookup_child(parent, name)) {
-        return -1; // JÃƒÂ¡ existe
+    existing = vfs_resolve(path, 0, NULL);
+    if (existing) {
+        return vfs_fail(VFS_ERR_ALREADY_EXISTS);
+    }
+    if (g_vfs_last_error != VFS_ERR_NOT_FOUND) {
+        return vfs_fail_last_or(VFS_ERR_IO);
     }
 
     // Para o FS nativo atual (CAPYFS), garantimos que o conjunto de ops
@@ -264,10 +320,10 @@ int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta)
         parent->inode->ops = capyfs_file_ops();
     }
     if (!parent->inode || !parent->inode->ops || !parent->inode->ops->create) {
-        return -1;
+        return vfs_fail(VFS_ERR_UNSUPPORTED);
     }
     if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
-        return -1;
+        return vfs_fail(VFS_ERR_PERMISSION_DENIED);
     }
     struct vfs_metadata local_meta;
     if (meta) {
@@ -278,30 +334,36 @@ int vfs_create(const char *path, uint16_t mode, const struct vfs_metadata *meta)
     struct inode *inode = NULL;
     // Chamada direta ao CAPYFS para evitar dependencia de ponteiros corrompidos
     if (capyfs_create_pub(parent->inode, name, mode, &local_meta, &inode) != 0 || !inode) {
-        return -1;
+        return vfs_fail(VFS_ERR_IO);
     }
     struct dentry *child = dentry_alloc(name, inode, parent);
     if (!child) {
-        return -1;
+        return vfs_fail(VFS_ERR_NO_MEMORY);
     }
     dentry_attach_child(parent, child);
+    vfs_set_ok();
     return 0;
 }
 
 struct file *vfs_open(const char *path, uint32_t flags) {
+    vfs_set_ok();
     struct dentry *d = vfs_resolve(path, 0, NULL);
     if (!d || !d->inode) {
+        vfs_fail_last_or(VFS_ERR_NOT_FOUND);
         return NULL;
     }
     uint32_t open_flags = flags ? flags : VFS_OPEN_READ;
     if ((open_flags & VFS_OPEN_READ) && !inode_has_permission(d->inode, VFS_PERM_READ)) {
+        vfs_set_error(VFS_ERR_PERMISSION_DENIED);
         return NULL;
     }
     if ((open_flags & VFS_OPEN_WRITE) && !inode_has_permission(d->inode, VFS_PERM_WRITE)) {
+        vfs_set_error(VFS_ERR_PERMISSION_DENIED);
         return NULL;
     }
     struct file *f = (struct file *)kalloc(sizeof(struct file));
     if (!f) {
+        vfs_set_error(VFS_ERR_NO_MEMORY);
         return NULL;
     }
     f->dentry = d;
@@ -310,10 +372,12 @@ struct file *vfs_open(const char *path, uint32_t flags) {
     if (d->inode->ops && d->inode->ops->open) {
         if (d->inode->ops->open(d->inode, f) != 0) {
             kfree(f);
+            vfs_set_error(VFS_ERR_IO);
             return NULL;
         }
     }
     d->refcount++;
+    vfs_set_ok();
     return f;
 }
 
@@ -358,108 +422,153 @@ long vfs_write(struct file *file, const void *buffer, size_t size) {
 
 int vfs_listdir(const char *path, vfs_iter_cb cb, void *ctx) {
     if (!path || !cb) {
-        return -1;
+        return vfs_fail(VFS_ERR_INVALID_ARGUMENT);
     }
+    vfs_set_ok();
     struct dentry *d = vfs_resolve(path, 0, NULL);
     if (!d || !d->inode) {
-        return -1;
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
     }
     if ((d->inode->mode & VFS_MODE_DIR) == 0) {
-        return -1;
+        return vfs_fail(VFS_ERR_NOT_DIRECTORY);
     }
     if (!inode_has_permission(d->inode, VFS_PERM_READ | VFS_PERM_EXEC)) {
-        return -1;
+        return vfs_fail(VFS_ERR_PERMISSION_DENIED);
     }
     if (!d->inode->ops || !d->inode->ops->iterate) {
-        return -1;
+        return vfs_fail(VFS_ERR_UNSUPPORTED);
     }
-    return d->inode->ops->iterate(d->inode, cb, ctx);
+    if (d->inode->ops->iterate(d->inode, cb, ctx) != 0) {
+        return vfs_fail(VFS_ERR_IO);
+    }
+    vfs_set_ok();
+    return 0;
 }
 
 int vfs_unlink(const char *path) {
-    char name[VFS_NAME_MAX];
-    struct dentry *parent = vfs_resolve(path, 1, name);
-    if (!parent || name[0] == '\0') {
-        return -1;
+    vfs_set_ok();
+    struct dentry *target = vfs_resolve(path, 0, NULL);
+    if (!target || !target->inode) {
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
+    }
+    if (target->inode->mode & VFS_MODE_DIR) {
+        return vfs_fail(VFS_ERR_IS_DIRECTORY);
+    }
+    struct dentry *parent = target->parent;
+    if (!parent || target->name[0] == '\0') {
+        return vfs_fail(VFS_ERR_INVALID_PATH);
     }
     if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
-        return -1;
+        return vfs_fail(VFS_ERR_PERMISSION_DENIED);
     }
     if (!parent->inode->ops || !parent->inode->ops->remove) {
-        return -1;
+        return vfs_fail(VFS_ERR_UNSUPPORTED);
     }
-    if (parent->inode->ops->remove(parent->inode, name, 0) != 0) {
-        return -1;
+    if (parent->inode->ops->remove(parent->inode, target->name, 0) != 0) {
+        return vfs_fail(VFS_ERR_IO);
     }
-    struct dentry *removed = dentry_detach_child(parent, name);
+    struct dentry *removed = dentry_detach_child(parent, target->name);
     dentry_free_tree(removed);
+    vfs_set_ok();
     return 0;
 }
 
 int vfs_rmdir(const char *path) {
-    char name[VFS_NAME_MAX];
-    struct dentry *parent = vfs_resolve(path, 1, name);
-    if (!parent || name[0] == '\0') {
-        return -1;
+    vfs_set_ok();
+    struct dentry *target = vfs_resolve(path, 0, NULL);
+    if (!target || !target->inode) {
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
+    }
+    if ((target->inode->mode & VFS_MODE_DIR) == 0) {
+        return vfs_fail(VFS_ERR_NOT_DIRECTORY);
+    }
+    struct dentry *parent = target->parent;
+    if (!parent || target->name[0] == '\0') {
+        return vfs_fail(VFS_ERR_INVALID_PATH);
     }
     if (!inode_has_permission(parent->inode, VFS_PERM_WRITE)) {
-        return -1;
+        return vfs_fail(VFS_ERR_PERMISSION_DENIED);
     }
     if (!parent->inode->ops || !parent->inode->ops->remove) {
-        return -1;
+        return vfs_fail(VFS_ERR_UNSUPPORTED);
     }
-    if (parent->inode->ops->remove(parent->inode, name, 1) != 0) {
-        return -1;
+    if (vfs_directory_has_entries(target)) {
+        return vfs_fail(VFS_ERR_DIR_NOT_EMPTY);
     }
-    struct dentry *removed = dentry_detach_child(parent, name);
+    if (parent->inode->ops->remove(parent->inode, target->name, 1) != 0) {
+        if (vfs_directory_has_entries(target)) {
+            return vfs_fail(VFS_ERR_DIR_NOT_EMPTY);
+        }
+        return vfs_fail(VFS_ERR_IO);
+    }
+    struct dentry *removed = dentry_detach_child(parent, target->name);
     dentry_free_tree(removed);
+    vfs_set_ok();
     return 0;
 }
 
 int vfs_rename(const char *src_path, const char *dst_path) {
+    vfs_set_ok();
     if (!src_path || !dst_path) {
-        return -1;
+        return vfs_fail(VFS_ERR_INVALID_ARGUMENT);
     }
-    char src_name[VFS_NAME_MAX];
     char dst_name[VFS_NAME_MAX];
-    struct dentry *src_parent = vfs_resolve(src_path, 1, src_name);
+    struct dentry *src = vfs_resolve(src_path, 0, NULL);
+    struct dentry *src_parent = src ? src->parent : NULL;
     struct dentry *dst_parent = vfs_resolve(dst_path, 1, dst_name);
-    if (!src_parent || !dst_parent || src_name[0] == '\0' || dst_name[0] == '\0') {
-        return -1;
+    struct dentry *dst = NULL;
+    if (!src || !src_parent) {
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
+    }
+    if (!dst_parent || dst_name[0] == '\0') {
+        return vfs_fail_last_or(VFS_ERR_INVALID_PATH);
+    }
+    dst = vfs_resolve(dst_path, 0, NULL);
+    if (dst && dst != src) {
+        return vfs_fail(VFS_ERR_ALREADY_EXISTS);
+    }
+    if (!dst && g_vfs_last_error != VFS_ERR_NOT_FOUND) {
+        return vfs_fail_last_or(VFS_ERR_IO);
     }
     if (!inode_has_permission(src_parent->inode, VFS_PERM_WRITE) ||
         !inode_has_permission(dst_parent->inode, VFS_PERM_WRITE)) {
-        return -1;
+        return vfs_fail(VFS_ERR_PERMISSION_DENIED);
     }
     if (!src_parent->inode->ops || !src_parent->inode->ops->rename) {
-        return -1;
+        return vfs_fail(VFS_ERR_UNSUPPORTED);
     }
-    if (src_parent->inode->ops->rename(src_parent->inode, src_name, dst_parent->inode, dst_name) != 0) {
-        return -1;
+    if (src_parent->inode->ops->rename(src_parent->inode, src->name, dst_parent->inode, dst_name) != 0) {
+        return vfs_fail(VFS_ERR_IO);
     }
 
-    struct dentry *child = dentry_detach_child(src_parent, src_name);
+    struct dentry *child = dentry_detach_child(src_parent, src->name);
     if (child) {
         copy_name(child->name, dst_name);
         child->parent = dst_parent;
         dentry_attach_child(dst_parent, child);
     }
+    vfs_set_ok();
     return 0;
 }
 
 int vfs_stat_path(const char *path, struct vfs_stat *out) {
     if (!out) {
-        return -1;
+        return vfs_fail(VFS_ERR_INVALID_ARGUMENT);
     }
+    vfs_set_ok();
     struct dentry *d = vfs_resolve(path, 0, NULL);
     if (!d || !d->inode) {
-        return -1;
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
     }
     if (!inode_has_permission(d->inode, VFS_PERM_READ)) {
-        return -1;
+        return vfs_fail(VFS_ERR_PERMISSION_DENIED);
     }
     if (d->inode->ops && d->inode->ops->stat) {
-        return d->inode->ops->stat(d->inode, out);
+        if (d->inode->ops->stat(d->inode, out) != 0) {
+            return vfs_fail(VFS_ERR_IO);
+        }
+        vfs_set_ok();
+        return 0;
     }
     out->ino = d->inode->ino;
     out->size = d->inode->size;
@@ -467,28 +576,57 @@ int vfs_stat_path(const char *path, struct vfs_stat *out) {
     out->gid = d->inode->gid;
     out->mode = d->inode->mode;
     out->perm = d->inode->perm;
+    vfs_set_ok();
     return 0;
 }
 
 int vfs_set_metadata(const char *path, const struct vfs_metadata *meta) {
     if (!path || !meta) {
-        return -1;
+        return vfs_fail(VFS_ERR_INVALID_ARGUMENT);
     }
+    vfs_set_ok();
     struct dentry *d = vfs_resolve(path, 0, NULL);
-    if (!d || !d->inode || !d->inode->ops || !d->inode->ops->set_metadata) {
+    if (!d || !d->inode) {
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
+    }
+    if (!d->inode->ops || !d->inode->ops->set_metadata) {
         if (d && d->refcount) {
             d->refcount--;
         }
-        return -1;
+        return vfs_fail(VFS_ERR_UNSUPPORTED);
     }
     if (d->inode->ops->set_metadata(d->inode, meta) != 0) {
         if (d->refcount) {
             d->refcount--;
         }
-        return -1;
+        return vfs_fail(VFS_ERR_IO);
     }
     if (d->refcount) {
         d->refcount--;
     }
+    vfs_set_ok();
     return 0;
+}
+
+int vfs_last_error(void) {
+    return g_vfs_last_error;
+}
+
+const char *vfs_error_string(int error) {
+    switch (vfs_normalize_error(error)) {
+        case VFS_OK: return "ok";
+        case VFS_ERR_INVALID_ARGUMENT: return "invalid argument";
+        case VFS_ERR_INVALID_PATH: return "invalid path";
+        case VFS_ERR_NAME_TOO_LONG: return "name too long";
+        case VFS_ERR_NOT_FOUND: return "not found";
+        case VFS_ERR_ALREADY_EXISTS: return "already exists";
+        case VFS_ERR_NOT_DIRECTORY: return "not a directory";
+        case VFS_ERR_IS_DIRECTORY: return "is a directory";
+        case VFS_ERR_PERMISSION_DENIED: return "permission denied";
+        case VFS_ERR_DIR_NOT_EMPTY: return "directory not empty";
+        case VFS_ERR_UNSUPPORTED: return "operation unsupported";
+        case VFS_ERR_NO_MEMORY: return "out of memory";
+        case VFS_ERR_IO: return "io error";
+        default: return "unknown error";
+    }
 }

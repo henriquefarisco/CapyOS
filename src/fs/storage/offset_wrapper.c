@@ -7,16 +7,49 @@ struct offset_ctx {
     uint32_t count;
 };
 
+static inline void dbg_putc(char ch) {
+    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
+static void dbg_puts(const char *s) {
+    while (s && *s) {
+        dbg_putc(*s++);
+    }
+}
+
+static void dbg_hex32(uint32_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        dbg_putc(hex[(value >> shift) & 0xFu]);
+    }
+}
+
 static int off_read(void *ctx, uint32_t block_no, void *buffer){
     struct offset_ctx *c = (struct offset_ctx *)ctx;
     if (block_no >= c->count) return -1;
-    return block_device_read(c->lower, c->start + block_no, buffer);
+    if (block_device_read(c->lower, c->start + block_no, buffer) != 0) {
+        dbg_puts("[off] read fail blk=");
+        dbg_hex32(block_no);
+        dbg_puts(" abs=");
+        dbg_hex32(c->start + block_no);
+        dbg_putc('\n');
+        return -1;
+    }
+    return 0;
 }
 
 static int off_write(void *ctx, uint32_t block_no, const void *buffer){
     struct offset_ctx *c = (struct offset_ctx *)ctx;
     if (block_no >= c->count) return -1;
-    return block_device_write(c->lower, c->start + block_no, buffer);
+    if (block_device_write(c->lower, c->start + block_no, buffer) != 0) {
+        dbg_puts("[off] write fail blk=");
+        dbg_hex32(block_no);
+        dbg_puts(" abs=");
+        dbg_hex32(c->start + block_no);
+        dbg_putc('\n');
+        return -1;
+    }
+    return 0;
 }
 
 static struct block_device_ops off_ops;

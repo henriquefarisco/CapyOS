@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/session.h"
+#include "auth/session.h"
 #include "core/system_init.h"
 #include "fs/vfs.h"
 

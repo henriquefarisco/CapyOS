@@ -1,7 +1,7 @@
 #include "fs/buffer.h"
 
 #ifndef BUFFER_HASH_SIZE
-#define BUFFER_HASH_SIZE 64
+#define BUFFER_HASH_SIZE 256
 #endif
 
 static struct buffer_head buffer_cache[BUFFER_CACHE_MAX];
@@ -12,6 +12,23 @@ static int cache_initialized = 0;
 static uint32_t g_last_error_block_no = 0;
 static int g_last_error_valid = 0;
 static int g_last_error_code = 0;
+
+static inline void dbg_putc(char ch) {
+    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
+static void dbg_puts(const char *s) {
+    while (s && *s) {
+        dbg_putc(*s++);
+    }
+}
+
+static void dbg_hex32(uint32_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        dbg_putc(hex[(value >> shift) & 0xFu]);
+    }
+}
 
 static inline uint32_t buffer_hash(struct block_device *dev, uint32_t block_no) {
     uintptr_t key = (uintptr_t)dev;
@@ -138,6 +155,7 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
 
     bh = buffer_evict();
     if (!bh) {
+        dbg_puts("[buf] evict none\n");
         return NULL;
     }
 
@@ -146,6 +164,13 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
     bh->refcount = 1;
 
     if (block_device_read(dev, block_no, bh->data) != 0) {
+        dbg_puts("[buf] read fail blk=");
+        dbg_hex32(block_no);
+        dbg_puts(" bsz=");
+        dbg_hex32(dev->block_size);
+        dbg_puts(" bcnt=");
+        dbg_hex32(dev->block_count);
+        dbg_putc('\n');
         bh->dev = NULL;
         bh->refcount = 0;
         lru_insert_front(bh);
@@ -208,6 +233,30 @@ int buffer_cache_sync(struct block_device *dev) {
         }
     }
     return rc;
+}
+
+void buffer_cache_invalidate(struct block_device *dev) {
+    if (!dev) {
+        return;
+    }
+    for (size_t i = 0; i < BUFFER_CACHE_MAX; ++i) {
+        struct buffer_head *bh = &buffer_cache[i];
+        if (bh->dev != dev) {
+            continue;
+        }
+        hash_remove(bh);
+        if (bh->refcount == 0) {
+            lru_remove(bh);
+        }
+        bh->dev = NULL;
+        bh->block_no = 0;
+        bh->dirty = 0;
+        bh->valid = 0;
+        bh->hash_next = NULL;
+        if (bh->refcount == 0) {
+            lru_insert_front(bh);
+        }
+    }
 }
 
 int buffer_cache_last_error_block(uint32_t *out_block_no) {

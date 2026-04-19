@@ -5,7 +5,7 @@
  * memory descriptors. */
 #include "drivers/net/vmxnet3.h"
 #include "drivers/io.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>

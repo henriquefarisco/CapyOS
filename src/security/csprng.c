@@ -33,13 +33,55 @@ static inline void irq_restore(unsigned long flags) {
 }
 #endif
 
+static int has_rdrand(void) {
+#ifdef UNIT_TEST
+  return 0;
+#else
+  uint32_t ecx = 0;
+  __asm__ volatile("cpuid" : "=c"(ecx) : "a"(1) : "ebx", "edx");
+  return (ecx >> 30) & 1;
+#endif
+}
+
+static int rdrand64(uint64_t *out) {
+#ifdef UNIT_TEST
+  (void)out;
+  return 0;
+#else
+  uint64_t val;
+  unsigned char ok;
+  __asm__ volatile("rdrand %0; setc %1" : "=r"(val), "=qm"(ok));
+  if (ok) { *out = val; return 1; }
+  return 0;
+#endif
+}
+
 void csprng_init(void) {
   if (initialized)
     return;
   sha256_init(&entropy_pool);
-  // Mistura algum sal inicial fixo para garantir estado nÃ£o-nulo
   uint8_t salt[] = "CAPYOS_Initial_Salt_v1";
   sha256_update(&entropy_pool, salt, sizeof(salt));
+
+  /* Mix RDRAND hardware entropy when available */
+  if (has_rdrand()) {
+    for (int i = 0; i < 4; i++) {
+      uint64_t hw = 0;
+      if (rdrand64(&hw)) {
+        sha256_update(&entropy_pool, (uint8_t *)&hw, sizeof(hw));
+      }
+    }
+  }
+
+  /* Mix TSC as additional entropy source */
+#ifndef UNIT_TEST
+  {
+    uint64_t tsc;
+    __asm__ volatile("rdtsc" : "=A"(tsc));
+    sha256_update(&entropy_pool, (uint8_t *)&tsc, sizeof(tsc));
+  }
+#endif
+
   reseed_counter = 0;
   initialized = 1;
 }

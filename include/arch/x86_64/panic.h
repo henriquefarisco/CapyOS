@@ -17,11 +17,22 @@ struct panic_regs {
 
 #define PANIC_STACK_DUMP_WORDS 32
 
+extern uint32_t *g_panic_fb;
+extern uint32_t g_panic_fb_width;
+extern uint32_t g_panic_fb_height;
+extern uint32_t g_panic_fb_pitch;
+
+static inline void panic_set_framebuffer(uint32_t *fb, uint32_t width,
+                                         uint32_t height, uint32_t pitch) {
+  g_panic_fb = fb;
+  g_panic_fb_width = width;
+  g_panic_fb_height = height;
+  g_panic_fb_pitch = pitch;
+}
+
 void panic(const char *message) __attribute__((noreturn));
 void panic_with_regs(const char *message,
                      const struct panic_regs *regs) __attribute__((noreturn));
 void panic_dump_to_serial(const struct panic_regs *regs);
-void panic_set_framebuffer(uint32_t *fb, uint32_t width, uint32_t height,
-                           uint32_t pitch);
 
 #endif /* ARCH_X86_64_PANIC_H */

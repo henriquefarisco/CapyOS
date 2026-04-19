@@ -18,6 +18,23 @@ static int g_storage_candidates_initialized = 0;
 static struct x64_storage_native_candidate_state g_storage_native;
 static struct x64_storage_hyperv_runtime_state g_storage_hyperv_runtime;
 
+static inline void dbg_putc(char ch) {
+  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+}
+
+static void dbg_puts(const char *s) {
+  while (s && *s) {
+    dbg_putc(*s++);
+  }
+}
+
+static void dbg_hex32(uint32_t value) {
+  static const char hex[] = "0123456789ABCDEF";
+  for (int shift = 28; shift >= 0; shift -= 4) {
+    dbg_putc(hex[(value >> shift) & 0xFu]);
+  }
+}
+
 static void io_print(const struct x64_storage_runtime_io *io,
                      const char *message) {
   if (io && io->print && message) {
@@ -48,14 +65,49 @@ static void io_putc(const struct x64_storage_runtime_io *io, char ch) {
 static void ensure_storage_runtime_candidates(
     const struct boot_handoff *handoff, const struct x64_storage_runtime_io *io,
     void *probe_buf) {
-  if (g_storage_candidates_initialized || !handoff || !probe_buf) {
+  if (!handoff || !probe_buf) {
     return;
   }
 
-  x64_storage_hyperv_runtime_reset(&g_storage_hyperv_runtime);
+  if (!g_storage_candidates_initialized) {
+    x64_storage_hyperv_runtime_reset(&g_storage_hyperv_runtime);
+    g_storage_candidates_initialized = 1;
+  }
+
+  if (!g_storage_native.ready) {
+    /* Probe native storage even when EFI Block I/O is still available.
+     * Installed-disk boots can hand off a whole-disk firmware handle while the
+     * real DATA slice must be rediscovered from GPT; skipping native probing
+     * here makes persistence depend on that ambiguous firmware path. */
+    x64_storage_runtime_native_probe(&g_storage_native, handoff, io, probe_buf,
+                                     CAPYFS_BLOCK_SIZE);
+  }
+}
+
+static struct block_device *try_native_fallback(
+    const struct boot_handoff *handoff, const struct x64_storage_runtime_io *io,
+    void *probe_buf, const char *reason) {
+  if (g_storage_native.ready) {
+    return x64_storage_runtime_native_promote(
+        &g_storage_native, &g_storage_backend, &g_storage_data_path,
+        &g_storage_has_device, io, reason);
+  }
+
+  if (!handoff || !probe_buf) {
+    return NULL;
+  }
+
+  dbg_puts("[srt] native: probing on demand\n");
   x64_storage_runtime_native_probe(&g_storage_native, handoff, io, probe_buf,
                                    CAPYFS_BLOCK_SIZE);
-  g_storage_candidates_initialized = 1;
+
+  if (!g_storage_native.ready) {
+    return NULL;
+  }
+
+  return x64_storage_runtime_native_promote(
+      &g_storage_native, &g_storage_backend, &g_storage_data_path,
+      &g_storage_has_device, io, reason);
 }
 
 static int probe_blockio_lba0(struct efi_block_device *dev,
@@ -143,6 +195,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
   uint64_t active_data_start = 0;
   uint64_t active_data_count = 0;
   int selected_probe_ok = 0;
+  int active_probe_ok = 0;
   int has_raw_fallback = 0;
   int firmware_block_io_available = 0;
   int boot_services_active = 0;
@@ -153,12 +206,8 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
   ensure_storage_runtime_candidates(handoff, io, probe_buf);
 
   if (!handoff || !probe_buf) {
-    if (g_storage_native.ready) {
-      return x64_storage_runtime_native_promote(
-          &g_storage_native, &g_storage_backend, &g_storage_data_path,
-          &g_storage_has_device, io, "sem handoff disponivel");
-    }
-    return NULL;
+    return try_native_fallback(handoff, io, probe_buf,
+                               "sem handoff disponivel");
   }
 
   firmware_block_io_available =
@@ -175,6 +224,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
 
   if (firmware_block_io_available && boot_services_active &&
       g_storage_native.ready) {
+    dbg_puts("[srt] native: ready before EFI\n");
     return x64_storage_runtime_native_promote(
         &g_storage_native, &g_storage_backend, &g_storage_data_path,
         &g_storage_has_device, io,
@@ -184,14 +234,16 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
   if ((!firmware_block_io_available || !boot_services_active ||
        handoff->version < 2 || handoff->data_lba_count == 0) &&
       g_storage_native.ready) {
+    dbg_puts("[srt] native: firmware unavailable/inactive\n");
     return x64_storage_runtime_native_promote(
         &g_storage_native, &g_storage_backend, &g_storage_data_path,
         &g_storage_has_device, io, "firmware indisponivel ou inativo");
   }
 
   if (handoff->version < 2 || !firmware_block_io_available ||
-      handoff->data_lba_count == 0) {
-    return NULL;
+      !boot_services_active || handoff->data_lba_count == 0) {
+    return try_native_fallback(handoff, io, probe_buf,
+                               "firmware indisponivel ou inativo");
   }
 
   block_size = handoff->efi_block_size ? handoff->efi_block_size : 512;
@@ -218,7 +270,9 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
           handoff->data_lba_start, handoff->data_lba_count,
           handoff->efi_disk_last_lba, &effective_data_count) != 0) {
     io_print(io, "[fs] ERRO: parametros DATA invalidos no handoff.\n");
-    return NULL;
+    dbg_puts("[srt] native: invalid EFI handoff\n");
+    return try_native_fallback(handoff, io, probe_buf,
+                               "handoff EFI invalido");
   }
 
   if (efi_block_device_init(&g_efi_runtime_disk, handoff->efi_block_io,
@@ -226,20 +280,35 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
                             handoff->efi_disk_last_lba) != 0) {
     io_print(io,
              "[fs] ERRO: falha ao inicializar adaptador EFI BlockIO do handoff.\n");
-    return NULL;
+    dbg_puts("[srt] native: EFI init failed\n");
+    return try_native_fallback(handoff, io, probe_buf,
+                               "falha ao inicializar EFI BlockIO");
   }
   print_efi_blockio_status(&g_efi_runtime_disk, handoff->efi_media_id, io);
 
   selected_probe_ok = probe_blockio_lba0(&g_efi_runtime_disk, handoff->efi_media_id,
                                          "selected", io, probe_buf);
+  active_probe_ok = selected_probe_ok;
   active_data_start = handoff->data_lba_start;
   active_data_count = effective_data_count;
 
-  if (!selected_probe_ok && has_raw_fallback) {
+  if ((!selected_probe_ok ||
+       (has_raw_fallback && selected_probe_ok &&
+        handoff->data_lba_start == 0 && handoff->data_lba_start_raw != 0 &&
+        handoff->data_lba_count_raw != 0 &&
+        handoff->data_lba_count_raw <= handoff->data_lba_count)) &&
+      has_raw_fallback) {
     uint64_t raw_effective_data_count = 0;
 
-    io_print(io,
-             "[fs] Probe do BlockIO selecionado falhou; tentando fallback RAW.\n");
+    if (!selected_probe_ok) {
+      io_print(io,
+               "[fs] Probe do BlockIO selecionado falhou; tentando fallback RAW.\n");
+    } else {
+      io_print(
+          io,
+          "[fs] Handle particionado em LBA 0 detectado; promovendo fallback RAW "
+          "para evitar ambiguidade do volume DATA.\n");
+    }
     if (handoff->data_lba_start_raw > handoff->efi_disk_last_lba_raw) {
       io_print(io, "[fs] aviso: fallback RAW com start LBA fora do disco.\n");
     } else {
@@ -269,8 +338,14 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
           g_efi_runtime_disk.dev.ctx = &g_efi_runtime_disk.ctx;
           active_data_start = handoff->data_lba_start_raw;
           active_data_count = raw_effective_data_count;
+          active_probe_ok = 1;
           g_storage_data_path = "raw-fallback";
-          io_print(io, "[fs] Fallback RAW ativo para DATA.\n");
+          if (!selected_probe_ok) {
+            io_print(io, "[fs] Fallback RAW ativo para DATA.\n");
+          } else {
+            io_print(io,
+                     "[fs] Fallback RAW promovido como caminho principal de DATA.\n");
+          }
         } else {
           io_print(io, "[fs] Fallback RAW falhou no probe inicial.\n");
         }
@@ -285,12 +360,37 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
              "erro de probe.\n");
   }
 
+  if (!active_probe_ok) {
+    io_print(io,
+             "[fs] EFI BlockIO nao passou no probe inicial da particao DATA.\n");
+    dbg_puts("[srt] native: EFI probe failed\n");
+    return try_native_fallback(handoff, io, probe_buf,
+                               "probe inicial do EFI BlockIO falhou");
+  }
+
   {
     struct block_device *slice = NULL;
+    struct block_device *chunked = NULL;
     slice = block_offset_wrap(&g_efi_runtime_disk.dev, (uint32_t)active_data_start,
                               (uint32_t)active_data_count);
     if (!slice) {
-      return NULL;
+      dbg_puts("[srt] native: EFI slice failed\n");
+      return try_native_fallback(handoff, io, probe_buf,
+                                 "falha ao criar slice EFI da DATA");
+    }
+    chunked = block_chunked_wrap(slice, CAPYFS_BLOCK_SIZE);
+    if (!chunked) {
+      dbg_puts("[srt] native: EFI chunk failed\n");
+      return try_native_fallback(handoff, io, probe_buf,
+                                 "falha ao alinhar slice EFI para CAPYFS");
+    }
+    if (block_device_read(chunked, 0, probe_buf) != 0) {
+      io_print(io,
+               "[fs] EFI BlockIO abriu DATA, mas falhou na leitura validada do bloco 0.\n");
+      dbg_puts("[srt] native: EFI validated read failed\n");
+      return try_native_fallback(
+          handoff, io, probe_buf,
+          "leitura validada do bloco 0 em EFI BlockIO falhou");
     }
     g_storage_backend = X64_STORAGE_BACKEND_EFI_BLOCK_IO;
     if (!g_storage_data_path || g_storage_data_path[0] == '\0' ||
@@ -298,7 +398,12 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
       g_storage_data_path = "selected";
     }
     g_storage_has_device = 1;
-    return block_chunked_wrap(slice, CAPYFS_BLOCK_SIZE);
+    dbg_puts("[srt] efi ready start=");
+    dbg_hex32((uint32_t)active_data_start);
+    dbg_puts(" count=");
+    dbg_hex32((uint32_t)active_data_count);
+    dbg_putc('\n');
+    return chunked;
   }
 }
 

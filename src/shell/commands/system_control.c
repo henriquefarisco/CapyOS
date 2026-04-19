@@ -1,13 +1,13 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
-#include "core/klog_persist.h"
-#include "core/service_manager.h"
+#include "lang/localization.h"
+#include "kernel/log/klog_persist.h"
+#include "services/service_manager.h"
 #include "core/system_init.h"
-#include "core/update_agent.h"
-#include "core/user.h"
-#include "core/user_prefs.h"
+#include "services/update_agent.h"
+#include "auth/user.h"
+#include "auth/user_prefs.h"
 #include "core/version.h"
 #include "core/work_queue.h"
 #if defined(__x86_64__)
@@ -104,12 +104,6 @@ static const char *theme_name_or_null(const char *name) {
   if (shell_string_equal(name, "forest")) {
     return "forest";
   }
-  if (shell_string_equal(name, "sunset")) {
-    return "sunset";
-  }
-  if (shell_string_equal(name, "midnight")) {
-    return "midnight";
-  }
   return NULL;
 }
 
@@ -185,14 +179,6 @@ static int cmd_config_theme(struct shell_context *ctx, int argc, char **argv) {
                                     " - forest : variante verde/floresta\n",
                                     " - forest : green/forest variant\n",
                                     " - forest : variante verde/bosque\n"));
-    shell_print(localization_select(language,
-                                    " - sunset   : variante quente/ambar\n",
-                                    " - sunset   : warm/amber variant\n",
-                                    " - sunset   : variante calida/ambar\n"));
-    shell_print(localization_select(language,
-                                    " - midnight : variante roxo/escuro\n",
-                                    " - midnight : purple/dark variant\n",
-                                    " - midnight : variante purpura/oscuro\n"));
     return 0;
   }
 

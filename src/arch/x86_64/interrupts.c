@@ -1,3 +1,4 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "arch/x86_64/interrupts.h"
 #include "arch/x86_64/panic.h"
 
@@ -65,8 +66,6 @@ struct x64_exception_frame {
 extern void *x64_exception_stub_table[32];
 extern void *x64_irq_stub_table[16];
 extern void x64_unhandled_vector_stub(void);
-extern void fbcon_print(const char *s);
-extern void fbcon_putc(char c);
 
 static struct x64_gdt_entry g_gdt[3];
 static struct x64_descriptor_ptr g_gdtr;
@@ -132,7 +131,6 @@ static void diag_putc(char c) {
   if (c != '\r') {
     outb_local((uint16_t)DEBUGCON_PORT, (uint8_t)c);
   }
-  fbcon_putc(c);
 }
 
 static void diag_write(const char *s) {
@@ -155,6 +153,16 @@ static void diag_label_hex64(const char *label, uint64_t value) {
   diag_write(label);
   diag_hex64(value);
   diag_putc('\n');
+}
+
+static uint64_t interrupted_rsp_from_frame(
+    const struct x64_exception_frame *frame) {
+  if (!frame) {
+    return 0;
+  }
+  /* Current boot/runtime faults arrive from CPL0, so the CPU frame ends at
+   * RFLAGS and the interrupted RSP is immediately above it. */
+  return (uint64_t)(uintptr_t)(&frame->rflags + 1);
 }
 
 static __attribute__((noreturn)) void diag_halt_forever(void) {
@@ -207,7 +215,7 @@ static void x64_idt_set_gate(uint8_t vector, void (*handler)(void),
   entry->reserved = 0;
 }
 
-void gdt_init(void) {
+__attribute__((optimize("O0"))) void gdt_init(void) {
   x64_gdt_set(0, 0, 0, 0, 0);
   x64_gdt_set(1, 0, 0, 0x9Au, 0x20u);
   x64_gdt_set(2, 0, 0, 0x92u, 0x00u);
@@ -217,7 +225,9 @@ void gdt_init(void) {
   x64_load_gdt(&g_gdtr);
 }
 
-void idt_install(void) {
+/* Keep the early descriptor-table path scalar. Auto-vectorized XMM moves here
+ * can fault before the kernel has taken full control of CPU feature state. */
+__attribute__((optimize("O0"))) void idt_install(void) {
   for (uint32_t i = 0; i < IDT_ENTRIES; ++i) {
     x64_idt_set_gate((uint8_t)i, x64_unhandled_vector_stub,
                      IDT_GATE_INTERRUPT);
@@ -309,7 +319,8 @@ static void pic_send_eoi(uint64_t vector) {
   }
 }
 
-static void report_fault(const struct x64_exception_frame *frame) {
+__attribute__((optimize("O0"))) static void
+report_fault(const struct x64_exception_frame *frame) {
   uint64_t vector = frame ? frame->vector : 0xFFFFFFFFFFFFFFFFULL;
 
   diag_write("\n[x64] Fatal fault\n");
@@ -325,6 +336,7 @@ static void report_fault(const struct x64_exception_frame *frame) {
 
   diag_label_hex64("[x64] vector=0x", vector);
   if (frame) {
+    uint64_t interrupted_rsp = interrupted_rsp_from_frame(frame);
     diag_label_hex64("[x64] err=0x", frame->error_code);
     diag_label_hex64("[x64] rip=0x", frame->rip);
     diag_label_hex64("[x64] cs=0x", frame->cs);
@@ -336,6 +348,7 @@ static void report_fault(const struct x64_exception_frame *frame) {
     diag_label_hex64("[x64] rsi=0x", frame->rsi);
     diag_label_hex64("[x64] rdi=0x", frame->rdi);
     diag_label_hex64("[x64] rbp=0x", frame->rbp);
+    diag_label_hex64("[x64] rsp=0x", interrupted_rsp);
     diag_label_hex64("[x64] r8 =0x", frame->r8);
     diag_label_hex64("[x64] r9 =0x", frame->r9);
     diag_label_hex64("[x64] r10=0x", frame->r10);
@@ -350,7 +363,8 @@ static void report_fault(const struct x64_exception_frame *frame) {
   }
 }
 
-void x64_exception_dispatch(struct x64_exception_frame *frame) {
+__attribute__((optimize("O0"))) void
+x64_exception_dispatch(struct x64_exception_frame *frame) {
   uint64_t vector = frame ? frame->vector : 0xFFFFFFFFFFFFFFFFULL;
 
   if (vector >= 32u && vector <= 47u) {
@@ -368,10 +382,12 @@ void x64_exception_dispatch(struct x64_exception_frame *frame) {
   /* Invoke structured panic handler for full dump + blue screen */
   if (frame) {
     struct panic_regs pregs;
+    uint64_t interrupted_rsp = interrupted_rsp_from_frame(frame);
     pregs.rax = frame->rax; pregs.rbx = frame->rbx;
     pregs.rcx = frame->rcx; pregs.rdx = frame->rdx;
     pregs.rsi = frame->rsi; pregs.rdi = frame->rdi;
-    pregs.rbp = frame->rbp; pregs.rsp = 0;
+    pregs.rbp = frame->rbp;
+    pregs.rsp = interrupted_rsp;
     pregs.r8 = frame->r8;   pregs.r9 = frame->r9;
     pregs.r10 = frame->r10; pregs.r11 = frame->r11;
     pregs.r12 = frame->r12; pregs.r13 = frame->r13;
@@ -403,7 +419,6 @@ void x64_platform_tables_init(int native_runtime_ready) {
   if (g_platform_tables_bridge_active) {
     g_platform_tables_active = 1;
     g_platform_tables_status = "native-descriptors-active";
-    x64_interrupts_enable();
     return;
   }
 
@@ -414,7 +429,6 @@ void x64_platform_tables_init(int native_runtime_ready) {
   pic_set_mask(0xFFu, 0xFFu);
   g_platform_tables_active = 1;
   g_platform_tables_status = "native-descriptors-active";
-  x64_interrupts_enable();
 }
 
 int x64_platform_tables_active(void) { return g_platform_tables_active; }

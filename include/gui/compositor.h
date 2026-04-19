@@ -69,6 +69,7 @@ struct compositor_stats {
 
 void compositor_init(uint32_t *framebuffer, uint32_t width, uint32_t height,
                      uint32_t pitch);
+void compositor_shutdown(void);
 struct gui_window *compositor_create_window(const char *title, int32_t x,
                                             int32_t y, uint32_t w, uint32_t h);
 void compositor_destroy_window(uint32_t window_id);

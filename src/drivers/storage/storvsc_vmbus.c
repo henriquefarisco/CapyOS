@@ -1,10 +1,9 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "drivers/storage/storvsc_vmbus.h"
 
 #include "drivers/hyperv/hyperv.h"
 
 #ifndef UNIT_TEST
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 #endif
 
 struct storvsc_vmbus_packet_desc {
@@ -214,12 +213,12 @@ static int storvsc_vmbus_recv_control(struct vmbus_channel_runtime *channel,
   return 0;
 }
 
-struct storvsc_backend_ops storvsc_vmbus_ops(void) {
-  struct storvsc_backend_ops ops;
-
-  ops.query_offer = storvsc_vmbus_query_offer;
-  ops.open_channel = storvsc_vmbus_open_channel;
-  ops.send_control = storvsc_vmbus_send_control;
-  ops.recv_control = storvsc_vmbus_recv_control;
-  return ops;
+void storvsc_vmbus_ops_init(struct storvsc_backend_ops *out) {
+  if (!out) {
+    return;
+  }
+  out->query_offer = storvsc_vmbus_query_offer;
+  out->open_channel = storvsc_vmbus_open_channel;
+  out->send_control = storvsc_vmbus_send_control;
+  out->recv_control = storvsc_vmbus_recv_control;
 }

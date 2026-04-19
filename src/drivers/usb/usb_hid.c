@@ -3,7 +3,7 @@
  * and mice, then polls interrupt endpoints for input reports. */
 #include "drivers/usb/usb_hid.h"
 #include "drivers/usb/usb_core.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -115,7 +115,7 @@ static int kbd_buffer_pop(char *c) {
   return 1;
 }
 
-static void process_kbd_report(const struct usb_hid_keyboard_report *report) {
+static void __attribute__((unused)) process_kbd_report(const struct usb_hid_keyboard_report *report) {
   int shift = (report->modifiers & 0x22) ? 1 : 0; /* L/R Shift */
 
   for (int i = 0; i < 6; i++) {

@@ -1,7 +1,7 @@
 #ifndef SHELL_H
 #define SHELL_H
 
-#include "core/session.h"
+#include "auth/session.h"
 #include "core/system_init.h"
 
 enum shell_result {

@@ -3,18 +3,22 @@
 #include "gui/font.h"
 #include "drivers/input/keyboard_layout.h"
 #include "fs/vfs.h"
+#include "util/kstring.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 
 static struct text_editor_app g_editor;
+static int g_editor_open = 0;
 
-static void ed_memset(void *d, int v, size_t n) {
-  uint8_t *p = (uint8_t *)d; for (size_t i = 0; i < n; i++) p[i] = (uint8_t)v;
+static void text_editor_cleanup(void) {
+  g_editor.window = NULL;
+  g_editor_open = 0;
 }
-static void ed_strcpy(char *d, const char *s, size_t max) {
-  size_t i = 0; while (i < max - 1 && s[i]) { d[i] = s[i]; i++; } d[i] = '\0';
+
+static void text_editor_on_close(struct gui_window *win) {
+  (void)win;
+  text_editor_cleanup();
 }
-static size_t ed_strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
 
 static void text_editor_window_paint(struct gui_window *win) {
   if (!win || !win->user_data) return;
@@ -23,11 +27,18 @@ static void text_editor_window_paint(struct gui_window *win) {
 
 static void text_editor_window_key(struct gui_window *win, uint32_t keycode,
                                    uint8_t mods) {
-  (void)mods;
   if (!win || !win->user_data) return;
-  /* For special keys (>=0x80), ch must be 0 so the handler uses keycode. */
+  struct text_editor_app *app = (struct text_editor_app *)win->user_data;
+
+  /* Ctrl+S → save */
+  if ((mods & 0x01) && (keycode == 's' || keycode == 'S' ||
+                        keycode == 0x13 /* raw Ctrl+S */)) {
+    text_editor_save(app);
+    return;
+  }
+
   char ch = (keycode < 0x80) ? (char)keycode : 0;
-  text_editor_handle_key((struct text_editor_app *)win->user_data, keycode, ch);
+  text_editor_handle_key(app, keycode, ch);
 }
 
 static void text_editor_window_scroll(struct gui_window *win, int32_t delta) {
@@ -44,7 +55,18 @@ static void text_editor_window_scroll(struct gui_window *win, int32_t delta) {
 void text_editor_open(const char *path) {
   const struct gui_theme_palette *theme = compositor_theme();
   uint8_t scale = compositor_ui_scale();
-  ed_memset(&g_editor, 0, sizeof(g_editor));
+
+  /* If already open, just focus the existing window */
+  if (g_editor_open && g_editor.window) {
+    compositor_show_window(g_editor.window->id);
+    compositor_focus_window(g_editor.window->id);
+    return;
+  }
+
+  /* Clean up stale state */
+  text_editor_cleanup();
+  kmemzero(&g_editor, sizeof(g_editor));
+
   g_editor.window = compositor_create_window("Text Editor", 100, 80,
                                              600 + 160 * (scale - 1),
                                              400 + 140 * (scale - 1));
@@ -55,14 +77,16 @@ void text_editor_open(const char *path) {
   g_editor.window->on_paint = text_editor_window_paint;
   g_editor.window->on_key = text_editor_window_key;
   g_editor.window->on_scroll = text_editor_window_scroll;
+  g_editor.window->on_close = text_editor_on_close;
   compositor_show_window(g_editor.window->id);
   compositor_focus_window(g_editor.window->id);
+  g_editor_open = 1;
 
   g_editor.line_count = 1;
   g_editor.lines[0][0] = '\0';
 
   if (path) {
-    ed_strcpy(g_editor.path, path, EDITOR_PATH_MAX);
+    kstrcpy(g_editor.path, EDITOR_PATH_MAX, path);
     struct file *f = vfs_open(path, 0x1);
     if (f) {
       char buf[4096];
@@ -88,7 +112,7 @@ void text_editor_open(const char *path) {
       }
     }
   } else {
-    ed_strcpy(g_editor.path, "untitled.txt", EDITOR_PATH_MAX);
+    kstrcpy(g_editor.path, EDITOR_PATH_MAX, "untitled.txt");
   }
 }
 
@@ -99,7 +123,7 @@ void text_editor_save(struct text_editor_app *app) {
   struct file *f = vfs_open(app->path, 0x2);
   if (!f) return;
   for (int i = 0; i < app->line_count; i++) {
-    vfs_write(f, app->lines[i], ed_strlen(app->lines[i]));
+    vfs_write(f, app->lines[i], kstrlen(app->lines[i]));
     vfs_write(f, "\n", 1);
   }
   vfs_close(f);
@@ -113,7 +137,7 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
   if (keycode == KEY_UP) {
     if (app->cursor_line > 0) {
       app->cursor_line--;
-      int len = (int)ed_strlen(app->lines[app->cursor_line]);
+      int len = (int)kstrlen(app->lines[app->cursor_line]);
       if (app->cursor_col > len) app->cursor_col = len;
     }
     return;
@@ -121,7 +145,7 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
   if (keycode == KEY_DOWN) {
     if (app->cursor_line < app->line_count - 1) {
       app->cursor_line++;
-      int len = (int)ed_strlen(app->lines[app->cursor_line]);
+      int len = (int)kstrlen(app->lines[app->cursor_line]);
       if (app->cursor_col > len) app->cursor_col = len;
     }
     return;
@@ -131,7 +155,7 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
     return;
   }
   if (keycode == KEY_RIGHT) {
-    int len = (int)ed_strlen(app->lines[app->cursor_line]);
+    int len = (int)kstrlen(app->lines[app->cursor_line]);
     if (app->cursor_col < len) app->cursor_col++;
     return;
   }
@@ -139,22 +163,22 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
   if (ch == '\b') {
     if (app->cursor_col > 0) {
       char *line = app->lines[app->cursor_line];
-      int len = (int)ed_strlen(line);
+      int len = (int)kstrlen(line);
       for (int i = app->cursor_col - 1; i < len; i++) line[i] = line[i + 1];
       app->cursor_col--;
       app->modified = 1;
     } else if (app->cursor_line > 0) {
       /* Merge with previous line */
-      int prev_len = (int)ed_strlen(app->lines[app->cursor_line - 1]);
+      int prev_len = (int)kstrlen(app->lines[app->cursor_line - 1]);
       char *prev = app->lines[app->cursor_line - 1];
       char *cur = app->lines[app->cursor_line];
-      int cur_len = (int)ed_strlen(cur);
+      int cur_len = (int)kstrlen(cur);
       if (prev_len + cur_len < EDITOR_LINE_MAX - 1) {
         for (int i = 0; i < cur_len; i++) prev[prev_len + i] = cur[i];
         prev[prev_len + cur_len] = '\0';
       }
       for (int i = app->cursor_line; i < app->line_count - 1; i++)
-        ed_strcpy(app->lines[i], app->lines[i + 1], EDITOR_LINE_MAX);
+        kstrcpy(app->lines[i], EDITOR_LINE_MAX, app->lines[i + 1]);
       app->line_count--;
       app->cursor_line--;
       app->cursor_col = prev_len;
@@ -166,11 +190,11 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
   if (ch == '\n' || ch == '\r') {
     if (app->line_count < EDITOR_MAX_LINES) {
       for (int i = app->line_count; i > app->cursor_line + 1; i--)
-        ed_strcpy(app->lines[i], app->lines[i - 1], EDITOR_LINE_MAX);
+        kstrcpy(app->lines[i], EDITOR_LINE_MAX, app->lines[i - 1]);
       app->line_count++;
       char *cur = app->lines[app->cursor_line];
       int col = app->cursor_col;
-      ed_strcpy(app->lines[app->cursor_line + 1], cur + col, EDITOR_LINE_MAX);
+      kstrcpy(app->lines[app->cursor_line + 1], EDITOR_LINE_MAX, cur + col);
       cur[col] = '\0';
       app->cursor_line++;
       app->cursor_col = 0;
@@ -181,7 +205,7 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
 
   if (ch >= 32 && ch < 127) {
     char *line = app->lines[app->cursor_line];
-    int len = (int)ed_strlen(line);
+    int len = (int)kstrlen(line);
     if (len < EDITOR_LINE_MAX - 1) {
       for (int i = len; i >= app->cursor_col; i--) line[i + 1] = line[i];
       line[app->cursor_col] = ch;
@@ -238,5 +262,34 @@ void text_editor_paint(struct text_editor_app *app) {
       }
     }
     y += (int32_t)gh;
+  }
+
+  /* Status bar: Ln X, Col Y */
+  {
+    int32_t bar_y = (int32_t)s->height - (int32_t)gh - 4;
+    /* Background strip */
+    for (uint32_t sx = 0; sx < s->width; sx++) {
+      uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)bar_y * s->pitch);
+      line[sx] = theme->terminal_bg;
+    }
+    char status[64];
+    int sp = 0;
+    status[sp++] = 'L'; status[sp++] = 'n'; status[sp++] = ' ';
+    { int v = app->cursor_line + 1; char t[8]; int tp = 0;
+      if (v == 0) t[tp++] = '0';
+      else { while (v > 0) { t[tp++] = '0' + (v % 10); v /= 10; } }
+      for (int i = tp - 1; i >= 0; i--) status[sp++] = t[i]; }
+    status[sp++] = ','; status[sp++] = ' ';
+    status[sp++] = 'C'; status[sp++] = 'o'; status[sp++] = 'l'; status[sp++] = ' ';
+    { int v = app->cursor_col + 1; char t[8]; int tp = 0;
+      if (v == 0) t[tp++] = '0';
+      else { while (v > 0) { t[tp++] = '0' + (v % 10); v /= 10; } }
+      for (int i = tp - 1; i >= 0; i--) status[sp++] = t[i]; }
+    status[sp] = '\0';
+    font_draw_string(s, f, 4, bar_y, status, theme->text_muted);
+
+    if (app->modified)
+      font_draw_string(s, f, (int32_t)(s->width - 72), bar_y, "[Ctrl+S]",
+                       theme->accent_alt);
   }
 }

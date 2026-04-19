@@ -3,7 +3,7 @@
  * Implements basic TX (4 descriptors) and RX (ring buffer). */
 #include "drivers/net/rtl8139.h"
 #include "drivers/io.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,7 +67,7 @@ static void rtl_copy(void *dst, const void *src, size_t len) {
 }
 
 static uint8_t rtl_r8(uint16_t off) { return inb(g_rtl.io_base + off); }
-static uint16_t rtl_r16(uint16_t off) { return inw(g_rtl.io_base + off); }
+static uint16_t __attribute__((unused)) rtl_r16(uint16_t off) { return inw(g_rtl.io_base + off); }
 static uint32_t rtl_r32(uint16_t off) { return inl(g_rtl.io_base + off); }
 static void rtl_w8(uint16_t off, uint8_t v) { outb(g_rtl.io_base + off, v); }
 static void rtl_w16(uint16_t off, uint16_t v) { outw(g_rtl.io_base + off, v); }

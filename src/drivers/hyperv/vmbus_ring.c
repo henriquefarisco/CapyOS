@@ -1,3 +1,4 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include "vmbus_ring.h"
 
 #include <stdint.h>
@@ -5,8 +6,6 @@
 #include "drivers/hyperv/hyperv.h"
 
 #ifndef UNIT_TEST
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 #endif
 
 struct vmpacket_descriptor {

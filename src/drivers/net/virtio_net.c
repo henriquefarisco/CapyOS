@@ -3,7 +3,7 @@
  * Supports VirtIO device IDs 0x1000 (legacy) and 0x1041 (modern/transitional). */
 #include "drivers/net/virtio_net.h"
 #include "drivers/io.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>

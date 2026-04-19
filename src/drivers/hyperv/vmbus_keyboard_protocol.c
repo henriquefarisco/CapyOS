@@ -1,3 +1,4 @@
+#include "arch/x86_64/framebuffer_console.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -8,8 +9,6 @@
 #include "vmbus_keyboard_internal.h"
 
 #ifndef UNIT_TEST
-extern void fbcon_print(const char *s);
-extern void fbcon_print_hex(uint64_t val);
 #endif
 
 static void protocol_memcpy(void *dst, const void *src, uint32_t len) {

@@ -8,7 +8,11 @@
 #include <stdint.h>
 
 #ifndef KHEAP_SIZE
-#define KHEAP_SIZE (4 * 1024 * 1024) /* 4 MiB for 64-bit kernel */
+#define KHEAP_SIZE (16 * 1024 * 1024) /* 16 MiB: 4 MiB ficou insuficiente para
+                                         login + desktop + TLS/browser. A
+                                         limpeza de BSS agora e feita no
+                                         proprio kernel, entao essa faixa cabe
+                                         com folga na janela reservada. */
 #endif
 
 /* Block header structure */
@@ -43,7 +47,7 @@ void kinit(void) {
   free_list->magic = HEADER_MAGIC;
   kmem_oom_warning = 0;
   g_kmem_initialized = 1;
-  K_INFO("kmem", "Heap initialized (4 MiB, free-list allocator)");
+  K_INFO("kmem", "Heap initialized (free-list allocator)");
 }
 
 void *kalloc(size_t size) {

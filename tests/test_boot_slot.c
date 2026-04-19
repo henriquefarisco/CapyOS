@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "core/boot_slot.h"
+#include "boot/boot_slot.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;

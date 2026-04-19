@@ -5,6 +5,6 @@
 
 int netvsc_vmbus_offer_cached(struct vmbus_offer_info *out);
 int netvsc_vmbus_offer_refresh_connected(struct vmbus_offer_info *out);
-struct netvsc_backend_ops netvsc_vmbus_ops(void);
+void netvsc_vmbus_ops_init(struct netvsc_backend_ops *out);
 
 #endif /* DRIVERS_NET_NETVSC_VMBUS_H */

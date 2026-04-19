@@ -1,7 +1,7 @@
 #ifndef ARCH_X86_64_KERNEL_RUNTIME_CONTROL_H
 #define ARCH_X86_64_KERNEL_RUNTIME_CONTROL_H
 
-#include "core/update_agent.h"
+#include "services/update_agent.h"
 
 #include <stdint.h>
 

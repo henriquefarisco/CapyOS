@@ -13,6 +13,8 @@ def complete_iso_install(
     session: SmokeSession,
     timeout: float,
     keyboard_layout: str,
+    user: str = "admin",
+    password: str = "admin",
 ) -> None:
     mk = session.marker()
     session.wait_for("Press 'I' to start", timeout=timeout * 4, start_at=mk)
@@ -29,12 +31,59 @@ def complete_iso_install(
     else:
         session.send_line("")
 
+    # Hostname
+    mk = session.marker()
+    session.wait_for("Hostname [capyos-node]:", timeout=timeout, start_at=mk)
+    session.send_line("smoke-node")
+
+    # Theme
+    mk = session.marker()
+    session.wait_for_any(["Theme [1]:", "Tema [1]:"], timeout=timeout, start_at=mk)
+    session.send_line("")
+
+    # Splash
+    mk = session.marker()
+    session.wait_for_any(
+        ["Enable animated splash? [Y/n]:", "Ativar splash animado? [S/n]:",
+         "Activar splash animado? [S/n]:"],
+        timeout=timeout, start_at=mk,
+    )
+    session.send_line("n")
+
+    # Admin user
+    mk = session.marker()
+    session.wait_for_any(
+        ["Administrator user [admin]:", "Usuario administrador [admin]:"],
+        timeout=timeout, start_at=mk,
+    )
+    session.send_line("" if user == "admin" else user)
+
+    # Admin password
+    mk = session.marker()
+    session.wait_for_any(
+        ["Password for", "Senha para", "Contrasena para"],
+        timeout=timeout, start_at=mk,
+    )
+    session.send_line(password)
+
+    mk = session.marker()
+    session.wait_for_any(
+        ["Confirm password:", "Confirme a senha:", "Confirmar contrasena:"],
+        timeout=timeout, start_at=mk,
+    )
+    session.send_line(password)
+
+    # Volume key
     mk = session.marker()
     session.wait_for("Press ENTER to continue...", timeout=timeout, start_at=mk)
     session.send_line("")
 
     mk = session.marker()
-    session.wait_for("Confirm installation? [Y/n]:", timeout=timeout, start_at=mk)
+    session.wait_for_any(
+        ["Confirm installation? [Y/n]:", "Confirmar instalacao? [S/n]:",
+         "Confirmar instalacion? [S/n]:"],
+        timeout=timeout, start_at=mk,
+    )
     session.send_line("")
 
     mk = session.marker()
@@ -58,30 +107,75 @@ def maybe_run_first_boot_setup(
     user: str,
     password: str,
     keyboard_layout: str,
+    volume_key: str | None = None,
 ) -> None:
+    """Wait for first boot to complete.
+
+    When the installer has provisioned all config (hostname, theme, admin,
+    etc.), the first boot runs a silent provisioning path and goes straight
+    to the login prompt.  If for some reason the interactive wizard appears
+    instead, handle it as a fallback.
+    """
     mk = session.marker()
+    # The silent provisioner prints this, then goes to login.
+    # The interactive fallback would show layout prompts instead.
+    silent_markers = [
+        "Provisionamento automatico",
+        "Usuario:",
+        "User:",
+        "Usuario: ",
+        "User: ",
+    ]
+    volume_key_prompts = [
+        "Chave do volume:",
+        "Volume key:",
+    ]
+    runtime_recovery_markers = [
+        "[setup] Autocorrecao",
+        "Autocorrecao: retentando preparacao do runtime...",
+    ]
     legacy_layout_prompts = [
         "Keyboard layout [us]:",
         "Layout do teclado [us]:",
-        "Escolha layout [us]:",
-        "Layout del teclado [us]:",
-    ]
-    layout_menu_titles = [
         "Available keyboard layouts:",
         "Layouts de teclado disponiveis:",
-        "Layouts de teclado disponibles:",
     ]
     found = session.wait_for_any(
-        legacy_layout_prompts
-        + layout_menu_titles
-        + ["Usuario:", "User:", "Usuario: ", "User: "],
+        volume_key_prompts + runtime_recovery_markers + silent_markers + legacy_layout_prompts,
         timeout=timeout * 4,
         start_at=mk,
     )
+    if found in runtime_recovery_markers:
+        mk = session.marker()
+        found = session.wait_for_any(
+            volume_key_prompts + silent_markers + legacy_layout_prompts,
+            timeout=timeout * 4,
+            start_at=mk,
+        )
+    if found in volume_key_prompts:
+        if not volume_key:
+            raise RuntimeError("first boot requested volume key, but no key was provided to the smoke flow")
+        session.send_line(volume_key)
+        mk = session.marker()
+        found = session.wait_for_any(
+            silent_markers + legacy_layout_prompts,
+            timeout=timeout * 4,
+            start_at=mk,
+        )
     if found in ("Usuario:", "User:", "Usuario: ", "User: "):
         return
+    if found == "Provisionamento automatico":
+        # Silent provisioning in progress — just wait for the login prompt
+        mk = session.marker()
+        session.wait_for_any(
+            ["Usuario:", "User:", "Usuario: ", "User: "],
+            timeout=timeout * 4,
+            start_at=mk,
+        )
+        return
 
-    if found in layout_menu_titles:
+    # Fallback: interactive wizard (e.g. RAM boot without installer config)
+    if found in ("Available keyboard layouts:", "Layouts de teclado disponiveis:"):
         session.send_text("2" if keyboard_layout == "br-abnt2" else "1", newline=False)
     else:
         session.send_line("" if keyboard_layout == "us" else keyboard_layout)
@@ -171,7 +265,13 @@ def maybe_run_first_boot_setup(
         return
 
 
-def login(session: SmokeSession, timeout: float, user: str, password: str) -> None:
+def login(
+    session: SmokeSession,
+    timeout: float,
+    user: str,
+    password: str,
+    allow_desktop: bool = False,
+) -> str:
     if "User:" not in session.tail(1600) and "Usuario:" not in session.tail(1600):
         mk = session.marker()
         session.wait_for_any(["Usuario:", "User:"], timeout=timeout, start_at=mk)
@@ -186,7 +286,15 @@ def login(session: SmokeSession, timeout: float, user: str, password: str) -> No
         timeout=timeout,
         start_at=mk,
     )
+    if allow_desktop:
+        found = session.wait_for_any(
+            [f"{user}@smoke-node>~> ", "[desktop] session started"],
+            timeout=timeout,
+            start_at=mk,
+        )
+        return "desktop" if found == "[desktop] session started" else "shell"
     session.wait_for(f"{user}@smoke-node>~> ", timeout=timeout, start_at=mk)
+    return "shell"
 
 
 def assert_shell_identity(session: SmokeSession, timeout: float, user: str) -> None:

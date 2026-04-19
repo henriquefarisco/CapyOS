@@ -4,7 +4,7 @@
 #include "drivers/console/fbcon.h"
 #include "drivers/serial/com1.h"
 #include "gui/font8x8.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>

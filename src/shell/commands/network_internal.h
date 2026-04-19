@@ -4,7 +4,7 @@
 #include "shell/commands.h"
 #include "shell/core.h"
 
-#include "core/localization.h"
+#include "lang/localization.h"
 #include "core/system_init.h"
 
 #if defined(__x86_64__)

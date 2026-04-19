@@ -4,12 +4,12 @@
 #include "shell/commands.h"
 #include "shell/commands_extended.h"
 
-#include "core/localization.h"
-#include "core/klog.h"
+#include "lang/localization.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"
-#include "core/user.h"
+#include "auth/user.h"
 #include "fs/vfs.h"
 #include "drivers/video/vga.h"
 

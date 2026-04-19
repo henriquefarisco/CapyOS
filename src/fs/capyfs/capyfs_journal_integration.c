@@ -13,7 +13,7 @@
 #include "fs/journal.h"
 #include "fs/block.h"
 #include "fs/buffer.h"
-#include "core/klog.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 
 #include <stddef.h>
