@@ -44,8 +44,8 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
   sum += src_ip & 0xFFFF;
   sum += (dst_ip >> 16) & 0xFFFF;
   sum += dst_ip & 0xFFFF;
-  sum += tcp_htons(6);
-  sum += tcp_htons((uint16_t)tcp_len);
+  sum += 6;                        /* protocol = IPPROTO_TCP; already a big-endian word value */
+  sum += (uint16_t)tcp_len;       /* length in host order == big-endian word value for sums */
   for (size_t i = 0; i + 1 < tcp_len; i += 2) {
     sum += ((uint32_t)tcp_data[i] << 8) | tcp_data[i + 1];
   }
@@ -239,6 +239,14 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
   }
   if (!c) return;
 
+  /* RST tears down the connection immediately in any state. */
+  if (flags & TCP_FLAG_RST) {
+    c->state = TCP_STATE_CLOSED;
+    c->active = 0;
+    tcp_global_stats.resets++;
+    return;
+  }
+
   switch (c->state) {
   case TCP_STATE_SYN_SENT:
     if ((flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK)) {
@@ -277,7 +285,14 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
       size_t data_len = len - data_off;
       const uint8_t *payload = segment + data_off;
       if (c->recv_buf && c->recv_len + data_len <= c->recv_cap) {
-        tcp_memcpy(c->recv_buf + c->recv_len, payload, data_len);
+        /* Compact if the logical write pointer (recv_head + recv_len) would
+           exceed the buffer end; moving data to index 0 keeps recv_head==0. */
+        if (c->recv_head > 0 &&
+            c->recv_head + c->recv_len + data_len > c->recv_cap) {
+          tcp_memcpy(c->recv_buf, c->recv_buf + c->recv_head, c->recv_len);
+          c->recv_head = 0;
+        }
+        tcp_memcpy(c->recv_buf + c->recv_head + c->recv_len, payload, data_len);
         c->recv_len += (uint32_t)data_len;
         c->rcv_nxt += (uint32_t)data_len;
       }
@@ -346,6 +361,20 @@ void tcp_stats_get(struct tcp_stats *out) {
 int tcp_connection_state(int conn_id) {
   if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return TCP_STATE_CLOSED;
   return tcp_conns[conn_id].state;
+}
+
+int tcp_retransmit_syn(int conn_id) {
+  if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
+  struct tcp_connection *c = &tcp_conns[conn_id];
+  if (!c->active || c->state != TCP_STATE_SYN_SENT) return -1;
+  /* tcp_send_segment bumped snd_nxt to ISS+1 on the first SYN; restore so the
+     retransmit carries the same SEQ, then unbump again after the resend. */
+  uint32_t saved = c->snd_nxt;
+  c->snd_nxt = c->iss;
+  int r = tcp_send_segment(c, TCP_FLAG_SYN, NULL, 0);
+  c->snd_nxt = saved;
+  if (r == 0) tcp_global_stats.retransmits++;
+  return r;
 }
 
 size_t tcp_available(int conn_id) {

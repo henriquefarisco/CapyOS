@@ -26,6 +26,7 @@
 #include "apps/task_manager.h"
 #include "apps/settings.h"
 #include "apps/html_viewer.h"
+#include "security/tls.h"
 #include "arch/x86_64/framebuffer_console.h"
 #include "drivers/pcie.h"
 #include <stddef.h>
@@ -228,6 +229,27 @@ static int cmd_print_dns_cache(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
+static int cmd_print_last_tls(struct shell_context *ctx, int argc, char **argv) {
+  struct tls_security_info info;
+  (void)ctx; (void)argc; (void)argv;
+
+  fbcon_print("TLS last session:\n");
+  fbcon_print("  state: "); fbcon_print(tls_state_name(tls_last_state())); fbcon_putc('\n');
+  fbcon_print("  error: "); fbcon_print(tls_alert_name(tls_last_error())); fbcon_putc('\n');
+  if (tls_get_last_security_info(&info) != 0 || info.protocol_version == 0) {
+    fbcon_print("  no negotiated session data\n");
+    return 0;
+  }
+  fbcon_print("  version: "); fbcon_print(tls_version_name(info.protocol_version)); fbcon_putc('\n');
+  fbcon_print("  cipher:  "); fbcon_print(tls_cipher_suite_name(info.cipher_suite)); fbcon_putc('\n');
+  fbcon_print("  anchors: "); print_u32(info.trust_anchor_count); fbcon_putc('\n');
+  fbcon_print("  peer verified: "); fbcon_print(info.peer_verified ? "yes" : "no"); fbcon_putc('\n');
+  fbcon_print("  hostname ok:   "); fbcon_print(info.hostname_validated ? "yes" : "no"); fbcon_putc('\n');
+  fbcon_print("  custom anchor: "); fbcon_print(info.custom_anchor_loaded ? "yes" : "no"); fbcon_putc('\n');
+  fbcon_print("  alpn: "); fbcon_print(info.alpn[0] ? info.alpn : "(none)"); fbcon_putc('\n');
+  return 0;
+}
+
 /* --- print-boot-slot: show A/B slot status --- */
 static int cmd_print_boot_slot(struct shell_context *ctx, int argc, char **argv) {
   (void)ctx; (void)argc; (void)argv;
@@ -299,7 +321,7 @@ static int cmd_open_browser(struct shell_context *c, int a, char **v) {
   html_viewer_open(); return 0;
 }
 
-#define EXT_CMD_COUNT 23
+#define EXT_CMD_COUNT 24
 #define EXT_EARLY_COUNT 6
 
 static struct shell_command g_extended_commands[EXT_CMD_COUNT];
@@ -333,6 +355,7 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "print-boot-times", cmd_print_boot_times);
   set_cmd(&g_extended_commands[i++], "print-sockets",    cmd_print_sockets);
   set_cmd(&g_extended_commands[i++], "print-dns-cache",  cmd_print_dns_cache);
+  set_cmd(&g_extended_commands[i++], "print-last-tls",   cmd_print_last_tls);
   set_cmd(&g_extended_commands[i++], "print-boot-slot",  cmd_print_boot_slot);
   set_cmd(&g_extended_commands[i++], "auth-status",      cmd_auth_status);
   set_cmd(&g_extended_commands[i++], "scheduler-stats",  cmd_scheduler_stats);

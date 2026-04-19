@@ -1,6 +1,7 @@
 #include "../internal/stack_ipv4.h"
 
 #include "../internal/stack_utils.h"
+#include "net/tcp.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -112,8 +113,8 @@ static int handle_udp(struct net_stack_ipv4_runtime *runtime,
 }
 
 static int handle_tcp(struct net_stack_ipv4_runtime *runtime,
+                      uint32_t src_ip, uint32_t dst_ip,
                       const uint8_t *payload, size_t len) {
-  (void)payload;
   if (!runtime_ready(runtime) || len < sizeof(struct net_tcp_hdr)) {
     if (runtime && runtime->stats) {
       runtime->stats->frames_drop++;
@@ -121,6 +122,7 @@ static int handle_tcp(struct net_stack_ipv4_runtime *runtime,
     return -1;
   }
   runtime->stats->tcp_rx++;
+  tcp_receive_segment(src_ip, dst_ip, payload, len);
   return 0;
 }
 
@@ -241,7 +243,7 @@ int net_stack_ipv4_handle(struct net_stack_ipv4_runtime *runtime,
   case NET_L4_PROTO_UDP:
     return handle_udp(runtime, l4_payload, l4_len);
   case NET_L4_PROTO_TCP:
-    return handle_tcp(runtime, l4_payload, l4_len);
+    return handle_tcp(runtime, src_ip, dst_ip, l4_payload, l4_len);
   default:
     runtime->stats->frames_drop++;
     return -1;

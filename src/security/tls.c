@@ -19,7 +19,13 @@ struct tls_context {
   uint16_t cipher_suite;
   uint32_t trust_anchor_count;
   int peer_verified;
+  int hostname_validated;
   char selected_alpn[TLS_ALPN_MAX_LEN];
+  br_x509_trust_anchor custom_anchor;
+  unsigned char *custom_anchor_dn;
+  unsigned char *custom_anchor_key_a;
+  unsigned char *custom_anchor_key_b;
+  int custom_anchor_loaded;
   br_ssl_client_context client;
   br_x509_minimal_context x509;
   br_sslio_context io;
@@ -28,6 +34,7 @@ struct tls_context {
 
 static enum tls_state g_tls_last_state = TLS_STATE_INIT;
 static int g_tls_last_error = 0;
+static struct tls_security_info g_tls_last_info;
 static const char *g_tls_alpn_protocols[] = { "http/1.1" };
 
 static void tls_memzero(void *ptr, size_t len) {
@@ -61,7 +68,24 @@ static void tls_reset_security_info(struct tls_context *ctx) {
   ctx->cipher_suite = 0;
   ctx->trust_anchor_count = 0;
   ctx->peer_verified = 0;
+  ctx->hostname_validated = 0;
   ctx->selected_alpn[0] = '\0';
+}
+
+static void tls_reset_last_security_info(void) {
+  tls_memzero(&g_tls_last_info, sizeof(g_tls_last_info));
+}
+
+static void tls_publish_security_info(struct tls_context *ctx) {
+  if (!ctx) return;
+  g_tls_last_info.protocol_version = ctx->negotiated_version;
+  g_tls_last_info.cipher_suite = ctx->cipher_suite;
+  g_tls_last_info.trust_anchor_count = ctx->trust_anchor_count;
+  g_tls_last_info.peer_verified = ctx->peer_verified;
+  g_tls_last_info.hostname_validated = ctx->hostname_validated;
+  g_tls_last_info.custom_anchor_loaded = ctx->custom_anchor_loaded;
+  tls_copy_string(g_tls_last_info.alpn, sizeof(g_tls_last_info.alpn),
+                  ctx->selected_alpn);
 }
 
 static void tls_record_success(struct tls_context *ctx, enum tls_state state) {
@@ -70,6 +94,7 @@ static void tls_record_success(struct tls_context *ctx, enum tls_state state) {
   if (ctx) {
     ctx->state = state;
     ctx->error_code = 0;
+    tls_publish_security_info(ctx);
   }
 }
 
@@ -79,6 +104,7 @@ static void tls_record_failure(struct tls_context *ctx, int error) {
   if (ctx) {
     ctx->state = TLS_STATE_ERROR;
     ctx->error_code = error;
+    tls_publish_security_info(ctx);
   }
 }
 
@@ -124,12 +150,144 @@ static void tls_capture_session(struct tls_context *ctx) {
   br_ssl_engine_get_session_parameters(&ctx->client.eng, &session);
   ctx->negotiated_version = session.version;
   ctx->cipher_suite = session.cipher_suite;
-  ctx->trust_anchor_count = (uint32_t)capyos_tls_trust_anchor_count();
+  ctx->trust_anchor_count = ctx->custom_anchor_loaded ? 1u
+                              : (uint32_t)capyos_tls_trust_anchor_count();
   ctx->peer_verified = 1;
+  ctx->hostname_validated = ctx->verify_peer ? 1 : 0;
 
   selected_alpn = br_ssl_engine_get_selected_protocol(&ctx->client.eng);
   tls_copy_string(ctx->selected_alpn, sizeof(ctx->selected_alpn), selected_alpn);
   tls_memzero(session.master_secret, sizeof(session.master_secret));
+  tls_publish_security_info(ctx);
+}
+
+struct tls_dn_capture {
+  unsigned char *buf;
+  size_t len;
+  size_t cap;
+  int overflow;
+};
+
+static void tls_capture_dn_append(void *capture_ctx, const void *buf, size_t len) {
+  struct tls_dn_capture *capture = (struct tls_dn_capture *)capture_ctx;
+  const unsigned char *src = (const unsigned char *)buf;
+  if (!capture || !src || len == 0) return;
+  if (capture->len + len > capture->cap) {
+    capture->overflow = 1;
+    return;
+  }
+  for (size_t i = 0; i < len; i++) {
+    capture->buf[capture->len + i] = src[i];
+  }
+  capture->len += len;
+}
+
+static void tls_free_custom_anchor(struct tls_context *ctx) {
+  if (!ctx) return;
+  if (ctx->custom_anchor_key_b) {
+    kfree(ctx->custom_anchor_key_b);
+    ctx->custom_anchor_key_b = NULL;
+  }
+  if (ctx->custom_anchor_key_a) {
+    kfree(ctx->custom_anchor_key_a);
+    ctx->custom_anchor_key_a = NULL;
+  }
+  if (ctx->custom_anchor_dn) {
+    kfree(ctx->custom_anchor_dn);
+    ctx->custom_anchor_dn = NULL;
+  }
+  tls_memzero(&ctx->custom_anchor, sizeof(ctx->custom_anchor));
+  ctx->custom_anchor_loaded = 0;
+}
+
+static int tls_load_custom_anchor(struct tls_context *ctx,
+                                  const uint8_t *cert, size_t cert_len) {
+  br_x509_decoder_context decoder;
+  struct tls_dn_capture capture;
+  br_x509_pkey *pkey;
+
+  if (!ctx || !cert || cert_len == 0 || cert_len > TLS_MAX_CERT_SIZE) {
+    return BR_ERR_BAD_PARAM;
+  }
+  if (cert_len > 27 &&
+      cert[0] == '-' && cert[1] == '-' && cert[2] == '-' && cert[3] == '-' &&
+      cert[4] == '-' && cert[5] == 'B') {
+    return BR_ERR_X509_UNSUPPORTED;
+  }
+
+  tls_free_custom_anchor(ctx);
+  capture.buf = (unsigned char *)kmalloc(cert_len);
+  if (!capture.buf) {
+    return BR_ERR_IO;
+  }
+  capture.len = 0;
+  capture.cap = cert_len;
+  capture.overflow = 0;
+
+  br_x509_decoder_init(&decoder, tls_capture_dn_append, &capture);
+  br_x509_decoder_push(&decoder, cert, cert_len);
+  if (capture.overflow || br_x509_decoder_last_error(&decoder) != 0) {
+    kfree(capture.buf);
+    return br_x509_decoder_last_error(&decoder);
+  }
+
+  pkey = br_x509_decoder_get_pkey(&decoder);
+  if (!pkey || capture.len == 0) {
+    kfree(capture.buf);
+    return BR_ERR_X509_TRUNCATED;
+  }
+
+  ctx->custom_anchor_dn = (unsigned char *)kmalloc(capture.len);
+  if (!ctx->custom_anchor_dn) {
+    kfree(capture.buf);
+    return BR_ERR_IO;
+  }
+  for (size_t i = 0; i < capture.len; i++) {
+    ctx->custom_anchor_dn[i] = capture.buf[i];
+  }
+  kfree(capture.buf);
+
+  ctx->custom_anchor.dn.data = ctx->custom_anchor_dn;
+  ctx->custom_anchor.dn.len = capture.len;
+  ctx->custom_anchor.flags = br_x509_decoder_isCA(&decoder) ? BR_X509_TA_CA : 0;
+  ctx->custom_anchor.pkey.key_type = pkey->key_type;
+
+  if (pkey->key_type == BR_KEYTYPE_RSA) {
+    ctx->custom_anchor_key_a = (unsigned char *)kmalloc(pkey->key.rsa.nlen);
+    ctx->custom_anchor_key_b = (unsigned char *)kmalloc(pkey->key.rsa.elen);
+    if (!ctx->custom_anchor_key_a || !ctx->custom_anchor_key_b) {
+      tls_free_custom_anchor(ctx);
+      return BR_ERR_IO;
+    }
+    for (size_t i = 0; i < pkey->key.rsa.nlen; i++) {
+      ctx->custom_anchor_key_a[i] = pkey->key.rsa.n[i];
+    }
+    for (size_t i = 0; i < pkey->key.rsa.elen; i++) {
+      ctx->custom_anchor_key_b[i] = pkey->key.rsa.e[i];
+    }
+    ctx->custom_anchor.pkey.key.rsa.n = ctx->custom_anchor_key_a;
+    ctx->custom_anchor.pkey.key.rsa.nlen = pkey->key.rsa.nlen;
+    ctx->custom_anchor.pkey.key.rsa.e = ctx->custom_anchor_key_b;
+    ctx->custom_anchor.pkey.key.rsa.elen = pkey->key.rsa.elen;
+  } else if (pkey->key_type == BR_KEYTYPE_EC) {
+    ctx->custom_anchor_key_a = (unsigned char *)kmalloc(pkey->key.ec.qlen);
+    if (!ctx->custom_anchor_key_a) {
+      tls_free_custom_anchor(ctx);
+      return BR_ERR_IO;
+    }
+    for (size_t i = 0; i < pkey->key.ec.qlen; i++) {
+      ctx->custom_anchor_key_a[i] = pkey->key.ec.q[i];
+    }
+    ctx->custom_anchor.pkey.key.ec.curve = pkey->key.ec.curve;
+    ctx->custom_anchor.pkey.key.ec.q = ctx->custom_anchor_key_a;
+    ctx->custom_anchor.pkey.key.ec.qlen = pkey->key.ec.qlen;
+  } else {
+    tls_free_custom_anchor(ctx);
+    return BR_ERR_X509_WRONG_KEY_TYPE;
+  }
+
+  ctx->custom_anchor_loaded = 1;
+  return BR_ERR_OK;
 }
 
 static int tls_socket_read(void *read_context, unsigned char *data, size_t len) {
@@ -294,6 +452,7 @@ const char *tls_alert_name(int alert) {
 int tls_init(void) {
   g_tls_last_state = TLS_STATE_INIT;
   g_tls_last_error = 0;
+  tls_reset_last_security_info();
   return 0;
 }
 
@@ -325,8 +484,10 @@ int tls_handshake(struct tls_context *ctx) {
 struct tls_context *tls_connect(int socket_fd, const char *hostname,
                                 const struct tls_config *config) {
   struct tls_context *ctx;
+  const br_x509_trust_anchor *trust_anchors;
+  size_t trust_anchor_count;
 
-  if (socket_fd < 0) {
+  if (socket_fd < 0 || !hostname || !hostname[0]) {
     tls_record_failure(NULL, BR_ERR_BAD_PARAM);
     return NULL;
   }
@@ -350,20 +511,41 @@ struct tls_context *tls_connect(int socket_fd, const char *hostname,
   ctx->verify_peer = config ? config->verify_peer : 1;
   ctx->timeout_ms = (config && config->timeout_ms) ? config->timeout_ms : 10000u;
   tls_reset_security_info(ctx);
-  (void)config;
+  tls_reset_last_security_info();
+  if (ctx->timeout_ms > 0) {
+    (void)socket_setsockopt(ctx->socket_fd, SOL_SOCKET, SO_RCVTIMEO,
+                            &ctx->timeout_ms, sizeof(ctx->timeout_ms));
+    (void)socket_setsockopt(ctx->socket_fd, SOL_SOCKET, SO_SNDTIMEO,
+                            &ctx->timeout_ms, sizeof(ctx->timeout_ms));
+  }
+  if (config && ((config->ca_cert && config->ca_cert_len == 0) ||
+                 (!config->ca_cert && config->ca_cert_len > 0))) {
+    tls_record_failure(ctx, BR_ERR_BAD_PARAM);
+    tls_free(ctx);
+    return NULL;
+  }
+  trust_anchors = capyos_tls_trust_anchors();
+  trust_anchor_count = capyos_tls_trust_anchor_count();
+  if (config && config->ca_cert && config->ca_cert_len > 0) {
+    int anchor_rc = tls_load_custom_anchor(ctx, config->ca_cert, config->ca_cert_len);
+    if (anchor_rc != BR_ERR_OK) {
+      tls_record_failure(ctx, anchor_rc);
+      tls_free(ctx);
+      return NULL;
+    }
+    trust_anchors = &ctx->custom_anchor;
+    trust_anchor_count = 1;
+  }
 
-  br_ssl_client_init_full(&ctx->client, &ctx->x509,
-                          capyos_tls_trust_anchors(),
-                          capyos_tls_trust_anchor_count());
+  br_ssl_client_init_full(&ctx->client, &ctx->x509, trust_anchors, trust_anchor_count);
   tls_set_validation_time(ctx);
   br_ssl_engine_set_buffer(&ctx->client.eng, ctx->iobuf, BR_SSL_BUFSIZE_BIDI, 1);
   br_ssl_engine_set_versions(&ctx->client.eng, BR_TLS12, BR_TLS12);
   br_ssl_engine_set_protocol_names(&ctx->client.eng,
                                    g_tls_alpn_protocols,
                                    sizeof(g_tls_alpn_protocols) / sizeof(g_tls_alpn_protocols[0]));
-  br_ssl_engine_add_flags(&ctx->client.eng, BR_OPT_FAIL_ON_ALPN_MISMATCH);
   tls_seed_engine(ctx);
-  if (!br_ssl_client_reset(&ctx->client, hostname, 0)) {
+  if (!br_ssl_client_reset(&ctx->client, ctx->verify_peer ? hostname : NULL, 0)) {
     tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_NO_RANDOM));
     tls_free(ctx);
     return NULL;
@@ -440,6 +622,7 @@ void tls_free(struct tls_context *ctx) {
   if (!ctx) {
     return;
   }
+  tls_free_custom_anchor(ctx);
   if (ctx->iobuf) {
     kfree(ctx->iobuf);
     ctx->iobuf = NULL;
@@ -459,6 +642,14 @@ int tls_get_security_info(struct tls_context *ctx, struct tls_security_info *inf
   info->cipher_suite = ctx->cipher_suite;
   info->trust_anchor_count = ctx->trust_anchor_count;
   info->peer_verified = ctx->peer_verified;
+  info->hostname_validated = ctx->hostname_validated;
+  info->custom_anchor_loaded = ctx->custom_anchor_loaded;
   tls_copy_string(info->alpn, sizeof(info->alpn), ctx->selected_alpn);
+  return 0;
+}
+
+int tls_get_last_security_info(struct tls_security_info *info) {
+  if (!info) return -1;
+  *info = g_tls_last_info;
   return 0;
 }

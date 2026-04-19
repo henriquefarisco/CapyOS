@@ -30,16 +30,23 @@ enum html_node_type {
   HTML_NODE_TAG_BODY,
   HTML_NODE_TAG_HTML,
   HTML_NODE_TAG_HEAD,
-  HTML_NODE_TAG_TITLE
+  HTML_NODE_TAG_TITLE,
+  HTML_NODE_TAG_INPUT,
+  HTML_NODE_TAG_BUTTON
 };
 
 struct html_node {
   enum html_node_type type;
   char text[HTML_TEXT_MAX];
   char href[HTML_URL_MAX];
+  char name[HTML_COOKIE_NAME_MAX];
   uint32_t color;
   uint32_t font_size;
   int bold;
+  uint8_t form_method;
+  uint8_t input_type;
+  uint8_t hidden;
+  uint8_t reserved;
 };
 
 struct html_document {
@@ -66,6 +73,7 @@ struct html_viewer_app {
   int url_editing;
   int url_cursor;
   int content_height;
+  int focused_node_index;
   struct html_cookie cookies[HTML_MAX_COOKIES];
   uint32_t cookie_count;
 };

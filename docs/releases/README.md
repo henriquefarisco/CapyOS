@@ -4,6 +4,9 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.0+20260419.md`
+  - correcao critica do checksum TCP, retransmissao de SYN, redirect HTTP,
+    diagnostico e UX do `net-fetch` e do navegador HTML interno
 - `capyos-0.8.0-alpha.0+20260411.md`
   - consolidacao em `develop` com desktop x64 estabilizado, trilha 32-bit removida,
     ampliacao de drivers e revisao da documentacao

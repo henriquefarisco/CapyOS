@@ -48,8 +48,15 @@ uint16_t net_stack_checksum16(const uint8_t *data, size_t len) {
   return (uint16_t)(~sum);
 }
 
+static void (*g_net_yield_hook)(void) = (void *)0;
+
+void net_stack_set_yield_hook(void (*hook)(void)) {
+  g_net_yield_hook = hook;
+}
+
 void net_stack_delay_approx_1ms(void) {
-  for (volatile uint32_t i = 0; i < 60000u; ++i) {
+  if (g_net_yield_hook) g_net_yield_hook();
+  for (volatile uint32_t i = 0; i < 6000u; ++i) {
     __asm__ volatile("pause");
   }
 }

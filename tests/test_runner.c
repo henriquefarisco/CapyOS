@@ -20,6 +20,7 @@ int run_update_agent_tests(void);
 int run_gen_boot_config_tests(void);
 int run_user_home_tests(void);
 int run_html_viewer_tests(void);
+int run_http_encoding_tests(void);
 int run_net_dns_tests(void);
 int run_net_probe_tests(void);
 int run_hyperv_runtime_tests(void);
@@ -66,6 +67,7 @@ int main(void) {
     failures += run_gen_boot_config_tests();
     failures += run_user_home_tests();
     failures += run_html_viewer_tests();
+    failures += run_http_encoding_tests();
     failures += run_net_dns_tests();
     failures += run_net_probe_tests();
     failures += run_hyperv_runtime_tests();

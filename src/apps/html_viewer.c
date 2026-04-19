@@ -21,8 +21,24 @@ static void html_viewer_load_text_document(struct html_viewer_app *app,
                                            const char *text,
                                            size_t len,
                                            uint32_t color);
+static void html_viewer_request_internal(struct html_viewer_app *app,
+                                         const char *url,
+                                         enum http_method method,
+                                         const uint8_t *body,
+                                         size_t body_len,
+                                         int depth);
+static void html_viewer_submit_form(struct html_viewer_app *app, int node_index);
 
 enum { HTML_VIEWER_HTTP_ERR_TLS = 6 };
+enum { HTML_FORM_METHOD_GET = 0, HTML_FORM_METHOD_POST = 1 };
+enum {
+  HTML_INPUT_TYPE_TEXT = 0,
+  HTML_INPUT_TYPE_SEARCH,
+  HTML_INPUT_TYPE_TEXTAREA,
+  HTML_INPUT_TYPE_HIDDEN,
+  HTML_INPUT_TYPE_SUBMIT,
+  HTML_INPUT_TYPE_BUTTON
+};
 
 static int hv_strncmp(const char *a, const char *b, size_t n) {
   for (size_t i = 0; i < n; i++) {
@@ -219,6 +235,43 @@ static int hv_resolve_url(const char *base_url, const char *ref,
   hv_normalize_path(joined, normalized, sizeof(normalized));
   hv_build_absolute_url(out, out_len, use_tls, host, port, normalized);
   return 0;
+}
+
+static uint8_t hv_parse_form_method(const char *method) {
+  return hv_streq_ci(method, "post") ? HTML_FORM_METHOD_POST : HTML_FORM_METHOD_GET;
+}
+
+static int hv_form_action_matches(const struct html_node *a, const struct html_node *b) {
+  if (!a || !b) return 0;
+  if (!a->href[0] && !b->href[0]) return 1;
+  return kstreq(a->href, b->href);
+}
+
+static void hv_urlencode_append_char(char *out, size_t out_len, char ch) {
+  static const char hex[] = "0123456789ABCDEF";
+  char encoded[4];
+  if (hv_is_alnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+    encoded[0] = ch;
+    encoded[1] = '\0';
+  } else if (ch == ' ') {
+    encoded[0] = '+';
+    encoded[1] = '\0';
+  } else {
+    encoded[0] = '%';
+    encoded[1] = hex[((unsigned char)ch >> 4) & 0x0F];
+    encoded[2] = hex[(unsigned char)ch & 0x0F];
+    encoded[3] = '\0';
+  }
+  kbuf_append(out, out_len, encoded);
+}
+
+static void hv_urlencode_append(char *out, size_t out_len, const char *text) {
+  size_t i = 0;
+  if (!out || out_len == 0 || !text) return;
+  while (text[i]) {
+    hv_urlencode_append_char(out, out_len, text[i]);
+    i++;
+  }
 }
 
 static const char *html_viewer_find_header(const struct http_response *resp,
@@ -580,6 +633,68 @@ static struct html_node *html_push_node(struct html_document *doc) {
   return node;
 }
 
+static uint8_t hv_form_input_type(const char *type) {
+  if (hv_streq_ci(type, "search")) return HTML_INPUT_TYPE_SEARCH;
+  if (hv_streq_ci(type, "textarea")) return HTML_INPUT_TYPE_TEXTAREA;
+  if (hv_streq_ci(type, "hidden")) return HTML_INPUT_TYPE_HIDDEN;
+  if (hv_streq_ci(type, "submit")) return HTML_INPUT_TYPE_SUBMIT;
+  if (hv_streq_ci(type, "button")) return HTML_INPUT_TYPE_BUTTON;
+  return HTML_INPUT_TYPE_TEXT;
+}
+
+static int hv_body_looks_html(const uint8_t *body, size_t len) {
+  char sample[257];
+  size_t sample_len = len;
+  if (!body || len == 0) return 0;
+  if (sample_len > 256) sample_len = 256;
+  for (size_t i = 0; i < sample_len; i++) {
+    sample[i] = (char)body[i];
+  }
+  sample[sample_len] = '\0';
+  return hv_contains_ci(sample, "<!doctype html") ||
+         hv_contains_ci(sample, "<html") ||
+         hv_contains_ci(sample, "<body") ||
+         hv_contains_ci(sample, "<head");
+}
+
+static int hv_body_looks_textual(const uint8_t *body, size_t len) {
+  size_t sample_len = len;
+  size_t printable = 0;
+  if (!body || len == 0) return 0;
+  if (sample_len > 1024) sample_len = 1024;
+  for (size_t i = 0; i < sample_len; i++) {
+    uint8_t ch = body[i];
+    if (ch == 0) return 0;
+    if (ch == '\t' || ch == '\n' || ch == '\r' ||
+        (ch >= 32 && ch < 127) || ch >= 128) {
+      printable++;
+    }
+  }
+  return printable * 100 >= sample_len * 85;
+}
+
+static int hv_content_type_is_html(const char *content_type) {
+  return content_type && content_type[0] &&
+         (hv_contains_ci(content_type, "text/html") ||
+          hv_contains_ci(content_type, "application/xhtml+xml"));
+}
+
+static int hv_content_type_is_textual(const char *content_type) {
+  if (!content_type || !content_type[0]) return 0;
+  if (hv_contains_ci(content_type, "text/") ||
+      hv_contains_ci(content_type, "application/json") ||
+      hv_contains_ci(content_type, "application/xml") ||
+      hv_contains_ci(content_type, "text/xml") ||
+      hv_contains_ci(content_type, "+json") ||
+      hv_contains_ci(content_type, "+xml") ||
+      hv_contains_ci(content_type, "application/javascript") ||
+      hv_contains_ci(content_type, "text/javascript") ||
+      hv_contains_ci(content_type, "application/x-javascript")) {
+    return 1;
+  }
+  return 0;
+}
+
 static void hv_cookie_trim(char *text) {
   size_t len = kstrlen(text);
   size_t start = 0;
@@ -775,11 +890,23 @@ static void html_viewer_set_transport_error(struct html_viewer_app *app) {
   message[0] = '\0';
   kstrcpy(message, sizeof(message), http_error_string(err));
   if (err == HTML_VIEWER_HTTP_ERR_TLS) {
+    struct tls_security_info info;
     kbuf_append(message, sizeof(message), " (");
     kbuf_append(message, sizeof(message), tls_state_name(tls_last_state()));
     if (tls_last_error() != 0) {
       kbuf_append(message, sizeof(message), ", ");
       kbuf_append(message, sizeof(message), tls_alert_name(tls_last_error()));
+    }
+    if (tls_get_last_security_info(&info) == 0 && info.protocol_version != 0) {
+      kbuf_append(message, sizeof(message), ", ");
+      kbuf_append(message, sizeof(message), tls_version_name(info.protocol_version));
+      if (info.hostname_validated) {
+        kbuf_append(message, sizeof(message), ", host-ok");
+      }
+      if (info.alpn[0]) {
+        kbuf_append(message, sizeof(message), ", ");
+        kbuf_append(message, sizeof(message), info.alpn);
+      }
     }
     kbuf_append(message, sizeof(message), ")");
   }
@@ -830,7 +957,8 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
       "<html><head><title>About CapyBrowser</title></head><body>"
       "<h1>CapyBrowser</h1>"
       "<p>HTTP/1.1 client with verified HTTPS transport.</p>"
-      "<p>TLS certificate validation, cookies, redirects and basic modern HTML degradation are enabled in this build.</p>"
+      "<p>TLS 1.2 certificate validation, cookies, redirects, gzip/deflate decoding and basic HTML forms are enabled in this build.</p>"
+      "<p>Pages that depend on heavy JavaScript or advanced CSS fall back to simplified document mode.</p>"
       "<a href=\"about:home\">Back to home</a>"
       "</body></html>";
   } else {
@@ -878,6 +1006,48 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   if (!win || !win->user_data) return;
   struct html_viewer_app *app = (struct html_viewer_app *)win->user_data;
   char ch = (keycode < 0x80) ? (char)keycode : 0;
+
+  if (!app->url_editing &&
+      app->focused_node_index >= 0 &&
+      app->focused_node_index < app->doc.node_count) {
+    struct html_node *node = &app->doc.nodes[app->focused_node_index];
+    if (node->type == HTML_NODE_TAG_INPUT && !node->hidden) {
+      if (ch == '\n' || ch == '\r') {
+        if (node->input_type == HTML_INPUT_TYPE_TEXTAREA) {
+          size_t len = kstrlen(node->text);
+          if (len + 1 < sizeof(node->text)) {
+            node->text[len] = '\n';
+            node->text[len + 1] = '\0';
+          }
+          compositor_invalidate(win->id);
+          return;
+        }
+        html_viewer_submit_form(app, app->focused_node_index);
+        compositor_invalidate(win->id);
+        return;
+      }
+      if (ch == 0x1B) {
+        app->focused_node_index = -1;
+        compositor_invalidate(win->id);
+        return;
+      }
+      if (ch == '\b') {
+        size_t len = kstrlen(node->text);
+        if (len > 0) node->text[len - 1] = '\0';
+        compositor_invalidate(win->id);
+        return;
+      }
+      if (ch >= 32 && ch < 127) {
+        size_t len = kstrlen(node->text);
+        if (len + 1 < sizeof(node->text)) {
+          node->text[len] = ch;
+          node->text[len + 1] = '\0';
+        }
+        compositor_invalidate(win->id);
+        return;
+      }
+    }
+  }
 
   if (!app->url_editing) {
     if (ch >= 32 && ch < 127) {
@@ -1038,6 +1208,8 @@ static uint32_t html_viewer_node_color(const struct gui_theme_palette *theme,
   if (node->type == HTML_NODE_TAG_H1) return theme->accent;
   if (node->type == HTML_NODE_TAG_H2) return theme->accent_alt;
   if (node->type == HTML_NODE_TAG_A) return theme->accent;
+  if (node->type == HTML_NODE_TAG_BUTTON) return theme->accent_alt;
+  if (node->type == HTML_NODE_TAG_INPUT) return theme->text;
   return node->color ? node->color : theme->text;
 }
 
@@ -1052,17 +1224,34 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   int32_t height = 0;
   uint32_t color = html_viewer_node_color(theme, node);
   if (!surface || !f || !theme || !node) return y;
+  if (node->hidden) return y;
   if (node->type == HTML_NODE_TAG_BR) return y + html_viewer_node_margin_bottom(node->type);
   display[0] = '\0';
   if (node->type == HTML_NODE_TAG_LI) kstrcpy(display, sizeof(display), "* ");
   else if (node->type == HTML_NODE_TAG_IMG) kstrcpy(display, sizeof(display), "[image] ");
-  kbuf_append(display, sizeof(display), node->text);
+  else if (node->type == HTML_NODE_TAG_INPUT) {
+    if (node->name[0]) {
+      kstrcpy(display, sizeof(display), node->name);
+      kbuf_append(display, sizeof(display), ": ");
+    }
+    kbuf_append(display, sizeof(display), "[");
+    kbuf_append(display, sizeof(display), node->text);
+    kbuf_append(display, sizeof(display), "]");
+  } else if (node->type == HTML_NODE_TAG_BUTTON) {
+    kstrcpy(display, sizeof(display), "[ ");
+    kbuf_append(display, sizeof(display), node->text);
+    kbuf_append(display, sizeof(display), " ]");
+  }
+  else kbuf_append(display, sizeof(display), node->text);
   if (!display[0] && node->type == HTML_NODE_TAG_A && node->href[0]) {
     kstrcpy(display, sizeof(display), node->href);
   }
   max_width = (int32_t)surface->width - margin * 2;
   height = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top, max_width,
-                                 display, color, node->type == HTML_NODE_TAG_A);
+                                 display, color,
+                                 node->type == HTML_NODE_TAG_A ||
+                                 node->type == HTML_NODE_TAG_INPUT ||
+                                 node->type == HTML_NODE_TAG_BUTTON);
   return top + height + html_viewer_node_margin_bottom(node->type);
 }
 
@@ -1102,6 +1291,21 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
       int32_t bottom = node_y;
       struct html_node *node = &app->doc.nodes[i];
       node_y = html_viewer_node_hit_test(app, f, node, node_y, &top, &bottom);
+      if (node->type == HTML_NODE_TAG_INPUT && !node->hidden &&
+          y >= top && y < bottom && x >= 12) {
+        app->focused_node_index = i;
+        app->url_editing = 0;
+        compositor_invalidate(win->id);
+        return;
+      }
+      if (node->type == HTML_NODE_TAG_BUTTON &&
+          y >= top && y < bottom && x >= 12) {
+        app->focused_node_index = i;
+        app->url_editing = 0;
+        html_viewer_submit_form(app, i);
+        compositor_invalidate(win->id);
+        return;
+      }
       if (node->type == HTML_NODE_TAG_A && node->href[0] &&
           y >= top && y < bottom && x >= 12) {
         char resolved[HTML_URL_MAX];
@@ -1115,12 +1319,17 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
       }
     }
   }
+  app->focused_node_index = -1;
+  compositor_invalidate(win->id);
 }
 
 int html_parse(const char *html, size_t len, struct html_document *doc) {
   size_t pos = 0;
+  char current_form_action[HTML_URL_MAX];
+  uint8_t current_form_method = HTML_FORM_METHOD_GET;
   if (!html || !doc) return -1;
   kmemzero(doc, sizeof(*doc));
+  current_form_action[0] = '\0';
   while (pos < len && doc->node_count < HTML_MAX_NODES) {
     if (hv_is_space(html[pos])) {
       pos++;
@@ -1131,6 +1340,9 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       char href[HTML_URL_MAX];
       char src[HTML_URL_MAX];
       char text[HTML_TEXT_MAX];
+      char name[HTML_COOKIE_NAME_MAX];
+      char type_attr[24];
+      char method_attr[16];
       size_t attr_start = 0;
       size_t tag_end = pos;
       int closing = 0;
@@ -1147,13 +1359,32 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       hv_read_tag_name(html, len, &pos, tag, sizeof(tag));
       attr_start = pos;
       pos = hv_scan_tag_end(html, len, pos, &tag_end, &self_closing);
-      if (!tag[0] || closing) continue;
+      if (!tag[0]) continue;
+      if (closing) {
+        if (hv_streq_ci(tag, "form")) {
+          current_form_action[0] = '\0';
+          current_form_method = HTML_FORM_METHOD_GET;
+        }
+        continue;
+      }
       if (!self_closing && hv_tag_is_void(tag)) self_closing = 1;
 
       if (hv_streq_ci(tag, "script") || hv_streq_ci(tag, "style") ||
           hv_streq_ci(tag, "svg") || hv_streq_ci(tag, "canvas") ||
           hv_streq_ci(tag, "iframe")) {
         if (!self_closing) pos = hv_skip_block(html, len, pos, tag);
+        continue;
+      }
+      if (hv_streq_ci(tag, "form")) {
+        method_attr[0] = '\0';
+        if (!hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                   "action", current_form_action,
+                                   sizeof(current_form_action))) {
+          current_form_action[0] = '\0';
+        }
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "method", method_attr, sizeof(method_attr));
+        current_form_method = hv_parse_form_method(method_attr);
         continue;
       }
       if (hv_streq_ci(tag, "title")) {
@@ -1169,7 +1400,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       if (hv_streq_ci(tag, "html") || hv_streq_ci(tag, "body") ||
           hv_streq_ci(tag, "head") || hv_streq_ci(tag, "main") ||
           hv_streq_ci(tag, "header") || hv_streq_ci(tag, "footer") ||
-          hv_streq_ci(tag, "nav") || hv_streq_ci(tag, "form") ||
+          hv_streq_ci(tag, "nav") ||
           hv_streq_ci(tag, "section") || hv_streq_ci(tag, "article") ||
           hv_streq_ci(tag, "ul") || hv_streq_ci(tag, "ol") ||
           hv_streq_ci(tag, "table") || hv_streq_ci(tag, "tbody") ||
@@ -1182,12 +1413,67 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       href[0] = '\0';
       src[0] = '\0';
       text[0] = '\0';
+      name[0] = '\0';
+      type_attr[0] = '\0';
       (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
                                   "href", href, sizeof(href));
       (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
                                   "src", src, sizeof(src));
+      (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                  "name", name, sizeof(name));
+      (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                  "type", type_attr, sizeof(type_attr));
 
-      if (hv_streq_ci(tag, "img")) {
+      if (hv_streq_ci(tag, "input")) {
+        struct html_node *node;
+        uint8_t input_type = hv_form_input_type(type_attr);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "value", text, sizeof(text));
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = (input_type == HTML_INPUT_TYPE_SUBMIT ||
+                      input_type == HTML_INPUT_TYPE_BUTTON)
+                         ? HTML_NODE_TAG_BUTTON
+                         : HTML_NODE_TAG_INPUT;
+        node->input_type = input_type;
+        node->hidden = (input_type == HTML_INPUT_TYPE_HIDDEN);
+        node->form_method = current_form_method;
+        if (node->type == HTML_NODE_TAG_BUTTON && !text[0]) {
+          kstrcpy(text, sizeof(text), "Submit");
+        }
+        kstrcpy(node->text, sizeof(node->text), text);
+        kstrcpy(node->name, sizeof(node->name), name);
+        kstrcpy(node->href, sizeof(node->href), current_form_action);
+        continue;
+      } else if (hv_streq_ci(tag, "textarea")) {
+        struct html_node *node;
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_INPUT;
+        node->input_type = HTML_INPUT_TYPE_TEXTAREA;
+        node->hidden = 0;
+        node->form_method = current_form_method;
+        kstrcpy(node->text, sizeof(node->text), text);
+        kstrcpy(node->name, sizeof(node->name), name);
+        kstrcpy(node->href, sizeof(node->href), current_form_action);
+        continue;
+      } else if (hv_streq_ci(tag, "button")) {
+        struct html_node *node;
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_BUTTON;
+        node->input_type = hv_streq_ci(type_attr, "button")
+                               ? HTML_INPUT_TYPE_BUTTON
+                               : HTML_INPUT_TYPE_SUBMIT;
+        node->form_method = current_form_method;
+        if (!text[0]) kstrcpy(text, sizeof(text), "Submit");
+        kstrcpy(node->text, sizeof(node->text), text);
+        kstrcpy(node->name, sizeof(node->name), name);
+        kstrcpy(node->href, sizeof(node->href), current_form_action);
+        continue;
+      } else if (hv_streq_ci(tag, "img")) {
         if (!hv_extract_attr_value(html + attr_start, tag_end - attr_start,
                                    "alt", text, sizeof(text))) {
           kstrcpy(text, sizeof(text), src);
@@ -1263,6 +1549,7 @@ void html_viewer_open(void) {
 
   html_viewer_cleanup();
   kmemzero(&g_viewer, sizeof(g_viewer));
+  g_viewer.focused_node_index = -1;
 
   g_viewer.window = compositor_create_window("CapyBrowser", 60, 40,
                                              640 + 160 * (scale - 1),
@@ -1283,12 +1570,16 @@ void html_viewer_open(void) {
 }
 
 static int html_viewer_issue_request(struct html_viewer_app *app, const char *url,
+                                     enum http_method method,
+                                     const uint8_t *body, size_t body_len,
                                      struct http_request *req,
                                      struct http_response *resp) {
   char cookie_header[1024];
   if (!app || !url || !req || !resp) return -1;
   kmemzero(req, sizeof(*req));
-  req->method = HTTP_GET;
+  req->method = method;
+  req->body = body;
+  req->body_len = body_len;
   req->timeout_ms = 15000;
   if (http_parse_url(url, req->host, sizeof(req->host), req->path, sizeof(req->path),
                      &req->port, &req->use_tls) != 0) {
@@ -1303,7 +1594,86 @@ static int html_viewer_issue_request(struct html_viewer_app *app, const char *ur
             sizeof(req->headers[req->header_count].value), cookie_header);
     req->header_count++;
   }
+  if (body && body_len > 0 && req->header_count < HTTP_MAX_HEADERS) {
+    kstrcpy(req->headers[req->header_count].name,
+            sizeof(req->headers[req->header_count].name), "Content-Type");
+    kstrcpy(req->headers[req->header_count].value,
+            sizeof(req->headers[req->header_count].value),
+            "application/x-www-form-urlencoded");
+    req->header_count++;
+  }
   return http_request(req, resp);
+}
+
+static void hv_form_append_pair(char *out, size_t out_len,
+                                const char *name, const char *value,
+                                int *wrote_any) {
+  if (!out || out_len == 0 || !name || !name[0] || !wrote_any) return;
+  if (*wrote_any) kbuf_append(out, out_len, "&");
+  hv_urlencode_append(out, out_len, name);
+  kbuf_append(out, out_len, "=");
+  hv_urlencode_append(out, out_len, value ? value : "");
+  *wrote_any = 1;
+}
+
+static int html_viewer_build_form_payload(struct html_viewer_app *app,
+                                          const struct html_node *submit_node,
+                                          char *payload, size_t payload_len) {
+  int wrote_any = 0;
+  if (!app || !submit_node || !payload || payload_len == 0) return 0;
+  payload[0] = '\0';
+  for (int i = 0; i < app->doc.node_count; i++) {
+    const struct html_node *node = &app->doc.nodes[i];
+    if (!hv_form_action_matches(node, submit_node) ||
+        node->form_method != submit_node->form_method) {
+      continue;
+    }
+    if (node->type == HTML_NODE_TAG_INPUT) {
+      hv_form_append_pair(payload, payload_len, node->name, node->text, &wrote_any);
+    } else if (node->type == HTML_NODE_TAG_BUTTON && node == submit_node) {
+      hv_form_append_pair(payload, payload_len, node->name, node->text, &wrote_any);
+    }
+  }
+  return wrote_any;
+}
+
+static void html_viewer_submit_form(struct html_viewer_app *app, int node_index) {
+  char action[HTML_URL_MAX];
+  char resolved_action[HTML_URL_MAX];
+  char payload[HTML_URL_MAX];
+  char target[HTML_URL_MAX];
+  struct html_node *node;
+  int has_payload;
+  if (!app || node_index < 0 || node_index >= app->doc.node_count) return;
+  node = &app->doc.nodes[node_index];
+  if (node->type != HTML_NODE_TAG_INPUT && node->type != HTML_NODE_TAG_BUTTON) return;
+  if (node->type == HTML_NODE_TAG_BUTTON &&
+      node->input_type == HTML_INPUT_TYPE_BUTTON) {
+    return;
+  }
+
+  if (node->href[0]) kstrcpy(action, sizeof(action), node->href);
+  else kstrcpy(action, sizeof(action), app->url);
+
+  if (hv_resolve_url(app->url, action, resolved_action, sizeof(resolved_action)) != 0) {
+    kstrcpy(resolved_action, sizeof(resolved_action), action);
+  }
+
+  has_payload = html_viewer_build_form_payload(app, node, payload, sizeof(payload));
+  if (node->form_method == HTML_FORM_METHOD_POST) {
+    html_viewer_request_internal(app, resolved_action, HTTP_POST,
+                                 has_payload ? (const uint8_t *)payload : NULL,
+                                 has_payload ? kstrlen(payload) : 0, 0);
+    return;
+  }
+
+  kstrcpy(target, sizeof(target), resolved_action);
+  if (has_payload) {
+    kbuf_append(target, sizeof(target),
+                hv_contains_ci(resolved_action, "?") ? "&" : "?");
+    kbuf_append(target, sizeof(target), payload);
+  }
+  html_viewer_request_internal(app, target, HTTP_GET, NULL, 0, 0);
 }
 
 static void html_viewer_capture_cookies(struct html_viewer_app *app,
@@ -1354,18 +1724,11 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
                                        const struct http_request *req,
                                        const struct http_response *resp) {
   const char *content_type = html_viewer_find_header(resp, "Content-Type");
-  const char *content_encoding = html_viewer_find_header(resp, "Content-Encoding");
   if (!app || !req || !resp) return;
   html_viewer_capture_cookies(app, req, resp);
-  if (content_encoding && content_encoding[0] &&
-      !hv_contains_ci(content_encoding, "identity")) {
-    html_viewer_set_error(app, "Navigation Error",
-                          "Compressed responses are not yet supported by this renderer.");
-    return;
-  }
   if (resp->body && resp->body_len > 0 &&
-      (!content_type || hv_contains_ci(content_type, "text/html") ||
-       hv_contains_ci(content_type, "application/xhtml+xml"))) {
+      (hv_content_type_is_html(content_type) ||
+       hv_body_looks_html(resp->body, resp->body_len))) {
     html_parse((const char *)resp->body, resp->body_len, &app->doc);
     if (app->doc.node_count == 0) {
       html_viewer_load_text_document(app, "Document",
@@ -1375,10 +1738,8 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
     return;
   }
   if (resp->body && resp->body_len > 0 &&
-      (hv_contains_ci(content_type, "text/plain") ||
-       hv_contains_ci(content_type, "application/json") ||
-       hv_contains_ci(content_type, "application/xml") ||
-       hv_contains_ci(content_type, "text/xml"))) {
+      (hv_content_type_is_textual(content_type) ||
+       hv_body_looks_textual(resp->body, resp->body_len))) {
     html_viewer_load_text_document(app,
                                    content_type ? content_type : "Document",
                                    (const char *)resp->body, resp->body_len,
@@ -1397,9 +1758,12 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
   html_viewer_set_transport_error(app);
 }
 
-static void html_viewer_navigate_internal(struct html_viewer_app *app,
-                                          const char *url,
-                                          int depth) {
+static void html_viewer_request_internal(struct html_viewer_app *app,
+                                         const char *url,
+                                         enum http_method method,
+                                         const uint8_t *body,
+                                         size_t body_len,
+                                         int depth) {
   char normalized_url[HTML_URL_MAX];
   char redirect_url[HTML_URL_MAX];
   const char *target = url;
@@ -1442,12 +1806,24 @@ static void html_viewer_navigate_internal(struct html_viewer_app *app,
 
   kstrcpy(app->url, sizeof(app->url), target);
   app->scroll_offset = 0;
+  app->focused_node_index = -1;
   app->loading = 1;
+  /* Force loading state onto screen before the blocking network call. */
+  if (app->window) {
+    html_viewer_paint(app);
+    compositor_invalidate(app->window->id);
+    compositor_render();
+  }
   kmemzero(&resp, sizeof(resp));
-  rc = html_viewer_issue_request(app, target, &req, &resp);
+  rc = html_viewer_issue_request(app, target, method, body, body_len, &req, &resp);
   if (rc != 0) {
     html_viewer_set_transport_error(app);
   } else if (resp.status_code >= 300 && resp.status_code < 400) {
+    int redirect_method = (resp.status_code == 303 || method != HTTP_GET)
+                              ? HTTP_GET
+                              : method;
+    const uint8_t *redirect_body = redirect_method == HTTP_GET ? NULL : body;
+    size_t redirect_body_len = redirect_method == HTTP_GET ? 0 : body_len;
     html_viewer_capture_cookies(app, &req, &resp);
     location = html_viewer_find_header(&resp, "Location");
     if (location && depth >= 4) {
@@ -1456,7 +1832,8 @@ static void html_viewer_navigate_internal(struct html_viewer_app *app,
                hv_resolve_url(target, location, redirect_url, sizeof(redirect_url)) == 0 &&
                !kstreq(redirect_url, target)) {
       http_response_free(&resp);
-      html_viewer_navigate_internal(app, redirect_url, depth + 1);
+      html_viewer_request_internal(app, redirect_url, redirect_method,
+                                   redirect_body, redirect_body_len, depth + 1);
       return;
     } else {
       html_viewer_apply_response(app, &req, &resp);
@@ -1476,7 +1853,7 @@ static void html_viewer_navigate_internal(struct html_viewer_app *app,
 }
 
 void html_viewer_navigate(struct html_viewer_app *app, const char *url) {
-  html_viewer_navigate_internal(app, url, 0);
+  html_viewer_request_internal(app, url, HTTP_GET, NULL, 0, 0);
 }
 
 void html_viewer_paint(struct html_viewer_app *app) {
@@ -1517,8 +1894,18 @@ void html_viewer_paint(struct html_viewer_app *app) {
   app->content_height = y + 8;
 
   if (app->loading) {
-    font_draw_string(s, f, (int32_t)(s->width > 88 ? s->width - 88 : 4),
-                     4, "Loading...", theme->text);
+    /* Draw a full-width loading bar at the bottom of the viewport. */
+    uint32_t bar_h = f->glyph_height + 8;
+    uint32_t bar_y = s->height > bar_h ? s->height - bar_h : 0;
+    for (uint32_t py = bar_y; py < s->height; py++) {
+      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
+      for (uint32_t px = 0; px < s->width; px++) row[px] = theme->accent_alt;
+    }
+    char status_line[HTTP_MAX_HOST + 24];
+    status_line[0] = '\0';
+    kstrcpy(status_line, sizeof(status_line), "Carregando: ");
+    kbuf_append(status_line, sizeof(status_line), app->url);
+    font_draw_string(s, f, 4, (int32_t)(bar_y + 4), status_line, theme->accent_text);
   }
 }
 
