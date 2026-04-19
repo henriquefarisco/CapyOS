@@ -171,6 +171,13 @@ def smoke_first_boot(
         expect="Resolves a hostname through DNS using the currently configured server.",
         expect_optional=True,
     )
+    run_cmd(
+        session,
+        "net-fetch -help",
+        timeout=timeout,
+        expect="Fetches an HTTP/HTTPS URL and shows status, content type, body size, relevant headers and the last TLS state.",
+        expect_optional=True,
+    )
     run_cmd(session, "net-status", timeout=timeout, expect="runtime=ready", expect_optional=True)
     run_cmd(
         session,
@@ -214,6 +221,20 @@ def smoke_first_boot(
         "hey gateway",
         timeout=timeout,
         expect="hello from (",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="status=200",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="tls=TLS 1.2",
         expect_optional=True,
     )
     run_cmd(
@@ -366,6 +387,20 @@ def smoke_second_boot(
         "hey gateway",
         timeout=timeout,
         expect="hello from (",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="status=200",
+        expect_optional=True,
+    )
+    run_cmd(
+        session,
+        "net-fetch https://example.com",
+        timeout=timeout,
+        expect="tls=TLS 1.2",
         expect_optional=True,
     )
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
