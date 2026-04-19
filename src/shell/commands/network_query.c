@@ -173,9 +173,44 @@ int net_cmd_fetch(struct shell_context *ctx, int argc, char **argv) {
     return -1;
   }
 
+  /* Snapshot stats before the request for failure diagnostics. */
+  uint64_t pre_tcp_tx = 0, pre_tcp_rx = 0;
+  uint32_t pre_arp = 0;
+  if (net_stack_status(&st) == 0) {
+    pre_tcp_tx = st.stats.tcp_tx;
+    pre_tcp_rx = st.stats.tcp_rx;
+    pre_arp    = st.arp_entries;
+  }
+
+  /* Pre-resolve DNS so we can show the target IP in the status line. */
+  uint32_t resolved_ip = 0;
+  char resolved_str[16];
+  resolved_str[0] = '?'; resolved_str[1] = '\0';
+  if (net_stack_dns_resolve(host, 3000u, &resolved_ip) == 0)
+    net_ipv4_format(resolved_ip, resolved_str);
+
+  shell_print(">>> ");
+  shell_print(use_tls ? "https" : "http");
+  shell_print("://");
+  shell_print(host);
+  shell_print(" (");
+  shell_print(resolved_str);
+  shell_print(") ...\n");
+
   if (http_get(argv[1], &resp) != 0) {
     shell_print_error(http_error_string(http_last_error()));
     if (use_tls) net_query_print_tls_summary();
+    if (net_stack_status(&st) == 0) {
+      shell_print("diag: arp=");
+      shell_print_number(st.arp_entries);
+      shell_print(" syn-out=");
+      shell_print_number((uint32_t)(st.stats.tcp_tx - pre_tcp_tx));
+      shell_print(" syn-ack=");
+      shell_print_number((uint32_t)(st.stats.tcp_rx - pre_tcp_rx));
+      shell_print(" arp-before=");
+      shell_print_number(pre_arp);
+      shell_newline();
+    }
     return -1;
   }
 

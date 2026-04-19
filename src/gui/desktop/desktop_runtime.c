@@ -9,7 +9,14 @@
 #include "fs/vfs.h"
 #include "auth/session.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
+#include "net/stack.h"
 #include <stddef.h>
+
+static void desktop_net_yield(void) {
+  struct mouse_state ms;
+  mouse_get_state(&ms);
+  compositor_render_cursor(ms.x, ms.y);
+}
 
 static struct desktop_session g_desktop;
 static int g_desktop_active = 0;
@@ -77,6 +84,7 @@ int desktop_runtime_start(struct shell_context *ctx) {
   }
   desktop_init(&g_desktop, fb, w, h, pitch, ctx ? ctx->settings : NULL);
   desktop_open_terminal(&g_desktop);
+  net_stack_set_yield_hook(desktop_net_yield);
   sync_and_flush_desktop();
   fbcon_print("[desktop] session started\n");
   sync_and_flush_desktop();
@@ -137,6 +145,7 @@ int desktop_runtime_start(struct shell_context *ctx) {
   }
 
   desktop_shutdown(&g_desktop);
+  net_stack_set_yield_hook((void *)0);
   fbcon_print("[desktop] session stopped\n");
   g_desktop_active = 0;
   g_desktop_shell_ctx = NULL;

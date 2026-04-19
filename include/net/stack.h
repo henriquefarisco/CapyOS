@@ -90,5 +90,6 @@ const char *net_driver_name(uint8_t kind);
 void net_ipv4_format(uint32_t ip, char out[16]);
 int net_stack_driver_available(void);
 const char *net_stack_unavailable_reason(void);
+void net_stack_set_yield_hook(void (*hook)(void));
 
 #endif /* NET_STACK_H */

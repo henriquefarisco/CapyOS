@@ -16,6 +16,8 @@ static void socket_memset(void *dst, int val, size_t len) {
 
 static int socket_wait_for_tcp_state(int conn_id, uint8_t target_state,
                                      uint32_t timeout_ms) {
+  uint32_t next_retransmit_at = TCP_RTO_INIT_MS;
+  uint32_t retransmit_count = 0;
   for (uint32_t elapsed = 0; elapsed <= timeout_ms; ++elapsed) {
     int state = tcp_connection_state(conn_id);
     if (state == target_state) {
@@ -25,6 +27,15 @@ static int socket_wait_for_tcp_state(int conn_id, uint8_t target_state,
         state == TCP_STATE_CLOSING || state == TCP_STATE_LAST_ACK ||
         state == TCP_STATE_TIME_WAIT) {
       return -1;
+    }
+    /* Real networks drop packets; the SYN or SYN-ACK can vanish. Retransmit
+       the SYN with exponential backoff (1s, 2s, 4s, ...) so the connect does
+       not fail on a single drop. */
+    if (state == TCP_STATE_SYN_SENT && elapsed >= next_retransmit_at &&
+        retransmit_count < TCP_MAX_RETRIES) {
+      tcp_retransmit_syn(conn_id);
+      retransmit_count++;
+      next_retransmit_at = elapsed + (TCP_RTO_INIT_MS << retransmit_count);
     }
     (void)net_stack_poll();
     net_stack_delay_approx_1ms();
@@ -119,8 +130,12 @@ int socket_connect(int fd, const struct sockaddr_in *addr) {
       s->local_addr.sin_addr = ipv4.addr;
     }
 
+    /* sin_port is in network byte order (BSD convention); tcp_open expects
+       host byte order because tcp_send_segment will call tcp_htons() on it. */
+    uint16_t rp = addr->sin_port;
+    uint16_t rp_h = (uint16_t)((rp >> 8) | ((rp & 0xFF) << 8));
     int conn = tcp_open(s->local_addr.sin_addr, s->local_addr.sin_port,
-                        addr->sin_addr, addr->sin_port, fd);
+                        addr->sin_addr, rp_h, fd);
     if (conn < 0) {
       s->state = SOCK_STATE_ERROR;
       s->error = conn;

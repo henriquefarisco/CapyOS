@@ -63,9 +63,9 @@ const char *net_cli_text(const char *language, enum net_text_id id) {
   case NET_HELP_FETCH:
     return localization_select(
         language,
-        "Busca uma URL HTTP/HTTPS, exibe status, content-type, tamanho, headers relevantes e o ultimo estado TLS.",
-        "Fetches an HTTP/HTTPS URL and shows status, content type, body size, relevant headers and the last TLS state.",
-        "Obtiene una URL HTTP/HTTPS y muestra el estado, content-type, tamano, headers relevantes y el ultimo estado TLS.");
+        "Busca uma URL HTTP/HTTPS (segue ate 5 redirects), exibe status, content-type, tamanho, headers relevantes e o ultimo estado TLS.",
+        "Fetches an HTTP/HTTPS URL (follows up to 5 redirects) and shows status, content type, body size, relevant headers and the last TLS state.",
+        "Obtiene una URL HTTP/HTTPS (sigue hasta 5 redirects) y muestra el estado, content-type, tamano, headers relevantes y el ultimo estado TLS.");
   case NET_STACK_UNAVAILABLE:
     return localization_select(language,
                                "stack de rede nao inicializada",

@@ -237,6 +237,15 @@ def smoke_first_boot(
         expect="tls=TLS 1.2",
         expect_optional=True,
     )
+    # Redirect-following: https://google.com 301-redirects to https://www.google.com.
+    # If auto-follow works, we land on a 200 from www.google.com without manual hops.
+    run_cmd(
+        session,
+        "net-fetch https://google.com",
+        timeout=timeout,
+        expect="status=200",
+        expect_optional=True,
+    )
     run_cmd(
         session,
         "add-user smokeuser smoke user",
@@ -401,6 +410,14 @@ def smoke_second_boot(
         "net-fetch https://example.com",
         timeout=timeout,
         expect="tls=TLS 1.2",
+        expect_optional=True,
+    )
+    # Auto-redirect against a real modern site (google.com → www.google.com).
+    run_cmd(
+        session,
+        "net-fetch https://google.com",
+        timeout=timeout,
+        expect="status=200",
         expect_optional=True,
     )
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")

@@ -1808,6 +1808,12 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
   app->scroll_offset = 0;
   app->focused_node_index = -1;
   app->loading = 1;
+  /* Force loading state onto screen before the blocking network call. */
+  if (app->window) {
+    html_viewer_paint(app);
+    compositor_invalidate(app->window->id);
+    compositor_render();
+  }
   kmemzero(&resp, sizeof(resp));
   rc = html_viewer_issue_request(app, target, method, body, body_len, &req, &resp);
   if (rc != 0) {
@@ -1888,8 +1894,18 @@ void html_viewer_paint(struct html_viewer_app *app) {
   app->content_height = y + 8;
 
   if (app->loading) {
-    font_draw_string(s, f, (int32_t)(s->width > 88 ? s->width - 88 : 4),
-                     4, "Loading...", theme->text);
+    /* Draw a full-width loading bar at the bottom of the viewport. */
+    uint32_t bar_h = f->glyph_height + 8;
+    uint32_t bar_y = s->height > bar_h ? s->height - bar_h : 0;
+    for (uint32_t py = bar_y; py < s->height; py++) {
+      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
+      for (uint32_t px = 0; px < s->width; px++) row[px] = theme->accent_alt;
+    }
+    char status_line[HTTP_MAX_HOST + 24];
+    status_line[0] = '\0';
+    kstrcpy(status_line, sizeof(status_line), "Carregando: ");
+    kbuf_append(status_line, sizeof(status_line), app->url);
+    font_draw_string(s, f, 4, (int32_t)(bar_y + 4), status_line, theme->accent_text);
   }
 }
 
