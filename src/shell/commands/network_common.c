@@ -60,6 +60,12 @@ const char *net_cli_text(const char *language, enum net_text_id id) {
         "Envia ICMP echo (ping) para IPv4, alias (`gateway`, `dns`, `self`) ou hostname e responde com o host remoto e a latencia.",
         "Sends an ICMP echo (ping) to an IPv4 address, alias (`gateway`, `dns`, `self`) or hostname and reports the remote host and latency.",
         "Envia ICMP echo (ping) a una IPv4, alias (`gateway`, `dns`, `self`) o hostname y muestra el host remoto y la latencia.");
+  case NET_HELP_FETCH:
+    return localization_select(
+        language,
+        "Busca uma URL HTTP/HTTPS, exibe status, content-type, tamanho, headers relevantes e o ultimo estado TLS.",
+        "Fetches an HTTP/HTTPS URL and shows status, content type, body size, relevant headers and the last TLS state.",
+        "Obtiene una URL HTTP/HTTPS y muestra el estado, content-type, tamano, headers relevantes y el ultimo estado TLS.");
   case NET_STACK_UNAVAILABLE:
     return localization_select(language,
                                "stack de rede nao inicializada",

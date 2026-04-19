@@ -1,6 +1,11 @@
 #include "network_internal.h"
 
 #if defined(__x86_64__)
+#include "net/http.h"
+#include "security/tls.h"
+#endif
+
+#if defined(__x86_64__)
 static int net_query_lookup_target_ip(const char *language, const char *target,
                                       const struct net_stack_status *st,
                                       uint32_t *out_ip) {
@@ -23,6 +28,65 @@ static int net_query_lookup_target_ip(const char *language, const char *target,
   }
   (void)language;
   return -2;
+}
+#endif
+
+#if defined(__x86_64__)
+static void net_query_print_tls_summary(void) {
+  struct tls_security_info info;
+  if (tls_get_last_security_info(&info) != 0 || info.protocol_version == 0) {
+    shell_print("tls=none\n");
+    return;
+  }
+  shell_print("tls=");
+  shell_print(tls_version_name(info.protocol_version));
+  shell_print(" cipher=");
+  shell_print(tls_cipher_suite_name(info.cipher_suite));
+  shell_print(" host=");
+  shell_print(info.hostname_validated ? "ok" : "skip");
+  shell_print(" peer=");
+  shell_print(info.peer_verified ? "ok" : "fail");
+  shell_print(" alpn=");
+  shell_print(info.alpn[0] ? info.alpn : "(none)");
+  shell_newline();
+}
+
+static int net_query_body_looks_textual(const uint8_t *body, size_t len) {
+  size_t sample_len = len;
+  size_t printable = 0;
+  if (!body || len == 0) return 0;
+  if (sample_len > 512) sample_len = 512;
+  for (size_t i = 0; i < sample_len; i++) {
+    uint8_t ch = body[i];
+    if (ch == 0) return 0;
+    if (ch == '\t' || ch == '\n' || ch == '\r' || (ch >= 32 && ch < 127)) {
+      printable++;
+    }
+  }
+  return printable * 100 >= sample_len * 80;
+}
+
+static void net_query_print_body_preview(const uint8_t *body, size_t len) {
+  char preview[193];
+  size_t out = 0;
+  if (!body || len == 0 || !net_query_body_looks_textual(body, len)) return;
+  for (size_t i = 0; i < len && out + 1 < sizeof(preview) && out < 192; i++) {
+    uint8_t ch = body[i];
+    if (ch == '\r') continue;
+    if (ch == '\n' || ch == '\t') {
+      preview[out++] = ' ';
+    } else if (ch >= 32 && ch < 127) {
+      preview[out++] = (char)ch;
+    } else {
+      preview[out++] = '.';
+    }
+  }
+  while (out > 0 && preview[out - 1] == ' ') out--;
+  preview[out] = '\0';
+  if (!preview[0]) return;
+  shell_print("preview=");
+  shell_print(preview);
+  shell_newline();
 }
 #endif
 
@@ -66,6 +130,80 @@ int net_cmd_resolve(struct shell_context *ctx, int argc, char **argv) {
   shell_print(" ipv4=");
   shell_print(ip);
   shell_newline();
+  return 0;
+#endif
+}
+
+int net_cmd_fetch(struct shell_context *ctx, int argc, char **argv) {
+  const char *language = shell_current_language();
+  (void)ctx;
+  if (shell_handle_help(argc, argv, "net-fetch <url>",
+                        net_cli_text(language, NET_HELP_FETCH))) {
+    return 0;
+  }
+  if (argc != 2) {
+    shell_print_error(net_cli_text(language, NET_INVALID_USAGE));
+    shell_suggest_help("net-fetch");
+    return -1;
+  }
+
+#if !defined(__x86_64__)
+  shell_print_error(net_cli_text(language, NET_COMMAND_UNSUPPORTED));
+  return -1;
+#else
+  struct net_stack_status st;
+  struct http_response resp;
+  char host[HTTP_MAX_HOST];
+  char path[HTTP_MAX_PATH];
+  uint16_t port = 0;
+  int use_tls = 0;
+  const char *content_type = NULL;
+  const char *location = NULL;
+
+  if (!net_stack_ready()) {
+    shell_print_error(net_cli_text(language, NET_STACK_NOT_READY));
+    if (net_cli_read_status(language, &st) == 0) {
+      net_cli_print_runtime_block_detail(&st);
+    }
+    return -1;
+  }
+
+  if (http_parse_url(argv[1], host, sizeof(host), path, sizeof(path), &port, &use_tls) != 0) {
+    shell_print_error("invalid url");
+    return -1;
+  }
+
+  if (http_get(argv[1], &resp) != 0) {
+    shell_print_error(http_error_string(http_last_error()));
+    if (use_tls) net_query_print_tls_summary();
+    return -1;
+  }
+
+  content_type = http_find_header(&resp, "Content-Type");
+  location = http_find_header(&resp, "Location");
+  shell_print("status=");
+  shell_print_number((uint32_t)resp.status_code);
+  shell_print(" host=");
+  shell_print(host);
+  shell_print(" port=");
+  shell_print_number((uint32_t)port);
+  shell_print(" body=");
+  shell_print_number((uint32_t)resp.body_len);
+  shell_newline();
+
+  shell_print("content-type=");
+  shell_print(content_type && content_type[0] ? content_type : "(none)");
+  shell_newline();
+
+  if (location && location[0]) {
+    shell_print("location=");
+    shell_print(location);
+    shell_newline();
+  }
+
+  if (use_tls) net_query_print_tls_summary();
+  net_query_print_body_preview(resp.body, resp.body_len);
+  http_response_free(&resp);
   return 0;
 #endif
 }

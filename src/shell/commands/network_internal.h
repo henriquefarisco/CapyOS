@@ -25,6 +25,7 @@ enum net_text_id {
   NET_HELP_REFRESH,
   NET_HELP_RESOLVE,
   NET_HELP_HEY,
+  NET_HELP_FETCH,
   NET_STACK_UNAVAILABLE,
   NET_RUNTIME_UNAVAILABLE,
   NET_COMMAND_UNSUPPORTED,
@@ -86,5 +87,6 @@ int net_cmd_dns(struct shell_context *ctx, int argc, char **argv);
 int net_cmd_gw(struct shell_context *ctx, int argc, char **argv);
 int net_cmd_set(struct shell_context *ctx, int argc, char **argv);
 int net_cmd_ping(struct shell_context *ctx, int argc, char **argv);
+int net_cmd_fetch(struct shell_context *ctx, int argc, char **argv);
 
 #endif
