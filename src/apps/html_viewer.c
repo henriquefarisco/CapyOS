@@ -34,6 +34,7 @@ enum { HTML_FORM_METHOD_GET = 0, HTML_FORM_METHOD_POST = 1 };
 enum {
   HTML_INPUT_TYPE_TEXT = 0,
   HTML_INPUT_TYPE_SEARCH,
+  HTML_INPUT_TYPE_TEXTAREA,
   HTML_INPUT_TYPE_HIDDEN,
   HTML_INPUT_TYPE_SUBMIT,
   HTML_INPUT_TYPE_BUTTON
@@ -634,10 +635,64 @@ static struct html_node *html_push_node(struct html_document *doc) {
 
 static uint8_t hv_form_input_type(const char *type) {
   if (hv_streq_ci(type, "search")) return HTML_INPUT_TYPE_SEARCH;
+  if (hv_streq_ci(type, "textarea")) return HTML_INPUT_TYPE_TEXTAREA;
   if (hv_streq_ci(type, "hidden")) return HTML_INPUT_TYPE_HIDDEN;
   if (hv_streq_ci(type, "submit")) return HTML_INPUT_TYPE_SUBMIT;
   if (hv_streq_ci(type, "button")) return HTML_INPUT_TYPE_BUTTON;
   return HTML_INPUT_TYPE_TEXT;
+}
+
+static int hv_body_looks_html(const uint8_t *body, size_t len) {
+  char sample[257];
+  size_t sample_len = len;
+  if (!body || len == 0) return 0;
+  if (sample_len > 256) sample_len = 256;
+  for (size_t i = 0; i < sample_len; i++) {
+    sample[i] = (char)body[i];
+  }
+  sample[sample_len] = '\0';
+  return hv_contains_ci(sample, "<!doctype html") ||
+         hv_contains_ci(sample, "<html") ||
+         hv_contains_ci(sample, "<body") ||
+         hv_contains_ci(sample, "<head");
+}
+
+static int hv_body_looks_textual(const uint8_t *body, size_t len) {
+  size_t sample_len = len;
+  size_t printable = 0;
+  if (!body || len == 0) return 0;
+  if (sample_len > 1024) sample_len = 1024;
+  for (size_t i = 0; i < sample_len; i++) {
+    uint8_t ch = body[i];
+    if (ch == 0) return 0;
+    if (ch == '\t' || ch == '\n' || ch == '\r' ||
+        (ch >= 32 && ch < 127) || ch >= 128) {
+      printable++;
+    }
+  }
+  return printable * 100 >= sample_len * 85;
+}
+
+static int hv_content_type_is_html(const char *content_type) {
+  return content_type && content_type[0] &&
+         (hv_contains_ci(content_type, "text/html") ||
+          hv_contains_ci(content_type, "application/xhtml+xml"));
+}
+
+static int hv_content_type_is_textual(const char *content_type) {
+  if (!content_type || !content_type[0]) return 0;
+  if (hv_contains_ci(content_type, "text/") ||
+      hv_contains_ci(content_type, "application/json") ||
+      hv_contains_ci(content_type, "application/xml") ||
+      hv_contains_ci(content_type, "text/xml") ||
+      hv_contains_ci(content_type, "+json") ||
+      hv_contains_ci(content_type, "+xml") ||
+      hv_contains_ci(content_type, "application/javascript") ||
+      hv_contains_ci(content_type, "text/javascript") ||
+      hv_contains_ci(content_type, "application/x-javascript")) {
+    return 1;
+  }
+  return 0;
 }
 
 static void hv_cookie_trim(char *text) {
@@ -958,6 +1013,15 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
     struct html_node *node = &app->doc.nodes[app->focused_node_index];
     if (node->type == HTML_NODE_TAG_INPUT && !node->hidden) {
       if (ch == '\n' || ch == '\r') {
+        if (node->input_type == HTML_INPUT_TYPE_TEXTAREA) {
+          size_t len = kstrlen(node->text);
+          if (len + 1 < sizeof(node->text)) {
+            node->text[len] = '\n';
+            node->text[len + 1] = '\0';
+          }
+          compositor_invalidate(win->id);
+          return;
+        }
         html_viewer_submit_form(app, app->focused_node_index);
         compositor_invalidate(win->id);
         return;
@@ -1381,6 +1445,19 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         kstrcpy(node->name, sizeof(node->name), name);
         kstrcpy(node->href, sizeof(node->href), current_form_action);
         continue;
+      } else if (hv_streq_ci(tag, "textarea")) {
+        struct html_node *node;
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_INPUT;
+        node->input_type = HTML_INPUT_TYPE_TEXTAREA;
+        node->hidden = 0;
+        node->form_method = current_form_method;
+        kstrcpy(node->text, sizeof(node->text), text);
+        kstrcpy(node->name, sizeof(node->name), name);
+        kstrcpy(node->href, sizeof(node->href), current_form_action);
+        continue;
       } else if (hv_streq_ci(tag, "button")) {
         struct html_node *node;
         pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
@@ -1650,8 +1727,8 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
   if (!app || !req || !resp) return;
   html_viewer_capture_cookies(app, req, resp);
   if (resp->body && resp->body_len > 0 &&
-      (!content_type || hv_contains_ci(content_type, "text/html") ||
-       hv_contains_ci(content_type, "application/xhtml+xml"))) {
+      (hv_content_type_is_html(content_type) ||
+       hv_body_looks_html(resp->body, resp->body_len))) {
     html_parse((const char *)resp->body, resp->body_len, &app->doc);
     if (app->doc.node_count == 0) {
       html_viewer_load_text_document(app, "Document",
@@ -1661,10 +1738,8 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
     return;
   }
   if (resp->body && resp->body_len > 0 &&
-      (hv_contains_ci(content_type, "text/plain") ||
-       hv_contains_ci(content_type, "application/json") ||
-       hv_contains_ci(content_type, "application/xml") ||
-       hv_contains_ci(content_type, "text/xml"))) {
+      (hv_content_type_is_textual(content_type) ||
+       hv_body_looks_textual(resp->body, resp->body_len))) {
     html_viewer_load_text_document(app,
                                    content_type ? content_type : "Document",
                                    (const char *)resp->body, resp->body_len,
@@ -1738,6 +1813,11 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
   if (rc != 0) {
     html_viewer_set_transport_error(app);
   } else if (resp.status_code >= 300 && resp.status_code < 400) {
+    int redirect_method = (resp.status_code == 303 || method != HTTP_GET)
+                              ? HTTP_GET
+                              : method;
+    const uint8_t *redirect_body = redirect_method == HTTP_GET ? NULL : body;
+    size_t redirect_body_len = redirect_method == HTTP_GET ? 0 : body_len;
     html_viewer_capture_cookies(app, &req, &resp);
     location = html_viewer_find_header(&resp, "Location");
     if (location && depth >= 4) {
@@ -1746,14 +1826,8 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
                hv_resolve_url(target, location, redirect_url, sizeof(redirect_url)) == 0 &&
                !kstreq(redirect_url, target)) {
       http_response_free(&resp);
-      html_viewer_request_internal(app, redirect_url,
-                                   (resp.status_code == 303 || method != HTTP_GET)
-                                       ? HTTP_GET : method,
-                                   (resp.status_code == 303 || method != HTTP_GET)
-                                       ? NULL : body,
-                                   (resp.status_code == 303 || method != HTTP_GET)
-                                       ? 0 : body_len,
-                                   depth + 1);
+      html_viewer_request_internal(app, redirect_url, redirect_method,
+                                   redirect_body, redirect_body_len, depth + 1);
       return;
     } else {
       html_viewer_apply_response(app, &req, &resp);

@@ -79,6 +79,7 @@ static int test_html_skips_script_and_keeps_noscript(void) {
 static int test_html_parses_basic_forms(void) {
   struct html_document doc;
   const struct html_node *search = NULL;
+  const struct html_node *notes = NULL;
   const struct html_node *hidden = NULL;
   const struct html_node *button = NULL;
   int fails = 0;
@@ -86,11 +87,13 @@ static int test_html_parses_basic_forms(void) {
       "<body><form action=\"/search\" method=\"get\">"
       "<input type=\"hidden\" name=\"source\" value=\"capy\">"
       "<input type=\"search\" name=\"q\" value=\"hello\">"
+      "<textarea name=\"notes\">caps lock off</textarea>"
       "<button type=\"submit\">Go</button>"
       "</form></body>";
 
   html_parse(html, strlen(html), &doc);
   search = find_node(HTML_NODE_TAG_INPUT, &doc, "hello");
+  notes = find_node(HTML_NODE_TAG_INPUT, &doc, "caps lock off");
   hidden = find_node(HTML_NODE_TAG_INPUT, &doc, "capy");
   button = find_node(HTML_NODE_TAG_BUTTON, &doc, "Go");
 
@@ -99,6 +102,11 @@ static int test_html_parses_basic_forms(void) {
                        "search input name should be preserved");
   fails += expect_true(search && strcmp(search->href, "/search") == 0,
                        "form action should be copied to input");
+  fails += expect_true(notes != NULL, "textarea should be parsed as an editable control");
+  fails += expect_true(notes && strcmp(notes->name, "notes") == 0,
+                       "textarea name should be preserved");
+  fails += expect_true(notes && strcmp(notes->href, "/search") == 0,
+                       "textarea should use the form action");
   fails += expect_true(hidden != NULL && hidden->hidden,
                        "hidden input should be preserved for submission");
   fails += expect_true(button != NULL, "submit button should be parsed");
