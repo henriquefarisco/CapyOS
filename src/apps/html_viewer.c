@@ -1227,6 +1227,70 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   }
 }
 
+/* Draw a single bitmap glyph scaled by an integer factor (nearest-neighbor). */
+static void hv_draw_char_scaled(struct gui_surface *surface, const struct font *f,
+                                int32_t x, int32_t y, char c, uint32_t color, int scale) {
+  uint32_t idx = (uint32_t)(uint8_t)c;
+  uint32_t glyph_offset;
+  const uint8_t *glyph;
+  if (!surface || !f || !f->data || scale < 1) return;
+  if (idx < f->first_char || idx > f->last_char) return;
+  glyph_offset = (idx - f->first_char) * f->bytes_per_glyph;
+  glyph = f->data + glyph_offset;
+  for (uint32_t row = 0; row < f->glyph_height; row++) {
+    uint8_t bits = glyph[row];
+    for (int sy = 0; sy < scale; sy++) {
+      int32_t py = y + (int32_t)(row * (uint32_t)scale + (uint32_t)sy);
+      if (py < 0 || (uint32_t)py >= surface->height) continue;
+      uint32_t *line = (uint32_t *)((uint8_t *)surface->pixels + (uint32_t)py * surface->pitch);
+      for (uint32_t col = 0; col < f->glyph_width; col++) {
+        if (!(bits & (0x80 >> col))) continue;
+        for (int sx = 0; sx < scale; sx++) {
+          int32_t px = x + (int32_t)(col * (uint32_t)scale + (uint32_t)sx);
+          if (px >= 0 && (uint32_t)px < surface->width) line[(uint32_t)px] = color;
+        }
+      }
+    }
+  }
+}
+
+/* Word-wrap text using a scaled bitmap font; returns total height in pixels. */
+static int hv_wrap_text_scaled(struct gui_surface *surface, const struct font *f,
+                               int32_t x, int32_t y, int32_t max_width,
+                               const char *text, uint32_t color, int scale) {
+  int32_t char_w  = (int32_t)(f->glyph_width  * (uint32_t)scale);
+  int32_t char_h  = (int32_t)(f->glyph_height * (uint32_t)scale) + 2;
+  int32_t line_y  = y;
+  int32_t cursor_x = x;
+  size_t  i = 0;
+  int drew = 0;
+  if (!f || !text || !text[0]) return char_h;
+  while (text[i]) {
+    size_t word_start, word_len = 0;
+    if (text[i] == '\n') { cursor_x = x; line_y += char_h; i++; continue; }
+    while (text[i] == ' ') {
+      if (cursor_x != x) {
+        if (cursor_x - x + char_w > max_width) { cursor_x = x; line_y += char_h; }
+        else cursor_x += char_w;
+      }
+      i++;
+    }
+    word_start = i;
+    while (text[i] && text[i] != ' ' && text[i] != '\n') { word_len++; i++; }
+    if (!word_len) break;
+    if (cursor_x != x && cursor_x - x + (int32_t)word_len * char_w > max_width) {
+      cursor_x = x; line_y += char_h;
+    }
+    for (size_t j = 0; j < word_len; j++) {
+      if (surface)
+        hv_draw_char_scaled(surface, f, cursor_x, line_y, text[word_start + j], color, scale);
+      cursor_x += char_w;
+    }
+    drew = 1;
+  }
+  return drew ? (int)(line_y - y + char_h) : char_h;
+}
+
 static int html_viewer_wrap_text(struct gui_surface *surface, const struct font *f,
                                  int32_t x, int32_t y, int32_t max_width,
                                  const char *text, uint32_t color,
@@ -1437,6 +1501,16 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
     return top + 1 + html_viewer_node_margin_bottom(node->type);
   }
+  /* Scaled heading rendering: H1 at 3×, H2/H3 at 2× */
+  if (node->type == HTML_NODE_TAG_H1 || node->type == HTML_NODE_TAG_H2 ||
+      node->type == HTML_NODE_TAG_H3) {
+    int scale = (node->type == HTML_NODE_TAG_H1) ? 3 : 2;
+    int32_t h = hv_wrap_text_scaled(draw ? surface : NULL, f, margin, top,
+                    (int32_t)surface->width - margin * 2,
+                    node->text, color, scale);
+    return top + h + html_viewer_node_margin_bottom(node->type);
+  }
+
   /* IMG node: blit cached pixels or fall back to alt text */
   if (node->type == HTML_NODE_TAG_IMG) {
     struct hv_img_cache_entry *img = node->href[0] ? hv_img_cache_find(node->href) : NULL;
