@@ -1,5 +1,6 @@
 #include "apps/html_viewer.h"
 #include "apps/css_parser.h"
+#include "drivers/input/keyboard_layout.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
 #include "gui/png_loader.h"
@@ -53,6 +54,34 @@ static struct hv_img_cache_entry *hv_img_cache_slot(void) {
     kfree(hv_img_cache[0].pixels);
     hv_img_cache[0].pixels = NULL;
     return &hv_img_cache[0];
+}
+
+/* ------------------------------------------------------------------ */
+/* Navigation history (back / forward)                                  */
+/* ------------------------------------------------------------------ */
+
+#define HV_HISTORY_MAX 16
+static char hv_history[HV_HISTORY_MAX][HTML_URL_MAX];
+static int  hv_history_count = 0;
+static int  hv_history_cur   = -1;
+static int  hv_navigating_history = 0; /* suppress push during back/fwd */
+
+static void hv_history_push(const char *url) {
+    if (hv_navigating_history || !url || !url[0]) return;
+    /* Avoid duplicate consecutive entries */
+    if (hv_history_cur >= 0 && kstreq(hv_history[hv_history_cur], url)) return;
+    /* Truncate forward history */
+    hv_history_count = hv_history_cur + 1;
+    if (hv_history_count >= HV_HISTORY_MAX) {
+        /* Shift left, discard oldest */
+        for (int i = 0; i < HV_HISTORY_MAX - 1; i++)
+            kmemcpy(hv_history[i], hv_history[i + 1], HTML_URL_MAX);
+        hv_history_cur = HV_HISTORY_MAX - 2;
+        hv_history_count = HV_HISTORY_MAX - 1;
+    }
+    kstrcpy(hv_history[hv_history_count], sizeof(hv_history[0]), url);
+    hv_history_cur = hv_history_count;
+    hv_history_count++;
 }
 
 int http_last_error(void);
@@ -1065,6 +1094,55 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   if (!win || !win->user_data) return;
   struct html_viewer_app *app = (struct html_viewer_app *)win->user_data;
   char ch = (keycode < 0x80) ? (char)keycode : 0;
+
+  /* URL bar cursor movement */
+  if (app->url_editing) {
+    if (keycode == KEY_LEFT) {
+      if (app->url_cursor > 0) app->url_cursor--;
+      compositor_invalidate(win->id);
+      return;
+    }
+    if (keycode == KEY_RIGHT) {
+      int len = (int)kstrlen(app->url);
+      if (app->url_cursor < len) app->url_cursor++;
+      compositor_invalidate(win->id);
+      return;
+    }
+    if (keycode == KEY_HOME) {
+      app->url_cursor = 0;
+      compositor_invalidate(win->id);
+      return;
+    }
+    if (keycode == KEY_END) {
+      app->url_cursor = (int)kstrlen(app->url);
+      compositor_invalidate(win->id);
+      return;
+    }
+  }
+
+  /* Back / forward (only in browsing mode, not when editing URL or focused on input) */
+  if (!app->url_editing && app->focused_node_index < 0) {
+    if (keycode == KEY_LEFT) {
+      if (hv_history_cur > 0) {
+        hv_history_cur--;
+        hv_navigating_history = 1;
+        html_viewer_navigate(app, hv_history[hv_history_cur]);
+        hv_navigating_history = 0;
+      }
+      compositor_invalidate(win->id);
+      return;
+    }
+    if (keycode == KEY_RIGHT) {
+      if (hv_history_cur < hv_history_count - 1) {
+        hv_history_cur++;
+        hv_navigating_history = 1;
+        html_viewer_navigate(app, hv_history[hv_history_cur]);
+        hv_navigating_history = 0;
+      }
+      compositor_invalidate(win->id);
+      return;
+    }
+  }
 
   if (!app->url_editing &&
       app->focused_node_index >= 0 &&
@@ -2157,6 +2235,7 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
                                      (const char *)resp->body, resp->body_len,
                                      0xCDD6F4);
     }
+    hv_history_push(app->url);
     hv_fetch_page_images(app);
     return;
   }
