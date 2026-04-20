@@ -57,6 +57,122 @@ static struct hv_img_cache_entry *hv_img_cache_slot(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* HTTP response body cache (GET only, 200 responses, max-age based)    */
+/* ------------------------------------------------------------------ */
+
+#define HV_HTTP_CACHE_MAX  8
+#define HV_HTTP_CACHE_BODY_MAX (256 * 1024)  /* 256 KB per entry */
+
+struct hv_http_cache_entry {
+    char     url[HTTP_MAX_URL];
+    uint8_t *body;       /* kalloc'd; NULL = slot unused */
+    size_t   body_len;
+    char     content_type[128];
+    uint32_t max_age;    /* max-age in "ticks" (navigations); 0 = session-only */
+    uint32_t age;        /* how many navigations since cached */
+};
+
+static struct hv_http_cache_entry hv_http_cache[HV_HTTP_CACHE_MAX];
+
+static void hv_http_cache_clear(void) {
+    for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
+        if (hv_http_cache[i].body) {
+            kfree(hv_http_cache[i].body);
+            hv_http_cache[i].body = NULL;
+        }
+        hv_http_cache[i].url[0] = '\0';
+        hv_http_cache[i].body_len = 0;
+        hv_http_cache[i].age = 0;
+    }
+}
+
+static struct hv_http_cache_entry *hv_http_cache_find(const char *url) {
+    for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
+        if (hv_http_cache[i].body && kstreq(hv_http_cache[i].url, url))
+            return &hv_http_cache[i];
+    }
+    return NULL;
+}
+
+static void hv_http_cache_tick(void) {
+    for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
+        if (!hv_http_cache[i].body) continue;
+        hv_http_cache[i].age++;
+        if (hv_http_cache[i].max_age > 0 &&
+            hv_http_cache[i].age > hv_http_cache[i].max_age) {
+            kfree(hv_http_cache[i].body);
+            hv_http_cache[i].body = NULL;
+            hv_http_cache[i].url[0] = '\0';
+        }
+    }
+}
+
+static struct hv_http_cache_entry *hv_http_cache_slot(void) {
+    for (int i = 0; i < HV_HTTP_CACHE_MAX; i++)
+        if (!hv_http_cache[i].body) return &hv_http_cache[i];
+    /* Evict oldest */
+    int oldest = 0;
+    for (int i = 1; i < HV_HTTP_CACHE_MAX; i++)
+        if (hv_http_cache[i].age > hv_http_cache[oldest].age) oldest = i;
+    kfree(hv_http_cache[oldest].body);
+    hv_http_cache[oldest].body = NULL;
+    return &hv_http_cache[oldest];
+}
+
+static uint32_t hv_parse_cache_control_max_age(const char *cc) {
+    if (!cc) return 0;
+    const char *p = cc;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        if ((p[0]|32)=='n' && (p[1]|32)=='o' && (p[2]=='-'||p[2]==' ') &&
+            ((p[3]|32)=='s'||(p[3]|32)=='c')) return 0; /* no-store / no-cache */
+        if (p[0]=='m' && p[1]=='a' && p[2]=='x' && p[3]=='-' &&
+            p[4]=='a' && p[5]=='g' && p[6]=='e' && p[7]=='=') {
+            uint32_t v = 0;
+            p += 8;
+            while (*p >= '0' && *p <= '9') { v = v * 10 + (uint32_t)(*p - '0'); p++; }
+            return v / 60; /* convert seconds → navigation-ticks (≈60s per nav) */
+        }
+        while (*p && *p != ',') p++;
+    }
+    return 1; /* default: keep for 1 navigation */
+}
+
+static void hv_http_cache_store(const char *url, const struct http_response *resp) {
+    const char *cc = NULL;
+    const char *ct = NULL;
+    uint32_t max_age;
+    struct hv_http_cache_entry *slot;
+    uint8_t *body_copy;
+    int i;
+    if (!url || !resp || resp->status_code != 200 || !resp->body || resp->body_len == 0)
+        return;
+    if (resp->body_len > HV_HTTP_CACHE_BODY_MAX) return;
+    /* Check cache-control */
+    for (i = 0; i < (int)resp->header_count; i++) {
+        if ((resp->headers[i].name[0]|32) == 'c' &&
+            kstreq(resp->headers[i].name, "Cache-Control"))
+            cc = resp->headers[i].value;
+        if ((resp->headers[i].name[0]|32) == 'c' &&
+            kstreq(resp->headers[i].name, "Content-Type"))
+            ct = resp->headers[i].value;
+    }
+    max_age = hv_parse_cache_control_max_age(cc);
+    if (max_age == 0 && cc) return; /* explicit no-store */
+    body_copy = (uint8_t *)kalloc(resp->body_len);
+    if (!body_copy) return;
+    kmemcpy(body_copy, resp->body, resp->body_len);
+    slot = hv_http_cache_slot();
+    kstrcpy(slot->url, sizeof(slot->url), url);
+    slot->body = body_copy;
+    slot->body_len = resp->body_len;
+    slot->max_age = max_age;
+    slot->age = 0;
+    if (ct) kstrcpy(slot->content_type, sizeof(slot->content_type), ct);
+    else slot->content_type[0] = '\0';
+}
+
+/* ------------------------------------------------------------------ */
 /* Navigation history (back / forward)                                  */
 /* ------------------------------------------------------------------ */
 
@@ -102,6 +218,7 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
                                          size_t body_len,
                                          int depth);
 static void html_viewer_submit_form(struct html_viewer_app *app, int node_index);
+static void hv_http_cache_store(const char *url, const struct http_response *resp);
 static void hv_fetch_external_css(struct html_viewer_app *app);
 static void hv_fetch_page_images(struct html_viewer_app *app);
 
@@ -2324,6 +2441,7 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
       (hv_content_type_is_html(content_type) ||
        hv_body_looks_html(resp->body, resp->body_len))) {
     hv_img_cache_clear();
+    hv_http_cache_tick();
     html_parse((const char *)resp->body, resp->body_len, &app->doc);
     if (app->doc.node_count == 0) {
       html_viewer_load_text_document(app, "Document",
@@ -2455,22 +2573,29 @@ static void hv_fetch_external_css(struct html_viewer_app *app) {
   if (!app || !app->doc.css_count) return;
   for (i = 0; i < app->doc.css_count; i++) {
     char abs_url[HTML_URL_MAX];
-    struct http_request req;
-    struct http_response resp;
     struct css_stylesheet sheet;
+    struct hv_http_cache_entry *cached;
     if (hv_resolve_url(app->url, app->doc.pending_css[i], abs_url, sizeof(abs_url)) != 0)
       kstrcpy(abs_url, sizeof(abs_url), app->doc.pending_css[i]);
-    kmemzero(&resp, sizeof(resp));
-    if (html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp) != 0) {
-      http_response_free(&resp);
-      continue;
-    }
-    if (resp.body && resp.body_len > 0) {
+    cached = hv_http_cache_find(abs_url);
+    if (cached) {
       kmemzero(&sheet, sizeof(sheet));
-      if (css_parse((const char *)resp.body, resp.body_len, &sheet) == 0)
+      if (css_parse((const char *)cached->body, cached->body_len, &sheet) == 0)
         css_apply_to_doc(&sheet, &app->doc);
+    } else {
+      struct http_request req;
+      struct http_response resp;
+      kmemzero(&resp, sizeof(resp));
+      if (html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp) == 0) {
+        if (resp.body && resp.body_len > 0) {
+          hv_http_cache_store(abs_url, &resp);
+          kmemzero(&sheet, sizeof(sheet));
+          if (css_parse((const char *)resp.body, resp.body_len, &sheet) == 0)
+            css_apply_to_doc(&sheet, &app->doc);
+        }
+      }
+      http_response_free(&resp);
     }
-    http_response_free(&resp);
   }
 }
 
@@ -2481,20 +2606,34 @@ static void hv_fetch_page_images(struct html_viewer_app *app) {
     struct html_node *node = &app->doc.nodes[i];
     char abs_url[HTML_URL_MAX];
     struct hv_img_cache_entry *slot;
-    struct http_request req;
-    struct http_response resp;
     struct png_image img;
-    int rc;
+    const uint8_t *body = NULL;
+    size_t body_len = 0;
+    struct http_response resp;
+    struct hv_http_cache_entry *cached;
     if (node->type != HTML_NODE_TAG_IMG || !node->href[0]) continue;
     if (hv_resolve_url(app->url, node->href, abs_url, sizeof(abs_url)) != 0)
       kstrcpy(abs_url, sizeof(abs_url), node->href);
     kstrcpy(node->href, sizeof(node->href), abs_url);
     if (hv_img_cache_find(abs_url)) continue;
-    kmemzero(&resp, sizeof(resp));
-    rc = html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp);
-    if (rc != 0 || !resp.body || resp.body_len < 8) { http_response_free(&resp); continue; }
+    cached = hv_http_cache_find(abs_url);
+    if (cached) {
+      body = cached->body;
+      body_len = cached->body_len;
+    } else {
+      struct http_request req;
+      kmemzero(&resp, sizeof(resp));
+      if (html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp) != 0 ||
+          !resp.body || resp.body_len < 8) {
+        http_response_free(&resp);
+        continue;
+      }
+      hv_http_cache_store(abs_url, &resp);
+      body = resp.body;
+      body_len = resp.body_len;
+    }
     kmemzero(&img, sizeof(img));
-    if (png_decode(resp.body, resp.body_len, &img) == 0 &&
+    if (body_len >= 8 && png_decode(body, body_len, &img) == 0 &&
         img.pixels && img.width > 0 && img.height > 0) {
       slot = hv_img_cache_slot();
       kstrcpy(slot->url, sizeof(slot->url), abs_url);
@@ -2502,7 +2641,7 @@ static void hv_fetch_page_images(struct html_viewer_app *app) {
       slot->width  = img.width;
       slot->height = img.height;
     }
-    http_response_free(&resp);
+    if (!cached) http_response_free(&resp);
   }
 }
 
