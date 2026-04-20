@@ -1866,6 +1866,8 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
   size_t pos = 0;
   char current_form_action[HTML_URL_MAX];
   uint8_t current_form_method = HTML_FORM_METHOD_GET;
+  int list_ordered = 0;  /* inside <ol>? */
+  int list_num = 1;      /* next ordered-list item number */
   if (!html || !doc) return -1;
   kmemzero(doc, sizeof(*doc));
   current_form_action[0] = '\0';
@@ -1903,6 +1905,9 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (hv_streq_ci(tag, "form")) {
           current_form_action[0] = '\0';
           current_form_method = HTML_FORM_METHOD_GET;
+        } else if (hv_streq_ci(tag, "ol")) {
+          list_ordered = 0;
+          list_num = 1;
         }
         continue;
       }
@@ -1994,13 +1999,14 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (node) node->type = HTML_NODE_TAG_BR;
         continue;
       }
+      if (hv_streq_ci(tag, "ol")) { list_ordered = 1; list_num = 1; continue; }
       if (hv_streq_ci(tag, "html") || hv_streq_ci(tag, "body") ||
           hv_streq_ci(tag, "head") || hv_streq_ci(tag, "main") ||
           hv_streq_ci(tag, "header") || hv_streq_ci(tag, "footer") ||
           hv_streq_ci(tag, "nav") || hv_streq_ci(tag, "aside") ||
           hv_streq_ci(tag, "section") || hv_streq_ci(tag, "article") ||
           hv_streq_ci(tag, "figure") || hv_streq_ci(tag, "picture") ||
-          hv_streq_ci(tag, "ul") || hv_streq_ci(tag, "ol") || hv_streq_ci(tag, "menu") ||
+          hv_streq_ci(tag, "ul") || hv_streq_ci(tag, "menu") ||
           hv_streq_ci(tag, "table") || hv_streq_ci(tag, "tbody") ||
           hv_streq_ci(tag, "thead") || hv_streq_ci(tag, "tfoot") ||
           hv_streq_ci(tag, "colgroup") || hv_streq_ci(tag, "col") ||
@@ -2235,7 +2241,19 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         else if (hv_streq_ci(tag, "div")) node->type = HTML_NODE_TAG_DIV;
         else if (hv_streq_ci(tag, "span")) node->type = HTML_NODE_TAG_SPAN;
         else if (hv_streq_ci(tag, "ul")) node->type = HTML_NODE_TAG_UL;
-        else if (hv_streq_ci(tag, "li")) node->type = HTML_NODE_TAG_LI;
+        else if (hv_streq_ci(tag, "li")) {
+          node->type = HTML_NODE_TAG_LI;
+          if (list_ordered) {
+            char prefix[16];
+            char new_text[HTML_TEXT_MAX];
+            prefix[0] = '\0';
+            kbuf_append_u32(prefix, sizeof(prefix), (uint32_t)list_num++);
+            kbuf_append(prefix, sizeof(prefix), ". ");
+            kstrcpy(new_text, sizeof(new_text), prefix);
+            kbuf_append(new_text, sizeof(new_text), text);
+            kstrcpy(text, sizeof(text), new_text);
+          }
+        }
         else if (hv_streq_ci(tag, "img")) node->type = HTML_NODE_TAG_IMG;
         else if (hv_streq_ci(tag, "noscript")) node->type = HTML_NODE_TAG_DIV;
         else node->type = HTML_NODE_TEXT;
