@@ -201,6 +201,15 @@ static void css_apply_prop(const char *name, const char *value,
         if (css_streq_ci(value, "center")) node->text_align = 1;
         else if (css_streq_ci(value, "right")) node->text_align = 2;
         else node->text_align = 0;
+    } else if (css_streq_ci(name, "margin-left") ||
+               css_streq_ci(name, "padding-left")) {
+        uint32_t px = 0;
+        const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem"))
+            px = px * 16;
+        if (px > 0 && (int)px > node->indent)
+            node->indent = (int)px;
     }
 }
 

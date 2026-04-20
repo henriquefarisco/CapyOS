@@ -1826,7 +1826,24 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   if (!display[0] && node->type == HTML_NODE_TAG_A && node->href[0]) {
     kstrcpy(display, sizeof(display), node->href);
   }
-  max_width = (int32_t)surface->width - margin * 2;
+  /* CSS margin-left / padding-left → shift the left margin only */
+  if (node->indent > 0 && node->indent < 300)
+    margin += node->indent;
+  max_width = (int32_t)surface->width - margin - 12; /* right margin fixed at 12 */
+  if (max_width < (int32_t)f->glyph_width) max_width = (int32_t)f->glyph_width;
+  /* CSS font-size scaling for non-heading nodes */
+  if (node->font_size > 0 && node->font_size != f->glyph_height &&
+      node->type != HTML_NODE_TAG_H1 && node->type != HTML_NODE_TAG_H2 &&
+      node->type != HTML_NODE_TAG_H3) {
+    int scale = (int)(node->font_size / f->glyph_height);
+    if (scale < 1) scale = 1;
+    if (scale > 4) scale = 4;
+    if (scale > 1) {
+      height = hv_wrap_text_scaled(draw ? surface : NULL, f, margin, top,
+                                   max_width, display, color, scale);
+      return top + height + html_viewer_node_margin_bottom(node->type);
+    }
+  }
   height = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top, max_width,
                                  display, color,
                                  node->type == HTML_NODE_TAG_A ||
