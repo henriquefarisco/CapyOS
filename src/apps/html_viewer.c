@@ -1773,8 +1773,31 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
   const struct font *f = font_default();
 
   if (y < 24) {
-    app->url_editing = 1;
-    app->url_cursor = (int)kstrlen(app->url);
+    if (x < 24) {
+      /* Back button */
+      if (hv_history_cur > 0) {
+        hv_history_cur--;
+        hv_navigating_history = 1;
+        html_viewer_navigate(app, hv_history[hv_history_cur]);
+        hv_navigating_history = 0;
+      }
+    } else if (x < 50) {
+      /* Forward button */
+      if (hv_history_cur < hv_history_count - 1) {
+        hv_history_cur++;
+        hv_navigating_history = 1;
+        html_viewer_navigate(app, hv_history[hv_history_cur]);
+        hv_navigating_history = 0;
+      }
+    } else {
+      /* URL bar click: enter editing, set cursor position by click x */
+      app->url_editing = 1;
+      {
+        int click_pos = (x - 54) / (int32_t)font_default()->glyph_width;
+        int url_len = (int)kstrlen(app->url);
+        app->url_cursor = click_pos < 0 ? 0 : click_pos > url_len ? url_len : click_pos;
+      }
+    }
     compositor_invalidate(win->id);
     return;
   }
@@ -2661,20 +2684,39 @@ void html_viewer_paint(struct html_viewer_app *app) {
     uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
     for (uint32_t px = 0; px < s->width; px++) line[px] = theme->window_bg;
   }
-  for (uint32_t py = 0; py < 24 && py < s->height; py++) {
-    uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
-    for (uint32_t px = 0; px < s->width; px++) {
-      row[px] = app->url_editing ? theme->terminal_bg : theme->accent_alt;
+  /* Toolbar: 24px bar, back/forward buttons on the left, URL after */
+  {
+    int can_back = (hv_history_cur > 0);
+    int can_fwd  = (hv_history_cur < hv_history_count - 1);
+    uint32_t btn_color = theme->accent_alt;
+    uint32_t url_bg    = app->url_editing ? theme->terminal_bg : theme->accent_alt;
+    for (uint32_t py = 0; py < 24 && py < s->height; py++) {
+      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
+      for (uint32_t px = 0; px < 50; px++) row[px] = btn_color;
+      for (uint32_t px = 50; px < s->width; px++) row[px] = url_bg;
     }
-  }
-  font_draw_string(s, f, 4, 4, app->url,
-                   app->url_editing ? theme->text : theme->text_muted);
-  if (app->url_editing) {
-    int32_t cx = 4 + app->url_cursor * (int32_t)f->glyph_width;
-    for (uint32_t cy = 4; cy < 4 + f->glyph_height && cy < 24; cy++) {
-      if ((uint32_t)cx < s->width) {
-        uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + cy * s->pitch);
-        row[cx] = theme->accent;
+    /* Draw separator line between buttons and URL area */
+    for (uint32_t py = 2; py < 22 && py < s->height; py++) {
+      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
+      row[49] = theme->window_border;
+    }
+    /* Back button: "<" glyph */
+    font_draw_char(s, f, 4, 4, '<',
+                   can_back ? theme->accent : theme->text_muted);
+    font_draw_char(s, f, 4 + (int32_t)f->glyph_width, 4, ' ', 0);
+    /* Forward button: ">" glyph */
+    font_draw_char(s, f, 26, 4, '>',
+                   can_fwd ? theme->accent : theme->text_muted);
+    /* URL text */
+    font_draw_string(s, f, 54, 4, app->url,
+                     app->url_editing ? theme->text : theme->text_muted);
+    if (app->url_editing) {
+      int32_t cx = 54 + app->url_cursor * (int32_t)f->glyph_width;
+      for (uint32_t cy = 4; cy < 4 + f->glyph_height && cy < 24; cy++) {
+        if ((uint32_t)cx < s->width) {
+          uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + cy * s->pitch);
+          row[(uint32_t)cx] = theme->accent;
+        }
       }
     }
   }
