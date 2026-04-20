@@ -758,6 +758,7 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
       char alt[HTML_TEXT_MAX];
       size_t attr_start = 0;
       size_t tag_end = pos;
+      size_t tag_start = pos; /* position of '<' for backtracking */
       int closing = 0;
       int self_closing = 0;
       pos++;
@@ -777,6 +778,13 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
         depth--;
         if (depth == 0) break;
         continue;
+      }
+      /* Non-nestable block tags: a new opening <p>/<li> implicitly closes current */
+      if (!closing && !self_closing && hv_streq_ci(inner, tag) &&
+          (hv_streq_ci(tag, "p") || hv_streq_ci(tag, "li") ||
+           hv_streq_ci(tag, "dt") || hv_streq_ci(tag, "dd"))) {
+        pos = tag_start; /* back up so the outer parser re-processes this tag */
+        break;
       }
       if (!closing && !self_closing && hv_streq_ci(inner, tag)) {
         depth++;

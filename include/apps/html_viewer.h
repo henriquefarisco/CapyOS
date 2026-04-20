@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define HTML_MAX_NODES 512
-#define HTML_TEXT_MAX  256
+#define HTML_TEXT_MAX  512
 #define HTML_TITLE_MAX 192
 #define HTML_URL_MAX   768
 #define HTML_MAX_COOKIES 24
