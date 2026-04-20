@@ -1753,6 +1753,10 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
       int32_t tw = (int32_t)(kstrlen(node->text) * f->glyph_width * (uint32_t)scale);
       if (tw < max_w) start_x = margin + max_w - tw;
     }
+    /* Headings are always bold: double-draw shifted 1px */
+    if (draw && surface && scale >= 1) {
+      hv_wrap_text_scaled(surface, f, start_x + 1, top, max_w, node->text, color, scale);
+    }
     h = hv_wrap_text_scaled(draw ? surface : NULL, f, start_x, top, max_w,
                     node->text, color, scale);
     return top + h + html_viewer_node_margin_bottom(node->type);
@@ -1943,11 +1947,19 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
       return top + height + html_viewer_node_margin_bottom(node->type);
     }
   }
-  height = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top, max_width,
-                                 display, color,
-                                 node->type == HTML_NODE_TAG_A ||
-                                 node->type == HTML_NODE_TAG_INPUT ||
-                                 node->type == HTML_NODE_TAG_BUTTON);
+  {
+    int underline = (node->type == HTML_NODE_TAG_A ||
+                     node->type == HTML_NODE_TAG_INPUT ||
+                     node->type == HTML_NODE_TAG_BUTTON);
+    /* Bold: double-draw shifted 1px right for bitmap font simulation */
+    if (node->bold && draw && surface) {
+      html_viewer_wrap_text(surface, f, margin + 1, top,
+                            max_width > 1 ? max_width - 1 : max_width,
+                            display, color, 0);
+    }
+    height = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top, max_width,
+                                   display, color, underline);
+  }
   return top + height + html_viewer_node_margin_bottom(node->type);
 }
 
@@ -2496,6 +2508,12 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         else if (hv_streq_ci(tag, "img")) node->type = HTML_NODE_TAG_IMG;
         else if (hv_streq_ci(tag, "noscript")) node->type = HTML_NODE_TAG_DIV;
         else node->type = HTML_NODE_TEXT;
+        /* Inline formatting tags that affect rendering style */
+        if (hv_streq_ci(tag, "strong") || hv_streq_ci(tag, "b") ||
+            hv_streq_ci(tag, "dt")) node->bold = 1;
+        if (hv_streq_ci(tag, "em") || hv_streq_ci(tag, "i") ||
+            hv_streq_ci(tag, "cite") || hv_streq_ci(tag, "dfn"))
+            node->text_align = 3; /* repurpose: 3 = italic indicator */
         if (node->type == HTML_NODE_TAG_A) node->color = 0x89B4FA;
         kstrcpy(node->text, sizeof(node->text), text[0] ? text : href);
         kstrcpy(node->href, sizeof(node->href), href);
