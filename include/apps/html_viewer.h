@@ -60,6 +60,8 @@ struct html_node {
   uint8_t input_type;
   uint8_t hidden;
   uint8_t text_align; /* 0=left, 1=center, 2=right */
+  uint8_t col_index;  /* column index within a table row (0-based) */
+  uint8_t col_count;  /* total columns in the row (0 = not in a table) */
   char id[64];
   char class_list[128];
   int indent;

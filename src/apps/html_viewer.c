@@ -182,6 +182,10 @@ static int  hv_history_count = 0;
 static int  hv_history_cur   = -1;
 static int  hv_navigating_history = 0; /* suppress push during back/fwd */
 
+/* Set by TR renderer, read by TD renderer for side-by-side column layout */
+static int32_t hv_table_row_y = 28;
+static int32_t hv_table_row_h = 24;
+
 static void hv_history_push(const char *url) {
     if (hv_navigating_history || !url || !url[0]) return;
     /* Avoid duplicate consecutive entries */
@@ -1604,8 +1608,10 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
     return top + 2 + html_viewer_node_margin_bottom(node->type);
   }
-  /* Table row separator: 1-px subtle line */
+  /* Table row: separator line + reserve space for side-by-side cells */
   if (node->type == HTML_NODE_TAG_TR) {
+    hv_table_row_h = (int32_t)f->glyph_height + 8;
+    hv_table_row_y = top + 1;
     if (draw) {
       int32_t hy = top;
       if (hy >= 0 && (uint32_t)hy < surface->height) {
@@ -1617,7 +1623,8 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
         }
       }
     }
-    return top + 1 + html_viewer_node_margin_bottom(node->type);
+    /* Advance y past separator + full row height so TD nodes don't shift y */
+    return top + 1 + hv_table_row_h + html_viewer_node_margin_bottom(node->type);
   }
   /* Scaled heading rendering: H1 at 3×, H2/H3 at 2× (or CSS font-size derived) */
   if (node->type == HTML_NODE_TAG_H1 || node->type == HTML_NODE_TAG_H2 ||
@@ -1694,6 +1701,43 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
       return top + h + html_viewer_node_margin_bottom(node->type);
     }
   }
+  /* Table cell: render at column x offset, y fixed by prior TR, no y advance */
+  if (node->type == HTML_NODE_TAG_TD) {
+    int32_t ncols  = node->col_count > 0 ? (int32_t)(uint8_t)node->col_count : 1;
+    int32_t cidx   = (int32_t)(uint8_t)node->col_index;
+    int32_t total_w = (int32_t)surface->width - 8;
+    int32_t col_w  = total_w / ncols;
+    int32_t cell_x = 4 + cidx * col_w;
+    int32_t cell_y = hv_table_row_y + 2;
+    uint32_t cell_color = node->bold ? theme->accent_text : color;
+    if (draw) {
+      /* th: accent background */
+      if (node->bold) {
+        for (int32_t dy = 0; dy < hv_table_row_h; dy++) {
+          int32_t hy = hv_table_row_y + dy;
+          if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+          uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                      (uint32_t)hy * surface->pitch);
+          for (int32_t px = cell_x; px < cell_x + col_w &&
+               (uint32_t)px < surface->width; px++)
+            rp[(uint32_t)px] = theme->accent_alt;
+        }
+      }
+      /* Left vertical border between columns */
+      if (cidx > 0 && (uint32_t)cell_x < surface->width) {
+        for (int32_t dy = 0; dy < hv_table_row_h; dy++) {
+          int32_t hy = hv_table_row_y + dy;
+          if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+          uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                      (uint32_t)hy * surface->pitch);
+          rp[(uint32_t)cell_x] = theme->window_border;
+        }
+      }
+    }
+    html_viewer_wrap_text(draw ? surface : NULL, f, cell_x + 2, cell_y,
+                          col_w - 4, node->text, cell_color, 0);
+    return y; /* y already advanced by TR — do not shift again */
+  }
   display[0] = '\0';
   if (node->type == HTML_NODE_TAG_LI) kstrcpy(display, sizeof(display), "* ");
   else if (node->type == HTML_NODE_TAG_PRE ||
@@ -1703,10 +1747,6 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   }
   else if (node->type == HTML_NODE_TAG_BLOCKQUOTE) {
     kstrcpy(display, sizeof(display), "> ");
-    kbuf_append(display, sizeof(display), node->text);
-  }
-  else if (node->type == HTML_NODE_TAG_TD) {
-    kstrcpy(display, sizeof(display), node->bold ? "| " : "  ");
     kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_DETAILS) {
@@ -2292,6 +2332,26 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       if (doc->nodes[i].type == HTML_NODE_TAG_H1 && doc->nodes[i].text[0]) {
         kstrcpy(doc->title, sizeof(doc->title), doc->nodes[i].text);
         break;
+      }
+    }
+  }
+  /* Fill col_index / col_count on TD nodes for side-by-side table rendering */
+  {
+    int i;
+    for (i = 0; i < doc->node_count; i++) {
+      if (doc->nodes[i].type == HTML_NODE_TAG_TR) {
+        int first_td = i + 1;
+        int ncols = 0;
+        int j;
+        for (j = first_td; j < doc->node_count; j++) {
+          if (doc->nodes[j].type == HTML_NODE_TAG_TD) ncols++;
+          else break;
+        }
+        if (ncols > 255) ncols = 255;
+        for (j = 0; j < ncols; j++) {
+          doc->nodes[first_td + j].col_index = (uint8_t)j;
+          doc->nodes[first_td + j].col_count = (uint8_t)ncols;
+        }
       }
     }
   }
