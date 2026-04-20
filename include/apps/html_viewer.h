@@ -59,7 +59,7 @@ struct html_node {
   uint8_t form_method;
   uint8_t input_type;
   uint8_t hidden;
-  uint8_t reserved;
+  uint8_t text_align; /* 0=left, 1=center, 2=right */
   char id[64];
   char class_list[128];
   int indent;

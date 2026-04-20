@@ -186,6 +186,21 @@ static void css_apply_prop(const char *name, const char *value,
         /* treat opacity:0 as hidden */
         if (value[0] == '0' && (value[1] == '\0' || value[1] == '.'))
             node->hidden = 1;
+    } else if (css_streq_ci(name, "font-size")) {
+        /* Parse px / em values → store in node->font_size */
+        uint32_t px = 0;
+        const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (*p == '.') { p++; while (*p >= '0' && *p <= '9') p++; } /* skip fraction */
+        if (px > 0) {
+            if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem"))
+                px = px * 16; /* base 16px */
+            node->font_size = px;
+        }
+    } else if (css_streq_ci(name, "text-align")) {
+        if (css_streq_ci(value, "center")) node->text_align = 1;
+        else if (css_streq_ci(value, "right")) node->text_align = 2;
+        else node->text_align = 0;
     }
 }
 

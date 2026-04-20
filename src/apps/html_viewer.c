@@ -1619,12 +1619,27 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
     return top + 1 + html_viewer_node_margin_bottom(node->type);
   }
-  /* Scaled heading rendering: H1 at 3×, H2/H3 at 2× */
+  /* Scaled heading rendering: H1 at 3×, H2/H3 at 2× (or CSS font-size derived) */
   if (node->type == HTML_NODE_TAG_H1 || node->type == HTML_NODE_TAG_H2 ||
       node->type == HTML_NODE_TAG_H3) {
-    int scale = (node->type == HTML_NODE_TAG_H1) ? 3 : 2;
-    int32_t h = hv_wrap_text_scaled(draw ? surface : NULL, f, margin, top,
-                    (int32_t)surface->width - margin * 2,
+    int scale;
+    int32_t max_w = (int32_t)surface->width - margin * 2;
+    int32_t start_x = margin;
+    int32_t h;
+    if (node->font_size > 0)
+      scale = (int)(node->font_size / f->glyph_height);
+    else
+      scale = (node->type == HTML_NODE_TAG_H1) ? 3 : 2;
+    if (scale < 1) scale = 1;
+    /* Apply text-align: center */
+    if (node->text_align == 1) {
+      int32_t tw = (int32_t)(kstrlen(node->text) * f->glyph_width * (uint32_t)scale);
+      if (tw < max_w) start_x = margin + (max_w - tw) / 2;
+    } else if (node->text_align == 2) {
+      int32_t tw = (int32_t)(kstrlen(node->text) * f->glyph_width * (uint32_t)scale);
+      if (tw < max_w) start_x = margin + max_w - tw;
+    }
+    h = hv_wrap_text_scaled(draw ? surface : NULL, f, start_x, top, max_w,
                     node->text, color, scale);
     return top + h + html_viewer_node_margin_bottom(node->type);
   }
