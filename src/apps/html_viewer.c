@@ -1794,11 +1794,39 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   if (node->type == HTML_NODE_TAG_LI) kstrcpy(display, sizeof(display), "* ");
   else if (node->type == HTML_NODE_TAG_PRE ||
            node->type == HTML_NODE_TAG_CODE) {
+    /* Code block: dark background fill */
+    if (draw && !node->css_bg_color) {
+      int32_t block_h = (int32_t)f->glyph_height + 4;
+      for (int32_t dy = -1; dy < block_h; dy++) {
+        int32_t hy = top + dy;
+        if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+        uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                    (uint32_t)hy * surface->pitch);
+        for (uint32_t px = (uint32_t)(margin - 2);
+             px < surface->width - 12 && px < surface->width; px++)
+          rp[px] = theme->terminal_bg;
+      }
+    }
     kstrcpy(display, sizeof(display), "  ");
     kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_BLOCKQUOTE) {
-    kstrcpy(display, sizeof(display), "> ");
+    /* Blockquote: accent left border bar */
+    if (draw) {
+      for (int32_t dy = -2; dy < (int32_t)f->glyph_height + 4; dy++) {
+        int32_t hy = top + dy;
+        if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+        uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                    (uint32_t)hy * surface->pitch);
+        int32_t bar_x = margin - 4;
+        if (bar_x >= 0 && (uint32_t)bar_x + 3 < surface->width) {
+          rp[(uint32_t)bar_x]     = theme->accent;
+          rp[(uint32_t)bar_x + 1] = theme->accent;
+          rp[(uint32_t)bar_x + 2] = theme->accent;
+        }
+      }
+    }
+    kstrcpy(display, sizeof(display), "  ");
     kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_DETAILS) {
@@ -1810,12 +1838,28 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_INPUT) {
+    int is_focused = (g_viewer.focused_node_index >= 0 &&
+                      node == &g_viewer.doc.nodes[g_viewer.focused_node_index]);
+    /* Focused input: accent background fill */
+    if (draw && is_focused) {
+      int32_t bh = (int32_t)f->glyph_height + 4;
+      for (int32_t dy = -1; dy < bh; dy++) {
+        int32_t hy = top + dy;
+        if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+        uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                    (uint32_t)hy * surface->pitch);
+        for (uint32_t px = (uint32_t)(margin - 2);
+             px < surface->width - 12 && px < surface->width; px++)
+          rp[px] = theme->accent_alt;
+      }
+    }
     if (node->name[0]) {
       kstrcpy(display, sizeof(display), node->name);
       kbuf_append(display, sizeof(display), ": ");
     }
     kbuf_append(display, sizeof(display), "[");
     kbuf_append(display, sizeof(display), node->text);
+    if (is_focused) kbuf_append(display, sizeof(display), "_"); /* cursor */
     kbuf_append(display, sizeof(display), "]");
   } else if (node->type == HTML_NODE_TAG_BUTTON) {
     kstrcpy(display, sizeof(display), "[ ");
