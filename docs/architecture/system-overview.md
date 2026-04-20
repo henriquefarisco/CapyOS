@@ -90,7 +90,41 @@ Current runtime rule:
   - config load/save (`/system/config.ini`)
   - login flow and theme/keyboard handling
 
-## 7. Drivers and hardware support
+## 7. Network stack
+
+### 7.1 Protocol layers (x86_64 only)
+
+- **ARP** (`src/net/protocols/stack_arp.c`): request/reply, cache (LRU), next-hop routing.
+- **IPv4** (`src/net/protocols/stack_ipv4.c`): checksum, protocol dispatch (ICMP/UDP/TCP).
+- **ICMP** (`src/net/protocols/stack_icmp.c`): echo request/reply (used by `hey`).
+- **UDP** (`src/net/protocols/stack_udp.c`): used for DNS queries.
+- **TCP** (`src/net/protocols/tcp.c`):
+  - pseudo-header checksum (corrected 2026-04-19: raw word values, not byte-swapped)
+  - three-way handshake, RST handling, FIN/ACK teardown
+  - SYN retransmission with exponential backoff (1 s / 2 s / 4 s ...)
+  - receive buffer compaction to prevent TLS handshake corruption
+  - up to 8 simultaneous connections (`TCP_MAX_CONNECTIONS`)
+- **TLS** (`src/security/tls.c`, BearSSL): TLS 1.2, 146 trust anchors, ALPN, cipher reporting.
+- **HTTP/HTTPS** (`src/net/services/http.c`):
+  - `http_get()` follows up to 5 redirects (301/302/303/307/308)
+  - resolves absolute, protocol-relative, origin-relative and document-relative `Location:` values
+  - `net-fetch` CLI command: shows status, content-type, TLS state, body preview and diagnostics
+- **DNS** (`src/net/services/dns.c`): UDP/53, single A-record query, 2.5 s timeout.
+- **DHCP** (`src/net/services/dhcp.c`): DISCOVER/OFFER/REQUEST/ACK, host-byte-order lease.
+
+### 7.2 Socket layer
+
+- `src/net/services/socket.c`: BSD-like `socket()/connect()/send()/recv()/close()`.
+- Port byte order: `sin_port` is network order (BSD convention); `socket_connect` converts
+  to host order before calling `tcp_open` (which will call `htons` internally).
+
+### 7.3 Yield hook
+
+- `net_stack_set_yield_hook(fn)` registered by `desktop_runtime` so the compositor
+  renders the cursor on each `net_stack_delay_approx_1ms()` call, keeping the mouse
+  responsive during blocking network operations.
+
+## 8. Drivers and hardware support
 
 ### 7.1 64-bit path
 - Framebuffer console via UEFI handoff
@@ -124,10 +158,15 @@ Current runtime rule:
 - The x64 boot path still depends on firmware input in hybrid mode.
 - Integrity/authenticated encryption for filesystem metadata is pending.
 - Version metadata can diverge between `VERSION.yaml` and C headers.
+- HTML viewer: heavy pages (large JS/CSS/images) can stall the UI — no streaming,
+  no image/video decode, no HTTP cache, no cookies. Tracked in
+  `feature/browser-internet-improvements`.
 
 ## 10. Immediate architecture priorities
 
-1. Remove the remaining hybrid boot dependency and complete native x64 input.
-2. Continue broadening hardware coverage for the official `ISO -> install -> HDD boot -> login` path.
-3. Continue removing residual BIOS/x86 legacy code from the repository.
+1. Browser/internet stability: streaming render, image decode, heavy-page handling
+   (`feature/browser-internet-improvements`).
+2. Remove the remaining hybrid boot dependency and complete native x64 input.
+3. Continue broadening hardware coverage for the official `ISO -> install -> HDD boot -> login` path.
+4. Continue removing residual BIOS/x86 legacy code from the repository.
 4. Harden CAPYFS for integrity, recovery and scalability.
