@@ -4,7 +4,7 @@
 #include "gui/compositor.h"
 #include <stdint.h>
 
-#define HTML_MAX_NODES 384
+#define HTML_MAX_NODES 512
 #define HTML_TEXT_MAX  256
 #define HTML_TITLE_MAX 192
 #define HTML_URL_MAX   768
@@ -32,7 +32,20 @@ enum html_node_type {
   HTML_NODE_TAG_HEAD,
   HTML_NODE_TAG_TITLE,
   HTML_NODE_TAG_INPUT,
-  HTML_NODE_TAG_BUTTON
+  HTML_NODE_TAG_BUTTON,
+  HTML_NODE_TAG_H4,
+  HTML_NODE_TAG_H5,
+  HTML_NODE_TAG_H6,
+  HTML_NODE_TAG_PRE,
+  HTML_NODE_TAG_CODE,
+  HTML_NODE_TAG_BLOCKQUOTE,
+  HTML_NODE_TAG_HR,
+  HTML_NODE_TAG_MARK,
+  HTML_NODE_TAG_TD,
+  HTML_NODE_TAG_TR,
+  HTML_NODE_TAG_MEDIA,
+  HTML_NODE_TAG_FIGCAPTION,
+  HTML_NODE_TAG_DETAILS
 };
 
 struct html_node {
@@ -47,6 +60,8 @@ struct html_node {
   uint8_t input_type;
   uint8_t hidden;
   uint8_t reserved;
+  char id[64];
+  int indent;
 };
 
 struct html_document {

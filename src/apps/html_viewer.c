@@ -1191,6 +1191,13 @@ static int html_viewer_node_margin_top(enum html_node_type type) {
   if (type == HTML_NODE_TAG_H1) return 8;
   if (type == HTML_NODE_TAG_H2) return 6;
   if (type == HTML_NODE_TAG_H3) return 4;
+  if (type == HTML_NODE_TAG_H4) return 4;
+  if (type == HTML_NODE_TAG_H5) return 3;
+  if (type == HTML_NODE_TAG_H6) return 2;
+  if (type == HTML_NODE_TAG_HR) return 6;
+  if (type == HTML_NODE_TAG_BLOCKQUOTE) return 6;
+  if (type == HTML_NODE_TAG_PRE) return 4;
+  if (type == HTML_NODE_TAG_TR) return 2;
   return 2;
 }
 
@@ -1198,7 +1205,15 @@ static int html_viewer_node_margin_bottom(enum html_node_type type) {
   if (type == HTML_NODE_TAG_H1) return 10;
   if (type == HTML_NODE_TAG_H2) return 8;
   if (type == HTML_NODE_TAG_H3) return 6;
+  if (type == HTML_NODE_TAG_H4) return 6;
+  if (type == HTML_NODE_TAG_H5) return 4;
+  if (type == HTML_NODE_TAG_H6) return 4;
   if (type == HTML_NODE_TAG_BR) return 6;
+  if (type == HTML_NODE_TAG_HR) return 6;
+  if (type == HTML_NODE_TAG_BLOCKQUOTE) return 6;
+  if (type == HTML_NODE_TAG_PRE) return 4;
+  if (type == HTML_NODE_TAG_TR) return 2;
+  if (type == HTML_NODE_TAG_TD) return 1;
   return 4;
 }
 
@@ -1207,9 +1222,21 @@ static uint32_t html_viewer_node_color(const struct gui_theme_palette *theme,
   if (!theme || !node) return 0xCDD6F4;
   if (node->type == HTML_NODE_TAG_H1) return theme->accent;
   if (node->type == HTML_NODE_TAG_H2) return theme->accent_alt;
+  if (node->type == HTML_NODE_TAG_H3) return theme->accent_alt;
+  if (node->type == HTML_NODE_TAG_H4) return theme->accent_alt;
+  if (node->type == HTML_NODE_TAG_H5) return theme->text;
+  if (node->type == HTML_NODE_TAG_H6) return theme->text_muted;
   if (node->type == HTML_NODE_TAG_A) return theme->accent;
   if (node->type == HTML_NODE_TAG_BUTTON) return theme->accent_alt;
   if (node->type == HTML_NODE_TAG_INPUT) return theme->text;
+  if (node->type == HTML_NODE_TAG_PRE) return theme->terminal_fg;
+  if (node->type == HTML_NODE_TAG_CODE) return theme->terminal_fg;
+  if (node->type == HTML_NODE_TAG_BLOCKQUOTE) return theme->text_muted;
+  if (node->type == HTML_NODE_TAG_MARK) return 0xF9E2AF;
+  if (node->type == HTML_NODE_TAG_TD) return node->bold ? theme->accent_alt : theme->text;
+  if (node->type == HTML_NODE_TAG_FIGCAPTION) return theme->text_muted;
+  if (node->type == HTML_NODE_TAG_DETAILS) return theme->accent;
+  if (node->type == HTML_NODE_TAG_MEDIA) return theme->text_muted;
   return node->color ? node->color : theme->text;
 }
 
@@ -1226,9 +1253,62 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   if (!surface || !f || !theme || !node) return y;
   if (node->hidden) return y;
   if (node->type == HTML_NODE_TAG_BR) return y + html_viewer_node_margin_bottom(node->type);
+  /* Horizontal rule: draw a 2-px line across the viewport */
+  if (node->type == HTML_NODE_TAG_HR) {
+    if (draw) {
+      for (int32_t dy = 0; dy < 2; dy++) {
+        int32_t hy = top + dy;
+        if (hy >= 0 && (uint32_t)hy < surface->height) {
+          uint32_t *row = (uint32_t *)((uint8_t *)surface->pixels +
+                                       (uint32_t)hy * surface->pitch);
+          for (uint32_t px = (uint32_t)margin;
+               px < surface->width - (uint32_t)margin; px++) {
+            row[px] = theme->text_muted;
+          }
+        }
+      }
+    }
+    return top + 2 + html_viewer_node_margin_bottom(node->type);
+  }
+  /* Table row separator: 1-px subtle line */
+  if (node->type == HTML_NODE_TAG_TR) {
+    if (draw) {
+      int32_t hy = top;
+      if (hy >= 0 && (uint32_t)hy < surface->height) {
+        uint32_t *row = (uint32_t *)((uint8_t *)surface->pixels +
+                                     (uint32_t)hy * surface->pitch);
+        for (uint32_t px = (uint32_t)margin;
+             px < surface->width - (uint32_t)margin; px++) {
+          row[px] = theme->window_border;
+        }
+      }
+    }
+    return top + 1 + html_viewer_node_margin_bottom(node->type);
+  }
   display[0] = '\0';
   if (node->type == HTML_NODE_TAG_LI) kstrcpy(display, sizeof(display), "* ");
   else if (node->type == HTML_NODE_TAG_IMG) kstrcpy(display, sizeof(display), "[image] ");
+  else if (node->type == HTML_NODE_TAG_PRE ||
+           node->type == HTML_NODE_TAG_CODE) {
+    kstrcpy(display, sizeof(display), "  ");
+    kbuf_append(display, sizeof(display), node->text);
+  }
+  else if (node->type == HTML_NODE_TAG_BLOCKQUOTE) {
+    kstrcpy(display, sizeof(display), "> ");
+    kbuf_append(display, sizeof(display), node->text);
+  }
+  else if (node->type == HTML_NODE_TAG_TD) {
+    kstrcpy(display, sizeof(display), node->bold ? "| " : "  ");
+    kbuf_append(display, sizeof(display), node->text);
+  }
+  else if (node->type == HTML_NODE_TAG_DETAILS) {
+    kstrcpy(display, sizeof(display), "[+] ");
+    kbuf_append(display, sizeof(display), node->text);
+  }
+  else if (node->type == HTML_NODE_TAG_FIGCAPTION) {
+    kstrcpy(display, sizeof(display), "  ");
+    kbuf_append(display, sizeof(display), node->text);
+  }
   else if (node->type == HTML_NODE_TAG_INPUT) {
     if (node->name[0]) {
       kstrcpy(display, sizeof(display), node->name);
@@ -1270,6 +1350,29 @@ static int html_viewer_node_hit_test(struct html_viewer_app *app, const struct f
   return end_y;
 }
 
+static void hv_scroll_to_anchor(struct html_viewer_app *app, const char *id) {
+  const struct font *f = font_default();
+  const struct gui_theme_palette *theme = compositor_theme();
+  int32_t y = 28;
+  int viewport = 0;
+  int max_scroll = 0;
+  if (!app || !id || !id[0] || !f || !theme || !app->window) return;
+  for (int i = 0; i < app->doc.node_count; i++) {
+    struct html_node *node = &app->doc.nodes[i];
+    if (node->id[0] && kstreq(node->id, id)) {
+      app->scroll_offset = y - 28;
+      if (app->scroll_offset < 0) app->scroll_offset = 0;
+      viewport = (int)app->window->surface.height - 32;
+      max_scroll = app->content_height - viewport;
+      if (max_scroll < 0) max_scroll = 0;
+      if (app->scroll_offset > max_scroll) app->scroll_offset = max_scroll;
+      compositor_invalidate(app->window->id);
+      return;
+    }
+    y = html_viewer_render_node(&app->window->surface, f, theme, node, y, 0);
+  }
+}
+
 static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t y,
                                      uint8_t buttons) {
   if (!win || !win->user_data || !(buttons & 1)) return;
@@ -1309,6 +1412,11 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
       if (node->type == HTML_NODE_TAG_A && node->href[0] &&
           y >= top && y < bottom && x >= 12) {
         char resolved[HTML_URL_MAX];
+        if (node->href[0] == '#') {
+          hv_scroll_to_anchor(app, node->href + 1);
+          compositor_invalidate(win->id);
+          return;
+        }
         if (hv_resolve_url(app->url, node->href, resolved, sizeof(resolved)) == 0) {
           html_viewer_navigate(app, resolved);
         } else {
@@ -1370,7 +1478,8 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       if (!self_closing && hv_tag_is_void(tag)) self_closing = 1;
 
       if (hv_streq_ci(tag, "script") || hv_streq_ci(tag, "style") ||
-          hv_streq_ci(tag, "svg") || hv_streq_ci(tag, "canvas") ||
+          hv_streq_ci(tag, "svg") || hv_streq_ci(tag, "template") ||
+          hv_streq_ci(tag, "object") || hv_streq_ci(tag, "embed") ||
           hv_streq_ci(tag, "iframe")) {
         if (!self_closing) pos = hv_skip_block(html, len, pos, tag);
         continue;
@@ -1392,6 +1501,15 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
                                         doc->title, sizeof(doc->title));
         continue;
       }
+      if (hv_streq_ci(tag, "hr")) {
+        struct html_node *node = html_push_node(doc);
+        if (node) {
+          node->type = HTML_NODE_TAG_HR;
+          (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                      "id", node->id, sizeof(node->id));
+        }
+        continue;
+      }
       if (hv_streq_ci(tag, "br")) {
         struct html_node *node = html_push_node(doc);
         if (node) node->type = HTML_NODE_TAG_BR;
@@ -1400,13 +1518,166 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       if (hv_streq_ci(tag, "html") || hv_streq_ci(tag, "body") ||
           hv_streq_ci(tag, "head") || hv_streq_ci(tag, "main") ||
           hv_streq_ci(tag, "header") || hv_streq_ci(tag, "footer") ||
-          hv_streq_ci(tag, "nav") ||
+          hv_streq_ci(tag, "nav") || hv_streq_ci(tag, "aside") ||
           hv_streq_ci(tag, "section") || hv_streq_ci(tag, "article") ||
-          hv_streq_ci(tag, "ul") || hv_streq_ci(tag, "ol") ||
+          hv_streq_ci(tag, "figure") || hv_streq_ci(tag, "picture") ||
+          hv_streq_ci(tag, "ul") || hv_streq_ci(tag, "ol") || hv_streq_ci(tag, "menu") ||
           hv_streq_ci(tag, "table") || hv_streq_ci(tag, "tbody") ||
-          hv_streq_ci(tag, "thead") || hv_streq_ci(tag, "tr") ||
-          hv_streq_ci(tag, "td") || hv_streq_ci(tag, "th") ||
-          hv_streq_ci(tag, "div") || hv_streq_ci(tag, "span")) {
+          hv_streq_ci(tag, "thead") || hv_streq_ci(tag, "tfoot") ||
+          hv_streq_ci(tag, "colgroup") || hv_streq_ci(tag, "col") ||
+          hv_streq_ci(tag, "caption") ||
+          hv_streq_ci(tag, "div") || hv_streq_ci(tag, "span") ||
+          hv_streq_ci(tag, "map") || hv_streq_ci(tag, "area")) {
+        continue;
+      }
+      /* Table row separator */
+      if (hv_streq_ci(tag, "tr")) {
+        struct html_node *node = html_push_node(doc);
+        if (node) {
+          node->type = HTML_NODE_TAG_TR;
+          (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                      "id", node->id, sizeof(node->id));
+        }
+        continue;
+      }
+      /* Table cells */
+      if (hv_streq_ci(tag, "td") || hv_streq_ci(tag, "th")) {
+        char cell_text[HTML_TEXT_MAX];
+        struct html_node *node;
+        cell_text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, cell_text,
+                                        sizeof(cell_text));
+        if (!cell_text[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_TD;
+        node->bold = hv_streq_ci(tag, "th") ? 1 : 0;
+        kstrcpy(node->text, sizeof(node->text), cell_text);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Sub-headings h4-h6 */
+      if (hv_streq_ci(tag, "h4") || hv_streq_ci(tag, "h5") ||
+          hv_streq_ci(tag, "h6")) {
+        char htext[HTML_TEXT_MAX];
+        struct html_node *node;
+        htext[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, htext,
+                                        sizeof(htext));
+        if (!htext[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = hv_streq_ci(tag, "h4") ? HTML_NODE_TAG_H4 :
+                     hv_streq_ci(tag, "h5") ? HTML_NODE_TAG_H5 :
+                                              HTML_NODE_TAG_H6;
+        kstrcpy(node->text, sizeof(node->text), htext);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Preformatted text and inline code */
+      if (hv_streq_ci(tag, "pre") || hv_streq_ci(tag, "code") ||
+          hv_streq_ci(tag, "samp") || hv_streq_ci(tag, "kbd")) {
+        char ptext[HTML_TEXT_MAX];
+        struct html_node *node;
+        ptext[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, ptext,
+                                        sizeof(ptext));
+        if (!ptext[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = hv_streq_ci(tag, "pre") ? HTML_NODE_TAG_PRE
+                                              : HTML_NODE_TAG_CODE;
+        kstrcpy(node->text, sizeof(node->text), ptext);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Blockquote */
+      if (hv_streq_ci(tag, "blockquote")) {
+        char btext[HTML_TEXT_MAX];
+        struct html_node *node;
+        btext[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, btext,
+                                        sizeof(btext));
+        if (!btext[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_BLOCKQUOTE;
+        node->indent = 1;
+        kstrcpy(node->text, sizeof(node->text), btext);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Inline emphasis: strong, b, em, i, mark, abbr, cite, small, s, del */
+      if (hv_streq_ci(tag, "strong") || hv_streq_ci(tag, "b") ||
+          hv_streq_ci(tag, "em") || hv_streq_ci(tag, "i") ||
+          hv_streq_ci(tag, "mark") || hv_streq_ci(tag, "abbr") ||
+          hv_streq_ci(tag, "cite") || hv_streq_ci(tag, "small") ||
+          hv_streq_ci(tag, "s") || hv_streq_ci(tag, "del") ||
+          hv_streq_ci(tag, "ins") || hv_streq_ci(tag, "u")) {
+        char itext[HTML_TEXT_MAX];
+        struct html_node *node;
+        itext[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, itext,
+                                        sizeof(itext));
+        if (!itext[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = hv_streq_ci(tag, "mark") ? HTML_NODE_TAG_MARK
+                                               : HTML_NODE_TEXT;
+        node->bold = (hv_streq_ci(tag, "strong") || hv_streq_ci(tag, "b")) ? 1
+                                                                             : 0;
+        kstrcpy(node->text, sizeof(node->text), itext);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Figcaption */
+      if (hv_streq_ci(tag, "figcaption")) {
+        char ftext[HTML_TEXT_MAX];
+        struct html_node *node;
+        ftext[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, ftext,
+                                        sizeof(ftext));
+        if (!ftext[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_FIGCAPTION;
+        kstrcpy(node->text, sizeof(node->text), ftext);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Details/summary collapsible */
+      if (hv_streq_ci(tag, "details") || hv_streq_ci(tag, "summary")) {
+        char dtext[HTML_TEXT_MAX];
+        struct html_node *node;
+        dtext[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, dtext,
+                                        sizeof(dtext));
+        if (!dtext[0]) continue;
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_DETAILS;
+        kstrcpy(node->text, sizeof(node->text), dtext);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
+        continue;
+      }
+      /* Video and audio: skip block content, show placeholder */
+      if (hv_streq_ci(tag, "video") || hv_streq_ci(tag, "audio")) {
+        struct html_node *node;
+        if (!self_closing) pos = hv_skip_block(html, len, pos, tag);
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_MEDIA;
+        kstrcpy(node->text, sizeof(node->text),
+                hv_streq_ci(tag, "video") ? "[video]" : "[audio]");
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
         continue;
       }
 
@@ -1500,6 +1771,8 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (node->type == HTML_NODE_TAG_A) node->color = 0x89B4FA;
         kstrcpy(node->text, sizeof(node->text), text[0] ? text : href);
         kstrcpy(node->href, sizeof(node->href), href);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "id", node->id, sizeof(node->id));
       }
       continue;
     }
