@@ -565,6 +565,28 @@ static int hv_decode_entity_value(const char *html, size_t len,
     else if (hv_match_token_ci(name, name_len, "quot")) decoded = '"';
     else if (hv_match_token_ci(name, name_len, "apos")) decoded = '\'';
     else if (hv_match_token_ci(name, name_len, "nbsp")) decoded = ' ';
+    else if (hv_match_token_ci(name, name_len, "copy")) decoded = (char)0xA9; /* © */
+    else if (hv_match_token_ci(name, name_len, "reg"))  decoded = (char)0xAE; /* ® */
+    else if (hv_match_token_ci(name, name_len, "deg"))  decoded = (char)0xB0; /* ° */
+    else if (hv_match_token_ci(name, name_len, "plusmn")) decoded = (char)0xB1;
+    else if (hv_match_token_ci(name, name_len, "laquo")) decoded = (char)0xAB;
+    else if (hv_match_token_ci(name, name_len, "raquo")) decoded = (char)0xBB;
+    else if (hv_match_token_ci(name, name_len, "mdash") ||
+             hv_match_token_ci(name, name_len, "ndash")) decoded = '-';
+    else if (hv_match_token_ci(name, name_len, "hellip")) decoded = '.';
+    else if (hv_match_token_ci(name, name_len, "ldquo") ||
+             hv_match_token_ci(name, name_len, "rdquo") ||
+             hv_match_token_ci(name, name_len, "lsquo") ||
+             hv_match_token_ci(name, name_len, "rsquo")) decoded = '\'';
+    else if (hv_match_token_ci(name, name_len, "trade")) decoded = '*';
+    else if (hv_match_token_ci(name, name_len, "times")) decoded = 'x';
+    else if (hv_match_token_ci(name, name_len, "divide")) decoded = '/';
+    else if (hv_match_token_ci(name, name_len, "middot")) decoded = '.';
+    else if (hv_match_token_ci(name, name_len, "bull")) decoded = '*';
+    else if (hv_match_token_ci(name, name_len, "euro")) decoded = 'E';
+    else if (hv_match_token_ci(name, name_len, "pound")) decoded = (char)0xA3;
+    else if (hv_match_token_ci(name, name_len, "yen")) decoded = (char)0xA5;
+    else if (hv_match_token_ci(name, name_len, "sect")) decoded = (char)0xA7;
     else return 0;
   }
   *consumed = i + 1;
@@ -2350,6 +2372,37 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
           kstrcpy(text, sizeof(text), "Submit");
         }
         kstrcpy(node->text, sizeof(node->text), text);
+        kstrcpy(node->name, sizeof(node->name), name);
+        kstrcpy(node->href, sizeof(node->href), current_form_action);
+        continue;
+      } else if (hv_streq_ci(tag, "select")) {
+        /* Collect first <option> value as the default selection */
+        struct html_node *node;
+        char opt_text[HTML_TEXT_MAX];
+        char opt_val[HTML_TEXT_MAX];
+        size_t scan = pos;
+        opt_text[0] = '\0'; opt_val[0] = '\0';
+        while (scan < len) {
+          if (html[scan] != '<') { scan++; continue; }
+          char stag[32]; size_t sattr = scan + 1; size_t send = scan; int sclose = 0, ssc = 0;
+          scan++;
+          if (scan < len && html[scan] == '/') { sclose = 1; scan++; }
+          hv_read_tag_name(html, len, &scan, stag, sizeof(stag));
+          scan = hv_scan_tag_end(html, len, scan, &send, &ssc);
+          if (sclose && hv_streq_ci(stag, "select")) break;
+          if (!sclose && hv_streq_ci(stag, "option")) {
+            hv_extract_attr_value(html + sattr, send - sattr, "value", opt_val, sizeof(opt_val));
+            scan = hv_collect_text_until_tag(html, len, scan, "option", opt_text, sizeof(opt_text));
+            break;
+          }
+        }
+        pos = hv_skip_block(html, len, pos, "select");
+        node = html_push_node(doc);
+        if (!node) break;
+        node->type = HTML_NODE_TAG_INPUT;
+        node->input_type = HTML_INPUT_TYPE_TEXT;
+        node->form_method = current_form_method;
+        kstrcpy(node->text, sizeof(node->text), opt_val[0] ? opt_val : opt_text);
         kstrcpy(node->name, sizeof(node->name), name);
         kstrcpy(node->href, sizeof(node->href), current_form_action);
         continue;

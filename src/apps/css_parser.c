@@ -165,7 +165,8 @@ static void css_apply_prop(const char *name, const char *value,
     if (css_streq_ci(name, "color")) {
         uint32_t c = css_parse_color(value);
         if (c) node->css_color = c;
-    } else if (css_streq_ci(name, "background-color")) {
+    } else if (css_streq_ci(name, "background-color") ||
+               css_streq_ci(name, "background")) {
         uint32_t c = css_parse_color(value);
         if (c) node->css_bg_color = c;
     } else if (css_streq_ci(name, "display")) {
