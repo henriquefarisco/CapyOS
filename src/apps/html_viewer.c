@@ -1162,7 +1162,10 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
   const char *html = NULL;
   size_t len = 0;
   if (!app || !url) return;
-  if (hv_strncmp(url, "about:version", 13) == 0) {
+  if (hv_strncmp(url, "about:blank", 11) == 0) {
+    html = "<html><head><title>New Tab</title></head><body></body></html>";
+    url = "about:blank";
+  } else if (hv_strncmp(url, "about:version", 13) == 0) {
     html =
       "<html><head><title>About CapyBrowser</title></head><body>"
       "<h1>CapyBrowser</h1>"
@@ -1309,6 +1312,55 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   }
 
   if (!app->url_editing) {
+    /* Arrow key scroll */
+    if (keycode == KEY_UP) {
+      html_viewer_scroll(app, -1);
+      return;
+    }
+    if (keycode == KEY_DOWN) {
+      html_viewer_scroll(app, 1);
+      return;
+    }
+    if (keycode == KEY_PGUP) {
+      int page = app->window ? (int)app->window->surface.height / 20 : 10;
+      html_viewer_scroll(app, -page);
+      return;
+    }
+    if (keycode == KEY_PGDN) {
+      int page = app->window ? (int)app->window->surface.height / 20 : 10;
+      html_viewer_scroll(app, page);
+      return;
+    }
+    /* F5: reload current page */
+    if (keycode == KEY_F5) {
+      html_viewer_navigate(app, app->url);
+      return;
+    }
+    /* Tab: cycle focus through form input elements */
+    if (ch == '\t') {
+      int start = app->focused_node_index + 1;
+      int found = -1;
+      int i;
+      for (i = start; i < app->doc.node_count; i++) {
+        if ((app->doc.nodes[i].type == HTML_NODE_TAG_INPUT ||
+             app->doc.nodes[i].type == HTML_NODE_TAG_BUTTON) &&
+            !app->doc.nodes[i].hidden) {
+          found = i; break;
+        }
+      }
+      if (found < 0) {
+        for (i = 0; i < app->doc.node_count; i++) {
+          if ((app->doc.nodes[i].type == HTML_NODE_TAG_INPUT ||
+               app->doc.nodes[i].type == HTML_NODE_TAG_BUTTON) &&
+              !app->doc.nodes[i].hidden) {
+            found = i; break;
+          }
+        }
+      }
+      if (found >= 0) app->focused_node_index = found;
+      compositor_invalidate(win->id);
+      return;
+    }
     if (ch >= 32 && ch < 127) {
       app->url_editing = 1;
       app->url[0] = '\0';
@@ -2564,6 +2616,8 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
                                      (const char *)resp->body, resp->body_len,
                                      0xCDD6F4);
     }
+    if (app->doc.title[0] && app->window)
+      compositor_set_title(app->window->id, app->doc.title);
     hv_history_push(app->url);
     hv_fetch_external_css(app);
     hv_fetch_page_images(app);
@@ -2610,7 +2664,8 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
     return;
   }
   if (hv_strncmp(url, "about:home", 10) == 0 ||
-      hv_strncmp(url, "about:version", 13) == 0) {
+      hv_strncmp(url, "about:version", 13) == 0 ||
+      hv_strncmp(url, "about:blank", 11) == 0) {
     html_viewer_load_builtin(app, url);
     if (app->window) compositor_invalidate(app->window->id);
     return;
