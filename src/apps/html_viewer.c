@@ -1188,6 +1188,9 @@ static void html_viewer_set_error(struct html_viewer_app *app,
   if (app->window) compositor_set_title(app->window->id, app->doc.title);
 }
 
+/* Static buffer for dynamically-generated about: pages */
+static char hv_about_buf[16384];
+
 static void html_viewer_load_builtin(struct html_viewer_app *app, const char *url) {
   const char *html = NULL;
   size_t len = 0;
@@ -1195,23 +1198,45 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
   if (hv_strncmp(url, "about:blank", 11) == 0) {
     html = "<html><head><title>New Tab</title></head><body></body></html>";
     url = "about:blank";
+  } else if (hv_strncmp(url, "about:history", 13) == 0) {
+    /* Dynamically build history page */
+    hv_about_buf[0] = '\0';
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "<html><head><title>History</title></head><body>"
+                "<h1>Browsing History</h1>");
+    if (hv_history_count == 0) {
+      kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                  "<p>No history yet.</p>");
+    } else {
+      for (int i = hv_history_count - 1; i >= 0; i--) {
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "<a href=\"");
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), hv_history[i]);
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "\">");
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), hv_history[i]);
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</a><br>");
+      }
+    }
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</body></html>");
+    html = hv_about_buf;
+    url = "about:history";
   } else if (hv_strncmp(url, "about:version", 13) == 0) {
     html =
       "<html><head><title>About CapyBrowser</title></head><body>"
       "<h1>CapyBrowser</h1>"
-      "<p>HTTP/1.1 client with verified HTTPS transport.</p>"
-      "<p>TLS 1.2 certificate validation, cookies, redirects, gzip/deflate decoding and basic HTML forms are enabled in this build.</p>"
-      "<p>Pages that depend on heavy JavaScript or advanced CSS fall back to simplified document mode.</p>"
+      "<p>HTTP/1.1 client with verified HTTPS (TLS 1.2) transport.</p>"
+      "<p>Features: cookies, redirects, gzip/deflate, CSS engine, PNG images, forms, history.</p>"
       "<a href=\"about:home\">Back to home</a>"
       "</body></html>";
   } else {
     html =
       "<html><head><title>CapyBrowser</title></head><body>"
       "<h1>CapyBrowser</h1>"
-      "<p>Open secure sites directly from the address bar.</p>"
-      "<p>Pages with heavy CSS or JavaScript are rendered in simplified mode.</p>"
-      "<a href=\"https://www.google.com\">Open Google</a>"
-      "<br><a href=\"about:version\">About this build</a>"
+      "<p>Type a URL in the address bar and press Enter to navigate.</p>"
+      "<p>Keyboard: arrows scroll, Tab focuses form fields, F5 reloads.</p>"
+      "<a href=\"https://www.google.com\">Google</a>"
+      "<br><a href=\"https://example.com\">example.com</a>"
+      "<br><a href=\"about:history\">History</a>"
+      "<br><a href=\"about:version\">About</a>"
       "</body></html>";
     url = "about:home";
   }
@@ -2787,7 +2812,8 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
   }
   if (hv_strncmp(url, "about:home", 10) == 0 ||
       hv_strncmp(url, "about:version", 13) == 0 ||
-      hv_strncmp(url, "about:blank", 11) == 0) {
+      hv_strncmp(url, "about:blank", 11) == 0 ||
+      hv_strncmp(url, "about:history", 13) == 0) {
     html_viewer_load_builtin(app, url);
     if (app->window) compositor_invalidate(app->window->id);
     return;
