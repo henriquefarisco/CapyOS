@@ -2,6 +2,7 @@
 #include "apps/css_parser.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
+#include "gui/png_loader.h"
 #include "memory/kmem.h"
 #include "net/http.h"
 #include "security/tls.h"
@@ -10,6 +11,49 @@
 
 static struct html_viewer_app g_viewer;
 static int g_viewer_open = 0;
+
+/* ------------------------------------------------------------------ */
+/* Image cache (per-page, cleared on each navigation)                   */
+/* ------------------------------------------------------------------ */
+
+#define HV_IMG_CACHE_MAX 8
+struct hv_img_cache_entry {
+    char     url[HTML_URL_MAX];
+    uint32_t *pixels;  /* kalloc'd ARGB32; NULL means slot unused */
+    uint32_t width;
+    uint32_t height;
+};
+static struct hv_img_cache_entry hv_img_cache[HV_IMG_CACHE_MAX];
+
+static void hv_img_cache_clear(void) {
+    for (int i = 0; i < HV_IMG_CACHE_MAX; i++) {
+        if (hv_img_cache[i].pixels) {
+            kfree(hv_img_cache[i].pixels);
+            hv_img_cache[i].pixels = NULL;
+        }
+        hv_img_cache[i].url[0] = '\0';
+        hv_img_cache[i].width  = 0;
+        hv_img_cache[i].height = 0;
+    }
+}
+
+static struct hv_img_cache_entry *hv_img_cache_find(const char *url) {
+    for (int i = 0; i < HV_IMG_CACHE_MAX; i++) {
+        if (hv_img_cache[i].pixels && kstreq(hv_img_cache[i].url, url))
+            return &hv_img_cache[i];
+    }
+    return NULL;
+}
+
+static struct hv_img_cache_entry *hv_img_cache_slot(void) {
+    for (int i = 0; i < HV_IMG_CACHE_MAX; i++) {
+        if (!hv_img_cache[i].pixels) return &hv_img_cache[i];
+    }
+    /* All slots full: evict slot 0 */
+    kfree(hv_img_cache[0].pixels);
+    hv_img_cache[0].pixels = NULL;
+    return &hv_img_cache[0];
+}
 
 int http_last_error(void);
 const char *http_error_string(int error);
@@ -29,6 +73,7 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
                                          size_t body_len,
                                          int depth);
 static void html_viewer_submit_form(struct html_viewer_app *app, int node_index);
+static void hv_fetch_page_images(struct html_viewer_app *app);
 
 enum { HTML_VIEWER_HTTP_ERR_TLS = 6 };
 enum { HTML_FORM_METHOD_GET = 0, HTML_FORM_METHOD_POST = 1 };
@@ -1314,9 +1359,58 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
     return top + 1 + html_viewer_node_margin_bottom(node->type);
   }
+  /* IMG node: blit cached pixels or fall back to alt text */
+  if (node->type == HTML_NODE_TAG_IMG) {
+    struct hv_img_cache_entry *img = node->href[0] ? hv_img_cache_find(node->href) : NULL;
+    if (img && img->pixels && img->width > 0 && img->height > 0) {
+      uint32_t max_w = surface->width > (uint32_t)(margin * 2)
+                       ? surface->width - (uint32_t)(margin * 2) : 1;
+      uint32_t dst_w = img->width < max_w ? img->width : max_w;
+      uint32_t dst_h = (dst_w == img->width) ? img->height
+                     : (uint32_t)((uint64_t)img->height * dst_w / img->width);
+      if (dst_h == 0) dst_h = 1;
+      if (draw) {
+        for (uint32_t dy = 0; dy < dst_h; dy++) {
+          int32_t sy_row = top + (int32_t)dy;
+          if (sy_row < 0 || (uint32_t)sy_row >= surface->height) continue;
+          uint32_t *dst_row = (uint32_t *)((uint8_t *)surface->pixels +
+                                           (uint32_t)sy_row * surface->pitch);
+          uint32_t src_y = dy * img->height / dst_h;
+          const uint32_t *src_row = img->pixels + src_y * img->width;
+          for (uint32_t dx = 0; dx < dst_w; dx++) {
+            uint32_t src_x = dx * img->width / dst_w;
+            uint32_t px = src_row[src_x];
+            uint32_t alpha = px >> 24;
+            if (alpha == 0xFF) {
+              dst_row[(uint32_t)margin + dx] = px;
+            } else if (alpha > 0) {
+              uint32_t bg = theme->window_bg;
+              uint32_t r = ((px >> 16) & 0xFF) * alpha / 255
+                         + ((bg >> 16) & 0xFF) * (255 - alpha) / 255;
+              uint32_t g = ((px >> 8)  & 0xFF) * alpha / 255
+                         + ((bg >> 8)  & 0xFF) * (255 - alpha) / 255;
+              uint32_t b = (px & 0xFF) * alpha / 255
+                         + (bg & 0xFF) * (255 - alpha) / 255;
+              dst_row[(uint32_t)margin + dx] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+          }
+        }
+      }
+      return top + (int32_t)dst_h + html_viewer_node_margin_bottom(node->type);
+    }
+    /* fallback */
+    {
+      char img_display[HTML_TEXT_MAX + 16];
+      kstrcpy(img_display, sizeof(img_display), "[image] ");
+      if (node->text[0]) kbuf_append(img_display, sizeof(img_display), node->text);
+      int32_t h = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top,
+                      (int32_t)surface->width - margin * 2,
+                      img_display, color, 0);
+      return top + h + html_viewer_node_margin_bottom(node->type);
+    }
+  }
   display[0] = '\0';
   if (node->type == HTML_NODE_TAG_LI) kstrcpy(display, sizeof(display), "* ");
-  else if (node->type == HTML_NODE_TAG_IMG) kstrcpy(display, sizeof(display), "[image] ");
   else if (node->type == HTML_NODE_TAG_PRE ||
            node->type == HTML_NODE_TAG_CODE) {
     kstrcpy(display, sizeof(display), "  ");
@@ -1797,6 +1891,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
                                    "alt", text, sizeof(text))) {
           kstrcpy(text, sizeof(text), src);
         }
+        if (src[0] && !href[0]) kstrcpy(href, sizeof(href), src);
       } else if (!self_closing) {
         pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
       }
@@ -2055,12 +2150,14 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
   if (resp->body && resp->body_len > 0 &&
       (hv_content_type_is_html(content_type) ||
        hv_body_looks_html(resp->body, resp->body_len))) {
+    hv_img_cache_clear();
     html_parse((const char *)resp->body, resp->body_len, &app->doc);
     if (app->doc.node_count == 0) {
       html_viewer_load_text_document(app, "Document",
                                      (const char *)resp->body, resp->body_len,
                                      0xCDD6F4);
     }
+    hv_fetch_page_images(app);
     return;
   }
   if (resp->body && resp->body_len > 0 &&
@@ -2176,6 +2273,38 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
   http_response_free(&resp);
   app->loading = 0;
   if (app->window) compositor_invalidate(app->window->id);
+}
+
+static void hv_fetch_page_images(struct html_viewer_app *app) {
+  int i;
+  if (!app) return;
+  for (i = 0; i < app->doc.node_count; i++) {
+    struct html_node *node = &app->doc.nodes[i];
+    char abs_url[HTML_URL_MAX];
+    struct hv_img_cache_entry *slot;
+    struct http_request req;
+    struct http_response resp;
+    struct png_image img;
+    int rc;
+    if (node->type != HTML_NODE_TAG_IMG || !node->href[0]) continue;
+    if (hv_resolve_url(app->url, node->href, abs_url, sizeof(abs_url)) != 0)
+      kstrcpy(abs_url, sizeof(abs_url), node->href);
+    kstrcpy(node->href, sizeof(node->href), abs_url);
+    if (hv_img_cache_find(abs_url)) continue;
+    kmemzero(&resp, sizeof(resp));
+    rc = html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp);
+    if (rc != 0 || !resp.body || resp.body_len < 8) { http_response_free(&resp); continue; }
+    kmemzero(&img, sizeof(img));
+    if (png_decode(resp.body, resp.body_len, &img) == 0 &&
+        img.pixels && img.width > 0 && img.height > 0) {
+      slot = hv_img_cache_slot();
+      kstrcpy(slot->url, sizeof(slot->url), abs_url);
+      slot->pixels = img.pixels;
+      slot->width  = img.width;
+      slot->height = img.height;
+    }
+    http_response_free(&resp);
+  }
 }
 
 void html_viewer_navigate(struct html_viewer_app *app, const char *url) {
