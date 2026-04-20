@@ -2761,6 +2761,28 @@ void html_viewer_paint(struct html_viewer_app *app) {
   }
   app->content_height = y + 8;
 
+  /* Scrollbar: 4px strip on the right edge */
+  if (app->content_height > (int32_t)s->height && s->width > 6) {
+    int viewport = (int)s->height - 28;
+    int total = app->content_height;
+    if (total > 0 && viewport > 0) {
+      uint32_t sb_x = s->width - 4;
+      uint32_t sb_top = 28;
+      uint32_t sb_h = (uint32_t)s->height - 28;
+      uint32_t thumb_h = (uint32_t)((int64_t)sb_h * viewport / total);
+      uint32_t thumb_y = sb_top + (uint32_t)((int64_t)sb_h * app->scroll_offset / total);
+      if (thumb_h < 4) thumb_h = 4;
+      if (thumb_y + thumb_h > sb_top + sb_h) thumb_y = sb_top + sb_h - thumb_h;
+      for (uint32_t sy = sb_top; sy < sb_top + sb_h && sy < s->height; sy++) {
+        uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + sy * s->pitch);
+        uint32_t color = (sy >= thumb_y && sy < thumb_y + thumb_h)
+                         ? theme->accent : theme->window_border;
+        for (uint32_t sx = sb_x; sx < sb_x + 4 && sx < s->width; sx++)
+          row[sx] = color;
+      }
+    }
+  }
+
   if (app->loading) {
     /* Draw a full-width loading bar at the bottom of the viewport. */
     uint32_t bar_h = f->glyph_height + 8;
