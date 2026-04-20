@@ -69,11 +69,15 @@ struct html_node {
 
 #define HTML_STYLE_BUF_MAX 8192
 
+#define HTML_MAX_PENDING_CSS 6
+
 struct html_document {
   struct html_node nodes[HTML_MAX_NODES];
   int node_count;
   char title[HTML_TITLE_MAX];
   char style_text[HTML_STYLE_BUF_MAX];
+  char pending_css[HTML_MAX_PENDING_CSS][HTML_URL_MAX];
+  int css_count;
 };
 
 struct html_cookie {

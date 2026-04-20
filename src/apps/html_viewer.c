@@ -102,6 +102,7 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
                                          size_t body_len,
                                          int depth);
 static void html_viewer_submit_form(struct html_viewer_app *app, int node_index);
+static void hv_fetch_external_css(struct html_viewer_app *app);
 static void hv_fetch_page_images(struct html_viewer_app *app);
 
 enum { HTML_VIEWER_HTTP_ERR_TLS = 6 };
@@ -1781,6 +1782,26 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         }
         continue;
       }
+      /* <link rel="stylesheet" href="..."> — queue for external CSS fetch */
+      if (hv_streq_ci(tag, "link")) {
+        char rel[32];
+        char link_href[HTML_URL_MAX];
+        rel[0] = '\0'; link_href[0] = '\0';
+        hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                              "rel", rel, sizeof(rel));
+        hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                              "href", link_href, sizeof(link_href));
+        if (link_href[0] && doc->css_count < HTML_MAX_PENDING_CSS) {
+          char rel_lower[32];
+          size_t ri;
+          for (ri = 0; ri < sizeof(rel_lower) - 1 && rel[ri]; ri++)
+            rel_lower[ri] = (char)(rel[ri] | 32);
+          rel_lower[ri] = '\0';
+          if (kstreq(rel_lower, "stylesheet"))
+            kstrcpy(doc->pending_css[doc->css_count++], HTML_URL_MAX, link_href);
+        }
+        continue;
+      }
       if (hv_streq_ci(tag, "script") ||
           hv_streq_ci(tag, "svg") || hv_streq_ci(tag, "template") ||
           hv_streq_ci(tag, "object") || hv_streq_ci(tag, "embed") ||
@@ -2310,6 +2331,7 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
                                      0xCDD6F4);
     }
     hv_history_push(app->url);
+    hv_fetch_external_css(app);
     hv_fetch_page_images(app);
     return;
   }
@@ -2426,6 +2448,30 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
   http_response_free(&resp);
   app->loading = 0;
   if (app->window) compositor_invalidate(app->window->id);
+}
+
+static void hv_fetch_external_css(struct html_viewer_app *app) {
+  int i;
+  if (!app || !app->doc.css_count) return;
+  for (i = 0; i < app->doc.css_count; i++) {
+    char abs_url[HTML_URL_MAX];
+    struct http_request req;
+    struct http_response resp;
+    struct css_stylesheet sheet;
+    if (hv_resolve_url(app->url, app->doc.pending_css[i], abs_url, sizeof(abs_url)) != 0)
+      kstrcpy(abs_url, sizeof(abs_url), app->doc.pending_css[i]);
+    kmemzero(&resp, sizeof(resp));
+    if (html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp) != 0) {
+      http_response_free(&resp);
+      continue;
+    }
+    if (resp.body && resp.body_len > 0) {
+      kmemzero(&sheet, sizeof(sheet));
+      if (css_parse((const char *)resp.body, resp.body_len, &sheet) == 0)
+        css_apply_to_doc(&sheet, &app->doc);
+    }
+    http_response_free(&resp);
+  }
 }
 
 static void hv_fetch_page_images(struct html_viewer_app *app) {
