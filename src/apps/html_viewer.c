@@ -1684,16 +1684,19 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   uint32_t color = html_viewer_node_color(theme, node);
   if (!surface || !f || !theme || !node) return y;
   if (node->hidden) return y;
-  /* CSS background color: fill the node's row before drawing text */
-  if (draw && node->css_bg_color) {
-    int32_t row_h = (int32_t)f->glyph_height + 4;
-    for (int32_t dy = 0; dy < row_h; dy++) {
-      int32_t hy = top + dy;
-      if (hy >= 0 && (uint32_t)hy < surface->height) {
-        uint32_t *row = (uint32_t *)((uint8_t *)surface->pixels +
-                                     (uint32_t)hy * surface->pitch);
-        for (uint32_t px = 0; px < surface->width; px++)
-          row[px] = node->css_bg_color;
+  /* CSS background color or <mark> highlight: fill the node's row */
+  {
+    uint32_t bg = node->css_bg_color;
+    if (!bg && node->type == HTML_NODE_TAG_MARK) bg = 0x3A3010; /* dim yellow bg */
+    if (draw && bg) {
+      int32_t row_h = (int32_t)f->glyph_height + 4;
+      for (int32_t dy = 0; dy < row_h; dy++) {
+        int32_t hy = top + dy;
+        if (hy >= 0 && (uint32_t)hy < surface->height) {
+          uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                      (uint32_t)hy * surface->pitch);
+          for (uint32_t px = 0; px < surface->width; px++) rp[px] = bg;
+        }
       }
     }
   }
@@ -2028,7 +2031,8 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
       /* URL bar click: enter editing, set cursor position by click x */
       app->url_editing = 1;
       {
-        int click_pos = (x - 54) / (int32_t)font_default()->glyph_width;
+        int32_t url_x0 = 54 + (int32_t)font_default()->glyph_width * 2;
+        int click_pos = (x - url_x0) / (int32_t)font_default()->glyph_width;
         int url_len = (int)kstrlen(app->url);
         app->url_cursor = click_pos < 0 ? 0 : click_pos > url_len ? url_len : click_pos;
       }
@@ -3021,11 +3025,21 @@ void html_viewer_paint(struct html_viewer_app *app) {
     /* Forward button: ">" glyph */
     font_draw_char(s, f, 26, 4, '>',
                    can_fwd ? theme->accent : theme->text_muted);
-    /* URL text */
-    font_draw_string(s, f, 54, 4, app->url,
+    /* HTTPS/HTTP indicator before URL */
+    {
+      int is_https = (hv_strncmp(app->url, "https://", 8) == 0);
+      int is_http  = (hv_strncmp(app->url, "http://",  7) == 0);
+      uint32_t indicator_color = is_https ? 0x00AA00 :
+                                  is_http  ? 0xAA8800 : theme->text_muted;
+      const char *indicator = is_https ? "S " : is_http ? "! " : "  ";
+      font_draw_string(s, f, 54, 4, indicator, indicator_color);
+    }
+    /* URL text (shifted right to make room for indicator) */
+    font_draw_string(s, f, 54 + (int32_t)f->glyph_width * 2, 4, app->url,
                      app->url_editing ? theme->text : theme->text_muted);
     if (app->url_editing) {
-      int32_t cx = 54 + app->url_cursor * (int32_t)f->glyph_width;
+      int32_t url_x0 = 54 + (int32_t)f->glyph_width * 2;
+      int32_t cx = url_x0 + app->url_cursor * (int32_t)f->glyph_width;
       for (uint32_t cy = 4; cy < 4 + f->glyph_height && cy < 24; cy++) {
         if ((uint32_t)cx < s->width) {
           uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + cy * s->pitch);
