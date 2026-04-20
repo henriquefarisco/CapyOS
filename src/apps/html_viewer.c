@@ -1,4 +1,5 @@
 #include "apps/html_viewer.h"
+#include "apps/css_parser.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
 #include "memory/kmem.h"
@@ -622,6 +623,19 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
   return pos;
 }
 
+static void hv_apply_node_attrs(struct html_node *node, const char *attrs,
+                               size_t len) {
+  char style_attr[256];
+  style_attr[0] = '\0';
+  if (!node || !attrs) return;
+  (void)hv_extract_attr_value(attrs, len, "id", node->id, sizeof(node->id));
+  (void)hv_extract_attr_value(attrs, len, "class", node->class_list,
+                              sizeof(node->class_list));
+  if (hv_extract_attr_value(attrs, len, "style", style_attr,
+                             sizeof(style_attr)))
+    css_apply_inline(style_attr, node);
+}
+
 static struct html_node *html_push_node(struct html_document *doc) {
   struct html_node *node = NULL;
   if (!doc || doc->node_count >= HTML_MAX_NODES) return NULL;
@@ -1220,6 +1234,8 @@ static int html_viewer_node_margin_bottom(enum html_node_type type) {
 static uint32_t html_viewer_node_color(const struct gui_theme_palette *theme,
                                        const struct html_node *node) {
   if (!theme || !node) return 0xCDD6F4;
+  /* CSS inline/stylesheet color takes priority */
+  if (node->css_color) return node->css_color;
   if (node->type == HTML_NODE_TAG_H1) return theme->accent;
   if (node->type == HTML_NODE_TAG_H2) return theme->accent_alt;
   if (node->type == HTML_NODE_TAG_H3) return theme->accent_alt;
@@ -1252,6 +1268,19 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   uint32_t color = html_viewer_node_color(theme, node);
   if (!surface || !f || !theme || !node) return y;
   if (node->hidden) return y;
+  /* CSS background color: fill the node's row before drawing text */
+  if (draw && node->css_bg_color) {
+    int32_t row_h = (int32_t)f->glyph_height + 4;
+    for (int32_t dy = 0; dy < row_h; dy++) {
+      int32_t hy = top + dy;
+      if (hy >= 0 && (uint32_t)hy < surface->height) {
+        uint32_t *row = (uint32_t *)((uint8_t *)surface->pixels +
+                                     (uint32_t)hy * surface->pitch);
+        for (uint32_t px = 0; px < surface->width; px++)
+          row[px] = node->css_bg_color;
+      }
+    }
+  }
   if (node->type == HTML_NODE_TAG_BR) return y + html_viewer_node_margin_bottom(node->type);
   /* Horizontal rule: draw a 2-px line across the viewport */
   if (node->type == HTML_NODE_TAG_HR) {
@@ -1477,7 +1506,36 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       }
       if (!self_closing && hv_tag_is_void(tag)) self_closing = 1;
 
-      if (hv_streq_ci(tag, "script") || hv_streq_ci(tag, "style") ||
+      /* Collect <style> block into doc->style_text for CSS processing */
+      if (hv_streq_ci(tag, "style")) {
+        if (!self_closing) {
+          size_t used = kstrlen(doc->style_text);
+          size_t cap = HTML_STYLE_BUF_MAX - 1;
+          size_t end = pos;
+          while (end < len) {
+            if (html[end] == '<') {
+              size_t j = end + 1;
+              if (j < len && html[j] == '/') j++;
+              size_t k = j;
+              while (k < len && html[k] != '>') k++;
+              char inner[12];
+              size_t copy = k - j;
+              if (copy >= sizeof(inner)) copy = sizeof(inner) - 1;
+              size_t m;
+              for (m = 0; m < copy; m++)
+                inner[m] = (char)(html[j + m] | 32);
+              inner[m] = '\0';
+              if (kstreq(inner, "style")) { pos = k + 1; break; }
+            }
+            if (used < cap) doc->style_text[used++] = html[end];
+            end++;
+          }
+          doc->style_text[used] = '\0';
+          if (pos == end) pos = end;
+        }
+        continue;
+      }
+      if (hv_streq_ci(tag, "script") ||
           hv_streq_ci(tag, "svg") || hv_streq_ci(tag, "template") ||
           hv_streq_ci(tag, "object") || hv_streq_ci(tag, "embed") ||
           hv_streq_ci(tag, "iframe")) {
@@ -1505,8 +1563,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         struct html_node *node = html_push_node(doc);
         if (node) {
           node->type = HTML_NODE_TAG_HR;
-          (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                      "id", node->id, sizeof(node->id));
+          hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         }
         continue;
       }
@@ -1535,8 +1592,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         struct html_node *node = html_push_node(doc);
         if (node) {
           node->type = HTML_NODE_TAG_TR;
-          (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                      "id", node->id, sizeof(node->id));
+          hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         }
         continue;
       }
@@ -1553,8 +1609,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         node->type = HTML_NODE_TAG_TD;
         node->bold = hv_streq_ci(tag, "th") ? 1 : 0;
         kstrcpy(node->text, sizeof(node->text), cell_text);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Sub-headings h4-h6 */
@@ -1572,8 +1627,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
                      hv_streq_ci(tag, "h5") ? HTML_NODE_TAG_H5 :
                                               HTML_NODE_TAG_H6;
         kstrcpy(node->text, sizeof(node->text), htext);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Preformatted text and inline code */
@@ -1590,8 +1644,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         node->type = hv_streq_ci(tag, "pre") ? HTML_NODE_TAG_PRE
                                               : HTML_NODE_TAG_CODE;
         kstrcpy(node->text, sizeof(node->text), ptext);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Blockquote */
@@ -1607,8 +1660,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         node->type = HTML_NODE_TAG_BLOCKQUOTE;
         node->indent = 1;
         kstrcpy(node->text, sizeof(node->text), btext);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Inline emphasis: strong, b, em, i, mark, abbr, cite, small, s, del */
@@ -1631,8 +1683,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         node->bold = (hv_streq_ci(tag, "strong") || hv_streq_ci(tag, "b")) ? 1
                                                                              : 0;
         kstrcpy(node->text, sizeof(node->text), itext);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Figcaption */
@@ -1647,8 +1698,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (!node) break;
         node->type = HTML_NODE_TAG_FIGCAPTION;
         kstrcpy(node->text, sizeof(node->text), ftext);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Details/summary collapsible */
@@ -1663,8 +1713,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (!node) break;
         node->type = HTML_NODE_TAG_DETAILS;
         kstrcpy(node->text, sizeof(node->text), dtext);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Video and audio: skip block content, show placeholder */
@@ -1676,8 +1725,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         node->type = HTML_NODE_TAG_MEDIA;
         kstrcpy(node->text, sizeof(node->text),
                 hv_streq_ci(tag, "video") ? "[video]" : "[audio]");
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
 
@@ -1771,8 +1819,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (node->type == HTML_NODE_TAG_A) node->color = 0x89B4FA;
         kstrcpy(node->text, sizeof(node->text), text[0] ? text : href);
         kstrcpy(node->href, sizeof(node->href), href);
-        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
-                                    "id", node->id, sizeof(node->id));
+        hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
       }
       continue;
     }
@@ -1806,6 +1853,12 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         break;
       }
     }
+  }
+  /* Apply collected <style> block to all nodes */
+  if (doc->style_text[0]) {
+    struct css_stylesheet sheet;
+    if (css_parse(doc->style_text, kstrlen(doc->style_text), &sheet) == 0)
+      css_apply_to_doc(&sheet, doc);
   }
   return 0;
 }

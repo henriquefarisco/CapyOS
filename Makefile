@@ -266,6 +266,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/apps/text_editor.o \
 	$(BUILD)/x86_64/apps/task_manager.o \
 	$(BUILD)/x86_64/apps/html_viewer.o \
+	$(BUILD)/x86_64/apps/css_parser.o \
 	$(BUILD)/x86_64/apps/settings.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
 	$(BUILD)/x86_64/gui/window/window_manager.o \
@@ -416,7 +417,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer.c src/net/services/http_encoding.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
+               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer.c src/apps/css_parser.c src/net/services/http_encoding.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
                src/util/kstring.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \

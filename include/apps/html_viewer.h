@@ -61,13 +61,19 @@ struct html_node {
   uint8_t hidden;
   uint8_t reserved;
   char id[64];
+  char class_list[128];
   int indent;
+  uint32_t css_color;
+  uint32_t css_bg_color;
 };
+
+#define HTML_STYLE_BUF_MAX 8192
 
 struct html_document {
   struct html_node nodes[HTML_MAX_NODES];
   int node_count;
   char title[HTML_TITLE_MAX];
+  char style_text[HTML_STYLE_BUF_MAX];
 };
 
 struct html_cookie {
