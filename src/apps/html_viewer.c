@@ -729,7 +729,9 @@ static int hv_extract_attr_value(const char *attrs, size_t len,
 static int hv_tag_is_void(const char *tag) {
   return hv_streq_ci(tag, "br") || hv_streq_ci(tag, "img") ||
          hv_streq_ci(tag, "meta") || hv_streq_ci(tag, "link") ||
-         hv_streq_ci(tag, "input") || hv_streq_ci(tag, "hr");
+         hv_streq_ci(tag, "input") || hv_streq_ci(tag, "hr") ||
+         hv_streq_ci(tag, "wbr") || hv_streq_ci(tag, "source") ||
+         hv_streq_ci(tag, "track") || hv_streq_ci(tag, "area");
 }
 
 static size_t hv_skip_block(const char *html, size_t len, size_t pos,
@@ -815,7 +817,8 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
       if (!closing &&
           (hv_streq_ci(inner, "script") || hv_streq_ci(inner, "style") ||
            hv_streq_ci(inner, "svg") || hv_streq_ci(inner, "canvas") ||
-           hv_streq_ci(inner, "iframe"))) {
+           hv_streq_ci(inner, "iframe") || hv_streq_ci(inner, "template") ||
+           hv_streq_ci(inner, "noscript") || hv_streq_ci(inner, "noframes"))) {
         pos = hv_skip_block(html, len, pos, inner);
         continue;
       }
@@ -860,6 +863,23 @@ static void hv_apply_node_attrs(struct html_node *node, const char *attrs,
   if (hv_extract_attr_value(attrs, len, "style", style_attr,
                              sizeof(style_attr)))
     css_apply_inline(style_attr, node);
+  /* Boolean attribute "open" (e.g. <details open>) */
+  {
+    /* Scan for bare "open" word or open="..." */
+    size_t i = 0;
+    while (i < len) {
+      while (i < len && hv_is_space(attrs[i])) i++;
+      if (i >= len) break;
+      if (hv_match_token_ci(attrs + i, 4, "open") &&
+          (i + 4 >= len || hv_is_space(attrs[i+4]) || attrs[i+4] == '='
+           || attrs[i+4] == '/' || attrs[i+4] == '>')) {
+        node->open = 1;
+        break;
+      }
+      while (i < len && !hv_is_space(attrs[i]) && attrs[i] != '>' &&
+             attrs[i] != '/') i++;
+    }
+  }
 }
 
 static struct html_node *html_push_node(struct html_document *doc) {
@@ -1853,12 +1873,18 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     return y; /* y already advanced by TR — do not shift again */
   }
   display[0] = '\0';
-  if (node->type == HTML_NODE_TAG_LI) kstrcpy(display, sizeof(display), "* ");
+  if (node->type == HTML_NODE_TAG_LI && !node->list_style_none)
+    kstrcpy(display, sizeof(display), "* ");
   else if (node->type == HTML_NODE_TAG_PRE ||
            node->type == HTML_NODE_TAG_CODE) {
-    /* Code block: dark background fill */
+    /* Code block: dark background fill covering full text height */
+    kstrcpy(display, sizeof(display), "  ");
+    kbuf_append(display, sizeof(display), node->text);
     if (draw && !node->css_bg_color) {
-      int32_t block_h = (int32_t)f->glyph_height + 4;
+      int32_t avail_w = (int32_t)surface->width - margin - 12;
+      if (avail_w < (int32_t)f->glyph_width) avail_w = (int32_t)f->glyph_width;
+      int32_t block_h = html_viewer_wrap_text(NULL, f, margin, top,
+                                              avail_w, display, 0, 0) + 4;
       for (int32_t dy = -1; dy < block_h; dy++) {
         int32_t hy = top + dy;
         if (hy < 0 || (uint32_t)hy >= surface->height) continue;
@@ -1869,8 +1895,6 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
           rp[px] = theme->terminal_bg;
       }
     }
-    kstrcpy(display, sizeof(display), "  ");
-    kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_BLOCKQUOTE) {
     /* Blockquote: accent left border bar */
@@ -1892,8 +1916,23 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_DETAILS) {
-    kstrcpy(display, sizeof(display), "[+] ");
-    kbuf_append(display, sizeof(display), node->text);
+    if (node->open) {
+      kstrcpy(display, sizeof(display), "[-] ");
+      kbuf_append(display, sizeof(display), node->text);
+    } else {
+      /* Show only first line/sentence when closed */
+      char summary[80];
+      size_t si = 0;
+      while (si < sizeof(summary) - 1 && node->text[si] &&
+             node->text[si] != '\n' && node->text[si] != '.') {
+        summary[si] = node->text[si]; si++;
+      }
+      if (node->text[si] == '.') summary[si++] = '.';
+      summary[si] = '\0';
+      kstrcpy(display, sizeof(display), "[+] ");
+      kbuf_append(display, sizeof(display), summary);
+      if (node->text[si]) kbuf_append(display, sizeof(display), "...");
+    }
   }
   else if (node->type == HTML_NODE_TAG_FIGCAPTION) {
     kstrcpy(display, sizeof(display), "  ");
@@ -1936,6 +1975,11 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   if (node->indent > 0 && node->indent < 300)
     margin += node->indent;
   max_width = (int32_t)surface->width - margin - 12; /* right margin fixed at 12 */
+  /* CSS width/max-width: clamp content width */
+  if (node->css_width > 0 && (int32_t)node->css_width < max_width)
+    max_width = (int32_t)node->css_width;
+  if (node->css_max_width > 0 && (int32_t)node->css_max_width < max_width)
+    max_width = (int32_t)node->css_max_width;
   if (max_width < (int32_t)f->glyph_width) max_width = (int32_t)f->glyph_width;
   /* CSS font-size scaling for non-heading nodes */
   if (node->font_size > 0 && node->font_size != f->glyph_height &&
@@ -1951,9 +1995,10 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
   }
   {
-    int underline = (node->type == HTML_NODE_TAG_A ||
-                     node->type == HTML_NODE_TAG_INPUT ||
-                     node->type == HTML_NODE_TAG_BUTTON);
+    int underline = ((node->type == HTML_NODE_TAG_A ||
+                      node->type == HTML_NODE_TAG_INPUT ||
+                      node->type == HTML_NODE_TAG_BUTTON) &&
+                     !node->no_underline);
     /* Bold: double-draw shifted 1px right for bitmap font simulation */
     if (node->bold && draw && surface) {
       html_viewer_wrap_text(surface, f, margin + 1, top,
@@ -2027,11 +2072,14 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
         html_viewer_navigate(app, hv_history[hv_history_cur]);
         hv_navigating_history = 0;
       }
+    } else if (x < 74) {
+      /* Reload button */
+      html_viewer_navigate(app, app->url);
     } else {
       /* URL bar click: enter editing, set cursor position by click x */
       app->url_editing = 1;
       {
-        int32_t url_x0 = 54 + (int32_t)font_default()->glyph_width * 2;
+        int32_t url_x0 = 78 + (int32_t)font_default()->glyph_width * 2;
         int click_pos = (x - url_x0) / (int32_t)font_default()->glyph_width;
         int url_len = (int)kstrlen(app->url);
         app->url_cursor = click_pos < 0 ? 0 : click_pos > url_len ? url_len : click_pos;
@@ -2061,6 +2109,12 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
         app->focused_node_index = i;
         app->url_editing = 0;
         html_viewer_submit_form(app, i);
+        compositor_invalidate(win->id);
+        return;
+      }
+      if (node->type == HTML_NODE_TAG_DETAILS &&
+          y >= top && y < bottom && x >= 12) {
+        node->open = node->open ? 0 : 1;
         compositor_invalidate(win->id);
         return;
       }
@@ -2236,7 +2290,11 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
           hv_streq_ci(tag, "colgroup") || hv_streq_ci(tag, "col") ||
           hv_streq_ci(tag, "caption") ||
           hv_streq_ci(tag, "div") || hv_streq_ci(tag, "span") ||
-          hv_streq_ci(tag, "map") || hv_streq_ci(tag, "area")) {
+          hv_streq_ci(tag, "map") || hv_streq_ci(tag, "area") ||
+          hv_streq_ci(tag, "form") || hv_streq_ci(tag, "fieldset") ||
+          hv_streq_ci(tag, "legend") || hv_streq_ci(tag, "optgroup") ||
+          hv_streq_ci(tag, "datalist") || hv_streq_ci(tag, "dialog") ||
+          hv_streq_ci(tag, "slot") || hv_streq_ci(tag, "portal")) {
         continue;
       }
       /* Table row separator */
@@ -2511,6 +2569,19 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         }
         else if (hv_streq_ci(tag, "img")) node->type = HTML_NODE_TAG_IMG;
         else if (hv_streq_ci(tag, "noscript")) node->type = HTML_NODE_TAG_DIV;
+        else if (hv_streq_ci(tag, "kbd") || hv_streq_ci(tag, "samp") ||
+                 hv_streq_ci(tag, "var") || hv_streq_ci(tag, "tt"))
+            node->type = HTML_NODE_TAG_CODE;
+        else if (hv_streq_ci(tag, "abbr") || hv_streq_ci(tag, "acronym") ||
+                 hv_streq_ci(tag, "cite") || hv_streq_ci(tag, "q") ||
+                 hv_streq_ci(tag, "address") || hv_streq_ci(tag, "time") ||
+                 hv_streq_ci(tag, "small") || hv_streq_ci(tag, "sub") ||
+                 hv_streq_ci(tag, "sup") || hv_streq_ci(tag, "s") ||
+                 hv_streq_ci(tag, "del") || hv_streq_ci(tag, "ins") ||
+                 hv_streq_ci(tag, "u") || hv_streq_ci(tag, "output") ||
+                 hv_streq_ci(tag, "label") || hv_streq_ci(tag, "legend") ||
+                 hv_streq_ci(tag, "caption"))
+            node->type = HTML_NODE_TAG_SPAN;
         else node->type = HTML_NODE_TEXT;
         /* Inline formatting tags that affect rendering style */
         if (hv_streq_ci(tag, "strong") || hv_streq_ci(tag, "b") ||
@@ -2561,17 +2632,23 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
     int i;
     for (i = 0; i < doc->node_count; i++) {
       if (doc->nodes[i].type == HTML_NODE_TAG_TR) {
-        int first_td = i + 1;
-        int ncols = 0;
         int j;
-        for (j = first_td; j < doc->node_count; j++) {
-          if (doc->nodes[j].type == HTML_NODE_TAG_TD) ncols++;
-          else break;
+        int td_indices[64];
+        int ncols = 0;
+        /* Collect TD node indices until next TR or TABLE-level tag */
+        for (j = i + 1; j < doc->node_count && ncols < 64; j++) {
+          enum html_node_type t = doc->nodes[j].type;
+          if (t == HTML_NODE_TAG_TR) break;  /* next row */
+          if (t == HTML_NODE_TAG_TD) td_indices[ncols++] = j;
+          /* Only skip text/span/formatting nodes; stop on block-level */
+          else if (t == HTML_NODE_TAG_P || t == HTML_NODE_TAG_DIV ||
+                   t == HTML_NODE_TAG_H1 || t == HTML_NODE_TAG_H2 ||
+                   t == HTML_NODE_TAG_H3 || t == HTML_NODE_TAG_UL) break;
         }
         if (ncols > 255) ncols = 255;
         for (j = 0; j < ncols; j++) {
-          doc->nodes[first_td + j].col_index = (uint8_t)j;
-          doc->nodes[first_td + j].col_count = (uint8_t)ncols;
+          doc->nodes[td_indices[j]].col_index = (uint8_t)j;
+          doc->nodes[td_indices[j]].col_count = (uint8_t)ncols;
         }
       }
     }
@@ -3002,7 +3079,7 @@ void html_viewer_paint(struct html_viewer_app *app) {
     uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
     for (uint32_t px = 0; px < s->width; px++) line[px] = theme->window_bg;
   }
-  /* Toolbar: 24px bar, back/forward buttons on the left, URL after */
+  /* Toolbar: 24px bar, back/forward/reload buttons on the left, URL after */
   {
     int can_back = (hv_history_cur > 0);
     int can_fwd  = (hv_history_cur < hv_history_count - 1);
@@ -3010,21 +3087,22 @@ void html_viewer_paint(struct html_viewer_app *app) {
     uint32_t url_bg    = app->url_editing ? theme->terminal_bg : theme->accent_alt;
     for (uint32_t py = 0; py < 24 && py < s->height; py++) {
       uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
-      for (uint32_t px = 0; px < 50; px++) row[px] = btn_color;
-      for (uint32_t px = 50; px < s->width; px++) row[px] = url_bg;
+      for (uint32_t px = 0; px < 74; px++) row[px] = btn_color;
+      for (uint32_t px = 74; px < s->width; px++) row[px] = url_bg;
     }
     /* Draw separator line between buttons and URL area */
     for (uint32_t py = 2; py < 22 && py < s->height; py++) {
       uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
-      row[49] = theme->window_border;
+      row[73] = theme->window_border;
     }
     /* Back button: "<" glyph */
     font_draw_char(s, f, 4, 4, '<',
                    can_back ? theme->accent : theme->text_muted);
-    font_draw_char(s, f, 4 + (int32_t)f->glyph_width, 4, ' ', 0);
     /* Forward button: ">" glyph */
     font_draw_char(s, f, 26, 4, '>',
                    can_fwd ? theme->accent : theme->text_muted);
+    /* Reload button: "R" glyph (loading shows "*") */
+    font_draw_char(s, f, 50, 4, app->loading ? '*' : 'R', theme->accent);
     /* HTTPS/HTTP indicator before URL */
     {
       int is_https = (hv_strncmp(app->url, "https://", 8) == 0);
@@ -3032,13 +3110,13 @@ void html_viewer_paint(struct html_viewer_app *app) {
       uint32_t indicator_color = is_https ? 0x00AA00 :
                                   is_http  ? 0xAA8800 : theme->text_muted;
       const char *indicator = is_https ? "S " : is_http ? "! " : "  ";
-      font_draw_string(s, f, 54, 4, indicator, indicator_color);
+      font_draw_string(s, f, 78, 4, indicator, indicator_color);
     }
     /* URL text (shifted right to make room for indicator) */
-    font_draw_string(s, f, 54 + (int32_t)f->glyph_width * 2, 4, app->url,
+    font_draw_string(s, f, 78 + (int32_t)f->glyph_width * 2, 4, app->url,
                      app->url_editing ? theme->text : theme->text_muted);
     if (app->url_editing) {
-      int32_t url_x0 = 54 + (int32_t)f->glyph_width * 2;
+      int32_t url_x0 = 78 + (int32_t)f->glyph_width * 2;
       int32_t cx = url_x0 + app->url_cursor * (int32_t)f->glyph_width;
       for (uint32_t cy = 4; cy < 4 + f->glyph_height && cy < 24; cy++) {
         if ((uint32_t)cx < s->width) {

@@ -180,9 +180,13 @@ static void css_apply_prop(const char *name, const char *value,
              value[2] == '0')) {
             node->bold = 1;
         }
-    } else if (css_streq_ci(name, "text-decoration")) {
-        /* underline is already implicit for links; none removes it */
-        (void)value; /* reserved for future rendering use */
+    } else if (css_streq_ci(name, "text-decoration") ||
+               css_streq_ci(name, "text-decoration-line")) {
+        if (css_streq_ci(value, "none")) node->no_underline = 1;
+        else if (css_streq_ci(value, "underline")) node->no_underline = 0;
+    } else if (css_streq_ci(name, "list-style-type") ||
+               css_streq_ci(name, "list-style")) {
+        if (css_streq_ci(value, "none")) node->list_style_none = 1;
     } else if (css_streq_ci(name, "opacity")) {
         /* treat opacity:0 as hidden */
         if (value[0] == '0' && (value[1] == '\0' || value[1] == '.'))
@@ -202,6 +206,33 @@ static void css_apply_prop(const char *name, const char *value,
         if (css_streq_ci(value, "center")) node->text_align = 1;
         else if (css_streq_ci(value, "right")) node->text_align = 2;
         else node->text_align = 0;
+    } else if (css_streq_ci(name, "margin") || css_streq_ci(name, "padding")) {
+        /* Shorthand: parse up to 4 space-separated values; apply left (index 3 or 1) */
+        uint32_t vals[4] = {0, 0, 0, 0};
+        int nvals = 0;
+        const char *p = value;
+        while (*p && nvals < 4) {
+            while (*p == ' ' || *p == '\t') p++;
+            if (!*p) break;
+            if (css_streq_ci(p, "auto") || *p < '0' || *p > '9') {
+                nvals++;
+                while (*p && *p != ' ' && *p != '\t') p++;
+                continue;
+            }
+            uint32_t v = 0;
+            while (*p >= '0' && *p <= '9') { v = v * 10 + (uint32_t)(*p - '0'); p++; }
+            if (*p == '.') { p++; while (*p >= '0' && *p <= '9') p++; }
+            if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) v = v * 16;
+            while (*p && *p != ' ' && *p != '\t') p++;
+            vals[nvals++] = v;
+        }
+        /* CSS shorthand: 1 val = all; 2 vals = top/bottom left/right;
+         * 3 vals = top left/right bottom; 4 vals = top right bottom left */
+        uint32_t left_val = (nvals == 1) ? vals[0] :
+                            (nvals == 2) ? vals[1] :
+                            (nvals == 3) ? vals[1] : vals[3];
+        if (left_val > 0 && (int)left_val > node->indent)
+            node->indent = (int)left_val;
     } else if (css_streq_ci(name, "margin-left") ||
                css_streq_ci(name, "padding-left")) {
         uint32_t px = 0;
@@ -211,6 +242,19 @@ static void css_apply_prop(const char *name, const char *value,
             px = px * 16;
         if (px > 0 && (int)px > node->indent)
             node->indent = (int)px;
+    } else if (css_streq_ci(name, "max-width")) {
+        uint32_t px = 0;
+        const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
+        if (px > 0 && px < 65535) node->css_max_width = (uint16_t)px;
+    } else if (css_streq_ci(name, "width") && !css_streq_ci(value, "100%") &&
+               !css_streq_ci(value, "auto")) {
+        uint32_t px = 0;
+        const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
+        if (px > 0 && px < 65535) node->css_width = (uint16_t)px;
     }
 }
 
@@ -282,18 +326,78 @@ int css_parse(const char *css, size_t len, struct css_stylesheet *out) {
             continue;
         }
         if (pos >= len) break;
-        /* Skip @-rules (media, keyframes, import, etc.) */
+        /* Handle @-rules */
         if (css[pos] == '@') {
-            /* find next '{' or ';' */
-            while (pos < len && css[pos] != '{' && css[pos] != ';') pos++;
+            size_t at_start = pos;
+            int is_media = 0;
+            int media_matches = 0;
+            pos++; /* skip '@' */
+            /* Check if it's @media */
+            if (pos + 4 < len &&
+                css_tolower(css[pos])   == 'm' &&
+                css_tolower(css[pos+1]) == 'e' &&
+                css_tolower(css[pos+2]) == 'd' &&
+                css_tolower(css[pos+3]) == 'i' &&
+                css_tolower(css[pos+4]) == 'a') {
+                is_media = 1;
+                pos += 5;
+                /* Read media condition until '{' */
+                size_t cond_start = pos;
+                while (pos < len && css[pos] != '{' && css[pos] != ';') pos++;
+                if (pos < len && css[pos] == '{') {
+                    /* Check condition: match "screen", "all", or conditions with
+                     * max-width >= 480 or min-width <= 800 (treat as small screen) */
+                    char cond[128];
+                    size_t clen = pos - cond_start;
+                    if (clen >= 128) clen = 127;
+                    kmemcpy(cond, css + cond_start, clen); cond[clen] = '\0';
+                    css_trim(cond);
+                    /* Accept: screen, all, empty, or max-width queries */
+                    if (!cond[0] || css_streq_ci(cond, "screen") ||
+                        css_streq_ci(cond, "all") ||
+                        css_startswith_ci(cond, "screen") ||
+                        /* max-width condition: always accept (we're always small) */
+                        kstrlen(cond) > 0) {
+                        /* Check for min-width > 1024 — skip those (desktop-only) */
+                        const char *mw = cond;
+                        int skip_desktop = 0;
+                        while (*mw) {
+                            if (css_startswith_ci(mw, "min-width")) {
+                                /* Parse px value */
+                                const char *p2 = mw + 9;
+                                while (*p2 && (*p2 < '0' || *p2 > '9') &&
+                                       *p2 != ')') p2++;
+                                uint32_t px = 0;
+                                while (*p2 >= '0' && *p2 <= '9') {
+                                    px = px * 10 + (uint32_t)(*p2 - '0'); p2++;
+                                }
+                                if (px > 1024) { skip_desktop = 1; break; }
+                            }
+                            mw++;
+                        }
+                        media_matches = !skip_desktop;
+                    }
+                }
+            } else {
+                /* Non-media @-rule: skip to '{...}' or ';' */
+                while (pos < len && css[pos] != '{' && css[pos] != ';') pos++;
+            }
+            (void)at_start;
             if (pos < len && css[pos] == '{') {
-                /* skip block */
-                int depth = 1;
-                pos++;
-                while (pos < len && depth > 0) {
-                    if (css[pos] == '{') depth++;
-                    else if (css[pos] == '}') depth--;
+                if (is_media && media_matches) {
+                    /* Parse inner rules recursively by advancing past '{' */
+                    pos++; /* enter block */
+                    /* Continue normal parsing inside (loop handles nested depth via selector scan) */
+                    continue; /* re-enter loop inside the @media block */
+                } else {
+                    /* skip entire block */
+                    int depth = 1;
                     pos++;
+                    while (pos < len && depth > 0) {
+                        if (css[pos] == '{') depth++;
+                        else if (css[pos] == '}') depth--;
+                        pos++;
+                    }
                 }
             } else if (pos < len) {
                 pos++; /* skip ';' */
@@ -350,7 +454,21 @@ int css_parse(const char *css, size_t len, struct css_stylesheet *out) {
                 p->value[vlen] = '\0';
                 css_trim(p->name);
                 css_trim(p->value);
-                if (p->name[0]) rule->prop_count++;
+                if (p->name[0] == '-' && p->name[1] == '-') {
+                    /* CSS custom property: store in var table */
+                    if (out->var_count < CSS_MAX_VARS) {
+                        struct css_var *cv = &out->vars[out->var_count++];
+                        size_t vnl = kstrlen(p->name);
+                        size_t vvl = kstrlen(p->value);
+                        if (vnl >= CSS_VAR_NAME_MAX) vnl = CSS_VAR_NAME_MAX - 1;
+                        if (vvl >= CSS_VAR_VALUE_MAX) vvl = CSS_VAR_VALUE_MAX - 1;
+                        kmemcpy(cv->name, p->name, vnl); cv->name[vnl] = '\0';
+                        kmemcpy(cv->value, p->value, vvl); cv->value[vvl] = '\0';
+                    }
+                    /* Don't store in rule props */
+                } else if (p->name[0]) {
+                    rule->prop_count++;
+                }
             }
         }
         if (pos < len && css[pos] == '}') pos++;
@@ -392,6 +510,9 @@ static const char *css_node_tag(const struct html_node *node) {
         case HTML_NODE_TAG_MEDIA:      return "video";
         case HTML_NODE_TAG_FIGCAPTION: return "figcaption";
         case HTML_NODE_TAG_DETAILS:    return "details";
+        case HTML_NODE_TAG_BODY:       return "body";
+        case HTML_NODE_TAG_HTML:       return "html";
+        case HTML_NODE_TAG_HEAD:       return "head";
         default:                       return "";
     }
 }
@@ -419,9 +540,32 @@ static int css_simple_selector_matches(const char *sel,
     char tag_part[64];
     char cls_part[64];
     char id_part[64];
+    char stripped[CSS_SELECTOR_MAX];
     size_t pos = 0;
     size_t len = 0;
     if (!sel || !node) return 0;
+    /* :root → treat as html selector */
+    if (css_streq_ci(sel, ":root")) return node->type == HTML_NODE_TAG_HTML;
+    /* Strip pseudo-classes/elements (:hover, ::before, :nth-child(), etc.)
+     * so a:hover still applies the base a{} properties */
+    {
+        size_t slen = kstrlen(sel);
+        size_t si = 0, di = 0;
+        while (si < slen && di < CSS_SELECTOR_MAX - 1) {
+            if (sel[si] == ':') {
+                /* skip to end of this token (stop at '.', '#', '[', or end) */
+                while (si < slen && sel[si] != '.' && sel[si] != '#' &&
+                       sel[si] != '[') si++;
+            } else if (sel[si] == '[') {
+                while (si < slen && sel[si] != ']') si++;
+                if (si < slen) si++; /* skip ']' */
+            } else {
+                stripped[di++] = sel[si++];
+            }
+        }
+        stripped[di] = '\0';
+        sel = stripped;
+    }
     /* Universal */
     if (sel[0] == '*' && sel[1] == '\0') return 1;
     len = kstrlen(sel);
@@ -511,6 +655,55 @@ static int css_selector_matches(const char *selector,
 /* Apply stylesheet to document                                         */
 /* ------------------------------------------------------------------ */
 
+/* Expand var(--name) or var(--name, fallback) using stylesheet variables.
+ * Writes resolved value into out (max out_len). Returns 1 if expanded. */
+static int css_expand_var(const struct css_stylesheet *css,
+                          const char *value, char *out, size_t out_len) {
+    const char *p;
+    size_t ol = 0;
+    if (!css || !value || !out || out_len == 0) return 0;
+    p = value;
+    while (*p && ol + 1 < out_len) {
+        /* Look for var( */
+        if (p[0] == 'v' && p[1] == 'a' && p[2] == 'r' && p[3] == '(') {
+            const char *inner = p + 4;
+            while (*inner == ' ') inner++;
+            if (inner[0] == '-' && inner[1] == '-') {
+                /* Extract var name */
+                const char *nstart = inner;
+                size_t ni2 = 0;
+                char varname[CSS_VAR_NAME_MAX];
+                while (*inner && *inner != ',' && *inner != ')') inner++;
+                ni2 = (size_t)(inner - nstart);
+                if (ni2 >= CSS_VAR_NAME_MAX) ni2 = CSS_VAR_NAME_MAX - 1;
+                kmemcpy(varname, nstart, ni2); varname[ni2] = '\0';
+                css_trim(varname);
+                /* Find in var table */
+                const char *resolved = NULL;
+                for (int vi = 0; vi < css->var_count; vi++) {
+                    if (css_streq_ci(css->vars[vi].name, varname)) {
+                        resolved = css->vars[vi].value; break;
+                    }
+                }
+                /* Skip to closing ')' */
+                while (*inner && *inner != ')') inner++;
+                if (*inner == ')') inner++;
+                if (resolved) {
+                    size_t rlen = kstrlen(resolved);
+                    if (ol + rlen >= out_len) rlen = out_len - ol - 1;
+                    kmemcpy(out + ol, resolved, rlen);
+                    ol += rlen;
+                }
+                p = inner;
+                continue;
+            }
+        }
+        out[ol++] = *p++;
+    }
+    out[ol] = '\0';
+    return ol > 0;
+}
+
 void css_apply_to_doc(const struct css_stylesheet *css,
                       struct html_document *doc) {
     if (!css || !doc) return;
@@ -520,8 +713,15 @@ void css_apply_to_doc(const struct css_stylesheet *css,
             const struct css_rule *rule = &css->rules[ri];
             if (!css_selector_matches(rule->selector, node)) continue;
             for (int pi = 0; pi < rule->prop_count; pi++) {
-                css_apply_prop(rule->props[pi].name, rule->props[pi].value,
-                               node);
+                const char *val = rule->props[pi].value;
+                char expanded[CSS_PROP_VALUE_MAX];
+                /* Expand CSS custom property references */
+                if (kstrlen(val) >= 4 &&
+                    val[0] == 'v' && val[1] == 'a' && val[2] == 'r') {
+                    css_expand_var(css, val, expanded, sizeof(expanded));
+                    val = expanded;
+                }
+                css_apply_prop(rule->props[pi].name, val, node);
             }
         }
     }

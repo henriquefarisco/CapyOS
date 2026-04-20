@@ -62,6 +62,11 @@ struct html_node {
   uint8_t text_align; /* 0=left, 1=center, 2=right */
   uint8_t col_index;  /* column index within a table row (0-based) */
   uint8_t col_count;  /* total columns in the row (0 = not in a table) */
+  uint8_t no_underline; /* CSS text-decoration: none */
+  uint8_t list_style_none; /* CSS list-style-type: none */
+  uint8_t open; /* <details open> or toggled open by click */
+  uint16_t css_max_width; /* max-width in px; 0 = unset */
+  uint16_t css_width;     /* width in px; 0 = unset */
   char id[64];
   char class_list[128];
   int indent;
