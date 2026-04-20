@@ -4,9 +4,9 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-11
+Ultima atualizacao: 2026-04-19
 Versao de referencia: `0.8.0-alpha.0`
-Consolidacao atual de `develop`: desktop x64 estabilizado, limpeza da trilha 32-bit, ampliacao de drivers e documentacao revisada.
+Consolidacao atual de `develop`: pilha TCP/IP corrigida (checksum, RST, retransmissao SYN, redirect HTTP), `net-fetch` HTTP/HTTPS funcional, navegador HTML com barra de carregamento, diagnosticos de rede ampliados.
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -102,9 +102,12 @@ Codigo legado `BIOS/MBR 32-bit` pode ainda existir no repositorio como divida de
 - console serial COM1 como fallback de depuracao
 - deteccao de PCIe/NVMe e inicializacao de controladores suportados
 - bootstrap inicial de rede no x64 com:
-  - `e1000` funcional (RX/TX + ping/ICMP)
+  - `e1000` funcional (RX/TX + ping/ICMP/TCP)
   - `tulip-2114x` em modo inicial/experimental
-- parser/protocolo de ARP/IPv4/ICMP/UDP/TCP com diagnostico via CLI
+- pilha TCP/IP completa: ARP/IPv4/ICMP/UDP/TCP com checksum correto, RST handling, retransmissao SYN
+- HTTP/HTTPS funcional via `net-fetch` (BearSSL TLS 1.2, segue redirects, exibe TLS e body preview)
+- navegador HTML interno com barra de carregamento e indicador de progresso
+- diagnostico de rede ampliado: `diag: arp=N syn-out=N syn-ack=N` em falhas
 - estado de sessao com usuario autenticado, `cwd`, prompt dinamico e logout
 
 ### 3. Filesystem (CAPYFS) e VFS
@@ -139,10 +142,12 @@ Conjuntos de comandos implementados:
 - busca: `hunt-file`, `hunt-dir`, `hunt-any`, `find`
 - sessao/ajuda/sistema: `help-any`, `help-docs`, `mess`, `bye`, `print-*`, `config-keyboard`, `shutdown-reboot`, `shutdown-off`, `do-sync`
 - rede:
-  - `net-status`
+  - `net-status`, `net-refresh`, `net-dump-runtime`
   - `net-ip`, `net-gw`, `net-dns`
-  - `net-set <ip> <mask> <gw> <dns>`
-  - `hey <ip|gateway|dns|self>`
+  - `net-set <ip> <mask> <gw> <dns>`, `net-mode [static|dhcp]`
+  - `net-resolve <hostname>` (DNS lookup)
+  - `hey <ip|hostname|gateway|dns|self>` (ICMP ping)
+  - `net-fetch <url>` (HTTP/HTTPS GET, segue ate 5 redirects, exibe TLS, body preview)
 
 Observacao sobre o x64:
 - comandos antigos que estavam hardcoded no loop principal foram redirecionados para o modulo de shell
@@ -172,7 +177,7 @@ Impacto pratico:
 | CAPYFS em disco cifrado | Ativo no x64 | Parcial |
 | Login e sessao | Funcional no x64 com persistencia em disco | Parcial |
 | CLI modular | Comandos principais ativos | Estavel |
-| Rede x64 | Stack com ARP/IPv4/ICMP ativo, `e1000` funcional e `VMXNET3` apenas detectado | Parcial |
+| Rede x64 | TCP/IP corrigido; HTTP/HTTPS funcional (`net-fetch`); `e1000` validado | Parcial |
 | VMware | Caminho principal atual para boot, setup, login e CLI | Parcial |
 | Hyper-V | Backend experimental, sem suporte oficial de release | Fora de suporte |
 | USB HID teclado x64 | Enumeracao XHCI ainda incompleta | Em desenvolvimento |
@@ -188,6 +193,7 @@ Impacto pratico:
 - scheduler/multithread ainda nao entrou no kernel runtime
 - hardening criptografico de integridade por bloco/metadata ainda pendente
 - o kernel x64 ainda depende de `EFI ConIn` em parte dos cenarios UEFI
+- navegador HTML: paginas pesadas podem travar a UI (sem streaming/paging); imagens e videos nao renderizados; sem cache/cookies
 
 ## Build e testes
 

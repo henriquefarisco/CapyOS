@@ -61,6 +61,7 @@ Contexto operacional atual:
 | `net-gw` | `net-gw` | Exibe o gateway padrao configurado. |
 | `net-dns` | `net-dns` | Exibe o DNS configurado. |
 | `net-resolve` | `net-resolve <hostname>` | Resolve um hostname via DNS usando o servidor configurado na stack atual. |
+| `net-fetch` | `net-fetch <url>` | Realiza HTTP/HTTPS GET; segue ate 5 redirects automaticamente; exibe status, host, porta, content-type, tamanho, estado TLS (versao, cipher, ALPN) e preview textual do corpo (ate 192 chars). Em falha, imprime linha de diagnostico com contadores ARP/SYN. |
 | `net-set` | `net-set <ip> <mask> <gateway> <dns>` | Aplica IPv4 estatico na stack atual e salva em `/system/config.ini`. |
 | `net-mode` | `net-mode [list|show|static|dhcp]` | Alterna entre modo estatico e DHCP, persistindo `network_mode=` em `/system/config.ini`. |
 | `hey` | `hey <ip|hostname|gateway|dns|self>` | Envia ICMP echo e responde no formato `hello from (...) Xms`. |
@@ -261,8 +262,14 @@ Contexto operacional atual:
 - `ready=yes/no` indica se a stack esta operacional para envio/polling.
 - `net-resolve <hostname>` consulta um registro `A` via UDP/53 usando o DNS
   configurado na stack atual.
-- `hey <hostname>` agora tenta resolver o nome via DNS antes do ICMP echo,
-  usando o mesmo DNS configurado na stack atual.
+- `hey <hostname>` resolve o nome via DNS antes do ICMP echo, usando o DNS
+  configurado na stack atual. Retorna `hello from (nome/ip/reply) Xms`.
+- `net-fetch <url>` suporta `http://` e `https://` (TLS 1.2 via BearSSL).
+  Segue ate 5 redirects (301/302/303/307/308), incluindo redirects de
+  `http://` para `https://`. Em caso de falha imprime:
+  `diag: arp=N syn-out=N syn-ack=N arp-before=N` para facilitar diagnostico
+  sem acesso ao wireshark. O campo `tls=` informa versao e cipher negociados.
+  O campo `preview=` exibe os primeiros 192 caracteres da resposta textual.
 - `net-set <ip> <mask> <gateway> <dns>` altera a stack atual e persiste a
   configuracao em `/system/config.ini`.
 - `net-mode show` exibe o modo persistido ativo: `static` ou `dhcp`.
