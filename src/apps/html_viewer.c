@@ -946,7 +946,8 @@ static size_t hv_parse_inline_content(const char *html, size_t len, size_t pos,
                                        const char *close_tag,
                                        struct html_document *doc,
                                        const struct html_node *tmpl) {
-  char buf[HTML_TEXT_MAX];
+  /* Static buffers: CapyOS is single-threaded; avoids ~2 KB stack pressure */
+  static char buf[HTML_TEXT_MAX];
   size_t buf_pos = 0;
   int last_space = 1;
   buf[0] = '\0';
@@ -1003,8 +1004,8 @@ static size_t hv_parse_inline_content(const char *html, size_t len, size_t pos,
       }
       /* <a href="...">link text</a> — flush prior text, emit anchor node */
       if (!self_closing && hv_streq_ci(inner, "a")) {
-        char a_href[HTML_URL_MAX];
-        char a_text[HTML_TEXT_MAX];
+        static char a_href[HTML_URL_MAX];
+        static char a_text[HTML_TEXT_MAX];
         size_t a_tpos = 0; int a_lsp = 1;
         struct html_node *anode;
         a_href[0] = '\0'; a_text[0] = '\0';
@@ -1072,7 +1073,7 @@ static size_t hv_parse_inline_content(const char *html, size_t len, size_t pos,
            hv_streq_ci(inner, "time") || hv_streq_ci(inner, "sub") ||
            hv_streq_ci(inner, "sup") || hv_streq_ci(inner, "label"))) {
         /* Flush current run, then read this inline element's text directly into buf */
-        char sub_text[HTML_TEXT_MAX];
+        static char sub_text[HTML_TEXT_MAX];
         size_t sub_pos = 0; int sub_lsp = 1;
         sub_text[0] = '\0';
         /* Collect until closing tag */
