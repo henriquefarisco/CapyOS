@@ -3,6 +3,7 @@
 #include "drivers/input/keyboard_layout.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
+#include "gui/jpeg_loader.h"
 #include "gui/png_loader.h"
 #include "memory/kmem.h"
 #include "net/http.h"
@@ -3425,13 +3426,38 @@ static void hv_fetch_page_images(struct html_viewer_app *app) {
       body_len = resp.body_len;
     }
     kmemzero(&img, sizeof(img));
-    if (body_len >= 8 && png_decode(body, body_len, &img) == 0 &&
-        img.pixels && img.width > 0 && img.height > 0) {
-      slot = hv_img_cache_slot();
-      kstrcpy(slot->url, sizeof(slot->url), abs_url);
-      slot->pixels = img.pixels;
-      slot->width  = img.width;
-      slot->height = img.height;
+    if (body_len >= 8) {
+      int decoded = 0;
+      /* Try PNG first (signature: 0x89 'P' 'N' 'G') */
+      if (!decoded && body[0] == 0x89 && body[1] == 0x50) {
+        if (png_decode(body, body_len, &img) == 0 &&
+            img.pixels && img.width > 0 && img.height > 0) {
+          decoded = 1;
+        }
+      }
+      /* Try JPEG (signature: 0xFF 0xD8) */
+      if (!decoded && body[0] == 0xFF && body[1] == 0xD8) {
+        struct jpeg_image jimg;
+        kmemzero(&jimg, sizeof(jimg));
+        if (jpeg_decode(body, body_len, &jimg) == 0 &&
+            jimg.pixels && jimg.width > 0 && jimg.height > 0) {
+          img.pixels = jimg.pixels;
+          img.width  = jimg.width;
+          img.height = jimg.height;
+          decoded = 1;
+        }
+      }
+      /* Fallback: try PNG regardless of signature */
+      if (!decoded) {
+        png_decode(body, body_len, &img);
+      }
+      if (img.pixels && img.width > 0 && img.height > 0) {
+        slot = hv_img_cache_slot();
+        kstrcpy(slot->url, sizeof(slot->url), abs_url);
+        slot->pixels = img.pixels;
+        slot->width  = img.width;
+        slot->height = img.height;
+      }
     }
     if (!cached) http_response_free(&resp);
   }
