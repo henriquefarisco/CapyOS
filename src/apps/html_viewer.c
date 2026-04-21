@@ -182,6 +182,32 @@ static int  hv_history_count = 0;
 static int  hv_history_cur   = -1;
 static int  hv_navigating_history = 0; /* suppress push during back/fwd */
 
+#define HV_BOOKMARK_MAX 32
+static char hv_bookmark_url[HV_BOOKMARK_MAX][HTML_URL_MAX];
+static char hv_bookmark_title[HV_BOOKMARK_MAX][HTML_TITLE_MAX];
+static int  hv_bookmark_count = 0;
+
+static void hv_bookmark_add(const char *url, const char *title) {
+  int i;
+  if (!url || !url[0]) return;
+  for (i = 0; i < hv_bookmark_count; i++) {
+    if (kstreq(hv_bookmark_url[i], url)) return; /* already bookmarked */
+  }
+  if (hv_bookmark_count >= HV_BOOKMARK_MAX) return;
+  kstrcpy(hv_bookmark_url[hv_bookmark_count], HTML_URL_MAX, url);
+  kstrcpy(hv_bookmark_title[hv_bookmark_count], HTML_TITLE_MAX,
+          title && title[0] ? title : url);
+  hv_bookmark_count++;
+}
+
+static int hv_is_bookmarked(const char *url) {
+  int i;
+  if (!url) return 0;
+  for (i = 0; i < hv_bookmark_count; i++)
+    if (kstreq(hv_bookmark_url[i], url)) return 1;
+  return 0;
+}
+
 /* Set by TR renderer, read by TD renderer for side-by-side column layout */
 static int32_t hv_table_row_y = 28;
 static int32_t hv_table_row_h = 24;
@@ -1239,26 +1265,67 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
     kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</body></html>");
     html = hv_about_buf;
     url = "about:history";
+  } else if (hv_strncmp(url, "about:bookmarks", 15) == 0) {
+    hv_about_buf[0] = '\0';
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "<html><head><title>Bookmarks</title></head><body>"
+                "<h1>Bookmarks</h1>");
+    if (hv_bookmark_count == 0) {
+      kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                  "<p>No bookmarks yet. Press Ctrl+D on a page to bookmark it.</p>");
+    } else {
+      for (int i = 0; i < hv_bookmark_count; i++) {
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "<a href=\"");
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), hv_bookmark_url[i]);
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "\">");
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), hv_bookmark_title[i]);
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</a><br>");
+      }
+    }
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</body></html>");
+    html = hv_about_buf;
+    url = "about:bookmarks";
   } else if (hv_strncmp(url, "about:version", 13) == 0) {
     html =
       "<html><head><title>About CapyBrowser</title></head><body>"
       "<h1>CapyBrowser</h1>"
       "<p>HTTP/1.1 client with verified HTTPS (TLS 1.2) transport.</p>"
-      "<p>Features: cookies, redirects, gzip/deflate, CSS engine, PNG images, forms, history.</p>"
+      "<p>Features: cookies, redirects, gzip/deflate, CSS engine, PNG images, forms, history, bookmarks.</p>"
       "<a href=\"about:home\">Back to home</a>"
       "</body></html>";
   } else {
-    html =
-      "<html><head><title>CapyBrowser</title></head><body>"
-      "<h1>CapyBrowser</h1>"
-      "<p>Type a URL in the address bar and press Enter to navigate.</p>"
-      "<p>Keyboard: arrows scroll, Tab focuses form fields, F5 reloads.</p>"
-      "<a href=\"https://www.google.com\">Google</a>"
-      "<br><a href=\"https://example.com\">example.com</a>"
-      "<br><a href=\"about:history\">History</a>"
-      "<br><a href=\"about:version\">About</a>"
-      "</body></html>";
-    url = "about:home";
+    /* about:home / about:newtab */
+    hv_about_buf[0] = '\0';
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "<html><head><title>New Tab</title></head><body>"
+                "<h1>CapyBrowser</h1>"
+                "<p>Type a URL and press Enter. Press Ctrl+D to bookmark current page.</p>"
+                "<form action=\"\" method=\"get\">"
+                "<input type=\"text\" name=\"url\" placeholder=\"Enter URL...\"> "
+                "<input type=\"submit\" value=\"Go\">"
+                "</form>"
+                "<h2>Bookmarks</h2>");
+    if (hv_bookmark_count == 0) {
+      kbuf_append(hv_about_buf, sizeof(hv_about_buf), "<p>No bookmarks yet.</p>");
+    } else {
+      for (int i = 0; i < hv_bookmark_count; i++) {
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "<a href=\"");
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), hv_bookmark_url[i]);
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "\">");
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), hv_bookmark_title[i]);
+        kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</a><br>");
+      }
+    }
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "<h2>Quick Links</h2>"
+                "<a href=\"https://www.google.com\">Google</a><br>"
+                "<a href=\"https://example.com\">example.com</a><br>"
+                "<a href=\"about:history\">History</a><br>"
+                "<a href=\"about:bookmarks\">All Bookmarks</a><br>"
+                "<a href=\"about:version\">About</a>"
+                "</body></html>");
+    html = hv_about_buf;
+    url = (hv_strncmp(url, "about:newtab", 12) == 0) ? "about:newtab" : "about:home";
   }
   while (html[len]) len++;
   html_parse(html, len, &app->doc);
@@ -1294,6 +1361,18 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   if (!win || !win->user_data) return;
   struct html_viewer_app *app = (struct html_viewer_app *)win->user_data;
   char ch = (keycode < 0x80) ? (char)keycode : 0;
+
+  /* Ctrl+D (ASCII 4): bookmark current page */
+  if (keycode == 4 && !app->url_editing) {
+    hv_bookmark_add(app->url, app->doc.title);
+    compositor_invalidate(win->id);
+    return;
+  }
+  /* Ctrl+B (ASCII 2): open bookmarks */
+  if (keycode == 2 && !app->url_editing) {
+    html_viewer_navigate(app, "about:bookmarks");
+    return;
+  }
 
   /* URL bar cursor movement */
   if (app->url_editing) {
@@ -2936,9 +3015,11 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
     return;
   }
   if (hv_strncmp(url, "about:home", 10) == 0 ||
+      hv_strncmp(url, "about:newtab", 12) == 0 ||
       hv_strncmp(url, "about:version", 13) == 0 ||
       hv_strncmp(url, "about:blank", 11) == 0 ||
-      hv_strncmp(url, "about:history", 13) == 0) {
+      hv_strncmp(url, "about:history", 13) == 0 ||
+      hv_strncmp(url, "about:bookmarks", 15) == 0) {
     html_viewer_load_builtin(app, url);
     if (app->window) compositor_invalidate(app->window->id);
     return;
@@ -3152,6 +3233,15 @@ void html_viewer_paint(struct html_viewer_app *app) {
     /* URL text (shifted right to make room for indicator) */
     font_draw_string(s, f, 78 + (int32_t)f->glyph_width * 2, 4, app->url,
                      app->url_editing ? theme->text : theme->text_muted);
+    /* Bookmark star on the right edge of URL bar */
+    {
+      int32_t star_x = (int32_t)s->width - (int32_t)f->glyph_width - 4;
+      int is_bm = hv_is_bookmarked(app->url);
+      if (star_x > 78) {
+        font_draw_char(s, f, star_x, 4, '*',
+                       is_bm ? 0xFFD700 : theme->text_muted);
+      }
+    }
     if (app->url_editing) {
       int32_t url_x0 = 78 + (int32_t)f->glyph_width * 2;
       int32_t cx = url_x0 + app->url_cursor * (int32_t)f->glyph_width;
