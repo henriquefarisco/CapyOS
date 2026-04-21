@@ -6,7 +6,9 @@
 #include "gui/jpeg_loader.h"
 #include "gui/png_loader.h"
 #include "memory/kmem.h"
+#include "net/dns_cache.h"
 #include "net/http.h"
+#include "net/stack.h"
 #include "security/tls.h"
 #include "util/kstring.h"
 #include <stddef.h>
@@ -252,6 +254,7 @@ static void html_viewer_submit_form(struct html_viewer_app *app, int node_index)
 static void hv_http_cache_store(const char *url, const struct http_response *resp);
 static void hv_fetch_external_css(struct html_viewer_app *app);
 static void hv_fetch_page_images(struct html_viewer_app *app);
+static void hv_prefetch_dns(struct html_viewer_app *app);
 static int html_viewer_node_margin_top(const struct html_node *node);
 static int32_t html_viewer_render_node(struct gui_surface *surface,
                                        const struct font *f,
@@ -3453,6 +3456,7 @@ static void html_viewer_apply_response(struct html_viewer_app *app,
     if (app->doc.title[0] && app->window)
       compositor_set_title(app->window->id, app->doc.title);
     hv_history_push(app->url);
+    hv_prefetch_dns(app);
     hv_fetch_external_css(app);
     hv_fetch_page_images(app);
     return;
@@ -3606,6 +3610,52 @@ static void hv_fetch_external_css(struct html_viewer_app *app) {
       http_response_free(&resp);
     }
   }
+}
+
+/* Prefetch DNS for unique external hosts found in links and image srcs.
+ * Warms the DNS cache before CSS and image fetches to reduce per-request latency. */
+static void hv_prefetch_dns(struct html_viewer_app *app) {
+#define HV_PREFETCH_MAX 12
+  char seen[HV_PREFETCH_MAX][HTTP_MAX_HOST];
+  int seen_count = 0;
+  int i;
+  if (!app) return;
+  for (i = 0; i < app->doc.node_count && seen_count < HV_PREFETCH_MAX; i++) {
+    struct html_node *node = &app->doc.nodes[i];
+    const char *url = NULL;
+    char host[HTTP_MAX_HOST];
+    uint32_t cached_ip = 0;
+    int j;
+    if (node->href[0]) url = node->href;
+    if (!url || !url[0]) continue;
+    /* Only prefetch http/https URLs */
+    if (hv_strncmp(url, "http://", 7) != 0 && hv_strncmp(url, "https://", 8) != 0)
+      continue;
+    /* Extract hostname */
+    {
+      const char *p = url + (url[7] == '/' ? 8 : 7);  /* skip scheme:// */
+      size_t hi = 0;
+      while (*p && *p != '/' && *p != ':' && *p != '?' && hi < sizeof(host) - 1)
+        host[hi++] = *p++;
+      host[hi] = '\0';
+    }
+    if (!host[0]) continue;
+    /* Skip if already seen in this prefetch pass */
+    for (j = 0; j < seen_count; j++)
+      if (hv_streq_ci(seen[j], host)) break;
+    if (j < seen_count) continue;
+    /* Skip if already in DNS cache */
+    if (dns_cache_lookup(host, &cached_ip) == 0) continue;
+    /* Prefetch: resolve with short timeout (500ms) */
+    {
+      uint32_t ip = 0;
+      kstrcpy(seen[seen_count], sizeof(seen[seen_count]), host);
+      seen_count++;
+      net_stack_dns_resolve(host, 500, &ip);
+      /* ip may be 0 on failure; the cache stores it regardless */
+    }
+  }
+#undef HV_PREFETCH_MAX
 }
 
 static void hv_fetch_page_images(struct html_viewer_app *app) {
