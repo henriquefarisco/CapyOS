@@ -61,6 +61,30 @@ static void css_trim(char *s) {
     s[len > start ? len - start : 0] = '\0';
 }
 
+/* Strip trailing "!important" (and whitespace) from a CSS value in-place. */
+static void css_strip_important(char *s) {
+    size_t len;
+    if (!s) return;
+    len = kstrlen(s);
+    /* Trim trailing whitespace first */
+    while (len > 0 && css_is_space(s[len - 1])) len--;
+    /* Check for '!important' suffix (case-insensitive) */
+    if (len >= 10) {
+        const char *tail = s + len - 10;
+        if (css_tolower(tail[0]) == '!' &&
+            css_tolower(tail[1]) == 'i' && css_tolower(tail[2]) == 'm' &&
+            css_tolower(tail[3]) == 'p' && css_tolower(tail[4]) == 'o' &&
+            css_tolower(tail[5]) == 'r' && css_tolower(tail[6]) == 't' &&
+            css_tolower(tail[7]) == 'a' && css_tolower(tail[8]) == 'n' &&
+            css_tolower(tail[9]) == 't') {
+            len -= 10;
+            /* Trim any whitespace before the '!' */
+            while (len > 0 && css_is_space(s[len - 1])) len--;
+        }
+    }
+    s[len] = '\0';
+}
+
 /* ------------------------------------------------------------------ */
 /* Color parsing                                                        */
 /* ------------------------------------------------------------------ */
@@ -478,6 +502,7 @@ void css_apply_inline(const char *style_attr, struct html_node *node) {
         value[vlen] = '\0';
         css_trim(name);
         css_trim(value);
+        css_strip_important(value);
         css_apply_prop(name, value, node);
     }
 }
@@ -633,6 +658,7 @@ int css_parse(const char *css, size_t len, struct css_stylesheet *out) {
                 p->value[vlen] = '\0';
                 css_trim(p->name);
                 css_trim(p->value);
+                css_strip_important(p->value);
                 if (p->name[0] == '-' && p->name[1] == '-') {
                     /* CSS custom property: store in var table */
                     if (out->var_count < CSS_MAX_VARS) {
