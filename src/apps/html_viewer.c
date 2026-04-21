@@ -1245,24 +1245,40 @@ static void html_viewer_set_status_error(struct html_viewer_app *app, int status
 static void html_viewer_set_error(struct html_viewer_app *app,
                                   const char *title,
                                   const char *message) {
+  static char err_buf[4096];
+  size_t elen = 0;
   if (!app) return;
-  kmemzero(&app->doc, sizeof(app->doc));
-  app->doc.node_count = 0;
-  if (title && title[0]) {
-    struct html_node *title_node = html_push_node(&app->doc);
-    if (title_node) {
-      title_node->type = HTML_NODE_TAG_H1;
-      title_node->color = 0xF38BA8;
-      kstrcpy(title_node->text, sizeof(title_node->text), title);
-    }
-  }
+  err_buf[0] = '\0';
+  kbuf_append(err_buf, sizeof(err_buf),
+              "<html><head><title>Navigation Error</title></head><body>");
+  kbuf_append(err_buf, sizeof(err_buf), "<h1>");
+  kbuf_append(err_buf, sizeof(err_buf), title && title[0] ? title : "Navigation Error");
+  kbuf_append(err_buf, sizeof(err_buf), "</h1>");
   if (message && message[0]) {
-    struct html_node *body_node = html_push_node(&app->doc);
-    if (body_node) {
-      body_node->type = HTML_NODE_TAG_P;
-      body_node->color = 0xCDD6F4;
-      kstrcpy(body_node->text, sizeof(body_node->text), message);
-    }
+    kbuf_append(err_buf, sizeof(err_buf), "<p>");
+    kbuf_append(err_buf, sizeof(err_buf), message);
+    kbuf_append(err_buf, sizeof(err_buf), "</p>");
+  }
+  if (app->url[0]) {
+    kbuf_append(err_buf, sizeof(err_buf), "<p><strong>URL:</strong> ");
+    kbuf_append(err_buf, sizeof(err_buf), app->url);
+    kbuf_append(err_buf, sizeof(err_buf), "</p>");
+  }
+  /* Action links */
+  if (app->url[0]) {
+    kbuf_append(err_buf, sizeof(err_buf), "<a href=\"");
+    kbuf_append(err_buf, sizeof(err_buf), app->url);
+    kbuf_append(err_buf, sizeof(err_buf), "\">Try Again</a>  ");
+  }
+  kbuf_append(err_buf, sizeof(err_buf),
+              "<a href=\"about:home\">New Tab</a></body></html>");
+  while (err_buf[elen]) elen++;
+  kmemzero(&app->doc, sizeof(app->doc));
+  html_parse(err_buf, elen, &app->doc);
+  /* Force red color on the H1 error heading */
+  for (int ei = 0; ei < app->doc.node_count; ei++) {
+    if (app->doc.nodes[ei].type == HTML_NODE_TAG_H1)
+      app->doc.nodes[ei].css_color = 0xF38BA8;
   }
   kstrcpy(app->doc.title, sizeof(app->doc.title),
           title && title[0] ? title : "Navigation Error");
@@ -1346,10 +1362,17 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
       "<li>Click R button, press F5, or Ctrl+R to reload</li>"
       "<li>Click the * star to bookmark this page</li>"
       "</ul>"
-      "<h2>About</h2>"
-      "<p>CapyBrowser - HTTP/HTTPS browser for CapyOS.</p>"
-      "<p>Features: HTML5 parsing, CSS engine, PNG/JPEG images, forms, cookies, gzip, history, bookmarks, find-in-page.</p>"
-      "<a href=\"about:home\">Home</a>"
+      "<h2>Features</h2>"
+      "<ul>"
+      "<li>HTML5: block/inline layout, tables, forms, details, semantic tags</li>"
+      "<li>CSS: color, background, font-size, font-weight, text-align, margin/padding, border, display:none, line-height, max-width, text-transform, text-decoration, opacity, list-style, @media queries</li>"
+      "<li>Images: PNG and JPEG (baseline DCT) via HTTP fetch with LRU cache</li>"
+      "<li>HTTP: keep-alive connection pool, gzip/deflate, chunked encoding, redirects, cookies</li>"
+      "<li>HTTPS: TLS 1.2 via BearSSL with 146 trust anchors</li>"
+      "<li>DNS: A-record cache + prefetch for page resources</li>"
+      "<li>Navigation: back/forward history, bookmarks (Ctrl+D), find-in-page (Ctrl+F)</li>"
+      "</ul>"
+      "<a href=\"about:home\">Home</a> | <a href=\"about:version\">Version</a>"
       "</body></html>";
     url = "about:settings";
   } else if (hv_strncmp(url, "about:version", 13) == 0) {
