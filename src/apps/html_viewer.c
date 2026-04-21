@@ -1817,13 +1817,18 @@ static int hv_wrap_text_scaled(struct gui_surface *surface, const struct font *f
   return drew ? (int)(line_y - y + char_h) : char_h;
 }
 
+/* Set by html_viewer_render_node before calling wrap_text to apply CSS line-height. */
+static int g_hv_line_height_px = 0;  /* 0 = use font default */
+
 static int html_viewer_wrap_text(struct gui_surface *surface, const struct font *f,
                                  int32_t x, int32_t y, int32_t max_width,
                                  const char *text, uint32_t color,
                                  int underline) {
   int32_t line_y = y;
   int32_t cursor_x = x;
-  int32_t line_height = (int32_t)f->glyph_height + 2;
+  int32_t default_lh = (int32_t)f->glyph_height + 2;
+  int32_t line_height = (g_hv_line_height_px > (int)f->glyph_height)
+                        ? (int32_t)g_hv_line_height_px : default_lh;
   size_t i = 0;
   int drew = 0;
   if (!f) return 0;
@@ -1922,7 +1927,9 @@ static int html_viewer_wrap_text_from(
     const char *text, uint32_t color, int underline, int32_t *out_end_x) {
   int32_t line_y = y;
   int32_t cursor_x = x_start;
-  int32_t line_height = (int32_t)f->glyph_height + 2;
+  int32_t default_lh2 = (int32_t)f->glyph_height + 2;
+  int32_t line_height = (g_hv_line_height_px > (int)f->glyph_height)
+                        ? (int32_t)g_hv_line_height_px : default_lh2;
   size_t i = 0;
   int drew = 0;
   if (!f || !text || !text[0]) { if (out_end_x) *out_end_x = x_start; return line_height; }
@@ -2058,6 +2065,8 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   uint32_t color = html_viewer_node_color(theme, node);
   if (!surface || !f || !theme || !node) return y;
   if (node->hidden) return y;
+  /* Apply CSS line-height for this node */
+  g_hv_line_height_px = (int)node->css_line_height;
   /* CSS background color or <mark> highlight: fill the node's row */
   {
     uint32_t bg = node->css_bg_color;

@@ -405,6 +405,29 @@ static void css_apply_prop(const char *name, const char *value,
         while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
         if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
         if (px > 0 && px < 65535) node->css_width = (uint16_t)px;
+    } else if (css_streq_ci(name, "line-height")) {
+        /* line-height: N (multiplier), Npx, Nem, or normal */
+        if (!css_streq_ci(value, "normal")) {
+            uint32_t whole = 0, frac = 0, frac_div = 1;
+            const char *p = value;
+            while (*p >= '0' && *p <= '9') { whole = whole * 10 + (uint32_t)(*p - '0'); p++; }
+            if (*p == '.') {
+                p++;
+                while (*p >= '0' && *p <= '9') {
+                    frac = frac * 10 + (uint32_t)(*p - '0'); frac_div *= 10; p++;
+                }
+            }
+            uint32_t px;
+            if (css_startswith_ci(p, "px")) {
+                px = whole;  /* direct px value */
+            } else if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) {
+                px = whole * 16 + frac * 16 / frac_div;
+            } else {
+                /* Pure number: multiplier × 16px base font */
+                px = whole * 16 + frac * 16 / frac_div;
+            }
+            if (px > 8 && px < 255) node->css_line_height = (uint8_t)px;
+        }
     }
 }
 
