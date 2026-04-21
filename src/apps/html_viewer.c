@@ -3267,6 +3267,35 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       }
     }
   }
+  /* Flex propagation: UL/NAV/DIV with display:flex → force LI/DIV children inline.
+   * The flat DOM doesn't have parent pointers, so we use the node immediately following
+   * the flex container and treat the next run of sibling-candidate nodes as inline-block. */
+  {
+    int i;
+    for (i = 0; i < doc->node_count - 1; i++) {
+      struct html_node *container = &doc->nodes[i];
+      enum html_node_type ct = container->type;
+      if (container->css_display != 3) continue;
+      /* Only propagate for list/block containers */
+      if (ct != HTML_NODE_TAG_UL && ct != HTML_NODE_TAG_DIV &&
+          ct != HTML_NODE_TAG_SPAN && ct != HTML_NODE_TAG_BODY &&
+          ct != HTML_NODE_TAG_HTML) continue;
+      /* Mark the following LI/DIV/SPAN/A run as inline-block */
+      for (int j = i + 1; j < doc->node_count; j++) {
+        struct html_node *child = &doc->nodes[j];
+        enum html_node_type jt = child->type;
+        /* Stop at another block container or at a node that changes context */
+        if (jt == HTML_NODE_TAG_UL || jt == HTML_NODE_TAG_BODY ||
+            jt == HTML_NODE_TAG_HTML || jt == HTML_NODE_TAG_HEAD)
+          break;
+        if (child->css_display == 0 &&
+            (jt == HTML_NODE_TAG_LI || jt == HTML_NODE_TAG_DIV ||
+             jt == HTML_NODE_TAG_SPAN || jt == HTML_NODE_TAG_P ||
+             jt == HTML_NODE_TAG_A))
+          child->css_display = 2; /* inline-block */
+      }
+    }
+  }
   return 0;
 }
 
