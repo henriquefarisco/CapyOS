@@ -1391,8 +1391,8 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
                 "<html><head><title>New Tab</title></head><body>"
                 "<h1>CapyBrowser</h1>"
                 "<p>Type a URL and press Enter. Press Ctrl+D to bookmark current page.</p>"
-                "<form action=\"\" method=\"get\">"
-                "<input type=\"text\" name=\"url\" placeholder=\"Enter URL...\"> "
+                "<form action=\"about:navigate\" method=\"get\">"
+                "<input type=\"text\" name=\"url\" placeholder=\"Enter URL or search...\"> "
                 "<input type=\"submit\" value=\"Go\">"
                 "</form>"
                 "<h2>Bookmarks</h2>");
@@ -2015,6 +2015,8 @@ static int html_viewer_wrap_text_from(
 static int hv_node_is_inline(const struct html_node *node) {
   enum html_node_type t;
   if (!node || node->hidden || !node->text[0]) return 0;
+  /* display:inline or display:inline-block overrides normal block behaviour */
+  if (node->css_display == 1 || node->css_display == 2) return 1;
   t = node->type;
   return t == HTML_NODE_TAG_A || t == HTML_NODE_TAG_SPAN ||
          t == HTML_NODE_TAG_MARK || t == HTML_NODE_TEXT;
@@ -3347,6 +3349,61 @@ static void hv_form_append_pair(char *out, size_t out_len,
   *wrote_any = 1;
 }
 
+/* Extract the value of a named query-string parameter from a URL.
+ * Returns 1 if found, 0 if not found. */
+static int hv_extract_query_param(const char *url, const char *param,
+                                  char *out, size_t out_len) {
+  const char *q;
+  size_t plen;
+  if (!url || !param || !out || out_len == 0) return 0;
+  out[0] = '\0';
+  plen = kstrlen(param);
+  q = url;
+  while (*q && *q != '?') q++;
+  if (!*q) return 0;
+  q++; /* skip '?' */
+  while (*q) {
+    size_t i = 0;
+    /* Match param name */
+    while (i < plen && q[i] && q[i] == param[i]) i++;
+    if (i == plen && q[i] == '=') {
+      /* Found: copy value until '&' or '\0' */
+      const char *v = q + i + 1;
+      size_t n = 0;
+      while (v[n] && v[n] != '&' && n + 1 < out_len) n++;
+      kmemcpy(out, v, n);
+      out[n] = '\0';
+      return 1;
+    }
+    /* Skip to next param */
+    while (*q && *q != '&') q++;
+    if (*q == '&') q++;
+  }
+  return 0;
+}
+
+/* URL-percent-decode in-place. */
+static void hv_url_decode(char *s) {
+  char *r = s, *w = s;
+  if (!s) return;
+  while (*r) {
+    if (*r == '%' && r[1] && r[2]) {
+      char hi = r[1], lo = r[2];
+      int h = (hi >= '0' && hi <= '9') ? hi - '0'
+            : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10
+            : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : -1;
+      int l = (lo >= '0' && lo <= '9') ? lo - '0'
+            : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10
+            : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : -1;
+      if (h >= 0 && l >= 0) { *w++ = (char)(h * 16 + l); r += 3; continue; }
+    } else if (*r == '+') {
+      *w++ = ' '; r++; continue;
+    }
+    *w++ = *r++;
+  }
+  *w = '\0';
+}
+
 static int html_viewer_build_form_payload(struct html_viewer_app *app,
                                           const struct html_node *submit_node,
                                           char *payload, size_t payload_len) {
@@ -3522,6 +3579,20 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
   if (!url[0]) {
     html_viewer_load_builtin(app, "about:home");
     if (app->window) compositor_invalidate(app->window->id);
+    return;
+  }
+  /* about:navigate?url=... — navigate to the URL query param */
+  if (hv_strncmp(url, "about:navigate", 14) == 0) {
+    char nav_target[HTML_URL_MAX];
+    nav_target[0] = '\0';
+    hv_extract_query_param(url, "url", nav_target, sizeof(nav_target));
+    hv_url_decode(nav_target);
+    if (nav_target[0]) {
+      html_viewer_request_internal(app, nav_target, HTTP_GET, NULL, 0, depth + 1);
+    } else {
+      html_viewer_load_builtin(app, "about:home");
+      if (app->window) compositor_invalidate(app->window->id);
+    }
     return;
   }
   if (hv_strncmp(url, "about:home", 10) == 0 ||

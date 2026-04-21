@@ -79,6 +79,7 @@ struct html_node {
   uint32_t css_border_color; /* border color (0x00RRGGBB); 0 = theme default */
   uint8_t css_text_transform; /* 0=none, 1=uppercase, 2=lowercase, 3=capitalize */
   uint8_t css_line_height; /* line-height in px (0 = use font default ~18px) */
+  uint8_t css_display;     /* 0=block(default), 1=inline, 2=inline-block, 3=flex */
   /* Inline layout bounds set during paint; used by click hit-test (0 = block node) */
   int32_t il_x_left;
   int32_t il_x_right;

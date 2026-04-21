@@ -265,6 +265,12 @@ static void css_apply_prop(const char *name, const char *value,
         if (c) node->css_bg_color = c;
     } else if (css_streq_ci(name, "display")) {
         if (css_streq_ci(value, "none")) node->hidden = 1;
+        else if (css_streq_ci(value, "inline")) node->css_display = 1;
+        else if (css_streq_ci(value, "inline-block")) node->css_display = 2;
+        else if (css_streq_ci(value, "flex") ||
+                 css_streq_ci(value, "inline-flex")) node->css_display = 3;
+        else if (css_streq_ci(value, "block") ||
+                 css_streq_ci(value, "list-item")) node->css_display = 0;
     } else if (css_streq_ci(name, "visibility")) {
         if (css_streq_ci(value, "hidden")) node->hidden = 1;
     } else if (css_streq_ci(name, "font-weight")) {
