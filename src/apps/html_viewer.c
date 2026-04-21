@@ -2988,15 +2988,15 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       }
       /* <link rel="stylesheet" href="..."> — queue for external CSS fetch */
       if (hv_streq_ci(tag, "link")) {
-        char rel[32];
-        char link_href[HTML_URL_MAX];
+        static char rel[32];
+        static char link_href[HTML_URL_MAX];
         rel[0] = '\0'; link_href[0] = '\0';
         hv_extract_attr_value(html + attr_start, tag_end - attr_start,
                               "rel", rel, sizeof(rel));
         hv_extract_attr_value(html + attr_start, tag_end - attr_start,
                               "href", link_href, sizeof(link_href));
         if (link_href[0] && doc->css_count < HTML_MAX_PENDING_CSS) {
-          char rel_lower[32];
+          static char rel_lower[32];
           size_t ri;
           for (ri = 0; ri < sizeof(rel_lower) - 1 && rel[ri]; ri++)
             rel_lower[ri] = (char)(rel[ri] | 32);
@@ -3225,7 +3225,7 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         /* For checkbox/radio: store value in text, checked state in open */
         if (input_type == HTML_INPUT_TYPE_CHECKBOX ||
             input_type == HTML_INPUT_TYPE_RADIO) {
-          char chk_val[64];
+          static char chk_val[64];
           chk_val[0] = '\0';
           hv_extract_attr_value(html + attr_start, tag_end - attr_start,
                                 "checked", chk_val, sizeof(chk_val));
@@ -3252,13 +3252,13 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       } else if (hv_streq_ci(tag, "select")) {
         /* Collect first <option> value as the default selection */
         struct html_node *node;
-        char opt_text[HTML_TEXT_MAX];
-        char opt_val[HTML_TEXT_MAX];
+        static char opt_text[HTML_TEXT_MAX];
+        static char opt_val[HTML_TEXT_MAX];
         size_t scan = pos;
         opt_text[0] = '\0'; opt_val[0] = '\0';
         while (scan < len) {
           if (html[scan] != '<') { scan++; continue; }
-          char stag[32]; size_t sattr = scan + 1; size_t send = scan; int sclose = 0, ssc = 0;
+          static char stag[32]; size_t sattr = scan + 1; size_t send = scan; int sclose = 0, ssc = 0;
           scan++;
           if (scan < len && html[scan] == '/') { sclose = 1; scan++; }
           hv_read_tag_name(html, len, &scan, stag, sizeof(stag));
@@ -3365,8 +3365,8 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         else if (hv_streq_ci(tag, "li")) {
           node->type = HTML_NODE_TAG_LI;
           if (list_ordered) {
-            char prefix[16];
-            char new_text[HTML_TEXT_MAX];
+            static char prefix[16];
+            static char new_text[HTML_TEXT_MAX];
             prefix[0] = '\0';
             kbuf_append_u32(prefix, sizeof(prefix), (uint32_t)list_num++);
             kbuf_append(prefix, sizeof(prefix), ". ");
@@ -3463,7 +3463,8 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
   }
   /* Apply collected <style> block to all nodes */
   if (doc->style_text[0]) {
-    struct css_stylesheet sheet;
+    static struct css_stylesheet sheet;
+    kmemzero(&sheet, sizeof(sheet));
     if (css_parse(doc->style_text, kstrlen(doc->style_text), &sheet) == 0)
       css_apply_to_doc(&sheet, doc);
   }
@@ -3925,11 +3926,11 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
 }
 
 static void hv_fetch_external_css(struct html_viewer_app *app) {
+  static char abs_url[HTML_URL_MAX];
+  static struct css_stylesheet sheet;
   int i;
   if (!app || !app->doc.css_count) return;
   for (i = 0; i < app->doc.css_count; i++) {
-    char abs_url[HTML_URL_MAX];
-    struct css_stylesheet sheet;
     struct hv_http_cache_entry *cached;
     if (hv_resolve_url(app->url, app->doc.pending_css[i], abs_url, sizeof(abs_url)) != 0)
       kstrcpy(abs_url, sizeof(abs_url), app->doc.pending_css[i]);
