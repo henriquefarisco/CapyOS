@@ -251,6 +251,12 @@ static void html_viewer_submit_form(struct html_viewer_app *app, int node_index)
 static void hv_http_cache_store(const char *url, const struct http_response *resp);
 static void hv_fetch_external_css(struct html_viewer_app *app);
 static void hv_fetch_page_images(struct html_viewer_app *app);
+static int html_viewer_node_margin_top(const struct html_node *node);
+static int32_t html_viewer_render_node(struct gui_surface *surface,
+                                       const struct font *f,
+                                       const struct gui_theme_palette *theme,
+                                       const struct html_node *node,
+                                       int32_t y, int draw);
 
 enum { HTML_VIEWER_HTTP_ERR_TLS = 6 };
 enum { HTML_FORM_METHOD_GET = 0, HTML_FORM_METHOD_POST = 1 };
@@ -860,6 +866,20 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
                                 "alt", alt, sizeof(alt))) {
         hv_append_decoded_text(out, out_len, &out_pos, alt, kstrlen(alt), &last_space);
       }
+      /* For <a href> inside block text: collect link text then append " [url]" if href differs */
+      if (!closing && !self_closing && hv_streq_ci(inner, "a")) {
+        char a_href[HTML_URL_MAX];
+        char a_text[HTML_TEXT_MAX];
+        a_href[0] = '\0'; a_text[0] = '\0';
+        hv_extract_attr_value(html + attr_start, tag_end - attr_start, "href",
+                              a_href, sizeof(a_href));
+        pos = hv_collect_text_until_tag(html, len, pos, "a", a_text, sizeof(a_text));
+        if (a_text[0]) {
+          hv_text_append_char(out, out_len, &out_pos, ' ', &last_space);
+          hv_append_decoded_text(out, out_len, &out_pos, a_text, kstrlen(a_text), &last_space);
+        }
+        continue;
+      }
       continue;
     }
     if (html[pos] == '&') {
@@ -1285,13 +1305,44 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
     kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</body></html>");
     html = hv_about_buf;
     url = "about:bookmarks";
+  } else if (hv_strncmp(url, "about:settings", 14) == 0) {
+    html =
+      "<html><head><title>Settings</title></head><body>"
+      "<h1>CapyBrowser Settings</h1>"
+      "<h2>Keyboard Shortcuts</h2>"
+      "<ul>"
+      "<li><strong>Enter</strong> - Navigate to URL in address bar</li>"
+      "<li><strong>Backspace</strong> - Go back in history</li>"
+      "<li><strong>F5</strong> - Reload page</li>"
+      "<li><strong>F3</strong> - Find next match</li>"
+      "<li><strong>Ctrl+F</strong> - Find in page</li>"
+      "<li><strong>Ctrl+D</strong> - Bookmark current page</li>"
+      "<li><strong>Ctrl+B</strong> - Open bookmarks</li>"
+      "<li><strong>Arrow keys</strong> - Scroll page</li>"
+      "<li><strong>Page Up/Down</strong> - Scroll by page</li>"
+      "<li><strong>Tab</strong> - Focus next form field</li>"
+      "</ul>"
+      "<h2>Navigation</h2>"
+      "<ul>"
+      "<li>Click the &lt; button or press Alt+Left to go back</li>"
+      "<li>Click the &gt; button to go forward</li>"
+      "<li>Click R button or press F5 to reload</li>"
+      "<li>Click the * star to bookmark this page</li>"
+      "</ul>"
+      "<h2>About</h2>"
+      "<p>CapyBrowser - HTTP/HTTPS browser for CapyOS.</p>"
+      "<p>Features: HTML5 parsing, CSS engine, PNG images, forms, cookies, gzip, history, bookmarks, find-in-page.</p>"
+      "<a href=\"about:home\">Home</a>"
+      "</body></html>";
+    url = "about:settings";
   } else if (hv_strncmp(url, "about:version", 13) == 0) {
     html =
       "<html><head><title>About CapyBrowser</title></head><body>"
       "<h1>CapyBrowser</h1>"
       "<p>HTTP/1.1 client with verified HTTPS (TLS 1.2) transport.</p>"
-      "<p>Features: cookies, redirects, gzip/deflate, CSS engine, PNG images, forms, history, bookmarks.</p>"
-      "<a href=\"about:home\">Back to home</a>"
+      "<p>Features: cookies, redirects, gzip/deflate, CSS engine (custom properties, @media, HSL), PNG images, forms, history, bookmarks, find-in-page.</p>"
+      "<a href=\"about:settings\">Settings</a> | "
+      "<a href=\"about:home\">Home</a>"
       "</body></html>";
   } else {
     /* about:home / about:newtab */
@@ -1322,6 +1373,7 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
                 "<a href=\"https://example.com\">example.com</a><br>"
                 "<a href=\"about:history\">History</a><br>"
                 "<a href=\"about:bookmarks\">All Bookmarks</a><br>"
+                "<a href=\"about:settings\">Settings</a><br>"
                 "<a href=\"about:version\">About</a>"
                 "</body></html>");
     html = hv_about_buf;
@@ -1371,6 +1423,71 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   /* Ctrl+B (ASCII 2): open bookmarks */
   if (keycode == 2 && !app->url_editing) {
     html_viewer_navigate(app, "about:bookmarks");
+    return;
+  }
+  /* Ctrl+F (ASCII 6): open find-in-page bar */
+  if (keycode == 6 && !app->url_editing) {
+    app->url_searching = 1;
+    app->search_query[0] = '\0';
+    app->search_cursor = 0;
+    compositor_invalidate(win->id);
+    return;
+  }
+  /* Find-in-page input handling */
+  if (app->url_searching) {
+    if (ch == 0x1B || keycode == 0x1B) { /* Escape: close find bar */
+      app->url_searching = 0;
+      compositor_invalidate(win->id);
+      return;
+    }
+    if (ch == '\b') {
+      int qlen = (int)kstrlen(app->search_query);
+      if (qlen > 0) { app->search_query[qlen - 1] = '\0'; app->search_cursor--; }
+      compositor_invalidate(win->id);
+      return;
+    }
+    if (ch >= 0x20 && ch < 0x7F) {
+      int qlen = (int)kstrlen(app->search_query);
+      if (qlen + 1 < (int)sizeof(app->search_query)) {
+        app->search_query[qlen] = ch;
+        app->search_query[qlen + 1] = '\0';
+        app->search_cursor++;
+      }
+      compositor_invalidate(win->id);
+      return;
+    }
+    /* Enter or F3: scroll to next match */
+    if (ch == '\n' || ch == '\r' || keycode == KEY_F3) {
+      if (app->search_query[0]) {
+        const struct font *sf = font_default();
+        const struct gui_theme_palette *stheme = compositor_theme();
+        int32_t ny = 28;
+        int found = 0;
+        for (int si = 0; si < app->doc.node_count; si++) {
+          struct html_node *sn = &app->doc.nodes[si];
+          if (sn->hidden) { ny = html_viewer_render_node(NULL, sf, stheme, sn, ny, 0); continue; }
+          int32_t node_top = ny + html_viewer_node_margin_top(sn);
+          ny = html_viewer_render_node(NULL, sf, stheme, sn, ny, 0);
+          if (hv_contains_ci(sn->text, app->search_query)) {
+            int viewport = (int)app->window->surface.height - 32;
+            int new_scroll = node_top - 28;
+            if (new_scroll < 0) new_scroll = 0;
+            int max_scroll = app->content_height - viewport;
+            if (max_scroll < 0) max_scroll = 0;
+            if (new_scroll > max_scroll) new_scroll = max_scroll;
+            if (new_scroll > app->scroll_offset + 4 || new_scroll < app->scroll_offset) {
+              app->scroll_offset = new_scroll;
+              found = 1;
+              break;
+            }
+            found = 1; /* already visible */
+          }
+        }
+        (void)found;
+        compositor_invalidate(win->id);
+      }
+      return;
+    }
     return;
   }
 
@@ -1716,7 +1833,9 @@ static int html_viewer_wrap_text(struct gui_surface *surface, const struct font 
   return drew ? (int)(line_y - y + line_height) : line_height;
 }
 
-static int html_viewer_node_margin_top(enum html_node_type type) {
+static int html_viewer_node_margin_top(const struct html_node *node) {
+  enum html_node_type type = node->type;
+  if (node->css_margin_top) return (int)node->css_margin_top;
   if (type == HTML_NODE_TAG_H1) return 8;
   if (type == HTML_NODE_TAG_H2) return 6;
   if (type == HTML_NODE_TAG_H3) return 4;
@@ -1730,7 +1849,9 @@ static int html_viewer_node_margin_top(enum html_node_type type) {
   return 2;
 }
 
-static int html_viewer_node_margin_bottom(enum html_node_type type) {
+static int html_viewer_node_margin_bottom(const struct html_node *node) {
+  enum html_node_type type = node->type;
+  if (node->css_margin_bottom) return (int)node->css_margin_bottom;
   if (type == HTML_NODE_TAG_H1) return 10;
   if (type == HTML_NODE_TAG_H2) return 8;
   if (type == HTML_NODE_TAG_H3) return 6;
@@ -1778,7 +1899,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   char display[HTML_TEXT_MAX + 16];
   int32_t margin = 12;
   int32_t max_width = 0;
-  int32_t top = y + html_viewer_node_margin_top(node->type);
+  int32_t top = y + html_viewer_node_margin_top(node);
   int32_t height = 0;
   uint32_t color = html_viewer_node_color(theme, node);
   if (!surface || !f || !theme || !node) return y;
@@ -1799,7 +1920,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
       }
     }
   }
-  if (node->type == HTML_NODE_TAG_BR) return y + html_viewer_node_margin_bottom(node->type);
+  if (node->type == HTML_NODE_TAG_BR) return y + html_viewer_node_margin_bottom(node);
   /* Horizontal rule: draw a 2-px line across the viewport */
   if (node->type == HTML_NODE_TAG_HR) {
     if (draw) {
@@ -1815,7 +1936,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
         }
       }
     }
-    return top + 2 + html_viewer_node_margin_bottom(node->type);
+    return top + 2 + html_viewer_node_margin_bottom(node);
   }
   /* Table row: separator line + reserve space for side-by-side cells */
   if (node->type == HTML_NODE_TAG_TR) {
@@ -1833,19 +1954,22 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
       }
     }
     /* Advance y past separator + full row height so TD nodes don't shift y */
-    return top + 1 + hv_table_row_h + html_viewer_node_margin_bottom(node->type);
+    return top + 1 + hv_table_row_h + html_viewer_node_margin_bottom(node);
   }
-  /* Scaled heading rendering: H1 at 3×, H2/H3 at 2× (or CSS font-size derived) */
+  /* Scaled heading rendering: H1=3×, H2=2×, H3=2×, H4/H5/H6=1× bold */
   if (node->type == HTML_NODE_TAG_H1 || node->type == HTML_NODE_TAG_H2 ||
-      node->type == HTML_NODE_TAG_H3) {
+      node->type == HTML_NODE_TAG_H3 || node->type == HTML_NODE_TAG_H4 ||
+      node->type == HTML_NODE_TAG_H5 || node->type == HTML_NODE_TAG_H6) {
     int scale;
     int32_t max_w = (int32_t)surface->width - margin * 2;
     int32_t start_x = margin;
     int32_t h;
     if (node->font_size > 0)
       scale = (int)(node->font_size / f->glyph_height);
-    else
-      scale = (node->type == HTML_NODE_TAG_H1) ? 3 : 2;
+    else if (node->type == HTML_NODE_TAG_H1) scale = 3;
+    else if (node->type == HTML_NODE_TAG_H2) scale = 2;
+    else if (node->type == HTML_NODE_TAG_H3) scale = 2;
+    else scale = 1;
     if (scale < 1) scale = 1;
     /* Apply text-align: center */
     if (node->text_align == 1) {
@@ -1861,7 +1985,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
     h = hv_wrap_text_scaled(draw ? surface : NULL, f, start_x, top, max_w,
                     node->text, color, scale);
-    return top + h + html_viewer_node_margin_bottom(node->type);
+    return top + h + html_viewer_node_margin_bottom(node);
   }
 
   /* IMG node: blit cached pixels or fall back to alt text */
@@ -1901,7 +2025,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
           }
         }
       }
-      return top + (int32_t)dst_h + html_viewer_node_margin_bottom(node->type);
+      return top + (int32_t)dst_h + html_viewer_node_margin_bottom(node);
     }
     /* fallback */
     {
@@ -1911,7 +2035,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
       int32_t h = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top,
                       (int32_t)surface->width - margin * 2,
                       img_display, color, 0);
-      return top + h + html_viewer_node_margin_bottom(node->type);
+      return top + h + html_viewer_node_margin_bottom(node);
     }
   }
   /* Table cell: render at column x offset, y fixed by prior TR, no y advance */
@@ -2020,7 +2144,67 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   else if (node->type == HTML_NODE_TAG_INPUT) {
     int is_focused = (g_viewer.focused_node_index >= 0 &&
                       node == &g_viewer.doc.nodes[g_viewer.focused_node_index]);
-    /* Focused input: accent background fill */
+    if (node->input_type == HTML_INPUT_TYPE_TEXTAREA) {
+      /* Textarea: multi-row box — render inline and return early */
+      int32_t box_w = (int32_t)surface->width - margin - 12;
+      int32_t row_h = (int32_t)f->glyph_height + 2;
+      /* Count lines in text (split on \n), min 4 visible rows */
+      int nlines = 1;
+      for (const char *p = node->text; *p; p++) if (*p == '\n') nlines++;
+      if (nlines < 4) nlines = 4;
+      int32_t box_h = nlines * row_h + 4;
+      if (draw) {
+        uint32_t bg = is_focused ? theme->accent_alt : theme->terminal_bg;
+        for (int32_t dy = 0; dy < box_h; dy++) {
+          int32_t hy = top + dy;
+          if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+          uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                      (uint32_t)hy * surface->pitch);
+          for (int32_t px = margin - 2; px < margin + box_w + 2 && px >= 0 &&
+               (uint32_t)px < surface->width; px++)
+            rp[(uint32_t)px] = bg;
+        }
+        /* Render each line of text */
+        const char *src = node->text;
+        int32_t ty = top + 2;
+        for (int ln = 0; ln < nlines; ln++) {
+          char line[HTML_TEXT_MAX];
+          int li = 0;
+          while (*src && *src != '\n' && li < (int)sizeof(line) - 1)
+            line[li++] = *src++;
+          line[li] = '\0';
+          if (*src == '\n') src++;
+          if (ln == nlines - 1 && is_focused) {
+            if (li + 1 < (int)sizeof(line)) { line[li++] = '_'; line[li] = '\0'; }
+          }
+          if (line[0]) font_draw_string(surface, f, margin, ty, line, color);
+          ty += row_h;
+          if (!*src && ln < nlines - 2) break;
+        }
+        /* Border outline */
+        for (int32_t dy = 0; dy < box_h; dy++) {
+          int32_t hy = top + dy;
+          if (hy < 0 || (uint32_t)hy >= surface->height) continue;
+          uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
+                                      (uint32_t)hy * surface->pitch);
+          if (margin - 2 >= 0) rp[(uint32_t)(margin - 2)] = theme->window_border;
+          if ((uint32_t)(margin + box_w + 1) < surface->width)
+            rp[(uint32_t)(margin + box_w + 1)] = theme->window_border;
+        }
+        for (int32_t px = margin - 2; px < margin + box_w + 2 && px >= 0 &&
+             (uint32_t)px < surface->width; px++) {
+          if ((uint32_t)top < surface->height)
+            ((uint32_t *)((uint8_t *)surface->pixels + (uint32_t)top * surface->pitch))
+                [(uint32_t)px] = theme->window_border;
+          int32_t bot = top + box_h - 1;
+          if (bot >= 0 && (uint32_t)bot < surface->height)
+            ((uint32_t *)((uint8_t *)surface->pixels + (uint32_t)bot * surface->pitch))
+                [(uint32_t)px] = theme->window_border;
+        }
+      }
+      return top + box_h + html_viewer_node_margin_bottom(node);
+    }
+    /* Focused single-line input: accent background fill */
     if (draw && is_focused) {
       int32_t bh = (int32_t)f->glyph_height + 4;
       for (int32_t dy = -1; dy < bh; dy++) {
@@ -2050,6 +2234,19 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   if (!display[0] && node->type == HTML_NODE_TAG_A && node->href[0]) {
     kstrcpy(display, sizeof(display), node->href);
   }
+  /* CSS text-transform: uppercase / lowercase / capitalize */
+  if (node->css_text_transform && display[0]) {
+    for (char *p = display; *p; p++) {
+      if (node->css_text_transform == 1) { /* uppercase */
+        if (*p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
+      } else if (node->css_text_transform == 2) { /* lowercase */
+        if (*p >= 'A' && *p <= 'Z') *p = (char)(*p + 32);
+      } else if (node->css_text_transform == 3) { /* capitalize */
+        int prev_space = (p == display || *(p-1) == ' ' || *(p-1) == '\t');
+        if (prev_space && *p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
+      }
+    }
+  }
   /* CSS margin-left / padding-left → shift the left margin only */
   if (node->indent > 0 && node->indent < 300)
     margin += node->indent;
@@ -2063,14 +2260,15 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
   /* CSS font-size scaling for non-heading nodes */
   if (node->font_size > 0 && node->font_size != f->glyph_height &&
       node->type != HTML_NODE_TAG_H1 && node->type != HTML_NODE_TAG_H2 &&
-      node->type != HTML_NODE_TAG_H3) {
+      node->type != HTML_NODE_TAG_H3 && node->type != HTML_NODE_TAG_H4 &&
+      node->type != HTML_NODE_TAG_H5 && node->type != HTML_NODE_TAG_H6) {
     int scale = (int)(node->font_size / f->glyph_height);
     if (scale < 1) scale = 1;
     if (scale > 4) scale = 4;
     if (scale > 1) {
       height = hv_wrap_text_scaled(draw ? surface : NULL, f, margin, top,
                                    max_width, display, color, scale);
-      return top + height + html_viewer_node_margin_bottom(node->type);
+      return top + height + html_viewer_node_margin_bottom(node);
     }
   }
   {
@@ -2087,7 +2285,7 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     height = html_viewer_wrap_text(draw ? surface : NULL, f, margin, top, max_width,
                                    display, color, underline);
   }
-  return top + height + html_viewer_node_margin_bottom(node->type);
+  return top + height + html_viewer_node_margin_bottom(node);
 }
 
 static int html_viewer_node_hit_test(struct html_viewer_app *app, const struct font *f,
@@ -2099,7 +2297,7 @@ static int html_viewer_node_hit_test(struct html_viewer_app *app, const struct f
   int32_t end_y = 0;
   if (!app || !app->window || !f || !node || !theme) return start_y;
   surface = &app->window->surface;
-  if (top_out) *top_out = start_y + html_viewer_node_margin_top(node->type);
+  if (top_out) *top_out = start_y + html_viewer_node_margin_top(node);
   end_y = html_viewer_render_node(surface, f, theme, node, start_y, 0);
   if (bottom_out) *bottom_out = end_y;
   return end_y;
@@ -3019,7 +3217,8 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
       hv_strncmp(url, "about:version", 13) == 0 ||
       hv_strncmp(url, "about:blank", 11) == 0 ||
       hv_strncmp(url, "about:history", 13) == 0 ||
-      hv_strncmp(url, "about:bookmarks", 15) == 0) {
+      hv_strncmp(url, "about:bookmarks", 15) == 0 ||
+      hv_strncmp(url, "about:settings", 14) == 0) {
     html_viewer_load_builtin(app, url);
     if (app->window) compositor_invalidate(app->window->id);
     return;
@@ -3296,6 +3495,50 @@ void html_viewer_paint(struct html_viewer_app *app) {
     kstrcpy(status_line, sizeof(status_line), "Carregando: ");
     kbuf_append(status_line, sizeof(status_line), app->url);
     font_draw_string(s, f, 4, (int32_t)(bar_y + 4), status_line, theme->accent_text);
+  }
+  /* Find-in-page bar at bottom */
+  if (app->url_searching) {
+    uint32_t bar_h = f->glyph_height + 8;
+    uint32_t bar_y = s->height > bar_h ? s->height - bar_h : 0;
+    for (uint32_t py = bar_y; py < s->height; py++) {
+      uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
+      for (uint32_t px = 0; px < s->width; px++) row[px] = theme->terminal_bg;
+    }
+    /* Highlight nodes matching query (yellow background tint) */
+    if (app->search_query[0]) {
+      int32_t hy2 = 28 - app->scroll_offset;
+      for (int si2 = 0; si2 < app->doc.node_count; si2++) {
+        struct html_node *sn2 = &app->doc.nodes[si2];
+        int32_t node_top2 = hy2 + html_viewer_node_margin_top(sn2);
+        int32_t node_bot2 = html_viewer_render_node(NULL, f, theme, sn2, hy2, 0);
+        hy2 = node_bot2;
+        if (!sn2->hidden && hv_contains_ci(sn2->text, app->search_query)) {
+          for (int32_t dy2 = node_top2; dy2 < node_bot2 && dy2 >= 0;
+               dy2++) {
+            if ((uint32_t)dy2 >= s->height || (uint32_t)dy2 >= bar_y) break;
+            uint32_t *rp2 = (uint32_t *)((uint8_t *)s->pixels +
+                                         (uint32_t)dy2 * s->pitch);
+            for (uint32_t px2 = 0; px2 < s->width; px2++) {
+              uint32_t c = rp2[px2];
+              /* Blend with yellow tint */
+              uint32_t r2 = ((c >> 16) & 0xFF) / 2 + 0x7F;
+              uint32_t g2 = ((c >>  8) & 0xFF) / 2 + 0x60;
+              uint32_t b2 = (c & 0xFF) / 2;
+              rp2[px2] = 0xFF000000 | (r2 << 16) | (g2 << 8) | b2;
+            }
+          }
+        }
+      }
+    }
+    /* Draw find bar UI */
+    font_draw_string(s, f, 4, (int32_t)(bar_y + 4), "Find: ", theme->accent);
+    char fq_display[140];
+    kstrcpy(fq_display, sizeof(fq_display), app->search_query);
+    kbuf_append(fq_display, sizeof(fq_display), "_");
+    font_draw_string(s, f, 4 + (int32_t)f->glyph_width * 6,
+                     (int32_t)(bar_y + 4), fq_display, theme->text);
+    font_draw_string(s, f, (int32_t)s->width - (int32_t)f->glyph_width * 9,
+                     (int32_t)(bar_y + 4), "[Esc=Close]", theme->text_muted);
   }
 }
 

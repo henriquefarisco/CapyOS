@@ -73,6 +73,11 @@ struct html_node {
   int indent;
   uint32_t css_color;
   uint32_t css_bg_color;
+  uint8_t css_margin_top;    /* margin-top in px; 0 = use default */
+  uint8_t css_margin_bottom; /* margin-bottom in px; 0 = use default */
+  uint8_t css_border_width;  /* border width in px; 0 = none */
+  uint32_t css_border_color; /* border color (0x00RRGGBB); 0 = theme default */
+  uint8_t css_text_transform; /* 0=none, 1=uppercase, 2=lowercase, 3=capitalize */
 };
 
 #define HTML_STYLE_BUF_MAX 8192
@@ -109,6 +114,9 @@ struct html_viewer_app {
   int focused_node_index;
   struct html_cookie cookies[HTML_MAX_COOKIES];
   uint32_t cookie_count;
+  int url_searching;       /* 1 = find-in-page bar active */
+  char search_query[128];  /* current find query */
+  int search_cursor;       /* cursor position in search query */
 };
 
 void html_viewer_open(void);

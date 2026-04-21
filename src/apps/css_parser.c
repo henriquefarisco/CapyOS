@@ -325,8 +325,27 @@ static void css_apply_prop(const char *name, const char *value,
         uint32_t left_val = (nvals == 1) ? vals[0] :
                             (nvals == 2) ? vals[1] :
                             (nvals == 3) ? vals[1] : vals[3];
+        uint32_t top_val  = (nvals >= 1) ? vals[0] : 0;
+        uint32_t bot_val  = (nvals == 1) ? vals[0] :
+                            (nvals == 2) ? vals[0] :
+                            (nvals == 3) ? vals[2] :
+                            (nvals == 4) ? vals[2] : 0;
         if (left_val > 0 && (int)left_val > node->indent)
             node->indent = (int)left_val;
+        if (css_streq_ci(name, "margin")) {
+            if (top_val > 0 && top_val < 128) node->css_margin_top = (uint8_t)top_val;
+            if (bot_val > 0 && bot_val < 128) node->css_margin_bottom = (uint8_t)bot_val;
+        }
+    } else if (css_streq_ci(name, "margin-top")) {
+        uint32_t px = 0; const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
+        if (px > 0 && px < 128) node->css_margin_top = (uint8_t)px;
+    } else if (css_streq_ci(name, "margin-bottom")) {
+        uint32_t px = 0; const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
+        if (px > 0 && px < 128) node->css_margin_bottom = (uint8_t)px;
     } else if (css_streq_ci(name, "margin-left") ||
                css_streq_ci(name, "padding-left")) {
         uint32_t px = 0;
@@ -336,12 +355,48 @@ static void css_apply_prop(const char *name, const char *value,
             px = px * 16;
         if (px > 0 && (int)px > node->indent)
             node->indent = (int)px;
+    } else if (css_streq_ci(name, "border") ||
+               css_streq_ci(name, "border-top") || css_streq_ci(name, "border-bottom") ||
+               css_streq_ci(name, "border-left") || css_streq_ci(name, "border-right") ||
+               css_streq_ci(name, "outline")) {
+        /* Parse "Wpx style color" — extract first number as width, last token as color */
+        if (css_streq_ci(value, "none") || css_streq_ci(value, "0")) {
+            node->css_border_width = 0;
+        } else {
+            const char *p = value;
+            uint32_t w = 0;
+            while (*p >= '0' && *p <= '9') { w = w * 10 + (uint32_t)(*p - '0'); p++; }
+            if (w == 0) w = 1;
+            if (w > 4) w = 4;
+            node->css_border_width = (uint8_t)w;
+            /* Try to parse color from remaining tokens */
+            while (*p && *p != '#' && !(*p >= 'a' && *p <= 'z') &&
+                   !(*p >= 'A' && *p <= 'Z')) p++;
+            if (*p) {
+                uint32_t bc = css_parse_color(p);
+                if (bc) node->css_border_color = bc;
+            }
+            if (!node->css_border_color) node->css_border_color = 0x888888;
+        }
+    } else if (css_streq_ci(name, "border-width")) {
+        uint32_t px = 0; const char *p = value;
+        while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+        if (px > 4) px = 4;
+        if (node->css_border_width == 0 && px > 0) node->css_border_width = (uint8_t)px;
+    } else if (css_streq_ci(name, "border-color")) {
+        uint32_t bc = css_parse_color(value);
+        if (bc) node->css_border_color = bc;
     } else if (css_streq_ci(name, "max-width")) {
         uint32_t px = 0;
         const char *p = value;
         while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
         if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
         if (px > 0 && px < 65535) node->css_max_width = (uint16_t)px;
+    } else if (css_streq_ci(name, "text-transform")) {
+        if (css_streq_ci(value, "uppercase")) node->css_text_transform = 1;
+        else if (css_streq_ci(value, "lowercase")) node->css_text_transform = 2;
+        else if (css_streq_ci(value, "capitalize")) node->css_text_transform = 3;
+        else node->css_text_transform = 0;
     } else if (css_streq_ci(name, "width") && !css_streq_ci(value, "100%") &&
                !css_streq_ci(value, "auto")) {
         uint32_t px = 0;
@@ -763,7 +818,7 @@ static int css_expand_var(const struct css_stylesheet *css,
             const char *inner = p + 4;
             while (*inner == ' ') inner++;
             if (inner[0] == '-' && inner[1] == '-') {
-                /* Extract var name */
+                /* Extract var name (up to comma or closing paren) */
                 const char *nstart = inner;
                 size_t ni2 = 0;
                 char varname[CSS_VAR_NAME_MAX];
@@ -779,13 +834,30 @@ static int css_expand_var(const struct css_stylesheet *css,
                         resolved = css->vars[vi].value; break;
                     }
                 }
+                /* Extract fallback (after comma, if any) */
+                const char *fallback = NULL;
+                char fb_buf[CSS_VAR_VALUE_MAX];
+                if (!resolved && *inner == ',') {
+                    inner++; /* skip comma */
+                    while (*inner == ' ') inner++;
+                    const char *fb_start = inner;
+                    while (*inner && *inner != ')') inner++;
+                    size_t fb_len = (size_t)(inner - fb_start);
+                    if (fb_len > 0 && fb_len < CSS_VAR_VALUE_MAX) {
+                        kmemcpy(fb_buf, fb_start, fb_len);
+                        fb_buf[fb_len] = '\0';
+                        css_trim(fb_buf);
+                        fallback = fb_buf;
+                    }
+                }
                 /* Skip to closing ')' */
                 while (*inner && *inner != ')') inner++;
                 if (*inner == ')') inner++;
-                if (resolved) {
-                    size_t rlen = kstrlen(resolved);
+                const char *use = resolved ? resolved : fallback;
+                if (use) {
+                    size_t rlen = kstrlen(use);
                     if (ol + rlen >= out_len) rlen = out_len - ol - 1;
-                    kmemcpy(out + ol, resolved, rlen);
+                    kmemcpy(out + ol, use, rlen);
                     ol += rlen;
                 }
                 p = inner;
