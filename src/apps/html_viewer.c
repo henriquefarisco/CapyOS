@@ -1954,12 +1954,12 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
           rp[px] = theme->accent_alt;
       }
     }
-    if (node->name[0]) {
-      kstrcpy(display, sizeof(display), node->name);
-      kbuf_append(display, sizeof(display), ": ");
-    }
     kbuf_append(display, sizeof(display), "[");
-    kbuf_append(display, sizeof(display), node->text);
+    if (node->text[0]) {
+      kbuf_append(display, sizeof(display), node->text);
+    } else if (node->placeholder[0] && !is_focused) {
+      kbuf_append(display, sizeof(display), node->placeholder);
+    }
     if (is_focused) kbuf_append(display, sizeof(display), "_"); /* cursor */
     kbuf_append(display, sizeof(display), "]");
   } else if (node->type == HTML_NODE_TAG_BUTTON) {
@@ -2473,6 +2473,9 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         kstrcpy(node->text, sizeof(node->text), text);
         kstrcpy(node->name, sizeof(node->name), name);
         kstrcpy(node->href, sizeof(node->href), current_form_action);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "placeholder", node->placeholder,
+                                    sizeof(node->placeholder));
         continue;
       } else if (hv_streq_ci(tag, "select")) {
         /* Collect first <option> value as the default selection */
@@ -2517,6 +2520,9 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         kstrcpy(node->text, sizeof(node->text), text);
         kstrcpy(node->name, sizeof(node->name), name);
         kstrcpy(node->href, sizeof(node->href), current_form_action);
+        (void)hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                    "placeholder", node->placeholder,
+                                    sizeof(node->placeholder));
         continue;
       } else if (hv_streq_ci(tag, "button")) {
         struct html_node *node;
@@ -2658,6 +2664,26 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
     struct css_stylesheet sheet;
     if (css_parse(doc->style_text, kstrlen(doc->style_text), &sheet) == 0)
       css_apply_to_doc(&sheet, doc);
+  }
+  /* Propagate body/html CSS color (text color only) to nodes without explicit color.
+   * Background color is handled globally in the paint function, not per-node. */
+  {
+    uint32_t body_color = 0;
+    int i;
+    for (i = 0; i < doc->node_count; i++) {
+      if (doc->nodes[i].type == HTML_NODE_TAG_BODY ||
+          doc->nodes[i].type == HTML_NODE_TAG_HTML) {
+        if (doc->nodes[i].css_color) body_color = doc->nodes[i].css_color;
+      }
+    }
+    if (body_color) {
+      for (i = 0; i < doc->node_count; i++) {
+        if (!doc->nodes[i].css_color &&
+            doc->nodes[i].type != HTML_NODE_TAG_BODY &&
+            doc->nodes[i].type != HTML_NODE_TAG_HTML)
+          doc->nodes[i].css_color = body_color;
+      }
+    }
   }
   return 0;
 }
@@ -3075,9 +3101,20 @@ void html_viewer_paint(struct html_viewer_app *app) {
   if (!app || !app->window || !f || !theme) return;
   s = &app->window->surface;
 
-  for (uint32_t py = 0; py < s->height; py++) {
-    uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
-    for (uint32_t px = 0; px < s->width; px++) line[px] = theme->window_bg;
+  /* Use body CSS background-color if set, else default theme */
+  {
+    uint32_t page_bg = theme->window_bg;
+    for (int bi = 0; bi < app->doc.node_count; bi++) {
+      enum html_node_type t = app->doc.nodes[bi].type;
+      if ((t == HTML_NODE_TAG_BODY || t == HTML_NODE_TAG_HTML) &&
+          app->doc.nodes[bi].css_bg_color) {
+        page_bg = app->doc.nodes[bi].css_bg_color; break;
+      }
+    }
+    for (uint32_t py = 0; py < s->height; py++) {
+      uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + py * s->pitch);
+      for (uint32_t px = 0; px < s->width; px++) line[px] = page_bg;
+    }
   }
   /* Toolbar: 24px bar, back/forward/reload buttons on the left, URL after */
   {

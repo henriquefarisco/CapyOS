@@ -82,7 +82,52 @@ static const struct css_named_color g_named_colors[] = {
     {"fuchsia",     0xFF00FF}, {"coral",       0xFF7F50},
     {"salmon",      0xFA8072}, {"khaki",       0xF0E68C},
     {"indigo",      0x4B0082}, {"violet",      0xEE82EE},
-    {"transparent", 0x000000}, /* treat transparent as black for now */
+    {"crimson",     0xDC143C}, {"darkorange",  0xFF8C00},
+    {"darkgreen",   0x006400}, {"darkblue",    0x00008B},
+    {"darkred",     0x8B0000}, {"darkgray",    0xA9A9A9},
+    {"darkgrey",    0xA9A9A9}, {"lightgray",   0xD3D3D3},
+    {"lightgrey",   0xD3D3D3}, {"whitesmoke",  0xF5F5F5},
+    {"ghostwhite",  0xF8F8FF}, {"beige",       0xF5F5DC},
+    {"ivory",       0xFFFFF0}, {"lavender",    0xE6E6FA},
+    {"mintcream",   0xF5FFFA}, {"honeydew",    0xF0FFF0},
+    {"azure",       0xF0FFFF}, {"aliceblue",   0xF0F8FF},
+    {"snow",        0xFFFAFA}, {"seashell",    0xFFF5EE},
+    {"linen",       0xFAF0E6}, {"oldlace",     0xFDF5E6},
+    {"floralwhite", 0xFFFAF0}, {"antiquewhite",0xFAEBD7},
+    {"bisque",      0xFFE4C4}, {"wheat",       0xF5DEB3},
+    {"tan",         0xD2B48C}, {"peru",        0xCD853F},
+    {"sienna",      0xA0522D}, {"chocolate",   0xD2691E},
+    {"saddlebrown", 0x8B4513}, {"firebrick",   0xB22222},
+    {"darkslategray",0x2F4F4F},{"slategray",   0x708090},
+    {"steelblue",   0x4682B4}, {"cadetblue",   0x5F9EA0},
+    {"powderblue",  0xB0E0E6}, {"lightblue",   0xADD8E6},
+    {"skyblue",     0x87CEEB}, {"deepskyblue", 0x00BFFF},
+    {"dodgerblue",  0x1E90FF}, {"royalblue",   0x4169E1},
+    {"mediumblue",  0x0000CD}, {"midnightblue",0x191970},
+    {"chartreuse",  0x7FFF00}, {"springgreen", 0x00FF7F},
+    {"mediumspringgreen",0x00FA9A},{"turquoise",0x40E0D0},
+    {"mediumturquoise",0x48D1CC},{"paleturquoise",0xAFEEEE},
+    {"darkcyan",    0x008B8B}, {"lightcyan",   0xE0FFFF},
+    {"mediumaquamarine",0x66CDAA},{"aquamarine",0x7FFFD4},
+    {"lightseagreen",0x20B2AA},{"mediumseagreen",0x3CB371},
+    {"seagreen",    0x2E8B57}, {"darkseagreen",0x8FBC8F},
+    {"yellowgreen", 0x9ACD32}, {"olivedrab",   0x6B8E23},
+    {"darkolivegreen",0x556B2F},{"limegreen",  0x32CD32},
+    {"forestgreen", 0x228B22}, {"darkkhaki",   0xBDB76B},
+    {"goldenrod",   0xDAA520}, {"darkgoldenrod",0xB8860B},
+    {"palegoldenrod",0xEEE8AA},{"peachpuff",   0xFFDAB9},
+    {"moccasin",    0xFFE4B5}, {"navajowhite", 0xFFDEAD},
+    {"mistyrose",   0xFFE4E1}, {"lightsalmon", 0xFFA07A},
+    {"darksalmon",  0xE9967A}, {"tomato",      0xFF6347},
+    {"orangered",   0xFF4500}, {"hotpink",     0xFF69B4},
+    {"deeppink",    0xFF1493}, {"palevioletred",0xDB7093},
+    {"mediumvioletred",0xC71585},{"orchid",    0xDA70D6},
+    {"plum",        0xDDA0DD}, {"thistle",     0xD8BFD8},
+    {"mediumorchid",0xBA55D3}, {"darkorchid",  0x9932CC},
+    {"darkviolet",  0x9400D3}, {"blueviolet",  0x8A2BE2},
+    {"mediumpurple",0x9370DB}, {"slateblue",   0x6A5ACD},
+    {"mediumslateblue",0x7B68EE},{"darkslateblue",0x483D8B},
+    {"transparent", 0x000001}, /* treat transparent as near-black, not 0 */
     {NULL, 0}
 };
 
@@ -98,8 +143,9 @@ uint32_t css_parse_color(const char *value) {
     if (!value) return 0;
     /* Skip leading spaces */
     while (css_is_space(value[i])) i++;
-    /* Named color */
-    if (value[i] != '#' && !css_startswith_ci(value + i, "rgb")) {
+    /* Named color (skip for functional notation) */
+    if (value[i] != '#' && !css_startswith_ci(value + i, "rgb") &&
+        !css_startswith_ci(value + i, "hsl")) {
         for (size_t n = 0; g_named_colors[n].name; n++) {
             if (css_streq_ci(value + i, g_named_colors[n].name))
                 return g_named_colors[n].rgb;
@@ -131,6 +177,54 @@ uint32_t css_parse_color(const char *value) {
             return (r << 16) | (g << 8) | b;
         }
         return 0;
+    }
+    /* hsl(h, s%, l%) or hsla(...) */
+    if (css_startswith_ci(value + i, "hsl")) {
+        /* Parse h (0-360), s (0-100%), l (0-100%) */
+        while (value[i] && value[i] != '(') i++;
+        if (!value[i]) return 0;
+        i++;
+        /* H */
+        while (css_is_space(value[i])) i++;
+        uint32_t H = 0;
+        while (value[i] >= '0' && value[i] <= '9') { H = H*10+(uint32_t)(value[i++]-'0'); }
+        while (value[i] && value[i] != ',' && value[i] != ' ') i++;
+        while (css_is_space(value[i]) || value[i] == ',') i++;
+        /* S */
+        uint32_t S = 0;
+        while (value[i] >= '0' && value[i] <= '9') { S = S*10+(uint32_t)(value[i++]-'0'); }
+        while (value[i] && value[i] != ',' && value[i] != ' ') i++;
+        while (css_is_space(value[i]) || value[i] == ',') i++;
+        /* L */
+        uint32_t L = 0;
+        while (value[i] >= '0' && value[i] <= '9') { L = L*10+(uint32_t)(value[i++]-'0'); }
+        /* HSL to RGB conversion (integer math) */
+        if (S == 0) {
+            uint32_t v = (L * 255u) / 100u;
+            return (v << 16) | (v << 8) | v;
+        }
+        {
+            /* C = (1 - |2L - 1|) * S */
+            uint32_t L2 = L > 50 ? (L - 50)*2 : (50 - L)*2;
+            uint32_t C = ((100u - L2) * S) / 100u; /* C in [0,100] */
+            uint32_t X = C * (uint32_t)(60u - (H % 120u > 60u ? H % 120u - 60u : 60u - H % 120u)) / 60u;
+            uint32_t m_l = L > C/2 ? L - C/2 : 0;
+            uint32_t r1, g1, b1;
+            uint32_t h6 = H / 60u;
+            if      (h6 == 0) { r1=C; g1=X; b1=0; }
+            else if (h6 == 1) { r1=X; g1=C; b1=0; }
+            else if (h6 == 2) { r1=0; g1=C; b1=X; }
+            else if (h6 == 3) { r1=0; g1=X; b1=C; }
+            else if (h6 == 4) { r1=X; g1=0; b1=C; }
+            else              { r1=C; g1=0; b1=X; }
+            uint32_t R = ((r1 + m_l) * 255u) / 100u;
+            uint32_t G = ((g1 + m_l) * 255u) / 100u;
+            uint32_t B = ((b1 + m_l) * 255u) / 100u;
+            if (R > 255) R = 255;
+            if (G > 255) G = 255;
+            if (B > 255) B = 255;
+            return (R << 16) | (G << 8) | B;
+        }
     }
     /* rgb(r, g, b) or rgba(r, g, b, a) */
     if (css_startswith_ci(value + i, "rgb")) {

@@ -65,6 +65,7 @@ struct html_node {
   uint8_t no_underline; /* CSS text-decoration: none */
   uint8_t list_style_none; /* CSS list-style-type: none */
   uint8_t open; /* <details open> or toggled open by click */
+  char placeholder[64]; /* <input placeholder="..."> hint text */
   uint16_t css_max_width; /* max-width in px; 0 = unset */
   uint16_t css_width;     /* width in px; 0 = unset */
   char id[64];
