@@ -276,6 +276,13 @@ const char *http_error_string(int error) {
   return "ok";
 }
 
+int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
+                          uint32_t *out_ip) {
+  (void)hostname; (void)timeout_ms;
+  if (out_ip) *out_ip = 0;
+  return -1;
+}
+
 int tls_init(void) { return 0; }
 struct tls_context *tls_connect(int socket_fd, const char *hostname,
                                 const struct tls_config *config) {
