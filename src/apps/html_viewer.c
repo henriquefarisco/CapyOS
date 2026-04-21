@@ -1321,6 +1321,8 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
       "<li><strong>F5</strong> - Reload page</li>"
       "<li><strong>F3</strong> - Find next match</li>"
       "<li><strong>Ctrl+F</strong> - Find in page</li>"
+      "<li><strong>Ctrl+L</strong> - Focus address bar</li>"
+      "<li><strong>Ctrl+R</strong> - Reload page</li>"
       "<li><strong>Ctrl+D</strong> - Bookmark current page</li>"
       "<li><strong>Ctrl+B</strong> - Open bookmarks</li>"
       "<li><strong>Arrow keys</strong> - Scroll page</li>"
@@ -1329,14 +1331,14 @@ static void html_viewer_load_builtin(struct html_viewer_app *app, const char *ur
       "</ul>"
       "<h2>Navigation</h2>"
       "<ul>"
-      "<li>Click the &lt; button or press Alt+Left to go back</li>"
+      "<li>Click the &lt; button or press Backspace to go back</li>"
       "<li>Click the &gt; button to go forward</li>"
-      "<li>Click R button or press F5 to reload</li>"
+      "<li>Click R button, press F5, or Ctrl+R to reload</li>"
       "<li>Click the * star to bookmark this page</li>"
       "</ul>"
       "<h2>About</h2>"
       "<p>CapyBrowser - HTTP/HTTPS browser for CapyOS.</p>"
-      "<p>Features: HTML5 parsing, CSS engine, PNG images, forms, cookies, gzip, history, bookmarks, find-in-page.</p>"
+      "<p>Features: HTML5 parsing, CSS engine, PNG/JPEG images, forms, cookies, gzip, history, bookmarks, find-in-page.</p>"
       "<a href=\"about:home\">Home</a>"
       "</body></html>";
     url = "about:settings";
@@ -1430,6 +1432,20 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
     html_viewer_navigate(app, "about:bookmarks");
     return;
   }
+  /* Ctrl+L (ASCII 12): focus address bar */
+  if (keycode == 12 && !app->url_editing) {
+    app->url_editing = 1;
+    app->url_cursor = (int)kstrlen(app->url);
+    compositor_invalidate(win->id);
+    return;
+  }
+  /* Ctrl+R (ASCII 18): reload page */
+  if (keycode == 18 && !app->url_editing) {
+    html_viewer_navigate(app, app->url);
+    return;
+  }
+  /* Ctrl+H (ASCII 8 = backspace, handle only outside editing): open history */
+  /* (Ctrl+H conflicts with backspace; handled separately below) */
   /* Ctrl+F (ASCII 6): open find-in-page bar */
   if (keycode == 6 && !app->url_editing) {
     app->url_searching = 1;
@@ -2155,9 +2171,15 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
     }
   }
   else if (node->type == HTML_NODE_TAG_BLOCKQUOTE) {
-    /* Blockquote: accent left border bar */
+    /* Blockquote: accent left border bar spanning full text height */
+    kstrcpy(display, sizeof(display), "  ");
+    kbuf_append(display, sizeof(display), node->text);
     if (draw) {
-      for (int32_t dy = -2; dy < (int32_t)f->glyph_height + 4; dy++) {
+      int32_t avail_w = (int32_t)surface->width - margin - 12;
+      if (avail_w < (int32_t)f->glyph_width) avail_w = (int32_t)f->glyph_width;
+      int32_t text_h = html_viewer_wrap_text(NULL, f, margin, top,
+                                             avail_w, display, 0, 0) + 4;
+      for (int32_t dy = -2; dy < text_h; dy++) {
         int32_t hy = top + dy;
         if (hy < 0 || (uint32_t)hy >= surface->height) continue;
         uint32_t *rp = (uint32_t *)((uint8_t *)surface->pixels +
@@ -2170,8 +2192,6 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
         }
       }
     }
-    kstrcpy(display, sizeof(display), "  ");
-    kbuf_append(display, sizeof(display), node->text);
   }
   else if (node->type == HTML_NODE_TAG_DETAILS) {
     if (node->open) {

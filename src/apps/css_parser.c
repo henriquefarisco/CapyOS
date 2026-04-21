@@ -332,16 +332,17 @@ static void css_apply_prop(const char *name, const char *value,
                             (nvals == 4) ? vals[2] : 0;
         if (left_val > 0 && (int)left_val > node->indent)
             node->indent = (int)left_val;
-        if (css_streq_ci(name, "margin")) {
-            if (top_val > 0 && top_val < 128) node->css_margin_top = (uint8_t)top_val;
-            if (bot_val > 0 && bot_val < 128) node->css_margin_bottom = (uint8_t)bot_val;
-        }
-    } else if (css_streq_ci(name, "margin-top")) {
+        /* Both margin and padding shorthand set vertical spacing */
+        if (top_val > 0 && top_val < 128) node->css_margin_top = (uint8_t)top_val;
+        if (bot_val > 0 && bot_val < 128) node->css_margin_bottom = (uint8_t)bot_val;
+    } else if (css_streq_ci(name, "margin-top") ||
+               css_streq_ci(name, "padding-top")) {
         uint32_t px = 0; const char *p = value;
         while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
         if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
         if (px > 0 && px < 128) node->css_margin_top = (uint8_t)px;
-    } else if (css_streq_ci(name, "margin-bottom")) {
+    } else if (css_streq_ci(name, "margin-bottom") ||
+               css_streq_ci(name, "padding-bottom")) {
         uint32_t px = 0; const char *p = value;
         while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
         if (css_startswith_ci(p, "em") || css_startswith_ci(p, "rem")) px = px * 16;
