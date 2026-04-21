@@ -1694,6 +1694,39 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
   }
 }
 
+/* Draw a horizontal line. */
+static void hv_draw_hline(struct gui_surface *s, int32_t x, int32_t y,
+                           int32_t w, uint32_t color) {
+  if (!s || y < 0 || (uint32_t)y >= s->height || w <= 0) return;
+  uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)y * s->pitch);
+  int32_t x1 = x < 0 ? 0 : x;
+  int32_t x2 = x + w;
+  if ((uint32_t)x2 > s->width) x2 = (int32_t)s->width;
+  for (int32_t px = x1; px < x2; px++) row[(uint32_t)px] = color;
+}
+
+/* Draw a vertical line. */
+static void hv_draw_vline(struct gui_surface *s, int32_t x, int32_t y,
+                           int32_t h, uint32_t color) {
+  if (!s || x < 0 || (uint32_t)x >= s->width || h <= 0) return;
+  for (int32_t py = y; py < y + h; py++) {
+    if (py < 0 || (uint32_t)py >= s->height) continue;
+    uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)py * s->pitch);
+    row[(uint32_t)x] = color;
+  }
+}
+
+/* Draw a border rectangle (hollow, border_w pixels thick on each side). */
+static void hv_draw_border_rect(struct gui_surface *s, int32_t x, int32_t y,
+                                 int32_t w, int32_t h, int bw, uint32_t color) {
+  for (int t = 0; t < bw; t++) {
+    hv_draw_hline(s, x, y + t, w, color);
+    hv_draw_hline(s, x, y + h - 1 - t, w, color);
+    hv_draw_vline(s, x + t, y, h, color);
+    hv_draw_vline(s, x + w - 1 - t, y, h, color);
+  }
+}
+
 /* Draw a single bitmap glyph scaled by an integer factor (nearest-neighbor). */
 static void hv_draw_char_scaled(struct gui_surface *surface, const struct font *f,
                                 int32_t x, int32_t y, char c, uint32_t color, int scale) {
@@ -3549,7 +3582,17 @@ void html_viewer_paint(struct html_viewer_app *app) {
 
   for (int i = 0; i < app->doc.node_count; i++) {
     struct html_node *node = &app->doc.nodes[i];
+    int32_t y_before = y;
     y = html_viewer_render_node(s, f, theme, node, y, 1);
+    /* CSS border: draw a rectangle overlay around the rendered row */
+    if (node->css_border_width > 0 && y > y_before) {
+      int32_t bx = 10;
+      int32_t bw = (int32_t)s->width - 20;
+      uint32_t bcol = node->css_border_color
+                      ? node->css_border_color : theme->window_border;
+      hv_draw_border_rect(s, bx, y_before, bw, y - y_before,
+                          (int)node->css_border_width, bcol);
+    }
     if (y > (int32_t)s->height + app->scroll_offset + 32) break;
   }
   app->content_height = y + 8;
