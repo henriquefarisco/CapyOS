@@ -904,6 +904,7 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
 static void hv_apply_node_attrs(struct html_node *node, const char *attrs,
                                size_t len) {
   char style_attr[256];
+  char wh_buf[16];
   style_attr[0] = '\0';
   if (!node || !attrs) return;
   (void)hv_extract_attr_value(attrs, len, "id", node->id, sizeof(node->id));
@@ -912,6 +913,12 @@ static void hv_apply_node_attrs(struct html_node *node, const char *attrs,
   if (hv_extract_attr_value(attrs, len, "style", style_attr,
                              sizeof(style_attr)))
     css_apply_inline(style_attr, node);
+  /* width= / height= HTML attributes (used on <img>, <td>, etc.) */
+  if (hv_extract_attr_value(attrs, len, "width", wh_buf, sizeof(wh_buf))) {
+    uint32_t px = 0; const char *p = wh_buf;
+    while (*p >= '0' && *p <= '9') { px = px * 10 + (uint32_t)(*p - '0'); p++; }
+    if (px > 0 && px < 65535 && node->css_width == 0) node->css_width = (uint16_t)px;
+  }
   /* Boolean attribute "open" (e.g. <details open>) */
   {
     /* Scan for bare "open" word or open="..." */
@@ -2615,7 +2622,8 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
         compositor_invalidate(win->id);
         return;
       }
-      if (node->type == HTML_NODE_TAG_A && node->href[0] &&
+      if ((node->type == HTML_NODE_TAG_A || node->type == HTML_NODE_TAG_LI) &&
+          node->href[0] &&
           y >= top && y < bottom && x >= 12) {
         char resolved[HTML_URL_MAX];
         if (node->href[0] == '#') {
@@ -3061,6 +3069,27 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
           kstrcpy(text, sizeof(text), src);
         }
         if (src[0] && !href[0]) kstrcpy(href, sizeof(href), src);
+      } else if (hv_streq_ci(tag, "li") && !self_closing) {
+        /* Peek for a leading <a href="..."> so the list item becomes clickable */
+        {
+          char li_href[HTML_URL_MAX];
+          size_t sc = pos;
+          li_href[0] = '\0';
+          while (sc < len && hv_is_space(html[sc])) sc++;
+          if (sc < len && html[sc] == '<') {
+            char atag[8]; size_t aattr = sc + 1; size_t aend = sc;
+            int acl = 0, asc2 = 0;
+            sc++;
+            if (sc < len && html[sc] == '/') { acl = 1; sc++; }
+            hv_read_tag_name(html, len, &sc, atag, sizeof(atag));
+            sc = hv_scan_tag_end(html, len, sc, &aend, &asc2);
+            if (!acl && hv_streq_ci(atag, "a"))
+              hv_extract_attr_value(html + aattr, aend - aattr, "href",
+                                    li_href, sizeof(li_href));
+          }
+          pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+          if (li_href[0] && !href[0]) kstrcpy(href, sizeof(href), li_href);
+        }
       } else if (!self_closing) {
         pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
       }
