@@ -2905,11 +2905,13 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
 }
 
 int html_parse(const char *html, size_t len, struct html_document *doc) {
-  size_t pos = 0;
-  char current_form_action[HTML_URL_MAX];
+  /* All large buffers are static: CapyOS is single-threaded, html_parse is
+   * never re-entrant, and the combined frame (~3 KB) was overflowing the stack. */
+  static char current_form_action[HTML_URL_MAX];
   uint8_t current_form_method = HTML_FORM_METHOD_GET;
-  int list_ordered = 0;  /* inside <ol>? */
-  int list_num = 1;      /* next ordered-list item number */
+  int list_ordered = 0;
+  int list_num = 1;
+  size_t pos = 0;
   if (!html || !doc) return -1;
   kmemzero(doc, sizeof(*doc));
   current_form_action[0] = '\0';
@@ -2919,11 +2921,11 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       continue;
     }
     if (html[pos] == '<') {
-      char tag[32];
-      char href[HTML_URL_MAX];
-      char src[HTML_URL_MAX];
-      char text[HTML_TEXT_MAX];
-      char name[HTML_COOKIE_NAME_MAX];
+      static char tag[32];
+      static char href[HTML_URL_MAX];
+      static char src[HTML_URL_MAX];
+      static char text[HTML_TEXT_MAX];
+      static char name[HTML_COOKIE_NAME_MAX];
       char type_attr[24];
       char method_attr[16];
       size_t attr_start = 0;
@@ -3072,68 +3074,60 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
       }
       /* Table cells */
       if (hv_streq_ci(tag, "td") || hv_streq_ci(tag, "th")) {
-        char cell_text[HTML_TEXT_MAX];
         struct html_node *node;
-        cell_text[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, cell_text,
-                                        sizeof(cell_text));
-        if (!cell_text[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = HTML_NODE_TAG_TD;
         node->bold = hv_streq_ci(tag, "th") ? 1 : 0;
-        kstrcpy(node->text, sizeof(node->text), cell_text);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Sub-headings h4-h6 */
       if (hv_streq_ci(tag, "h4") || hv_streq_ci(tag, "h5") ||
           hv_streq_ci(tag, "h6")) {
-        char htext[HTML_TEXT_MAX];
         struct html_node *node;
-        htext[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, htext,
-                                        sizeof(htext));
-        if (!htext[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = hv_streq_ci(tag, "h4") ? HTML_NODE_TAG_H4 :
                      hv_streq_ci(tag, "h5") ? HTML_NODE_TAG_H5 :
                                               HTML_NODE_TAG_H6;
-        kstrcpy(node->text, sizeof(node->text), htext);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Preformatted text and inline code */
       if (hv_streq_ci(tag, "pre") || hv_streq_ci(tag, "code") ||
           hv_streq_ci(tag, "samp") || hv_streq_ci(tag, "kbd")) {
-        char ptext[HTML_TEXT_MAX];
         struct html_node *node;
-        ptext[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, ptext,
-                                        sizeof(ptext));
-        if (!ptext[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = hv_streq_ci(tag, "pre") ? HTML_NODE_TAG_PRE
                                               : HTML_NODE_TAG_CODE;
-        kstrcpy(node->text, sizeof(node->text), ptext);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Blockquote */
       if (hv_streq_ci(tag, "blockquote")) {
-        char btext[HTML_TEXT_MAX];
         struct html_node *node;
-        btext[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, btext,
-                                        sizeof(btext));
-        if (!btext[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = HTML_NODE_TAG_BLOCKQUOTE;
         node->indent = 1;
-        kstrcpy(node->text, sizeof(node->text), btext);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
@@ -3144,49 +3138,43 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
           hv_streq_ci(tag, "cite") || hv_streq_ci(tag, "small") ||
           hv_streq_ci(tag, "s") || hv_streq_ci(tag, "del") ||
           hv_streq_ci(tag, "ins") || hv_streq_ci(tag, "u")) {
-        char itext[HTML_TEXT_MAX];
         struct html_node *node;
-        itext[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, itext,
-                                        sizeof(itext));
-        if (!itext[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = hv_streq_ci(tag, "mark") ? HTML_NODE_TAG_MARK
                                                : HTML_NODE_TEXT;
         node->bold = (hv_streq_ci(tag, "strong") || hv_streq_ci(tag, "b")) ? 1
                                                                              : 0;
-        kstrcpy(node->text, sizeof(node->text), itext);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Figcaption */
       if (hv_streq_ci(tag, "figcaption")) {
-        char ftext[HTML_TEXT_MAX];
         struct html_node *node;
-        ftext[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, ftext,
-                                        sizeof(ftext));
-        if (!ftext[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = HTML_NODE_TAG_FIGCAPTION;
-        kstrcpy(node->text, sizeof(node->text), ftext);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
       /* Details/summary collapsible */
       if (hv_streq_ci(tag, "details") || hv_streq_ci(tag, "summary")) {
-        char dtext[HTML_TEXT_MAX];
         struct html_node *node;
-        dtext[0] = '\0';
-        pos = hv_collect_text_until_tag(html, len, pos, tag, dtext,
-                                        sizeof(dtext));
-        if (!dtext[0]) continue;
+        text[0] = '\0';
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
+        if (!text[0]) continue;
         node = html_push_node(doc);
         if (!node) break;
         node->type = HTML_NODE_TAG_DETAILS;
-        kstrcpy(node->text, sizeof(node->text), dtext);
+        kstrcpy(node->text, sizeof(node->text), text);
         hv_apply_node_attrs(node, html + attr_start, tag_end - attr_start);
         continue;
       }
@@ -3335,8 +3323,10 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
                   hv_streq_ci(tag, "h4") || hv_streq_ci(tag, "h5") ||
                   hv_streq_ci(tag, "h6") || hv_streq_ci(tag, "div") ||
                   hv_streq_ci(tag, "blockquote") || hv_streq_ci(tag, "li"))) {
-        /* Use inline content parser: emits separate text + anchor nodes */
-        struct html_node tmpl;
+        /* Use inline content parser: emits separate text + anchor nodes.
+         * static: html_node is ~1800 bytes; putting it on stack would overflow
+         * html_parse()'s already-heavy ~3 KB frame. Single-threaded = safe. */
+        static struct html_node tmpl;
         kmemzero(&tmpl, sizeof(tmpl));
         tmpl.form_method = current_form_method;
         kstrcpy(tmpl.href, sizeof(tmpl.href), current_form_action);
