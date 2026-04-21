@@ -1432,10 +1432,13 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
     html_viewer_navigate(app, "about:bookmarks");
     return;
   }
-  /* Ctrl+L (ASCII 12): focus address bar */
-  if (keycode == 12 && !app->url_editing) {
+  /* Ctrl+L (ASCII 12): focus address bar and select all */
+  if (keycode == 12) {
     app->url_editing = 1;
-    app->url_cursor = (int)kstrlen(app->url);
+    app->url_searching = 0;
+    /* Clear URL so user can type a new one immediately */
+    app->url[0] = '\0';
+    app->url_cursor = 0;
     compositor_invalidate(win->id);
     return;
   }
@@ -1902,6 +1905,79 @@ static int html_viewer_wrap_text(struct gui_surface *surface, const struct font 
     }
   }
   return drew ? (int)(line_y - y + line_height) : line_height;
+}
+
+/* Like html_viewer_wrap_text but starts at x_start (> x_left).
+   Wraps to x_left on newline/overflow. Returns height; sets *out_end_x. */
+static int html_viewer_wrap_text_from(
+    struct gui_surface *surface, const struct font *f,
+    int32_t x_left, int32_t x_start, int32_t y, int32_t max_width,
+    const char *text, uint32_t color, int underline, int32_t *out_end_x) {
+  int32_t line_y = y;
+  int32_t cursor_x = x_start;
+  int32_t line_height = (int32_t)f->glyph_height + 2;
+  size_t i = 0;
+  int drew = 0;
+  if (!f || !text || !text[0]) { if (out_end_x) *out_end_x = x_start; return line_height; }
+  if (max_width < (int32_t)f->glyph_width) max_width = (int32_t)f->glyph_width;
+  while (text[i]) {
+    if (text[i] == '\n') { cursor_x = x_left; line_y += line_height; i++; continue; }
+    while (text[i] == ' ') {
+      if (cursor_x != x_left) {
+        if (cursor_x - x_left + (int32_t)f->glyph_width > max_width) {
+          cursor_x = x_left; line_y += line_height;
+        } else cursor_x += (int32_t)f->glyph_width;
+      }
+      i++;
+    }
+    if (!text[i]) break;
+    {
+      size_t word_start = i;
+      size_t word_len = 0;
+      int32_t word_width;
+      while (text[i] && text[i] != ' ' && text[i] != '\n') i++;
+      word_len = i - word_start;
+      word_width = (int32_t)word_len * (int32_t)f->glyph_width;
+      if (cursor_x != x_left && word_width <= max_width &&
+          cursor_x - x_left + word_width > max_width) {
+        cursor_x = x_left; line_y += line_height;
+      }
+      if (surface) {
+        int32_t start_x = cursor_x;
+        for (size_t j = 0; j < word_len; j++) {
+          if (cursor_x != x_left &&
+              cursor_x - x_left + (int32_t)f->glyph_width > max_width) {
+            cursor_x = x_left; line_y += line_height;
+          }
+          font_draw_char(surface, f, cursor_x, line_y, text[word_start + j], color);
+          cursor_x += (int32_t)f->glyph_width;
+        }
+        if (underline) {
+          int32_t uy = line_y + (int32_t)f->glyph_height;
+          if (uy >= 0 && (uint32_t)uy < surface->height) {
+            uint32_t *row = (uint32_t *)((uint8_t *)surface->pixels +
+                                         (uint32_t)uy * surface->pitch);
+            for (int32_t ux = start_x; ux < cursor_x; ux++)
+              if (ux >= 0 && (uint32_t)ux < surface->width) row[(uint32_t)ux] = color;
+          }
+        }
+      } else {
+        cursor_x += word_width;
+      }
+      drew = 1;
+    }
+  }
+  if (out_end_x) *out_end_x = cursor_x;
+  return drew ? (int)(line_y - y + line_height) : line_height;
+}
+
+/* Returns 1 if the node should participate in horizontal inline flow. */
+static int hv_node_is_inline(const struct html_node *node) {
+  enum html_node_type t;
+  if (!node || node->hidden || !node->text[0]) return 0;
+  t = node->type;
+  return t == HTML_NODE_TAG_A || t == HTML_NODE_TAG_SPAN ||
+         t == HTML_NODE_TAG_MARK || t == HTML_NODE_TEXT;
 }
 
 static int html_viewer_node_margin_top(const struct html_node *node) {
@@ -2450,19 +2526,69 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
 
   {
     int32_t node_y = 28 - app->scroll_offset;
+    /* Inline run state mirrors html_viewer_paint() for consistent y coords */
+    int32_t il_x = 0, il_y = 0, il_h = 0;
     for (int i = 0; i < app->doc.node_count; i++) {
-      int32_t top = node_y;
-      int32_t bottom = node_y;
+      int32_t top, bottom;
       struct html_node *node = &app->doc.nodes[i];
+
+      if (node->hidden) {
+        if (il_x > 0) { node_y = il_y + il_h; il_x = 0; }
+        continue;
+      }
+
+      if (hv_node_is_inline(node)) {
+        int32_t lm = 12 + (node->indent > 0 && node->indent < 300 ? node->indent : 0);
+        int32_t max_w = (int32_t)win->surface.width - lm - 12;
+        int32_t end_x;
+        int h;
+        if (max_w < (int32_t)f->glyph_width) max_w = (int32_t)f->glyph_width;
+        if (il_x == 0) {
+          il_y = node_y + (int32_t)html_viewer_node_margin_top(node);
+          il_x = lm;
+          il_h = (int32_t)f->glyph_height + 2;
+        }
+        top    = il_y;
+        end_x  = il_x;
+        h = html_viewer_wrap_text_from(NULL, f, lm, il_x, il_y, max_w,
+                                       node->text, 0, 0, &end_x);
+        bottom = il_y + (h > il_h ? h : il_h);
+        if (h > il_h) il_h = h;
+        il_x = end_x + (int32_t)f->glyph_width;
+        if (il_x >= lm + max_w) { il_y += il_h; il_x = lm; il_h = (int32_t)f->glyph_height + 2; }
+
+        /* Inline A: check both y and x ranges */
+        if (node->type == HTML_NODE_TAG_A && node->href[0] &&
+            y >= top && y < bottom &&
+            x >= node->il_x_left && x <= node->il_x_right + 4) {
+          char resolved[HTML_URL_MAX];
+          if (node->href[0] == '#') {
+            hv_scroll_to_anchor(app, node->href + 1);
+            compositor_invalidate(win->id);
+            return;
+          }
+          if (hv_resolve_url(app->url, node->href, resolved, sizeof(resolved)) == 0)
+            html_viewer_navigate(app, resolved);
+          else
+            html_viewer_navigate(app, node->href);
+          compositor_invalidate(win->id);
+          return;
+        }
+        continue;
+      }
+
+      /* Block node: flush inline run, use sequential layout */
+      if (il_x > 0) { node_y = il_y + il_h; il_x = 0; }
+      top = node_y; bottom = node_y;
       node_y = html_viewer_node_hit_test(app, f, node, node_y, &top, &bottom);
-      if (node->type == HTML_NODE_TAG_INPUT && !node->hidden &&
+
+      if (node->type == HTML_NODE_TAG_INPUT &&
           y >= top && y < bottom && x >= 12) {
         app->focused_node_index = i;
         app->url_editing = 0;
         if (node->input_type == HTML_INPUT_TYPE_CHECKBOX) {
           node->open = node->open ? 0 : 1;
         } else if (node->input_type == HTML_INPUT_TYPE_RADIO) {
-          /* Deselect all radios with the same name, select this one */
           for (int ri = 0; ri < app->doc.node_count; ri++) {
             struct html_node *rn = &app->doc.nodes[ri];
             if (rn->type == HTML_NODE_TAG_INPUT &&
@@ -2497,11 +2623,10 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
           compositor_invalidate(win->id);
           return;
         }
-        if (hv_resolve_url(app->url, node->href, resolved, sizeof(resolved)) == 0) {
+        if (hv_resolve_url(app->url, node->href, resolved, sizeof(resolved)) == 0)
           html_viewer_navigate(app, resolved);
-        } else {
+        else
           html_viewer_navigate(app, node->href);
-        }
         compositor_invalidate(win->id);
         return;
       }
@@ -3600,20 +3725,66 @@ void html_viewer_paint(struct html_viewer_app *app) {
     }
   }
 
-  for (int i = 0; i < app->doc.node_count; i++) {
-    struct html_node *node = &app->doc.nodes[i];
-    int32_t y_before = y;
-    y = html_viewer_render_node(s, f, theme, node, y, 1);
-    /* CSS border: draw a rectangle overlay around the rendered row */
-    if (node->css_border_width > 0 && y > y_before) {
-      int32_t bx = 10;
-      int32_t bw = (int32_t)s->width - 20;
-      uint32_t bcol = node->css_border_color
-                      ? node->css_border_color : theme->window_border;
-      hv_draw_border_rect(s, bx, y_before, bw, y - y_before,
-                          (int)node->css_border_width, bcol);
+  /* Inline run state for consecutive inline elements (A, SPAN, MARK, TEXT) */
+  {
+    int32_t il_x = 0;  /* 0 = no active inline run */
+    int32_t il_y = 0;
+    int32_t il_h = 0;
+    int i;
+    for (i = 0; i < app->doc.node_count; i++) {
+      struct html_node *node = &app->doc.nodes[i];
+      if (node->hidden) {
+        if (il_x > 0) { y = il_y + il_h; il_x = 0; }
+        node->il_x_left = 0; node->il_x_right = 0;
+        continue;
+      }
+      if (hv_node_is_inline(node)) {
+        int32_t lm = 12 + (node->indent > 0 && node->indent < 300 ? node->indent : 0);
+        int32_t max_w = (int32_t)s->width - lm - 12;
+        uint32_t color = html_viewer_node_color(theme, node);
+        int underline = (node->type == HTML_NODE_TAG_A && !node->no_underline);
+        int32_t end_x;
+        int h;
+        if (max_w < (int32_t)f->glyph_width) max_w = (int32_t)f->glyph_width;
+        if (il_x == 0) {
+          /* New inline run: begin at top margin of first node */
+          il_y = y + (int32_t)html_viewer_node_margin_top(node);
+          il_x = lm;
+          il_h = (int32_t)f->glyph_height + 2;
+        }
+        node->il_x_left = il_x;
+        end_x = il_x;
+        h = html_viewer_wrap_text_from(s, f, lm, il_x, il_y, max_w,
+                                       node->text, color, underline, &end_x);
+        node->il_x_right = end_x;
+        if (h > il_h) il_h = h;
+        il_x = end_x + (int32_t)f->glyph_width; /* inter-element gap */
+        if (il_x >= lm + max_w) {
+          /* Ran off the end: wrap inline cursor to next line */
+          il_y += il_h;
+          il_x = lm;
+          il_h = (int32_t)f->glyph_height + 2;
+        }
+      } else {
+        /* Block element: flush any pending inline run */
+        if (il_x > 0) { y = il_y + il_h; il_x = 0; }
+        node->il_x_left = 0; node->il_x_right = 0;
+        {
+          int32_t y_before = y;
+          y = html_viewer_render_node(s, f, theme, node, y, 1);
+          if (node->css_border_width > 0 && y > y_before) {
+            int32_t bx = 10, bw = (int32_t)s->width - 20;
+            uint32_t bcol = node->css_border_color
+                            ? node->css_border_color : theme->window_border;
+            hv_draw_border_rect(s, bx, y_before, bw, y - y_before,
+                                (int)node->css_border_width, bcol);
+          }
+        }
+      }
+      if (y > (int32_t)s->height + app->scroll_offset + 32) break;
     }
-    if (y > (int32_t)s->height + app->scroll_offset + 32) break;
+    /* Flush any trailing inline run */
+    if (il_x > 0) y = il_y + il_h;
   }
   app->content_height = y + 8;
 
