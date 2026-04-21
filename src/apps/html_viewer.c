@@ -266,7 +266,9 @@ enum {
   HTML_INPUT_TYPE_TEXTAREA,
   HTML_INPUT_TYPE_HIDDEN,
   HTML_INPUT_TYPE_SUBMIT,
-  HTML_INPUT_TYPE_BUTTON
+  HTML_INPUT_TYPE_BUTTON,
+  HTML_INPUT_TYPE_CHECKBOX,
+  HTML_INPUT_TYPE_RADIO
 };
 
 static int hv_strncmp(const char *a, const char *b, size_t n) {
@@ -945,6 +947,8 @@ static uint8_t hv_form_input_type(const char *type) {
   if (hv_streq_ci(type, "hidden")) return HTML_INPUT_TYPE_HIDDEN;
   if (hv_streq_ci(type, "submit")) return HTML_INPUT_TYPE_SUBMIT;
   if (hv_streq_ci(type, "button")) return HTML_INPUT_TYPE_BUTTON;
+  if (hv_streq_ci(type, "checkbox")) return HTML_INPUT_TYPE_CHECKBOX;
+  if (hv_streq_ci(type, "radio")) return HTML_INPUT_TYPE_RADIO;
   return HTML_INPUT_TYPE_TEXT;
 }
 
@@ -1545,6 +1549,23 @@ static void html_viewer_window_key(struct gui_window *win, uint32_t keycode,
       app->focused_node_index < app->doc.node_count) {
     struct html_node *node = &app->doc.nodes[app->focused_node_index];
     if (node->type == HTML_NODE_TAG_INPUT && !node->hidden) {
+      /* Space bar toggles checkbox; selects radio */
+      if (ch == ' ' && (node->input_type == HTML_INPUT_TYPE_CHECKBOX ||
+                         node->input_type == HTML_INPUT_TYPE_RADIO)) {
+        if (node->input_type == HTML_INPUT_TYPE_CHECKBOX) {
+          node->open = node->open ? 0 : 1;
+        } else {
+          for (int ri = 0; ri < app->doc.node_count; ri++) {
+            struct html_node *rn = &app->doc.nodes[ri];
+            if (rn->type == HTML_NODE_TAG_INPUT &&
+                rn->input_type == HTML_INPUT_TYPE_RADIO &&
+                kstreq(rn->name, node->name)) rn->open = 0;
+          }
+          node->open = 1;
+        }
+        compositor_invalidate(win->id);
+        return;
+      }
       if (ch == '\n' || ch == '\r') {
         if (node->input_type == HTML_INPUT_TYPE_TEXTAREA) {
           size_t len = kstrlen(node->text);
@@ -2217,14 +2238,20 @@ static int html_viewer_render_node(struct gui_surface *surface, const struct fon
           rp[px] = theme->accent_alt;
       }
     }
-    kbuf_append(display, sizeof(display), "[");
-    if (node->text[0]) {
-      kbuf_append(display, sizeof(display), node->text);
-    } else if (node->placeholder[0] && !is_focused) {
-      kbuf_append(display, sizeof(display), node->placeholder);
+    if (node->input_type == HTML_INPUT_TYPE_CHECKBOX) {
+      kbuf_append(display, sizeof(display), node->open ? "[x]" : "[ ]");
+    } else if (node->input_type == HTML_INPUT_TYPE_RADIO) {
+      kbuf_append(display, sizeof(display), node->open ? "(*)" : "( )");
+    } else {
+      kbuf_append(display, sizeof(display), "[");
+      if (node->text[0]) {
+        kbuf_append(display, sizeof(display), node->text);
+      } else if (node->placeholder[0] && !is_focused) {
+        kbuf_append(display, sizeof(display), node->placeholder);
+      }
+      if (is_focused) kbuf_append(display, sizeof(display), "_"); /* cursor */
+      kbuf_append(display, sizeof(display), "]");
     }
-    if (is_focused) kbuf_append(display, sizeof(display), "_"); /* cursor */
-    kbuf_append(display, sizeof(display), "]");
   } else if (node->type == HTML_NODE_TAG_BUTTON) {
     kstrcpy(display, sizeof(display), "[ ");
     kbuf_append(display, sizeof(display), node->text);
@@ -2378,6 +2405,19 @@ static void html_viewer_window_mouse(struct gui_window *win, int32_t x, int32_t 
           y >= top && y < bottom && x >= 12) {
         app->focused_node_index = i;
         app->url_editing = 0;
+        if (node->input_type == HTML_INPUT_TYPE_CHECKBOX) {
+          node->open = node->open ? 0 : 1;
+        } else if (node->input_type == HTML_INPUT_TYPE_RADIO) {
+          /* Deselect all radios with the same name, select this one */
+          for (int ri = 0; ri < app->doc.node_count; ri++) {
+            struct html_node *rn = &app->doc.nodes[ri];
+            if (rn->type == HTML_NODE_TAG_INPUT &&
+                rn->input_type == HTML_INPUT_TYPE_RADIO &&
+                kstreq(rn->name, node->name))
+              rn->open = 0;
+          }
+          node->open = 1;
+        }
         compositor_invalidate(win->id);
         return;
       }
@@ -2747,6 +2787,26 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
         if (node->type == HTML_NODE_TAG_BUTTON && !text[0]) {
           kstrcpy(text, sizeof(text), "Submit");
         }
+        /* For checkbox/radio: store value in text, checked state in open */
+        if (input_type == HTML_INPUT_TYPE_CHECKBOX ||
+            input_type == HTML_INPUT_TYPE_RADIO) {
+          char chk_val[64];
+          chk_val[0] = '\0';
+          hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                                "checked", chk_val, sizeof(chk_val));
+          /* "checked" attribute (boolean) or checked="" */
+          {
+            size_t ai = 0; const char *ats = html + attr_start; size_t alen = tag_end - attr_start;
+            while (ai < alen) {
+              while (ai < alen && hv_is_space(ats[ai])) ai++;
+              if (hv_match_token_ci(ats + ai, 7, "checked") &&
+                  (ai + 7 >= alen || hv_is_space(ats[ai+7]) || ats[ai+7] == '='
+                   || ats[ai+7] == '/' || ats[ai+7] == '>')) { node->open = 1; break; }
+              while (ai < alen && !hv_is_space(ats[ai]) && ats[ai] != '>' && ats[ai] != '/') ai++;
+            }
+          }
+          if (!text[0]) kstrcpy(text, sizeof(text), "on");
+        }
         kstrcpy(node->text, sizeof(node->text), text);
         kstrcpy(node->name, sizeof(node->name), name);
         kstrcpy(node->href, sizeof(node->href), current_form_action);
@@ -3057,7 +3117,15 @@ static int html_viewer_build_form_payload(struct html_viewer_app *app,
       continue;
     }
     if (node->type == HTML_NODE_TAG_INPUT) {
-      hv_form_append_pair(payload, payload_len, node->name, node->text, &wrote_any);
+      /* Checkboxes/radios: only include if checked */
+      if (node->input_type == HTML_INPUT_TYPE_CHECKBOX ||
+          node->input_type == HTML_INPUT_TYPE_RADIO) {
+        if (node->open)
+          hv_form_append_pair(payload, payload_len, node->name, node->text, &wrote_any);
+      } else if (node->input_type != HTML_INPUT_TYPE_HIDDEN ||
+                 node->name[0]) {
+        hv_form_append_pair(payload, payload_len, node->name, node->text, &wrote_any);
+      }
     } else if (node->type == HTML_NODE_TAG_BUTTON && node == submit_node) {
       hv_form_append_pair(payload, payload_len, node->name, node->text, &wrote_any);
     }
