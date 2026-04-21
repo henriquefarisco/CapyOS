@@ -252,6 +252,8 @@ static void html_viewer_request_internal(struct html_viewer_app *app,
                                          int depth);
 static void html_viewer_submit_form(struct html_viewer_app *app, int node_index);
 static void hv_http_cache_store(const char *url, const struct http_response *resp);
+static void hv_apply_node_attrs(struct html_node *node, const char *attrs, size_t len);
+static struct html_node *html_push_node(struct html_document *doc);
 static void hv_fetch_external_css(struct html_viewer_app *app);
 static void hv_fetch_page_images(struct html_viewer_app *app);
 static void hv_prefetch_dns(struct html_viewer_app *app);
@@ -901,6 +903,226 @@ static size_t hv_collect_text_until_tag(const char *html, size_t len,
     pos++;
   }
   hv_trim_text(out);
+  return pos;
+}
+
+/* Returns 1 if tag is a block-level element that implicitly closes an open p/li */
+static int hv_is_block_tag(const char *tag) {
+  return hv_streq_ci(tag, "p") || hv_streq_ci(tag, "div") ||
+         hv_streq_ci(tag, "h1") || hv_streq_ci(tag, "h2") ||
+         hv_streq_ci(tag, "h3") || hv_streq_ci(tag, "h4") ||
+         hv_streq_ci(tag, "h5") || hv_streq_ci(tag, "h6") ||
+         hv_streq_ci(tag, "li") || hv_streq_ci(tag, "ul") ||
+         hv_streq_ci(tag, "ol") || hv_streq_ci(tag, "blockquote") ||
+         hv_streq_ci(tag, "table") || hv_streq_ci(tag, "tr") ||
+         hv_streq_ci(tag, "section") || hv_streq_ci(tag, "article") ||
+         hv_streq_ci(tag, "header") || hv_streq_ci(tag, "footer") ||
+         hv_streq_ci(tag, "main") || hv_streq_ci(tag, "nav") ||
+         hv_streq_ci(tag, "hr") || hv_streq_ci(tag, "pre");
+}
+
+/* Flush accumulated text to a new TEXT node inheriting properties from tmpl.
+ * Clears buf. Returns 1 if a node was emitted. */
+static int hv_flush_inline_text(struct html_document *doc,
+                                const struct html_node *tmpl,
+                                char *buf, size_t *buf_pos) {
+  struct html_node *node;
+  hv_trim_text(buf);
+  if (!buf[0]) { buf[0] = '\0'; *buf_pos = 0; return 0; }
+  node = html_push_node(doc);
+  if (!node) { buf[0] = '\0'; *buf_pos = 0; return 0; }
+  *node = *tmpl;                /* copy CSS, indent, color, etc. from parent */
+  node->type = HTML_NODE_TEXT;
+  node->href[0] = '\0';        /* no link */
+  node->il_x_left = node->il_x_right = 0;
+  kstrcpy(node->text, sizeof(node->text), buf);
+  buf[0] = '\0'; *buf_pos = 0;
+  return 1;
+}
+
+/* Parse inline content of a block element, emitting separate nodes for text
+ * segments and <a>/<strong>/<em>/<span> children. Returns new parse position. */
+static size_t hv_parse_inline_content(const char *html, size_t len, size_t pos,
+                                       const char *close_tag,
+                                       struct html_document *doc,
+                                       const struct html_node *tmpl) {
+  char buf[HTML_TEXT_MAX];
+  size_t buf_pos = 0;
+  int last_space = 1;
+  buf[0] = '\0';
+
+  while (pos < len) {
+    if (html[pos] != '<') {
+      /* Plain text or entity */
+      if (html[pos] == '&') {
+        size_t consumed = 0; char decoded = 0;
+        if (hv_decode_entity_value(html + pos, len - pos, &consumed, &decoded)) {
+          hv_text_append_char(buf, sizeof(buf), &buf_pos, decoded, &last_space);
+          pos += consumed; continue;
+        }
+      }
+      hv_text_append_char(buf, sizeof(buf), &buf_pos, html[pos], &last_space);
+      pos++; continue;
+    }
+    /* Tag */
+    {
+      char inner[32];
+      size_t attr_start, tag_end;
+      int closing = 0, self_closing = 0;
+      size_t tag_start = pos;
+      pos++;
+      if (pos < len && (html[pos] == '!' || html[pos] == '?')) {
+        pos = hv_skip_special_tag(html, len, pos); continue;
+      }
+      if (pos < len && html[pos] == '/') { closing = 1; pos++; }
+      hv_read_tag_name(html, len, &pos, inner, sizeof(inner));
+      attr_start = pos;
+      pos = hv_scan_tag_end(html, len, pos, &tag_end, &self_closing);
+      if (!inner[0]) continue;
+
+      /* Closing the block */
+      if (closing && hv_streq_ci(inner, close_tag)) break;
+      /* Implicit close: another block tag opens */
+      if (!closing && !self_closing && hv_is_block_tag(inner) &&
+          !hv_streq_ci(inner, close_tag)) {
+        pos = tag_start; /* back up so outer parser picks up this tag */
+        break;
+      }
+      if (closing) continue; /* unmatched closing tag */
+
+      /* <br>: newline */
+      if (hv_streq_ci(inner, "br") || hv_streq_ci(inner, "wbr")) {
+        hv_flush_inline_text(doc, tmpl, buf, &buf_pos);
+        last_space = 1; continue;
+      }
+      /* Skip scripts/style/svg */
+      if (hv_streq_ci(inner, "script") || hv_streq_ci(inner, "style") ||
+          hv_streq_ci(inner, "svg") || hv_streq_ci(inner, "canvas")) {
+        if (!self_closing) pos = hv_skip_block(html, len, pos, inner);
+        continue;
+      }
+      /* <a href="...">link text</a> — flush prior text, emit anchor node */
+      if (!self_closing && hv_streq_ci(inner, "a")) {
+        char a_href[HTML_URL_MAX];
+        char a_text[HTML_TEXT_MAX];
+        size_t a_tpos = 0; int a_lsp = 1;
+        struct html_node *anode;
+        a_href[0] = '\0'; a_text[0] = '\0';
+        hv_extract_attr_value(html + attr_start, tag_end - attr_start,
+                              "href", a_href, sizeof(a_href));
+        /* Collect anchor text (no nested a's) */
+        while (pos < len) {
+          if (html[pos] == '<') {
+            char itag[16]; size_t ie = pos; int ic = 0, isc = 0;
+            size_t ip = pos + 1;
+            if (ip < len && html[ip] == '/') { ic = 1; ip++; }
+            hv_read_tag_name(html, len, &ip, itag, sizeof(itag));
+            ip = hv_scan_tag_end(html, len, ip, &ie, &isc);
+            if (ic && hv_streq_ci(itag, "a")) { pos = ip; break; }
+            if (hv_streq_ci(itag, "br")) {
+              hv_text_append_char(a_text, sizeof(a_text), &a_tpos, '\n', &a_lsp);
+              pos = ip; continue;
+            }
+            if (!ic && !isc &&
+                (hv_streq_ci(itag, "span") || hv_streq_ci(itag, "strong") ||
+                 hv_streq_ci(itag, "em") || hv_streq_ci(itag, "b") ||
+                 hv_streq_ci(itag, "i"))) { pos = ip; continue; }
+            if (ic && (hv_streq_ci(itag, "span") || hv_streq_ci(itag, "strong") ||
+                       hv_streq_ci(itag, "em") || hv_streq_ci(itag, "b") ||
+                       hv_streq_ci(itag, "i"))) { pos = ip; continue; }
+            pos = ip; continue;
+          }
+          if (html[pos] == '&') {
+            size_t consumed = 0; char decoded = 0;
+            if (hv_decode_entity_value(html + pos, len - pos, &consumed, &decoded)) {
+              hv_text_append_char(a_text, sizeof(a_text), &a_tpos, decoded, &a_lsp);
+              pos += consumed; continue;
+            }
+          }
+          hv_text_append_char(a_text, sizeof(a_text), &a_tpos, html[pos], &a_lsp);
+          pos++;
+        }
+        hv_trim_text(a_text);
+        if (!a_text[0] && a_href[0]) kstrcpy(a_text, sizeof(a_text), a_href);
+        if (a_text[0] || a_href[0]) {
+          hv_flush_inline_text(doc, tmpl, buf, &buf_pos);
+          last_space = 1;
+          anode = html_push_node(doc);
+          if (anode) {
+            *anode = *tmpl;
+            anode->type = HTML_NODE_TAG_A;
+            anode->color = 0x89B4FA; /* link blue */
+            anode->il_x_left = anode->il_x_right = 0;
+            kstrcpy(anode->text, sizeof(anode->text), a_text);
+            kstrcpy(anode->href, sizeof(anode->href), a_href);
+            hv_apply_node_attrs(anode, html + attr_start, tag_end - attr_start);
+          }
+        }
+        continue;
+      }
+      /* <strong>/<b>/<em>/<i>/<mark>/<span>/<small>/<s>/<u> etc.: collect text inline */
+      if (!self_closing &&
+          (hv_streq_ci(inner, "strong") || hv_streq_ci(inner, "b") ||
+           hv_streq_ci(inner, "em") || hv_streq_ci(inner, "i") ||
+           hv_streq_ci(inner, "mark") || hv_streq_ci(inner, "span") ||
+           hv_streq_ci(inner, "small") || hv_streq_ci(inner, "s") ||
+           hv_streq_ci(inner, "u") || hv_streq_ci(inner, "del") ||
+           hv_streq_ci(inner, "code") || hv_streq_ci(inner, "kbd") ||
+           hv_streq_ci(inner, "abbr") || hv_streq_ci(inner, "cite") ||
+           hv_streq_ci(inner, "time") || hv_streq_ci(inner, "sub") ||
+           hv_streq_ci(inner, "sup") || hv_streq_ci(inner, "label"))) {
+        /* Flush current run, then read this inline element's text directly into buf */
+        char sub_text[HTML_TEXT_MAX];
+        size_t sub_pos = 0; int sub_lsp = 1;
+        sub_text[0] = '\0';
+        /* Collect until closing tag */
+        while (pos < len) {
+          if (html[pos] == '<') {
+            char itag[16]; size_t ie = pos; int ic = 0, isc = 0;
+            size_t ip = pos + 1;
+            if (ip < len && html[ip] == '/') { ic = 1; ip++; }
+            hv_read_tag_name(html, len, &ip, itag, sizeof(itag));
+            ip = hv_scan_tag_end(html, len, ip, &ie, &isc);
+            if (ic && hv_streq_ci(itag, inner)) { pos = ip; break; }
+            if (hv_streq_ci(itag, "br")) {
+              hv_text_append_char(sub_text, sizeof(sub_text), &sub_pos, '\n', &sub_lsp);
+            }
+            pos = ip; continue;
+          }
+          if (html[pos] == '&') {
+            size_t consumed = 0; char decoded = 0;
+            if (hv_decode_entity_value(html + pos, len - pos, &consumed, &decoded)) {
+              hv_text_append_char(sub_text, sizeof(sub_text), &sub_pos, decoded, &sub_lsp);
+              pos += consumed; continue;
+            }
+          }
+          hv_text_append_char(sub_text, sizeof(sub_text), &sub_pos, html[pos], &sub_lsp);
+          pos++;
+        }
+        hv_trim_text(sub_text);
+        if (sub_text[0]) {
+          /* Append to current text buffer with a space separator */
+          if (buf_pos > 0 && buf[buf_pos - 1] != ' ')
+            hv_text_append_char(buf, sizeof(buf), &buf_pos, ' ', &last_space);
+          hv_append_decoded_text(buf, sizeof(buf), &buf_pos, sub_text,
+                                 kstrlen(sub_text), &last_space);
+        }
+        continue;
+      }
+      /* <img alt="..."> */
+      if (hv_streq_ci(inner, "img")) {
+        char alt[HTML_TEXT_MAX];
+        alt[0] = '\0';
+        hv_extract_attr_value(html + attr_start, tag_end - attr_start, "alt",
+                              alt, sizeof(alt));
+        if (alt[0]) hv_append_decoded_text(buf, sizeof(buf), &buf_pos, alt,
+                                           kstrlen(alt), &last_space);
+        continue;
+      }
+      /* Other tags: skip them */
+    }
+  }
+  hv_flush_inline_text(doc, tmpl, buf, &buf_pos);
   return pos;
 }
 
@@ -3106,27 +3328,34 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
           kstrcpy(text, sizeof(text), src);
         }
         if (src[0] && !href[0]) kstrcpy(href, sizeof(href), src);
+      } else if (!self_closing &&
+                 (hv_streq_ci(tag, "p") || hv_streq_ci(tag, "h1") ||
+                  hv_streq_ci(tag, "h2") || hv_streq_ci(tag, "h3") ||
+                  hv_streq_ci(tag, "h4") || hv_streq_ci(tag, "h5") ||
+                  hv_streq_ci(tag, "h6") || hv_streq_ci(tag, "div") ||
+                  hv_streq_ci(tag, "blockquote") || hv_streq_ci(tag, "li"))) {
+        /* Use inline content parser: emits separate text + anchor nodes */
+        struct html_node tmpl;
+        kmemzero(&tmpl, sizeof(tmpl));
+        tmpl.form_method = current_form_method;
+        kstrcpy(tmpl.href, sizeof(tmpl.href), current_form_action);
+        hv_apply_node_attrs(&tmpl, html + attr_start, tag_end - attr_start);
+        /* Set type and style on template based on tag */
+        if (hv_streq_ci(tag, "h1"))        { tmpl.type = HTML_NODE_TAG_H1; tmpl.bold = 1; }
+        else if (hv_streq_ci(tag, "h2"))   { tmpl.type = HTML_NODE_TAG_H2; tmpl.bold = 1; }
+        else if (hv_streq_ci(tag, "h3"))   { tmpl.type = HTML_NODE_TAG_H3; tmpl.bold = 1; }
+        else if (hv_streq_ci(tag, "h4"))   { tmpl.type = HTML_NODE_TAG_H4; tmpl.bold = 1; }
+        else if (hv_streq_ci(tag, "h5"))   { tmpl.type = HTML_NODE_TAG_H5; tmpl.bold = 1; }
+        else if (hv_streq_ci(tag, "h6"))   { tmpl.type = HTML_NODE_TAG_H6; tmpl.bold = 1; }
+        else if (hv_streq_ci(tag, "p"))    { tmpl.type = HTML_NODE_TAG_P; }
+        else if (hv_streq_ci(tag, "li"))   { tmpl.type = HTML_NODE_TAG_LI; }
+        else if (hv_streq_ci(tag, "blockquote")) { tmpl.type = HTML_NODE_TAG_BLOCKQUOTE; tmpl.indent = 24; }
+        else                               { tmpl.type = HTML_NODE_TAG_DIV; }
+        pos = hv_parse_inline_content(html, len, pos, tag, doc, &tmpl);
+        continue;
       } else if (hv_streq_ci(tag, "li") && !self_closing) {
-        /* Peek for a leading <a href="..."> so the list item becomes clickable */
-        {
-          char li_href[HTML_URL_MAX];
-          size_t sc = pos;
-          li_href[0] = '\0';
-          while (sc < len && hv_is_space(html[sc])) sc++;
-          if (sc < len && html[sc] == '<') {
-            char atag[8]; size_t aattr = sc + 1; size_t aend = sc;
-            int acl = 0, asc2 = 0;
-            sc++;
-            if (sc < len && html[sc] == '/') { acl = 1; sc++; }
-            hv_read_tag_name(html, len, &sc, atag, sizeof(atag));
-            sc = hv_scan_tag_end(html, len, sc, &aend, &asc2);
-            if (!acl && hv_streq_ci(atag, "a"))
-              hv_extract_attr_value(html + aattr, aend - aattr, "href",
-                                    li_href, sizeof(li_href));
-          }
-          pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
-          if (li_href[0] && !href[0]) kstrcpy(href, sizeof(href), li_href);
-        }
+        /* Fallback (should not be reached; handled above) */
+        pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
       } else if (!self_closing) {
         pos = hv_collect_text_until_tag(html, len, pos, tag, text, sizeof(text));
       }
