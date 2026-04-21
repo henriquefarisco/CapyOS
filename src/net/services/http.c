@@ -379,7 +379,7 @@ static int http_build_request(const struct http_request *req, char *buf, size_t 
   }
 
   if (!http_request_has_header(req, "Connection") &&
-      http_buf_append_str(buf, buf_size, &pos, "\r\nConnection: close") != 0) {
+      http_buf_append_str(buf, buf_size, &pos, "\r\nConnection: keep-alive") != 0) {
     return -1;
   }
   if (!http_request_has_header(req, "User-Agent") &&
@@ -447,6 +447,61 @@ struct http_transport {
   struct tls_context *tls;
 };
 
+/* ------------------------------------------------------------------ */
+/* Keep-alive connection pool (up to 4 cached connections)            */
+/* ------------------------------------------------------------------ */
+
+#define HTTP_POOL_MAX 4
+
+struct http_pool_entry {
+  char host[128];
+  uint16_t port;
+  uint8_t use_tls;
+  uint8_t active;
+  int socket_fd;
+  struct tls_context *tls;
+};
+
+static struct http_pool_entry g_http_pool[HTTP_POOL_MAX];
+
+static struct http_pool_entry *http_pool_find(const char *host,
+                                               uint16_t port, int use_tls) {
+  for (int i = 0; i < HTTP_POOL_MAX; i++) {
+    struct http_pool_entry *e = &g_http_pool[i];
+    if (!e->active) continue;
+    if (e->port != port || e->use_tls != (uint8_t)use_tls) continue;
+    if (http_streq_ci(e->host, host)) return e;
+  }
+  return NULL;
+}
+
+static void http_pool_remove(struct http_pool_entry *e) {
+  if (!e || !e->active) return;
+  if (e->tls) { tls_close(e->tls); tls_free(e->tls); e->tls = NULL; }
+  if (e->socket_fd >= 0) { socket_close(e->socket_fd); e->socket_fd = -1; }
+  e->active = 0;
+}
+
+static void http_pool_store(const char *host, uint16_t port, int use_tls,
+                             int socket_fd, struct tls_context *tls) {
+  /* Find empty slot, evicting LRU (first active) if full */
+  struct http_pool_entry *slot = NULL;
+  for (int i = 0; i < HTTP_POOL_MAX; i++) {
+    if (!g_http_pool[i].active) { slot = &g_http_pool[i]; break; }
+  }
+  if (!slot) {
+    /* Evict first slot */
+    http_pool_remove(&g_http_pool[0]);
+    slot = &g_http_pool[0];
+  }
+  http_strcpy(slot->host, host, sizeof(slot->host));
+  slot->port     = port;
+  slot->use_tls  = (uint8_t)use_tls;
+  slot->socket_fd = socket_fd;
+  slot->tls      = tls;
+  slot->active   = 1;
+}
+
 static void http_transport_reset(struct http_transport *transport) {
   if (!transport) return;
   transport->socket_fd = -1;
@@ -461,6 +516,23 @@ static int http_transport_connect(struct http_transport *transport,
   struct tls_config tls_config;
   if (!transport || !req) return http_fail(HTTP_ERR_INVALID_ARGUMENT);
   http_transport_reset(transport);
+
+  /* Try reusing a pooled connection */
+  {
+    struct http_pool_entry *pooled = http_pool_find(req->host, req->port,
+                                                     req->use_tls);
+    if (pooled) {
+      transport->socket_fd = pooled->socket_fd;
+      transport->use_tls   = pooled->use_tls;
+      transport->tls       = pooled->tls;
+      /* Mark slot as inactive without closing */
+      pooled->socket_fd = -1;
+      pooled->tls       = NULL;
+      pooled->active    = 0;
+      return 0; /* reuse succeeded */
+    }
+  }
+
   transport->socket_fd = socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (transport->socket_fd < 0) return http_fail(HTTP_ERR_SOCKET);
 
@@ -756,6 +828,29 @@ int http_request(const struct http_request *req, struct http_response *resp) {
 cleanup:
   if (recv_buf) {
     kfree(recv_buf);
+  }
+  /* Return connection to pool if keep-alive was negotiated and request succeeded */
+  if (result == 0 && transport.socket_fd >= 0) {
+    const char *conn_hdr = http_find_header(resp, "Connection");
+    int do_keepalive = (conn_hdr && http_contains_ci(conn_hdr, "keep-alive"));
+    /* HTTP/1.1 defaults to keep-alive unless Connection: close is specified */
+    if (!conn_hdr && resp->status_code >= 200 && resp->status_code < 400) {
+      int close_explicit = 0;
+      for (uint32_t hi = 0; hi < resp->header_count; hi++) {
+        if (http_streq_ci(resp->headers[hi].name, "Connection") &&
+            http_contains_ci(resp->headers[hi].value, "close")) {
+          close_explicit = 1; break;
+        }
+      }
+      if (!close_explicit) do_keepalive = 1;
+    }
+    if (do_keepalive) {
+      http_pool_store(req->host, req->port, req->use_tls,
+                      transport.socket_fd, transport.tls);
+      /* Don't let http_transport_close close the socket */
+      transport.socket_fd = -1;
+      transport.tls = NULL;
+    }
   }
   http_transport_close(&transport);
   return result;
