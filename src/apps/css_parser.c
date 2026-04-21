@@ -804,8 +804,19 @@ static int css_simple_selector_matches(const char *sel,
     }
     /* Match tag */
     if (tag_part[0] && !css_streq_ci(tag_part, css_node_tag(node))) return 0;
-    /* Match class */
+    /* Match first class */
     if (cls_part[0] && !css_has_class(node->class_list, cls_part)) return 0;
+    /* Match any additional chained classes (.foo.bar.baz) still remaining in sel */
+    while (pos < len && sel[pos] == '.') {
+        char extra_cls[64];
+        size_t es = 0;
+        pos++;
+        while (pos < len && sel[pos] != '.' && sel[pos] != '#' &&
+               es < sizeof(extra_cls) - 1)
+            extra_cls[es++] = css_tolower(sel[pos++]);
+        extra_cls[es] = '\0';
+        if (extra_cls[0] && !css_has_class(node->class_list, extra_cls)) return 0;
+    }
     /* Match id */
     if (id_part[0] && !css_streq_ci(id_part, node->id)) return 0;
     return 1;
