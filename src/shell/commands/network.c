@@ -1,4 +1,4 @@
-#include "network_internal.h"
+#include "internal/network_internal.h"
 
 static struct shell_command g_network_commands[11];
 static int g_network_commands_initialized = 0;

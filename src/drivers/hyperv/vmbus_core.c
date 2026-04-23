@@ -4,10 +4,10 @@
 
 #include "drivers/hyperv/hyperv.h"
 #include "kernel/log/klog.h"
-#include "vmbus_channel_runtime.h"
-#include "vmbus_core.h"
-#include "vmbus_offers.h"
-#include "vmbus_transport.h"
+#include "internal/vmbus_channel_runtime.h"
+#include "internal/vmbus_core.h"
+#include "internal/vmbus_offers.h"
+#include "internal/vmbus_transport.h"
 
 
 #define VMBUS_MESSAGE_CONNECTION_ID 1

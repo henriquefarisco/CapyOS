@@ -1,6 +1,6 @@
 /* system_setup.c: normalizers, runtime platform, theme/keyboard/splash apply,
    login. */
-#include "config_internal.h"
+#include "internal/config_internal.h"
 
 /* ---- globals ---- */
 char g_boot_default_keyboard_layout[16] = "us";

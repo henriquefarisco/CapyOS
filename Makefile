@@ -84,9 +84,9 @@ LINKER64_SCRIPT = $(SRC_DIR)/arch/x86_64/linker64.ld
 
 # Build 64-bit: entry64 + kernel_main64 + drivers + core + fs + shell + security
 CAPYOS64_OBJS = \
-	$(BUILD)/x86_64/arch/x86_64/entry64.o \
+	$(BUILD)/x86_64/arch/x86_64/boot/entry64.o \
 	$(BUILD)/x86_64/arch/x86_64/interrupts.o \
-	$(BUILD)/x86_64/arch/x86_64/interrupts_asm.o \
+	$(BUILD)/x86_64/arch/x86_64/cpu/interrupts_asm.o \
 	$(BUILD)/x86_64/arch/x86_64/input_runtime.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_input_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_runtime_coordinator.o \
@@ -121,7 +121,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/config/system_setup.o \
 	$(BUILD)/x86_64/config/system_setup_wizard.o \
 	$(BUILD)/x86_64/config/system_settings.o \
-	$(BUILD)/x86_64/config/first_boot.o \
+	$(BUILD)/x86_64/config/first_boot/logging.o \
+	$(BUILD)/x86_64/config/first_boot/storage_users.o \
+	$(BUILD)/x86_64/config/first_boot/program.o \
 	$(BUILD)/x86_64/services/update_agent.o \
 	$(BUILD)/x86_64/auth/user.o \
 	$(BUILD)/x86_64/auth/user_prefs.o \
@@ -213,8 +215,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/filesystem_search.o \
 	$(BUILD)/x86_64/arch/x86_64/panic.o \
 	$(BUILD)/x86_64/arch/x86_64/apic.o \
-	$(BUILD)/x86_64/arch/x86_64/context_switch.o \
-	$(BUILD)/x86_64/arch/x86_64/syscall_entry.o \
+	$(BUILD)/x86_64/arch/x86_64/cpu/context_switch.o \
+	$(BUILD)/x86_64/arch/x86_64/syscall/syscall_entry.o \
 	$(BUILD)/x86_64/kernel/task.o \
 	$(BUILD)/x86_64/kernel/scheduler.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
@@ -265,8 +267,19 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/apps/file_manager.o \
 	$(BUILD)/x86_64/apps/text_editor.o \
 	$(BUILD)/x86_64/apps/task_manager.o \
+	$(BUILD)/x86_64/apps/html_viewer/common.o \
+	$(BUILD)/x86_64/apps/html_viewer/navigation_state.o \
+	$(BUILD)/x86_64/apps/html_viewer/response_classification.o \
+	$(BUILD)/x86_64/apps/html_viewer/text_url_helpers.o \
+	$(BUILD)/x86_64/apps/html_viewer/async_runtime.o \
+	$(BUILD)/x86_64/apps/html_viewer/ui_runtime.o \
+	$(BUILD)/x86_64/apps/html_viewer/ui_input.o \
+	$(BUILD)/x86_64/apps/html_viewer/ui_mouse.o \
+	$(BUILD)/x86_64/apps/html_viewer/forms_and_response.o \
 	$(BUILD)/x86_64/apps/html_viewer.o \
-	$(BUILD)/x86_64/apps/css_parser.o \
+	$(BUILD)/x86_64/apps/css_parser/common.o \
+	$(BUILD)/x86_64/apps/css_parser/parse.o \
+	$(BUILD)/x86_64/apps/css_parser/apply.o \
 	$(BUILD)/x86_64/apps/settings.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
 	$(BUILD)/x86_64/gui/window/window_manager.o \
@@ -419,7 +432,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer.c src/apps/css_parser.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
+	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
                src/util/kstring.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
@@ -447,6 +460,11 @@ $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
+
+.PHONY: layout-audit
+layout-audit:
+	@echo "Auditando organizacao de codigo..."
+	python3 tools/scripts/audit_source_layout.py
 
 .PHONY: check-toolchain
 check-toolchain:
@@ -495,6 +513,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test check-toolchain smoke-x64-cli smoke-x64-cli-nvme smoke-x64-iso inspect-disk
+.PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test layout-audit check-toolchain smoke-x64-cli smoke-x64-cli-nvme smoke-x64-iso inspect-disk
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEP)

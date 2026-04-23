@@ -1,4 +1,4 @@
-#include "network_internal.h"
+#include "internal/network_internal.h"
 
 #if defined(__x86_64__)
 #include "net/http.h"

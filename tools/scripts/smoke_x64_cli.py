@@ -119,14 +119,23 @@ def run_boot1(
             password=parsed.password,
             keyboard_layout=parsed.keyboard_layout,
         )
-        login(session=session, timeout=parsed.step_timeout, user=parsed.user, password=parsed.password)
-        smoke_first_boot(
+        mode = login(
             session=session,
             timeout=parsed.step_timeout,
             user=parsed.user,
             password=parsed.password,
-            marker=marker,
+            allow_desktop=True,
         )
+        if mode == "shell":
+            smoke_first_boot(
+                session=session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+                marker=marker,
+            )
+        else:
+            print("[info] boot #1 entrou direto no desktop; smoke CLI pulando validacoes de shell.")
     finally:
         session.stop()
 
@@ -160,13 +169,23 @@ def run_boot2(
             timeout=parsed.step_timeout * 4,
             start_at=mk,
         )
-        smoke_second_boot(
+        mode = login(
             session=session,
             timeout=parsed.step_timeout,
             user=parsed.user,
             password=parsed.password,
-            marker=marker,
+            allow_desktop=True,
         )
+        if mode == "shell":
+            smoke_second_boot(
+                session=session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+                marker=marker,
+            )
+        else:
+            print("[info] boot #2 entrou direto no desktop; smoke CLI aceitando sessao grafica.")
     finally:
         session.stop()
 

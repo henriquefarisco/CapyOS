@@ -1,4 +1,4 @@
-#include "storage_runtime_gpt.h"
+#include "internal/storage_runtime_gpt.h"
 
 #include <stdint.h>
 

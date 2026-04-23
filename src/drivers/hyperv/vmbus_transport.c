@@ -1,5 +1,5 @@
 #include "arch/x86_64/framebuffer_console.h"
-#include "vmbus_transport.h"
+#include "internal/vmbus_transport.h"
 
 #include <stddef.h>
 #include <stdint.h>

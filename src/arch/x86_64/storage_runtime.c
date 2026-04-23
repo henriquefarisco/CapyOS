@@ -4,10 +4,10 @@
 #include <stdint.h>
 
 #include "fs/capyfs.h"
-#include "storage_runtime_gpt.h"
-#include "storage_runtime_hyperv.h"
+#include "internal/storage_runtime_gpt.h"
+#include "internal/storage_runtime_hyperv.h"
 #include "arch/x86_64/storage_runtime_hyperv_plan.h"
-#include "storage_runtime_native.h"
+#include "internal/storage_runtime_native.h"
 
 static struct efi_block_device g_efi_runtime_disk;
 static struct efi_block_device g_efi_runtime_disk_alt;

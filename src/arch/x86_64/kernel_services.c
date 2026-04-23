@@ -9,7 +9,9 @@
 #include "arch/x86_64/kernel_main_internal.h"
 #include "arch/x86_64/kernel_runtime_control.h"
 #include "arch/x86_64/storage_runtime.h"
+#include "drivers/gpu/gpu_core.h"
 #include "drivers/timer/pit.h"
+#include "drivers/usb/usb_core.h"
 #include "kernel/log/klog.h"
 #include "kernel/log/klog_persist.h"
 #include "lang/localization.h"
@@ -138,6 +140,43 @@ int kernel_work_recovery_snapshot(void *ctx) {
   return kernel_persist_recovery_report();
 }
 
+int kernel_work_gpu_discovery(void *ctx) {
+  (void)ctx;
+  klog(KLOG_INFO, "[boot] Background GPU discovery started.");
+  (void)gpu_detect();
+  klog(KLOG_INFO, "[boot] Background GPU discovery finished.");
+  return 0;
+}
+
+int kernel_work_usb_bringup(void *ctx) {
+  int devices = 0;
+
+  (void)ctx;
+  klog(KLOG_INFO, "[boot] Background USB bring-up started.");
+  usb_core_init();
+  devices = usb_enumerate_devices();
+  klog_dec(KLOG_INFO, "[boot] Background USB devices detected: ",
+           (uint32_t)devices);
+  return 0;
+}
+
+int kernel_work_update_agent_warmup(void *ctx) {
+  int rc = 0;
+
+  (void)ctx;
+  if (!g_shell_fs_ready) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                    "waiting for storage runtime");
+    return 0;
+  }
+
+  klog(KLOG_INFO, "[boot] Background update-agent warmup started.");
+  rc = update_agent_poll();
+  kernel_update_update_agent_service_status(rc);
+  return rc;
+}
+
 void kernel_update_recovery_snapshot_work(int schedule_now) {
   uint64_t now_ticks = pit_ticks();
 
@@ -156,6 +195,33 @@ void kernel_update_recovery_snapshot_work(int schedule_now) {
   }
 }
 
+void kernel_schedule_background_boot_work(int shell_runtime_ready) {
+  uint64_t now_ticks = pit_ticks();
+
+  (void)work_queue_register(SYSTEM_WORK_GPU_DISCOVERY, "gpu-discovery",
+                            kernel_work_gpu_discovery, NULL);
+  (void)work_queue_register(SYSTEM_WORK_USB_BRINGUP, "usb-bringup",
+                            kernel_work_usb_bringup, NULL);
+  (void)work_queue_register(SYSTEM_WORK_UPDATE_AGENT_WARMUP,
+                            "update-agent-warmup",
+                            kernel_work_update_agent_warmup, NULL);
+
+  (void)work_queue_schedule_after(SYSTEM_WORK_GPU_DISCOVERY, now_ticks, 8u);
+  (void)work_queue_schedule_after(SYSTEM_WORK_USB_BRINGUP, now_ticks, 48u);
+  if (shell_runtime_ready) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_STARTING, 0,
+                                    "background warmup scheduled");
+    (void)work_queue_schedule_after(SYSTEM_WORK_UPDATE_AGENT_WARMUP,
+                                    now_ticks, 96u);
+  } else {
+    (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
+                                    SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                    "waiting for storage runtime");
+    (void)work_queue_disable(SYSTEM_WORK_UPDATE_AGENT_WARMUP);
+  }
+}
+
 void kernel_service_poll(void) {
   uint64_t now_ticks = pit_ticks();
   __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'{'), "Nd"((uint16_t)0xE9));
@@ -163,6 +229,10 @@ void kernel_service_poll(void) {
   __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'|'), "Nd"((uint16_t)0xE9));
   (void)work_queue_poll_due(now_ticks);
   __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'}'), "Nd"((uint16_t)0xE9));
+}
+
+void x64_kernel_runtime_poll_background(void) {
+  kernel_service_poll();
 }
 
 /* ── boot policy helpers ─────────────────────────────────────────────── */

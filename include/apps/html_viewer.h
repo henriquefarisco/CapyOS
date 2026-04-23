@@ -71,6 +71,10 @@ struct html_node {
   char id[64];
   char class_list[128];
   int indent;
+  uint32_t *image_pixels;
+  uint16_t image_width;
+  uint16_t image_height;
+  uint8_t image_error; /* 0=none, 1=unsupported, 2=decode failed, 3=too large */
   uint32_t css_color;
   uint32_t css_bg_color;
   uint8_t css_margin_top;    /* margin-top in px; 0 = use default */
@@ -93,6 +97,9 @@ struct html_document {
   struct html_node nodes[HTML_MAX_NODES];
   int node_count;
   char title[HTML_TITLE_MAX];
+  char base_url[HTML_URL_MAX];
+  char meta_refresh_url[HTML_URL_MAX];
+  uint32_t meta_refresh_delay;
   char style_text[HTML_STYLE_BUF_MAX];
   char pending_css[HTML_MAX_PENDING_CSS][HTML_URL_MAX];
   int css_count;
@@ -107,10 +114,21 @@ struct html_cookie {
   uint8_t host_only;
 };
 
+enum html_viewer_nav_state {
+  HTML_VIEWER_NAV_IDLE = 0,
+  HTML_VIEWER_NAV_LOADING,
+  HTML_VIEWER_NAV_REDIRECTING,
+  HTML_VIEWER_NAV_RENDERING,
+  HTML_VIEWER_NAV_READY,
+  HTML_VIEWER_NAV_FAILED,
+  HTML_VIEWER_NAV_CANCELLED
+};
+
 struct html_viewer_app {
   struct gui_window *window;
   struct html_document doc;
   char url[HTML_URL_MAX];
+  char final_url[HTML_URL_MAX];
   int scroll_offset;
   int loading;
   int url_editing;
@@ -122,6 +140,16 @@ struct html_viewer_app {
   int url_searching;       /* 1 = find-in-page bar active */
   char search_query[128];  /* current find query */
   int search_cursor;       /* cursor position in search query */
+  uint8_t background_mode;
+  uint8_t safe_mode;
+  uint8_t redirect_count;
+  uint8_t external_css_loaded;
+  uint8_t external_images_loaded;
+  uint32_t navigation_id;
+  uint32_t active_navigation_id;
+  enum html_viewer_nav_state nav_state;
+  char last_stage[32];
+  char last_error_reason[192];
 };
 
 void html_viewer_open(void);

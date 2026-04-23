@@ -1,4 +1,4 @@
-#include "network_internal.h"
+#include "internal/network_internal.h"
 
 int net_cmd_mode(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();

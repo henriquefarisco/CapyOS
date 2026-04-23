@@ -21,6 +21,16 @@ Escopo atual:
   - plano operacional do ciclo atual
 - `plans/platform-hardening-plan.md`
   - detalha o fechamento da etapa de hardening da plataforma x64
+- `plans/browser-status-roadmap.md`
+  - fonte de verdade do programa do navegador, com status atual, roadmap e
+    criterios de validacao por fase
+- `screenshots/README.md`
+  - politica de snapshots visuais do sistema por versao alpha/beta/stable
+- `plans/source-organization-roadmap.md`
+  - roadmap incremental para reduzir monolitos, separar modulos/linguagens e
+    estabilizar a arquitetura de pastas
+- `architecture/source-layout.md`
+  - regras oficiais de organizacao de codigo e uso de `make layout-audit`
 - `plans/system-master-plan.md`
   - plano-mestre de evolucao do sistema inteiro, cobrindo fundacoes faltantes,
     seguranca, performance, GUI, atualizacoes, apps e linguagem propria
