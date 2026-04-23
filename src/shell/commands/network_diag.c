@@ -1,4 +1,4 @@
-#include "network_internal.h"
+#include "internal/network_internal.h"
 
 #include "core/version.h"
 

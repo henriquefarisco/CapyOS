@@ -1,16 +1,19 @@
 meta:
-  generated: 2026-04-11
+  generated: 2026-04-23
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
   description: "Canalizacao oficial de versoes do CapyOS na trilha UEFI/GPT x86_64"
 channels:
   alpha:
-    current: 0.8.0-alpha.0
-    extended: 0.8.0-alpha.0+20260411
+    current: 0.8.0-alpha.1
+    extended: 0.8.0-alpha.1+20260423
     stability: experimental
-    summary: "Consolidacao de develop com desktop x64 estabilizado, limpeza do legado 32-bit, drivers ampliados e documentacao revisada"
+    summary: "Consolidacao da trilha alpha com browser estabilizado na Fase 1, reorganizacao estrutural ampla do codigo e documentacao/versionamento alinhados"
     history:
+      - version: 0.8.0-alpha.1+20260423
+        date: 2026-04-23
+        summary: "Atualiza a trilha alpha com browser Fase 1 estabilizado, reorganizacao estrutural do codigo, snapshots versionados e refresh completo da documentacao"
       - version: 0.8.0-alpha.0+20260411
         date: 2026-04-11
         summary: "Consolidacao em develop da trilha x64 com desktop mais responsivo, limpeza do legado 32-bit e refresh da documentacao"

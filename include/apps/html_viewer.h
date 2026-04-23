@@ -4,8 +4,8 @@
 #include "gui/compositor.h"
 #include <stdint.h>
 
-#define HTML_MAX_NODES 384
-#define HTML_TEXT_MAX  256
+#define HTML_MAX_NODES 512
+#define HTML_TEXT_MAX  512
 #define HTML_TITLE_MAX 192
 #define HTML_URL_MAX   768
 #define HTML_MAX_COOKIES 24
@@ -32,7 +32,20 @@ enum html_node_type {
   HTML_NODE_TAG_HEAD,
   HTML_NODE_TAG_TITLE,
   HTML_NODE_TAG_INPUT,
-  HTML_NODE_TAG_BUTTON
+  HTML_NODE_TAG_BUTTON,
+  HTML_NODE_TAG_H4,
+  HTML_NODE_TAG_H5,
+  HTML_NODE_TAG_H6,
+  HTML_NODE_TAG_PRE,
+  HTML_NODE_TAG_CODE,
+  HTML_NODE_TAG_BLOCKQUOTE,
+  HTML_NODE_TAG_HR,
+  HTML_NODE_TAG_MARK,
+  HTML_NODE_TAG_TD,
+  HTML_NODE_TAG_TR,
+  HTML_NODE_TAG_MEDIA,
+  HTML_NODE_TAG_FIGCAPTION,
+  HTML_NODE_TAG_DETAILS
 };
 
 struct html_node {
@@ -46,13 +59,50 @@ struct html_node {
   uint8_t form_method;
   uint8_t input_type;
   uint8_t hidden;
-  uint8_t reserved;
+  uint8_t text_align; /* 0=left, 1=center, 2=right */
+  uint8_t col_index;  /* column index within a table row (0-based) */
+  uint8_t col_count;  /* total columns in the row (0 = not in a table) */
+  uint8_t no_underline; /* CSS text-decoration: none */
+  uint8_t list_style_none; /* CSS list-style-type: none */
+  uint8_t open; /* <details open> or toggled open by click */
+  char placeholder[64]; /* <input placeholder="..."> hint text */
+  uint16_t css_max_width; /* max-width in px; 0 = unset */
+  uint16_t css_width;     /* width in px; 0 = unset */
+  char id[64];
+  char class_list[128];
+  int indent;
+  uint32_t *image_pixels;
+  uint16_t image_width;
+  uint16_t image_height;
+  uint8_t image_error; /* 0=none, 1=unsupported, 2=decode failed, 3=too large */
+  uint32_t css_color;
+  uint32_t css_bg_color;
+  uint8_t css_margin_top;    /* margin-top in px; 0 = use default */
+  uint8_t css_margin_bottom; /* margin-bottom in px; 0 = use default */
+  uint8_t css_border_width;  /* border width in px; 0 = none */
+  uint32_t css_border_color; /* border color (0x00RRGGBB); 0 = theme default */
+  uint8_t css_text_transform; /* 0=none, 1=uppercase, 2=lowercase, 3=capitalize */
+  uint8_t css_line_height; /* line-height in px (0 = use font default ~18px) */
+  uint8_t css_display;     /* 0=block(default), 1=inline, 2=inline-block, 3=flex */
+  /* Inline layout bounds set during paint; used by click hit-test (0 = block node) */
+  int32_t il_x_left;
+  int32_t il_x_right;
 };
+
+#define HTML_STYLE_BUF_MAX 8192
+
+#define HTML_MAX_PENDING_CSS 6
 
 struct html_document {
   struct html_node nodes[HTML_MAX_NODES];
   int node_count;
   char title[HTML_TITLE_MAX];
+  char base_url[HTML_URL_MAX];
+  char meta_refresh_url[HTML_URL_MAX];
+  uint32_t meta_refresh_delay;
+  char style_text[HTML_STYLE_BUF_MAX];
+  char pending_css[HTML_MAX_PENDING_CSS][HTML_URL_MAX];
+  int css_count;
 };
 
 struct html_cookie {
@@ -64,10 +114,21 @@ struct html_cookie {
   uint8_t host_only;
 };
 
+enum html_viewer_nav_state {
+  HTML_VIEWER_NAV_IDLE = 0,
+  HTML_VIEWER_NAV_LOADING,
+  HTML_VIEWER_NAV_REDIRECTING,
+  HTML_VIEWER_NAV_RENDERING,
+  HTML_VIEWER_NAV_READY,
+  HTML_VIEWER_NAV_FAILED,
+  HTML_VIEWER_NAV_CANCELLED
+};
+
 struct html_viewer_app {
   struct gui_window *window;
   struct html_document doc;
   char url[HTML_URL_MAX];
+  char final_url[HTML_URL_MAX];
   int scroll_offset;
   int loading;
   int url_editing;
@@ -76,6 +137,19 @@ struct html_viewer_app {
   int focused_node_index;
   struct html_cookie cookies[HTML_MAX_COOKIES];
   uint32_t cookie_count;
+  int url_searching;       /* 1 = find-in-page bar active */
+  char search_query[128];  /* current find query */
+  int search_cursor;       /* cursor position in search query */
+  uint8_t background_mode;
+  uint8_t safe_mode;
+  uint8_t redirect_count;
+  uint8_t external_css_loaded;
+  uint8_t external_images_loaded;
+  uint32_t navigation_id;
+  uint32_t active_navigation_id;
+  enum html_viewer_nav_state nav_state;
+  char last_stage[32];
+  char last_error_reason[192];
 };
 
 void html_viewer_open(void);

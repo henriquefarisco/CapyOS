@@ -1,6 +1,6 @@
 #include "net/network_bootstrap.h"
 
-#include "network_bootstrap_internal.h"
+#include "internal/network_bootstrap_internal.h"
 
 #include "kernel/log/klog.h"
 #include "core/system_init.h"

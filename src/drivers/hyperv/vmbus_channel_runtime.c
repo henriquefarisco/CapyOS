@@ -1,12 +1,12 @@
 #include "arch/x86_64/framebuffer_console.h"
-#include "vmbus_channel_runtime.h"
+#include "internal/vmbus_channel_runtime.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "kernel/log/klog.h"
 #include "drivers/hyperv/hyperv.h"
-#include "vmbus_ring.h"
+#include "internal/vmbus_ring.h"
 
 extern void *kmalloc_aligned(uint64_t size, uint64_t alignment);
 extern void kfree_aligned(void *ptr);

@@ -1,4 +1,4 @@
-#include "network_bootstrap_internal.h"
+#include "internal/network_bootstrap_internal.h"
 
 #include "core/system_init.h"
 #include "net/stack.h"

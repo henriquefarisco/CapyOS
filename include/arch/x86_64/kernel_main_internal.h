@@ -214,8 +214,13 @@ int kernel_service_start_update_agent(void *ctx);
 int kernel_service_stop_update_agent(void *ctx);
 void kernel_update_update_agent_service_status(int rc);
 int kernel_work_recovery_snapshot(void *ctx);
+int kernel_work_gpu_discovery(void *ctx);
+int kernel_work_usb_bringup(void *ctx);
+int kernel_work_update_agent_warmup(void *ctx);
 void kernel_update_recovery_snapshot_work(int schedule_now);
+void kernel_schedule_background_boot_work(int shell_runtime_ready);
 void kernel_service_poll(void);
+void x64_kernel_runtime_poll_background(void);
 uint32_t kernel_service_target_from_settings(
     const struct system_settings *settings);
 void kernel_log_boot_policy_decision(

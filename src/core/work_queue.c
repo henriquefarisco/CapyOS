@@ -74,6 +74,9 @@ void work_queue_init(void) {
     work_seed(id, "unnamed");
   }
   work_seed(SYSTEM_WORK_RECOVERY_SNAPSHOT, "recovery-snapshot");
+  work_seed(SYSTEM_WORK_GPU_DISCOVERY, "gpu-discovery");
+  work_seed(SYSTEM_WORK_USB_BRINGUP, "usb-bringup");
+  work_seed(SYSTEM_WORK_UPDATE_AGENT_WARMUP, "update-agent-warmup");
   g_work_ready = 1;
 }
 

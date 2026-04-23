@@ -9,6 +9,7 @@
 #include "fs/vfs.h"
 #include "auth/session.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
+#include "arch/x86_64/kernel_runtime_control.h"
 #include "net/stack.h"
 #include <stddef.h>
 
@@ -98,6 +99,9 @@ int desktop_runtime_start(struct shell_context *ctx) {
   while (g_desktop_active) {
     char ch = 0;
     int had_activity = 0;
+
+    x64_kernel_runtime_poll_background();
+
     while (kernel_input_trygetc(&ch)) {
       had_activity = 1;
       if (escape_state == 2) {

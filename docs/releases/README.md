@@ -4,6 +4,10 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.1+20260423.md`
+  - refresh completo da trilha alpha com browser Fase 1 estabilizado,
+    reorganizacao estrutural do codigo, snapshots versionados e documentacao
+    alinhada
 - `capyos-0.8.0-alpha.0+20260419.md`
   - correcao critica do checksum TCP, retransmissao de SYN, redirect HTTP,
     diagnostico e UX do `net-fetch` e do navegador HTML interno

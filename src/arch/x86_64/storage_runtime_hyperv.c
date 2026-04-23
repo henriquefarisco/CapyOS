@@ -1,5 +1,5 @@
 #include "arch/x86_64/framebuffer_console.h"
-#include "storage_runtime_hyperv.h"
+#include "internal/storage_runtime_hyperv.h"
 
 #include "arch/x86_64/storage_runtime_hyperv_plan.h"
 #include "core/version.h"

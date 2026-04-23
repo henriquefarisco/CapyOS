@@ -1,5 +1,5 @@
 #include "arch/x86_64/framebuffer_console.h"
-#include "vmbus_ring.h"
+#include "internal/vmbus_ring.h"
 
 #include <stdint.h>
 

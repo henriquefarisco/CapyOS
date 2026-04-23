@@ -6,7 +6,7 @@
 #include "arch/x86_64/timebase.h"
 #endif
 #include "drivers/hyperv/hyperv.h"
-#include "vmbus_keyboard_internal.h"
+#include "internal/vmbus_keyboard_internal.h"
 
 #ifndef UNIT_TEST
 #endif
