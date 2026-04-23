@@ -291,9 +291,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('Q');
   gpu_init();
   dbgcon_putc('R');
-  gpu_detect();
   dbgcon_putc('S');
-  usb_core_init();
   dbgcon_putc('p');
   if (apic_available() && !handoff_boot_services_active()) {
     apic_timer_set_callback(scheduler_tick);
@@ -411,7 +409,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     int validated_storage_ready = 0;
     int network_status_available = 0;
     int validated_network_supported = 0;
-    int update_rc = 0;
     struct system_update_status update_status;
     struct system_service_boot_policy_input boot_policy_input;
 
@@ -482,8 +479,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)service_manager_set_dependencies(
         SYSTEM_SERVICE_UPDATE_AGENT, (1u << SYSTEM_SERVICE_LOGGER));
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
-    update_rc = update_agent_poll();
-    kernel_update_update_agent_service_status(update_rc);
     update_agent_status_get(&update_status);
 
     {
@@ -516,7 +511,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
         validated_network_supported = 1;
       }
     }
-    if (update_rc < 0) {
+    if (update_status.last_result < 0) {
       boot_warnings_add(&g_boot_warnings,
                         "Local update state is inconsistent; review staging");
     } else if (update_status.pending_activation) {
@@ -553,6 +548,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     g_recovery_login_requested = 0;
     kernel_persist_recovery_artifacts("boot-policy");
     kernel_update_recovery_snapshot_work(0);
+    kernel_schedule_background_boot_work(shell_runtime_rc == 0);
   }
   dbgcon_putc('8');
 

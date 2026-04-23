@@ -8,3 +8,4 @@ scripts.py
 __pycache__/
 *.pyc
 .codex/
+.claude/

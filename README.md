@@ -4,9 +4,9 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-19
-Versao de referencia: `0.8.0-alpha.0`
-Consolidacao atual de `develop`: pilha TCP/IP corrigida (checksum, RST, retransmissao SYN, redirect HTTP), `net-fetch` HTTP/HTTPS funcional, navegador HTML com barra de carregamento, diagnosticos de rede ampliados.
+Ultima atualizacao: 2026-04-23
+Versao de referencia: `0.8.0-alpha.1`
+Consolidacao atual de `develop`: reorganizacao estrutural ampla do codigo, browser HTML estabilizado na Fase 1, runtime x64/documentacao alinhados e trilha alpha atualizada para publicacao.
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -73,6 +73,7 @@ Observacao importante:
 - referencia de comandos: `docs/reference/cli-reference.md`
 - guia Hyper-V historico/nao suportado: `docs/setup/hyper-v.md`
 - release notes: `docs/releases/README.md`
+- screenshots versionados: `docs/screenshots/README.md`
 
 ## Visao geral do projeto
 
@@ -168,6 +169,23 @@ Impacto pratico:
 - `Hyper-V NetVSC/VMBus` nao e caminho suportado nesta fase
 - COM1 permanece para debug e contingencia
 
+## Screenshots da versao atual
+
+Os prints oficiais agora ficam versionados em `docs/screenshots/<versao>/` para
+acompanhar a evolucao visual do sistema por release alpha.
+
+### Boot e login
+
+![Login do sistema](docs/screenshots/0.8.0-alpha.1/login-system.png)
+
+![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.1/bootstage1-iso.png)
+
+### Desktop, navegador e apps
+
+![Desktop com navegador](docs/screenshots/0.8.0-alpha.1/desktop-browser1.png)
+
+![Desktop com apps](docs/screenshots/0.8.0-alpha.1/desktop-apps.png)
+
 ## Estado atual por dominio
 
 | Dominio | Estado atual | Nivel |
@@ -193,7 +211,10 @@ Impacto pratico:
 - scheduler/multithread ainda nao entrou no kernel runtime
 - hardening criptografico de integridade por bloco/metadata ainda pendente
 - o kernel x64 ainda depende de `EFI ConIn` em parte dos cenarios UEFI
-- navegador HTML: paginas pesadas podem travar a UI (sem streaming/paging); imagens e videos nao renderizados; sem cache/cookies
+- navegador HTML:
+  - Fase 1 de estabilizacao fechada
+  - ainda sem isolamento por processo, JS robusto ou render moderno amplo
+  - paginas pesadas nao devem congelar o sistema inteiro, mas a compatibilidade web moderna continua parcial
 
 ## Build e testes
 

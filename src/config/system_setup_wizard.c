@@ -1,5 +1,5 @@
 /* system_setup_wizard.c: TUI wizard menus, UI text translations, prompts. */
-#include "config_internal.h"
+#include "internal/config_internal.h"
 
 #if defined(__x86_64__)
 #include "drivers/serial/com1.h"

@@ -1,4 +1,4 @@
-#include "vmbus_offers.h"
+#include "internal/vmbus_offers.h"
 
 #include <stdint.h>
 

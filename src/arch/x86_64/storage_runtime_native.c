@@ -1,4 +1,4 @@
-#include "storage_runtime_native.h"
+#include "internal/storage_runtime_native.h"
 
 #include <stdint.h>
 
@@ -6,7 +6,7 @@
 #include "drivers/storage/ahci.h"
 #include "fs/capyfs.h"
 #include "memory/kmem.h"
-#include "storage_runtime_gpt.h"
+#include "internal/storage_runtime_gpt.h"
 
 static void native_io_print(const struct x64_storage_runtime_io *io,
                             const char *message) {

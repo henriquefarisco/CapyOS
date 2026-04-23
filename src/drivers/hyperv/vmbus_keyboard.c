@@ -4,10 +4,10 @@
 #include <stdint.h>
 
 #include "drivers/hyperv/hyperv.h"
-#include "vmbus_core.h"
-#include "vmbus_keyboard_internal.h"
-#include "vmbus_ring.h"
-#include "vmbus_transport.h"
+#include "internal/vmbus_core.h"
+#include "internal/vmbus_keyboard_internal.h"
+#include "internal/vmbus_ring.h"
+#include "internal/vmbus_transport.h"
 
 extern void *kmalloc_aligned(uint64_t size, uint64_t alignment);
 extern void kfree_aligned(void *ptr);

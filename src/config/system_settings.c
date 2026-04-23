@@ -1,5 +1,5 @@
 /* system_settings.c: settings load/save, config file I/O, update catalog. */
-#include "config_internal.h"
+#include "internal/config_internal.h"
 
 /* ---- validate_theme (forward) ---- */
 static const char *validate_theme(const char *input) {

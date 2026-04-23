@@ -41,5 +41,6 @@ int x64_kernel_manual_prepare_native_bridge(void);
 int x64_kernel_manual_prepare_hyperv_synic(void);
 int x64_kernel_manual_try_exit_boot_services(void);
 int x64_kernel_manual_native_runtime_step(void);
+void x64_kernel_runtime_poll_background(void);
 
 #endif /* ARCH_X86_64_KERNEL_RUNTIME_CONTROL_H */
