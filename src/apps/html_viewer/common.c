@@ -4,6 +4,7 @@ struct html_viewer_app g_viewer;
 int g_viewer_open = 0;
 volatile uint32_t g_hv_parse_lock = 0;
 struct hv_http_cache_entry hv_http_cache[HV_HTTP_CACHE_MAX];
+struct hv_http_cache_stats hv_http_cache_stats;
 char hv_history[HV_HISTORY_MAX][HTML_URL_MAX];
 int hv_history_count = 0;
 int hv_history_cur = -1;
@@ -45,24 +46,42 @@ void hv_doc_reset(struct html_document *doc) {
   kmemzero(doc, sizeof(*doc));
 }
 
+static void hv_http_cache_release_entry(int idx, int evicted, int expired) {
+  if (idx < 0 || idx >= HV_HTTP_CACHE_MAX || !hv_http_cache[idx].body) return;
+  if (hv_http_cache_stats.total_bytes >= hv_http_cache[idx].body_len) {
+    hv_http_cache_stats.total_bytes -= hv_http_cache[idx].body_len;
+  } else {
+    hv_http_cache_stats.total_bytes = 0;
+  }
+  if (hv_http_cache_stats.entries > 0) hv_http_cache_stats.entries--;
+  if (evicted) hv_http_cache_stats.evictions++;
+  if (expired) hv_http_cache_stats.expired++;
+  kfree(hv_http_cache[idx].body);
+  hv_http_cache[idx].body = NULL;
+  hv_http_cache[idx].url[0] = '\0';
+  hv_http_cache[idx].body_len = 0;
+  hv_http_cache[idx].content_type[0] = '\0';
+  hv_http_cache[idx].max_age = 0;
+  hv_http_cache[idx].age = 0;
+}
+
 void hv_http_cache_clear(void) {
   for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
-    if (hv_http_cache[i].body) {
-      kfree(hv_http_cache[i].body);
-      hv_http_cache[i].body = NULL;
-    }
-    hv_http_cache[i].url[0] = '\0';
-    hv_http_cache[i].body_len = 0;
-    hv_http_cache[i].age = 0;
+    hv_http_cache_release_entry(i, 0, 0);
   }
+  kmemzero(&hv_http_cache_stats, sizeof(hv_http_cache_stats));
 }
 
 struct hv_http_cache_entry *hv_http_cache_find(const char *url) {
+  if (!url || !url[0]) return NULL;
   for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
     if (hv_http_cache[i].body && kstreq(hv_http_cache[i].url, url)) {
+      hv_http_cache[i].age = 0;
+      hv_http_cache_stats.hits++;
       return &hv_http_cache[i];
     }
   }
+  hv_http_cache_stats.misses++;
   return NULL;
 }
 
@@ -72,14 +91,29 @@ void hv_http_cache_tick(void) {
     hv_http_cache[i].age++;
     if (hv_http_cache[i].max_age > 0 &&
         hv_http_cache[i].age > hv_http_cache[i].max_age) {
-      kfree(hv_http_cache[i].body);
-      hv_http_cache[i].body = NULL;
-      hv_http_cache[i].url[0] = '\0';
+      hv_http_cache_release_entry(i, 0, 1);
     }
   }
 }
 
-struct hv_http_cache_entry *hv_http_cache_slot(void) {
+struct hv_http_cache_entry *hv_http_cache_slot(size_t body_len) {
+  if (body_len == 0 || body_len > HV_HTTP_CACHE_BODY_MAX ||
+      body_len > HV_HTTP_CACHE_TOTAL_MAX) {
+    hv_http_cache_stats.rejected++;
+    return NULL;
+  }
+  while (hv_http_cache_stats.total_bytes + body_len > HV_HTTP_CACHE_TOTAL_MAX) {
+    int oldest = -1;
+    for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
+      if (!hv_http_cache[i].body) continue;
+      if (oldest < 0 || hv_http_cache[i].age > hv_http_cache[oldest].age) oldest = i;
+    }
+    if (oldest < 0) {
+      hv_http_cache_stats.rejected++;
+      return NULL;
+    }
+    hv_http_cache_release_entry(oldest, 1, 0);
+  }
   for (int i = 0; i < HV_HTTP_CACHE_MAX; i++) {
     if (!hv_http_cache[i].body) return &hv_http_cache[i];
   }
@@ -87,9 +121,12 @@ struct hv_http_cache_entry *hv_http_cache_slot(void) {
   for (int i = 1; i < HV_HTTP_CACHE_MAX; i++) {
     if (hv_http_cache[i].age > hv_http_cache[oldest].age) oldest = i;
   }
-  kfree(hv_http_cache[oldest].body);
-  hv_http_cache[oldest].body = NULL;
+  hv_http_cache_release_entry(oldest, 1, 0);
   return &hv_http_cache[oldest];
+}
+
+void hv_http_cache_stats_get(struct hv_http_cache_stats *out) {
+  if (out) *out = hv_http_cache_stats;
 }
 
 uint32_t hv_parse_cache_control_max_age(const char *cc) {
@@ -128,23 +165,38 @@ void hv_http_cache_store(const char *url, const struct http_response *resp) {
       resp->body_len == 0) {
     return;
   }
-  if (resp->body_len > HV_HTTP_CACHE_BODY_MAX) return;
+  if (resp->body_len > HV_HTTP_CACHE_BODY_MAX ||
+      resp->body_len > HV_HTTP_CACHE_TOTAL_MAX) {
+    hv_http_cache_stats.rejected++;
+    return;
+  }
   for (i = 0; i < (int)resp->header_count; i++) {
-    if ((resp->headers[i].name[0] | 32) == 'c' &&
-        kstreq(resp->headers[i].name, "Cache-Control")) {
+    if (hv_streq_ci(resp->headers[i].name, "Cache-Control")) {
       cc = resp->headers[i].value;
     }
-    if ((resp->headers[i].name[0] | 32) == 'c' &&
-        kstreq(resp->headers[i].name, "Content-Type")) {
+    if (hv_streq_ci(resp->headers[i].name, "Content-Type")) {
       ct = resp->headers[i].value;
     }
   }
   max_age = hv_parse_cache_control_max_age(cc);
-  if (max_age == 0 && cc) return;
+  if (max_age == 0 && cc) {
+    hv_http_cache_stats.rejected++;
+    return;
+  }
+  for (i = 0; i < HV_HTTP_CACHE_MAX; i++) {
+    if (hv_http_cache[i].body && kstreq(hv_http_cache[i].url, url)) {
+      hv_http_cache_release_entry(i, 0, 0);
+      break;
+    }
+  }
+  slot = hv_http_cache_slot(resp->body_len);
+  if (!slot) return;
   body_copy = (uint8_t *)kalloc(resp->body_len);
-  if (!body_copy) return;
+  if (!body_copy) {
+    hv_http_cache_stats.rejected++;
+    return;
+  }
   kmemcpy(body_copy, resp->body, resp->body_len);
-  slot = hv_http_cache_slot();
   kstrcpy(slot->url, sizeof(slot->url), url);
   slot->body = body_copy;
   slot->body_len = resp->body_len;
@@ -155,6 +207,9 @@ void hv_http_cache_store(const char *url, const struct http_response *resp) {
   } else {
     slot->content_type[0] = '\0';
   }
+  hv_http_cache_stats.entries++;
+  hv_http_cache_stats.total_bytes += resp->body_len;
+  hv_http_cache_stats.stores++;
 }
 
 void hv_bookmark_add(const char *url, const char *title) {

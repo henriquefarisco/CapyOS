@@ -409,7 +409,7 @@ static int shell_bootstrap_filesystem(
           while (v[vi] && p + 1 < sizeof(cfg)) cfg[p++] = v[vi++];
           cfg[p] = '\0'; }
         { size_t p = 0; while (cfg[p]) ++p;
-          const char *s = "\nupdate_channel=stable\nnetwork_mode=static\n"
+          const char *s = "\nupdate_channel=stable\nnetwork_mode=dhcp\n"
                           "service_target=network\nsplash="; size_t si = 0;
           while (s[si] && p + 1 < sizeof(cfg)) cfg[p++] = s[si++];
           cfg[p] = '\0'; }
@@ -500,7 +500,7 @@ static void apply_default_settings(struct system_settings *settings) {
   local_copy(settings->language, sizeof(settings->language), "en");
   local_copy(settings->update_channel, sizeof(settings->update_channel),
              "stable");
-  local_copy(settings->network_mode, sizeof(settings->network_mode), "static");
+  local_copy(settings->network_mode, sizeof(settings->network_mode), "dhcp");
   local_copy(settings->service_target, sizeof(settings->service_target),
              "network");
   settings->ipv4_addr = ((uint32_t)10u << 24) | ((uint32_t)0u << 16) |

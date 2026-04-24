@@ -30,6 +30,102 @@ static int test_html_viewer_loads_external_assets(void) {
   return fails;
 }
 
+static void fill_cache_response(struct http_response *resp, uint8_t *body,
+                                size_t body_len) {
+  memset(resp, 0, sizeof(*resp));
+  resp->status_code = 200;
+  resp->body = body;
+  resp->body_len = body_len;
+  strncpy(resp->headers[0].name, "Cache-Control", sizeof(resp->headers[0].name) - 1);
+  strncpy(resp->headers[0].value, "max-age=600", sizeof(resp->headers[0].value) - 1);
+  strncpy(resp->headers[1].name, "Content-Type", sizeof(resp->headers[1].name) - 1);
+  strncpy(resp->headers[1].value, "text/css", sizeof(resp->headers[1].value) - 1);
+  resp->header_count = 2;
+}
+
+static int test_html_viewer_http_cache_enforces_memory_budget(void) {
+  static uint8_t body_a[HV_HTTP_CACHE_BODY_MAX];
+  static uint8_t body_b[HV_HTTP_CACHE_BODY_MAX];
+  static uint8_t body_c[HV_HTTP_CACHE_BODY_MAX];
+  struct http_response resp;
+  struct hv_http_cache_stats stats;
+  int fails = 0;
+
+  memset(body_a, 'a', sizeof(body_a));
+  memset(body_b, 'b', sizeof(body_b));
+  memset(body_c, 'c', sizeof(body_c));
+  hv_http_cache_clear();
+
+  fill_cache_response(&resp, body_a, sizeof(body_a));
+  hv_http_cache_store("https://cache.test/a.css", &resp);
+  fill_cache_response(&resp, body_b, sizeof(body_b));
+  hv_http_cache_store("https://cache.test/b.css", &resp);
+
+  fails += expect_true(hv_http_cache_find("https://cache.test/a.css") != NULL,
+                       "HTTP cache should find stored entry before pressure");
+  hv_http_cache_tick();
+  hv_http_cache_tick();
+  fill_cache_response(&resp, body_c, sizeof(body_c));
+  hv_http_cache_store("https://cache.test/c.css", &resp);
+  hv_http_cache_stats_get(&stats);
+
+  fails += expect_true(stats.total_bytes <= HV_HTTP_CACHE_TOTAL_MAX,
+                       "HTTP cache should stay within total memory budget");
+  fails += expect_true(stats.entries <= 2,
+                       "HTTP cache should cap resident entries by memory budget");
+  fails += expect_true(stats.evictions >= 1,
+                       "HTTP cache should evict old entries under memory pressure");
+  fails += expect_true(hv_http_cache_find("https://cache.test/c.css") != NULL,
+                       "HTTP cache should keep the newly stored entry");
+
+  fill_cache_response(&resp, body_a, sizeof(body_a));
+  strncpy(resp.headers[0].value, "no-store", sizeof(resp.headers[0].value) - 1);
+  hv_http_cache_store("https://cache.test/no-store.css", &resp);
+  fails += expect_true(hv_http_cache_find("https://cache.test/no-store.css") == NULL,
+                       "HTTP cache should reject no-store responses");
+
+  hv_http_cache_clear();
+  return fails;
+}
+
+static int test_html_viewer_about_metrics_pages(void) {
+  struct html_viewer_app *app = NULL;
+  int fails = 0;
+
+  memset(&g_test_window, 0, sizeof(g_test_window));
+  html_viewer_open();
+  app = (struct html_viewer_app *)g_test_window.user_data;
+  fails += expect_true(app != NULL, "browser should open before metrics page test");
+  if (!app) return fails;
+
+  html_viewer_navigate(app, "about:network");
+  fails += expect_true(app->nav_state == HTML_VIEWER_NAV_READY,
+                       "about:network should render as a builtin page");
+  fails += expect_true(strcmp(app->url, "about:network") == 0,
+                       "about:network should update current URL");
+  fails += expect_true(document_contains_text(&app->doc, "Network Metrics"),
+                       "about:network should expose network metrics");
+  fails += expect_true(document_contains_text(&app->doc, "HTTP Cache"),
+                       "about:network should expose HTTP cache metrics");
+  fails += expect_true(document_contains_text(&app->doc, "DNS Cache"),
+                       "about:network should expose DNS cache metrics");
+
+  html_viewer_navigate(app, "about:memory");
+  fails += expect_true(app->nav_state == HTML_VIEWER_NAV_READY,
+                       "about:memory should render as a builtin page");
+  fails += expect_true(strcmp(app->url, "about:memory") == 0,
+                       "about:memory should update current URL");
+  fails += expect_true(document_contains_text(&app->doc, "Memory Metrics"),
+                       "about:memory should expose memory metrics");
+  fails += expect_true(document_contains_text(&app->doc, "Kernel heap used"),
+                       "about:memory should expose heap usage");
+  fails += expect_true(document_contains_text(&app->doc, "HTTP cache memory"),
+                       "about:memory should expose cache memory usage");
+
+  if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
+  return fails;
+}
+
 static int test_html_viewer_discards_stale_response(void) {
   struct html_viewer_app *app = NULL;
   int fails = 0;
@@ -199,4 +295,3 @@ static int test_html_viewer_follows_meta_refresh_redirect(void) {
   if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
   return fails;
 }
-

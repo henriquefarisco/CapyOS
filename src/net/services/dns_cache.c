@@ -42,17 +42,30 @@ static uint64_t dns_cache_current_tick(void) {
 #endif
 }
 
+static uint64_t dns_cache_ttl_ticks(uint32_t ttl_seconds) {
+  uint32_t ttl = ttl_seconds > 0 ? ttl_seconds : DNS_CACHE_TTL_DEFAULT;
+  return (uint64_t)ttl * 100u;
+}
+
+static int dns_cache_entry_expired(const struct dns_cache_entry *entry, uint64_t now) {
+  if (!entry || !entry->valid || entry->created_tick == 0 || now <= entry->created_tick) return 0;
+  return (now - entry->created_tick) > dns_cache_ttl_ticks(entry->ttl);
+}
+
+static void dns_cache_expire_entry(int idx) {
+  if (idx < 0 || idx >= DNS_CACHE_MAX_ENTRIES || !cache[idx].valid) return;
+  cache[idx].valid = 0;
+  if (cache_stats.entries > 0) cache_stats.entries--;
+  cache_stats.expired++;
+}
+
 int dns_cache_lookup(const char *name, uint32_t *out_ip) {
   if (!name || !out_ip) return -1;
   uint64_t now = dns_cache_current_tick();
   for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
     if (cache[i].valid && dns_streq(cache[i].name, name)) {
-      if (cache[i].ttl > 0 && cache[i].created_tick > 0 &&
-          now > cache[i].created_tick &&
-          (now - cache[i].created_tick) > (uint64_t)cache[i].ttl) {
-        cache[i].valid = 0;
-        if (cache_stats.entries > 0) cache_stats.entries--;
-        cache_stats.expired++;
+      if (dns_cache_entry_expired(&cache[i], now)) {
+        dns_cache_expire_entry(i);
         cache_stats.misses++;
         return -1;
       }
@@ -72,7 +85,7 @@ void dns_cache_insert(const char *name, uint32_t ip, uint32_t ttl) {
     if (cache[i].valid && dns_streq(cache[i].name, name)) {
       cache[i].ip = ip;
       cache[i].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
-      cache[i].created_tick = 0;
+      cache[i].created_tick = dns_cache_current_tick();
       return;
     }
   }
@@ -82,7 +95,7 @@ void dns_cache_insert(const char *name, uint32_t ip, uint32_t ttl) {
       dns_strcpy(cache[i].name, name, DNS_CACHE_NAME_MAX);
       cache[i].ip = ip;
       cache[i].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
-      cache[i].created_tick = 0;
+      cache[i].created_tick = dns_cache_current_tick();
       cache[i].valid = 1;
       cache_stats.entries++;
       return;
@@ -100,7 +113,7 @@ void dns_cache_insert(const char *name, uint32_t ip, uint32_t ttl) {
   dns_strcpy(cache[oldest_idx].name, name, DNS_CACHE_NAME_MAX);
   cache[oldest_idx].ip = ip;
   cache[oldest_idx].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
-  cache[oldest_idx].created_tick = 0;
+  cache[oldest_idx].created_tick = dns_cache_current_tick();
   cache[oldest_idx].valid = 1;
   cache_stats.evictions++;
 }
@@ -124,16 +137,8 @@ void dns_cache_flush(void) {
 void dns_cache_tick(uint64_t now) {
   for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
     if (!cache[i].valid) continue;
-    if (cache[i].created_tick == 0) {
-      cache[i].created_tick = now;
-      continue;
-    }
-    uint64_t age = now - cache[i].created_tick;
-    if (age > (uint64_t)cache[i].ttl * 100) {
-      cache[i].valid = 0;
-      if (cache_stats.entries > 0) cache_stats.entries--;
-      cache_stats.expired++;
-    }
+    if (cache[i].created_tick == 0) cache[i].created_tick = now;
+    if (dns_cache_entry_expired(&cache[i], now)) dns_cache_expire_entry(i);
   }
 }
 

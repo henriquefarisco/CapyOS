@@ -150,11 +150,11 @@ Use:
 make layout-audit
 ```
 
-Modo estrito para CI futura:
+`make layout-audit` e um gate estrito: falha quando encontra monolitos acima do
+limite, headers internos em local ambiguo ou mistura suspeita de linguagens.
+
+Para gerar apenas o relatorio, sem falhar a execucao:
 
 ```bash
-python3 tools/scripts/audit_source_layout.py --strict
+make layout-audit-report
 ```
-
-O modo padrao apenas reporta problemas. O modo estrito falha quando encontra
-monolitos, headers internos em local ambiguo ou mistura suspeita de linguagens.

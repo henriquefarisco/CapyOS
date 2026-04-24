@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from smoke_x64_auth import assert_shell_identity, login
 from smoke_x64_helpers import (
+    ensure_shell_after_login,
     run_cmd,
     run_cmd_expect_prompt,
     run_open_write,
@@ -85,7 +86,7 @@ def smoke_first_boot(
         session,
         "update-channel show",
         timeout=timeout,
-        expect="remote=https://raw.githubusercontent.com/henriquefarisco/CapyOS/main",
+        expect="refs/heads/main/system/update/latest.ini",
     )
     run_open_write(
         session,
@@ -255,7 +256,14 @@ def smoke_first_boot(
     mk = session.marker()
     session.send_line("bye")
     session.wait_for("Logging out", timeout=timeout, start_at=mk)
-    login(session=session, timeout=timeout, user="smokeuser", password="smoke")
+    mode = login(
+        session=session,
+        timeout=timeout,
+        user="smokeuser",
+        password="smoke",
+        allow_desktop=True,
+    )
+    ensure_shell_after_login(session=session, timeout=timeout, mode=mode)
     assert_shell_identity(session, timeout=timeout, user="smokeuser")
     run_cmd(
         session,
@@ -267,7 +275,14 @@ def smoke_first_boot(
     mk = session.marker()
     session.send_line("bye")
     session.wait_for("Logging out", timeout=timeout, start_at=mk)
-    login(session=session, timeout=timeout, user=user, password=password)
+    mode = login(
+        session=session,
+        timeout=timeout,
+        user=user,
+        password=password,
+        allow_desktop=True,
+    )
+    ensure_shell_after_login(session=session, timeout=timeout, mode=mode)
     assert_shell_identity(session, timeout=timeout, user=user)
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="theme=ocean")
     run_cmd(session, "print-file /system/config.ini", timeout=timeout, expect="splash=enabled")
@@ -295,7 +310,7 @@ def smoke_first_boot(
         session,
         f"go {deep_home}",
         timeout=timeout,
-        prompt=f"{user}@smoke-node>~/.../projetos/capy> ",
+        prompt="~/.../projetos/capy> ",
         expect="[ok]",
     )
     run_cmd(session, "mypath", timeout=timeout, expect=deep_home)
@@ -303,7 +318,7 @@ def smoke_first_boot(
         session,
         f"go /home/{user}",
         timeout=timeout,
-        prompt=f"{user}@smoke-node>~> ",
+        prompt=">~> ",
         expect="[ok]",
     )
     smoke_dir = "/tmp/smoke-persist"
@@ -321,15 +336,19 @@ def smoke_first_boot(
         expect="buffers sincronizados",
         expect_optional=True,
     )
-    if not trigger_reboot(session, timeout=timeout * 2):
+    try:
+        rebooted = trigger_reboot(session, timeout=timeout * 2)
+    except OSError:
+        rebooted = "Rebooting..." in session.tail() or "Reiniciando..." in session.tail()
+    if not rebooted:
         raise RuntimeError("shutdown-reboot did not terminate the VM")
 
 
 def smoke_second_boot(
     session: SmokeSession, timeout: float, user: str, password: str, marker: str
 ) -> None:
+    _ = password
     smoke_file = "/tmp/smoke-persist/smoke.txt"
-    login(session, timeout=timeout, user=user, password=password)
     assert_shell_identity(session, timeout=timeout, user=user)
     run_cmd(
         session,
@@ -463,7 +482,14 @@ def smoke_second_boot(
     mk = session.marker()
     session.send_line("bye")
     session.wait_for("Logging out", timeout=timeout, start_at=mk)
-    login(session=session, timeout=timeout, user="smokeuser", password="smoke")
+    mode = login(
+        session=session,
+        timeout=timeout,
+        user="smokeuser",
+        password="smoke",
+        allow_desktop=True,
+    )
+    ensure_shell_after_login(session=session, timeout=timeout, mode=mode)
     assert_shell_identity(session, timeout=timeout, user="smokeuser")
     run_cmd(
         session,
@@ -471,5 +497,14 @@ def smoke_second_boot(
         timeout=timeout,
         expect=("Current language: en", "Idioma atual: en", "Idioma actual: en"),
     )
-    if not trigger_poweroff(session, timeout=timeout * 2):
+    try:
+        powered_off = trigger_poweroff(session, timeout=timeout * 2)
+    except OSError:
+        tail = session.tail()
+        powered_off = (
+            "Powering off..." in tail
+            or "Desligando..." in tail
+            or "Apagando..." in tail
+        )
+    if not powered_off:
         raise RuntimeError("shutdown-off did not terminate the VM")

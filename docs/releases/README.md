@@ -4,6 +4,10 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.2+20260424.md`
+  - avanco do plano de robustez com DHCP automatico, gates de release
+    endurecidos, metricas de performance, caches DNS/HTTP e smoke x64
+    persistente validado
 - `capyos-0.8.0-alpha.1+20260423.md`
   - refresh completo da trilha alpha com browser Fase 1 estabilizado,
     reorganizacao estrutural do codigo, snapshots versionados e documentacao

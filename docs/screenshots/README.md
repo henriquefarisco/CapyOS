@@ -12,5 +12,6 @@ comparacao visual da evolucao do sistema ao longo do tempo.
 
 ## Estrutura atual
 
+- `0.8.0-alpha.2/`
 - `0.8.0-alpha.1/`
   - snapshots oficiais usados no README e na divulgacao atual

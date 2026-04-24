@@ -48,10 +48,13 @@ const char *system_language_or_default(const char *language) {
 }
 
 const char *system_network_mode_or_default(const char *mode) {
+  if (mode && strings_equal(mode, "static")) {
+    return "static";
+  }
   if (mode && strings_equal(mode, "dhcp")) {
     return "dhcp";
   }
-  return "static";
+  return "dhcp";
 }
 
 const char *system_update_channel_or_default(const char *channel) {

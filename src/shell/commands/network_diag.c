@@ -155,6 +155,23 @@ int net_cmd_status(struct shell_context *ctx, int argc, char **argv) {
   shell_print(net_cli_runtime_label(&st));
   shell_print(" ready=");
   shell_print(st.ready ? "yes\n" : "no\n");
+  shell_print("dhcp=");
+  if (!shell_string_equal(net_cli_current_mode(ctx), "dhcp")) {
+    shell_print("off");
+  } else if (st.dhcp_lease_acquired) {
+    shell_print("lease");
+  } else if (st.dhcp_last_error != 0) {
+    shell_print("fallback");
+  } else {
+    shell_print("pending");
+  }
+  shell_print(" attempts=");
+  shell_print_number(st.dhcp_attempts);
+  if (st.dhcp_last_error != 0) {
+    shell_print(" last_error=");
+    shell_print_signed_number(st.dhcp_last_error);
+  }
+  shell_newline();
 
   if (st.nic.found) {
     shell_print("pci=");
@@ -310,6 +327,12 @@ int net_cmd_dump_runtime(struct shell_context *ctx, int argc, char **argv) {
   shell_print(net_driver_name(st.nic.kind));
   shell_print(" runtime=");
   shell_print(net_cli_runtime_label(&st));
+  shell_print(" dhcp=");
+  shell_print(st.dhcp_lease_acquired ? "lease" : "none");
+  shell_print(" dhcp_attempts=");
+  shell_print_number(st.dhcp_attempts);
+  shell_print(" dhcp_last_error=");
+  shell_print_signed_number(st.dhcp_last_error);
   shell_newline();
 
   if (st.nic.kind == NET_NIC_KIND_HYPERV_NETVSC) {

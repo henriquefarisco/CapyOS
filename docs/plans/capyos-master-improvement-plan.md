@@ -1,7 +1,7 @@
 # CapyOS Master Improvement Plan v2.0
 
 > Gerado em 2026-04-10 com base em auditoria completa do codigo-fonte.
-> Versao atual: 0.8.0-alpha.1 | Trilha: UEFI/GPT/x86_64
+> Versao atual: 0.8.0-alpha.2 | Trilha: UEFI/GPT/x86_64
 > **Atualizado**: 2026-04-23 | Consolidacao alpha com reorganizacao estrutural, browser Fase 1 fechado e documentacao/versionamento revisados.
 
 ---

@@ -1,0 +1,6 @@
+#ifndef CAPYOS_FREESTANDING_STDLIB_H
+#define CAPYOS_FREESTANDING_STDLIB_H
+
+#include "libc/stdlib.h"
+
+#endif /* CAPYOS_FREESTANDING_STDLIB_H */

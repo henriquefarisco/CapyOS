@@ -45,6 +45,10 @@ Contexto operacional atual:
 | `print-envs` | `print-envs` | Mostra variaveis basicas (`USER`, `HOME`, `HOST`) e exibe `CHANNEL`, `VERSION`, `UPDATE_CHANNEL`, `UPDATE_BRANCH` e `UPDATE_REMOTE_MANIFEST`. |
 | `service-status` | `service-status [nome]` | Exibe o estado dos servicos internos atuais (`logger`, `networkd`, `update-agent`), incluindo alvo ativo, alvo salvo, startup, criticidade, ultimo resultado, transicoes, polls cooperativos, cadencia em ticks, falhas, reinicios, backoff, limite de retry, dependencias e resumo. |
 | `job-status` | `job-status [nome]` | Exibe o estado dos jobs internos do kernel/work queue, incluindo estado, ultimo resultado, numero de execucoes, falhas, intervalo e proximo tick previsto. |
+| `perf-boot` | `perf-boot` | Exibe metricas de boot por estagio e total ate login, usando `boot_metrics`. |
+| `perf-net` | `perf-net` | Exibe contadores de rede, DHCP, ARP/TCP e estatisticas do cache DNS. |
+| `perf-fs` | `perf-fs` | Exibe ocupacao e contadores do buffer cache de filesystem: validos, sujos, pinned, hits, misses, evictions, writebacks e erros. |
+| `perf-mem` | `perf-mem` | Exibe uso atual do heap do kernel em KiB e bytes. |
 | `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo canal, branch, manifesto local, URL remota, versao staged e ativacao pendente. |
 | `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-import-manifest`, `update-stage`, `update-arm`, `update-clear` e `update-channel` em `/var/log/update-history.log`. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |

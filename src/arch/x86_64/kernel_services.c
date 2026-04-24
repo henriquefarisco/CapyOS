@@ -26,6 +26,63 @@
 
 /* ── network service ─────────────────────────────────────────────────── */
 
+static uint32_t g_networkd_dhcp_failures = 0;
+static uint64_t g_networkd_dhcp_next_tick = 0;
+static int g_networkd_dhcp_last_error = 0;
+
+static int kernel_network_mode_is_dhcp(void) {
+  const char *mode = g_shell_settings.network_mode;
+  return mode && mode[0] == 'd' && mode[1] == 'h' && mode[2] == 'c' &&
+         mode[3] == 'p' && mode[4] == '\0';
+}
+
+static uint64_t kernel_networkd_tick(void) {
+  struct system_service_status svc;
+  if (service_manager_get(SYSTEM_SERVICE_NETWORKD, &svc) == 0) {
+    return svc.polls;
+  }
+  return 0u;
+}
+
+static uint32_t kernel_networkd_dhcp_backoff_ticks(void) {
+  uint32_t shift = g_networkd_dhcp_failures;
+  if (shift > 5u) {
+    shift = 5u;
+  }
+  return 12u << shift;
+}
+
+static void kernel_networkd_maybe_dhcp(const struct net_stack_status *status) {
+  uint64_t now = kernel_networkd_tick();
+
+  if (!kernel_network_mode_is_dhcp()) {
+    g_networkd_dhcp_failures = 0;
+    g_networkd_dhcp_next_tick = 0;
+    g_networkd_dhcp_last_error = 0;
+    return;
+  }
+  if (!status || !status->initialized || !status->ready ||
+      !status->runtime_supported || !status->nic.found) {
+    return;
+  }
+  if (status->dhcp_lease_acquired || now < g_networkd_dhcp_next_tick) {
+    return;
+  }
+
+  if (net_stack_dhcp_acquire(500u) == 0) {
+    g_networkd_dhcp_failures = 0;
+    g_networkd_dhcp_next_tick = 0;
+    g_networkd_dhcp_last_error = 0;
+    klog(KLOG_INFO, "[net] networkd: DHCP lease acquired.");
+    return;
+  }
+
+  g_networkd_dhcp_failures++;
+  g_networkd_dhcp_last_error = -1;
+  g_networkd_dhcp_next_tick = now + kernel_networkd_dhcp_backoff_ticks();
+  klog(KLOG_WARN, "[net] networkd: DHCP retry failed; backing off.");
+}
+
 void kernel_update_network_service_status(void) {
   struct net_stack_status net_status = {0};
 
@@ -53,14 +110,28 @@ void kernel_update_network_service_status(void) {
         "validated network driver detected but not ready");
     return;
   }
+  if (kernel_network_mode_is_dhcp() && !net_status.dhcp_lease_acquired) {
+    (void)service_manager_set_state(
+        SYSTEM_SERVICE_NETWORKD, SYSTEM_SERVICE_STATE_DEGRADED,
+        g_networkd_dhcp_last_error,
+        "network stack ready; DHCP lease pending");
+    return;
+  }
   (void)service_manager_set_state(SYSTEM_SERVICE_NETWORKD,
                                   SYSTEM_SERVICE_STATE_READY, 0,
-                                  "network stack ready");
+                                  kernel_network_mode_is_dhcp()
+                                      ? "network stack ready; DHCP lease acquired"
+                                      : "network stack ready");
 }
 
 int kernel_service_poll_networkd(void *ctx) {
+  struct net_stack_status net_status = {0};
+
   (void)ctx;
   kernel_maybe_refresh_network_runtime();
+  if (net_stack_status(&net_status) == 0) {
+    kernel_networkd_maybe_dhcp(&net_status);
+  }
   kernel_update_network_service_status();
   return 0;
 }

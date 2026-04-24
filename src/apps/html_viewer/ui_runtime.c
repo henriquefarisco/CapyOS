@@ -3,6 +3,11 @@
 /* Static buffer for dynamically-generated about: pages */
 static char hv_about_buf[16384];
 
+static void hv_about_append_kib(char *buf, size_t buf_size, size_t bytes) {
+  kbuf_append_u32(buf, buf_size, (uint32_t)(bytes / 1024u));
+  kbuf_append(buf, buf_size, " KiB");
+}
+
 void html_viewer_load_quick_start(struct html_viewer_app *app) {
   struct html_node *node = NULL;
 
@@ -162,9 +167,69 @@ void html_viewer_load_builtin(struct html_viewer_app *app, const char *url) {
         "<li>Navigation: back/forward history, bookmarks (Ctrl+D), find-in-page (Ctrl+F)</li>"
         "<li>Safety: safe-mode fallback, navigation state tracking, capped external resources</li>"
         "</ul>"
-        "<a href=\"about:home\">Home</a> | <a href=\"about:version\">Version</a>"
+        "<a href=\"about:home\">Home</a> | <a href=\"about:version\">Version</a> | "
+        "<a href=\"about:network\">Network</a> | <a href=\"about:memory\">Memory</a>"
         "</body></html>";
     url = "about:settings";
+  } else if (hv_strncmp(url, "about:network", 13) == 0) {
+    struct dns_cache_stats dns_stats;
+    struct hv_http_cache_stats http_stats;
+    dns_cache_stats_get(&dns_stats);
+    hv_http_cache_stats_get(&http_stats);
+    hv_about_buf[0] = '\0';
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "<html><head><title>Network Metrics</title></head><body>"
+                "<h1>Network Metrics</h1><h2>DNS Cache</h2><p>Entries: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), dns_stats.entries);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Hits: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), (uint32_t)dns_stats.hits);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Misses: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), (uint32_t)dns_stats.misses);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Expired: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), (uint32_t)dns_stats.expired);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "</p><h2>HTTP Cache</h2><p>Entries: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), http_stats.entries);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Memory: ");
+    hv_about_append_kib(hv_about_buf, sizeof(hv_about_buf), http_stats.total_bytes);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), " / ");
+    hv_about_append_kib(hv_about_buf, sizeof(hv_about_buf), HV_HTTP_CACHE_TOTAL_MAX);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Hits: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), http_stats.hits);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Misses: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), http_stats.misses);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Evictions: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), http_stats.evictions);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Rejected: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), http_stats.rejected);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "</p><a href=\"about:memory\">Memory</a> | "
+                "<a href=\"about:settings\">Settings</a> | "
+                "<a href=\"about:home\">Home</a></body></html>");
+    html = hv_about_buf;
+    url = "about:network";
+  } else if (hv_strncmp(url, "about:memory", 12) == 0) {
+    struct hv_http_cache_stats http_stats;
+    hv_http_cache_stats_get(&http_stats);
+    hv_about_buf[0] = '\0';
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "<html><head><title>Memory Metrics</title></head><body>"
+                "<h1>Memory Metrics</h1><p>Kernel heap used: ");
+    hv_about_append_kib(hv_about_buf, sizeof(hv_about_buf), kheap_used());
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>Kernel heap size: ");
+    hv_about_append_kib(hv_about_buf, sizeof(hv_about_buf), kheap_size());
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>HTTP cache memory: ");
+    hv_about_append_kib(hv_about_buf, sizeof(hv_about_buf), http_stats.total_bytes);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), " / ");
+    hv_about_append_kib(hv_about_buf, sizeof(hv_about_buf), HV_HTTP_CACHE_TOTAL_MAX);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf), "</p><p>HTTP cache entries: ");
+    kbuf_append_u32(hv_about_buf, sizeof(hv_about_buf), http_stats.entries);
+    kbuf_append(hv_about_buf, sizeof(hv_about_buf),
+                "</p><a href=\"about:network\">Network</a> | "
+                "<a href=\"about:settings\">Settings</a> | "
+                "<a href=\"about:home\">Home</a></body></html>");
+    html = hv_about_buf;
+    url = "about:memory";
   } else if (hv_strncmp(url, "about:version", 13) == 0) {
     hv_about_buf[0] = '\0';
     kbuf_append(hv_about_buf, sizeof(hv_about_buf),
@@ -229,6 +294,8 @@ void html_viewer_load_builtin(struct html_viewer_app *app, const char *url) {
                 "<a href=\"about:history\">History</a><br>"
                 "<a href=\"about:bookmarks\">All Bookmarks</a><br>"
                 "<a href=\"about:settings\">Settings</a><br>"
+                "<a href=\"about:network\">Network Metrics</a><br>"
+                "<a href=\"about:memory\">Memory Metrics</a><br>"
                 "<a href=\"about:version\">About</a>"
                 "</body></html>");
     html = hv_about_buf;

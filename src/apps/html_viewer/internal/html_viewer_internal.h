@@ -38,6 +38,7 @@
 
 #define HV_HTTP_CACHE_MAX 8
 #define HV_HTTP_CACHE_BODY_MAX (256 * 1024)
+#define HV_HTTP_CACHE_TOTAL_MAX (512 * 1024)
 #define HV_HISTORY_MAX 16
 #define HV_BOOKMARK_MAX 32
 
@@ -82,6 +83,17 @@ struct hv_http_cache_entry {
   uint32_t age;
 };
 
+struct hv_http_cache_stats {
+  uint32_t entries;
+  size_t total_bytes;
+  uint32_t hits;
+  uint32_t misses;
+  uint32_t stores;
+  uint32_t evictions;
+  uint32_t expired;
+  uint32_t rejected;
+};
+
 struct html_viewer_apply_options {
   uint8_t update_window_title;
   uint8_t push_history;
@@ -93,6 +105,7 @@ extern struct html_viewer_app g_viewer;
 extern int g_viewer_open;
 extern volatile uint32_t g_hv_parse_lock;
 extern struct hv_http_cache_entry hv_http_cache[HV_HTTP_CACHE_MAX];
+extern struct hv_http_cache_stats hv_http_cache_stats;
 extern char hv_history[HV_HISTORY_MAX][HTML_URL_MAX];
 extern int hv_history_count;
 extern int hv_history_cur;
@@ -123,7 +136,8 @@ void hv_doc_reset(struct html_document *doc);
 void hv_http_cache_clear(void);
 struct hv_http_cache_entry *hv_http_cache_find(const char *url);
 void hv_http_cache_tick(void);
-struct hv_http_cache_entry *hv_http_cache_slot(void);
+struct hv_http_cache_entry *hv_http_cache_slot(size_t body_len);
+void hv_http_cache_stats_get(struct hv_http_cache_stats *out);
 uint32_t hv_parse_cache_control_max_age(const char *cc);
 void hv_http_cache_store(const char *url, const struct http_response *resp);
 void hv_bookmark_add(const char *url, const char *title);

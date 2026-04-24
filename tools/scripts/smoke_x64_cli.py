@@ -27,8 +27,10 @@ from smoke_x64_common import (
     validate_installed_disk_artifacts,
 )
 from smoke_x64_flow import (
+    ensure_shell_after_login,
     login,
     maybe_run_first_boot_setup,
+    run_cmd,
     smoke_first_boot,
     smoke_second_boot,
 )
@@ -71,6 +73,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user", default="admin", help="Admin username for first-boot + login")
     parser.add_argument("--password", default="admin", help="Admin password for first-boot + login")
     parser.add_argument(
+        "--require-shell",
+        action="store_true",
+        help="Exit autostarted desktop and require the CLI prompt before running shell checks",
+    )
+    parser.add_argument(
+        "--boot-perf-only",
+        action="store_true",
+        help="Run only first boot/login plus perf-boot collection, then stop",
+    )
+    parser.add_argument(
         "--keyboard-layout",
         default="us",
         help="Keyboard layout persisted in CAPYCFG.BIN",
@@ -87,6 +99,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
     return parser.parse_args()
+
+
 
 
 def run_boot1(
@@ -126,6 +140,20 @@ def run_boot1(
             password=parsed.password,
             allow_desktop=True,
         )
+        if parsed.require_shell or parsed.boot_perf_only:
+            mode = ensure_shell_after_login(
+                session=session,
+                timeout=parsed.step_timeout,
+                mode=mode,
+            )
+        if parsed.boot_perf_only:
+            run_cmd(
+                session=session,
+                cmd="perf-boot",
+                timeout=parsed.step_timeout,
+                expect="total_boot_to_login",
+            )
+            return
         if mode == "shell":
             smoke_first_boot(
                 session=session,
@@ -176,6 +204,12 @@ def run_boot2(
             password=parsed.password,
             allow_desktop=True,
         )
+        if parsed.require_shell:
+            mode = ensure_shell_after_login(
+                session=session,
+                timeout=parsed.step_timeout,
+                mode=mode,
+            )
         if mode == "shell":
             smoke_second_boot(
                 session=session,
@@ -241,16 +275,19 @@ def main() -> int:
             parsed=parsed,
             marker=marker,
         )
-        run_boot2(
-            qemu_bin=qemu_bin,
-            ovmf_code=ovmf_code,
-            ovmf_vars_runtime=ovmf_vars_runtime,
-            disk_path=disk_path,
-            boot2_log=boot2_log,
-            boot2_debugcon_log=boot2_debugcon_log,
-            parsed=parsed,
-            marker=marker,
-        )
+        if not parsed.boot_perf_only:
+            run_boot2(
+                qemu_bin=qemu_bin,
+                ovmf_code=ovmf_code,
+                ovmf_vars_runtime=ovmf_vars_runtime,
+                disk_path=disk_path,
+                boot2_log=boot2_log,
+                boot2_debugcon_log=boot2_debugcon_log,
+                parsed=parsed,
+                marker=marker,
+            )
+        else:
+            print("[ok] smoke x64 boot performance passed.")
     except Exception as exc:
         print(f"[err] smoke failed: {exc}", file=sys.stderr)
         print_log_tail(boot1_log)
@@ -261,7 +298,8 @@ def main() -> int:
         if not parsed.keep_disk:
             cleanup_file(disk_path)
 
-    print("[ok] smoke x64 CLI + persistence passed.")
+    if not parsed.boot_perf_only:
+        print("[ok] smoke x64 CLI + persistence passed.")
     return 0
 
 

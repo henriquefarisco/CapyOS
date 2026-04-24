@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "apps/html_viewer.h"
+#include "../../src/apps/html_viewer/internal/html_viewer_internal.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
 #include "net/http.h"
@@ -33,6 +33,8 @@ static int test_html_viewer_uses_base_href_for_assets(void);
 static int test_html_viewer_marks_unsupported_image_format(void);
 static int test_html_viewer_loads_stylesheet_rel_tokens_and_imports(void);
 static int test_html_viewer_loads_style_block_imports_once(void);
+static int test_html_viewer_http_cache_enforces_memory_budget(void);
+static int test_html_viewer_about_metrics_pages(void);
 static char g_last_http_host[192];
 static char g_last_http_path[768];
 static uint16_t g_last_http_port = 0;
@@ -210,4 +212,3 @@ static int test_html_parses_lazy_image_sources(void) {
                        "picture should choose the first supported source fallback");
   return fails;
 }
-

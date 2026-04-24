@@ -1,0 +1,6 @@
+#ifndef CAPYOS_FREESTANDING_STRING_H
+#define CAPYOS_FREESTANDING_STRING_H
+
+#include "libc/string.h"
+
+#endif /* CAPYOS_FREESTANDING_STRING_H */
