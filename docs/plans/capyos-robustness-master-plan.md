@@ -125,6 +125,10 @@ Observacao inicial:
   update/smoke, incluindo `make test`, `make layout-audit`, `make version-audit`,
   `make boot-perf-baseline-selftest`, `make all64 TOOLCHAIN64=elf`,
   `make iso-uefi TOOLCHAIN64=elf` e verificacao SHA-256 dos artefatos.
+- Em 2026-04-24, M6.1 passou a aplicar politica minima de senha e lockout no
+  login real: `auth_policy` valida tamanho minimo, bloqueia apos falhas
+  consecutivas configuradas, registra sucesso/falha e e coberto por
+  `tests/test_auth_policy.c`; `make test` validou a mudanca.
 - Em 2026-04-23, `docs/plans/README.md` passou a classificar planos como
   `Ativo`, `Historico`, `Experimental` ou `Substituido`, com link no indice
   principal de documentacao; inspecao por script confirmou que todos os
@@ -217,7 +221,7 @@ de dados antes de ampliar apps e internet.
 
 | ID | Item | Status | Evidencia | Proximo passo |
 |---|---|---|---|---|
-| M6.1 | Politica de senha e lockout | Parcial | Auth com PBKDF2/salt existe; `auth_policy` compila | Aplicar politica minima, lockout progressivo e testes |
+| M6.1 | Politica de senha e lockout | Implementado | `auth_policy_validate_password` aplica tamanho minimo; `system_login` chama `auth_policy_check_allowed`, `auth_policy_record_success` e `auth_policy_record_failure`; `user_record_init` e `userdb_set_password` validam a politica; `tests/test_auth_policy.c` cobre senha minima, lockout, unlock e `auth-status`; `make test` passou | Evoluir depois para persistir contadores de lockout entre boots e politicas por perfil |
 | M6.2 | Auditoria persistente de eventos sensiveis | Parcial | `klog` persistente existe | Registrar login, falhas, rede, update, recovery e privilegios |
 | M6.3 | Privilegios centralizados | Parcial | VFS tem metadados/permissoes iniciais; `update-import-manifest` usa escritor de runtime privilegiado controlado para atualizar `/system/update/latest.ini` sem enfraquecer permissoes de usuario | Centralizar checagens para comandos e paths criticos e substituir elevacoes locais por API unica |
 | M6.4 | Build oficial endurecido | Parcial | `make release-check` passou em 2026-04-24 com `TOOLCHAIN64=elf`, `-fstack-protector-strong`, layout estrito, version audit, baseline self-test, ISO UEFI e verificacao SHA-256; build host permanece apenas para desenvolvimento | Completar assinatura dos checksums e smoke VMware+E1000 antes de promover para `Implementado` |

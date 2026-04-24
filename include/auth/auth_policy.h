@@ -8,6 +8,7 @@
 #define AUTH_USERNAME_MAX 32
 #define AUTH_DEFAULT_MAX_ATTEMPTS 5
 #define AUTH_DEFAULT_LOCKOUT_SECONDS 300
+#define AUTH_DEFAULT_MIN_PASSWORD_LENGTH 4
 
 struct auth_attempt {
   char username[AUTH_USERNAME_MAX];
@@ -20,6 +21,7 @@ struct auth_attempt {
 struct auth_policy_config {
   uint32_t max_attempts;
   uint64_t lockout_duration_ticks;
+  uint32_t min_password_length;
   int audit_enabled;
 };
 
@@ -30,6 +32,7 @@ void auth_policy_record_success(const char *username);
 void auth_policy_record_failure(const char *username);
 int auth_policy_is_locked(const char *username);
 void auth_policy_unlock(const char *username);
+int auth_policy_validate_password(const char *password, const char **reason);
 void auth_policy_status(void (*print)(const char *));
 
 #endif /* CORE_AUTH_POLICY_H */
