@@ -60,9 +60,12 @@ struct net_stack_status {
   uint8_t hyperv_runtime_phase;
   uint8_t hyperv_refresh_action;
   uint8_t hyperv_gate_state;
+  uint8_t dhcp_lease_acquired;
   uint32_t arp_entries;
+  uint32_t dhcp_attempts;
   uint32_t hyperv_refresh_attempts;
   uint32_t hyperv_refresh_changes;
+  int32_t dhcp_last_error;
   int32_t hyperv_last_error;
   int32_t hyperv_last_result;
   struct net_nic_probe nic;

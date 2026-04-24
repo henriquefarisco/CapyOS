@@ -19,6 +19,8 @@ Escopo atual:
   - referencia dos comandos do CapyCLI
 - `plans/mvp-implementation-plan.md`
   - plano operacional do ciclo atual
+- `plans/README.md`
+  - indice de governanca dos planos ativos, historicos e experimentais
 - `plans/platform-hardening-plan.md`
   - detalha o fechamento da etapa de hardening da plataforma x64
 - `plans/browser-status-roadmap.md`
@@ -34,6 +36,9 @@ Escopo atual:
 - `plans/system-master-plan.md`
   - plano-mestre de evolucao do sistema inteiro, cobrindo fundacoes faltantes,
     seguranca, performance, GUI, atualizacoes, apps e linguagem propria
+- `plans/capyos-robustness-master-plan.md`
+  - plano vivo de robustez com matriz de status para release robusta,
+    performance, seguranca, DHCP no boot, browser/internet e clean code
 - `plans/capyos-master-improvement-plan.md`
   - consolidacao tecnica mais recente da trilha x64, com foco em desktop,
     limpeza do legado 32-bit, drivers e verificacao para `develop`

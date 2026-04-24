@@ -1,5 +1,6 @@
 #include "internal/network_bootstrap_internal.h"
 
+#include "kernel/log/klog.h"
 #include "core/system_init.h"
 #include "net/stack.h"
 
@@ -33,8 +34,16 @@ void network_bootstrap_apply_settings(const struct network_bootstrap_io *io,
   if (mode[0] == 'd' && net_stack_ready()) {
     if (net_stack_dhcp_acquire(2500u) == 0) {
       io->print("[net] DHCP: lease acquired.\n");
+      klog(KLOG_INFO, "[net] Bootstrap DHCP lease acquired.");
     } else {
+      struct net_stack_status status;
       io->print("[net] DHCP: failed, keeping saved static fallback.\n");
+      if (net_stack_status(&status) == 0) {
+        klog_dec(KLOG_WARN, "[net] Bootstrap DHCP failed, error: ",
+                 (uint32_t)(-status.dhcp_last_error));
+      } else {
+        klog(KLOG_WARN, "[net] Bootstrap DHCP failed.");
+      }
     }
   }
 }

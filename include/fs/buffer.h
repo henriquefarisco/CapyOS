@@ -21,6 +21,19 @@ struct buffer_head {
     struct buffer_head *lru_next;
 };
 
+struct buffer_cache_stats {
+    uint32_t capacity;
+    uint32_t valid;
+    uint32_t dirty;
+    uint32_t pinned;
+    uint64_t hits;
+    uint64_t misses;
+    uint64_t evictions;
+    uint64_t writebacks;
+    uint64_t read_errors;
+    uint64_t write_errors;
+};
+
 void buffer_cache_init(void);
 struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no);
 void buffer_mark_dirty(struct buffer_head *bh);
@@ -28,6 +41,7 @@ int buffer_write_back(struct buffer_head *bh);
 void buffer_release(struct buffer_head *bh);
 int buffer_cache_sync(struct block_device *dev);
 void buffer_cache_invalidate(struct block_device *dev);
+void buffer_cache_stats_get(struct buffer_cache_stats *out);
 int buffer_cache_last_error_block(uint32_t *out_block_no);
 int buffer_cache_last_error_code(void);
 

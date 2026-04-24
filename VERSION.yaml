@@ -1,16 +1,19 @@
 meta:
-  generated: 2026-04-23
+  generated: 2026-04-24
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
   description: "Canalizacao oficial de versoes do CapyOS na trilha UEFI/GPT x86_64"
 channels:
   alpha:
-    current: 0.8.0-alpha.1
-    extended: 0.8.0-alpha.1+20260423
+    current: 0.8.0-alpha.2
+    extended: 0.8.0-alpha.2+20260424
     stability: experimental
-    summary: "Consolidacao da trilha alpha com browser estabilizado na Fase 1, reorganizacao estrutural ampla do codigo e documentacao/versionamento alinhados"
+    summary: "Consolidacao da robustez alpha com DHCP no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP e smoke x64 persistente"
     history:
+      - version: 0.8.0-alpha.2+20260424
+        date: 2026-04-24
+        summary: "Avanca o plano de robustez com DHCP automatico, release-check endurecido, metricas perf-*, baseline de boot, cache DNS/HTTP com telemetria e smoke x64 completo"
       - version: 0.8.0-alpha.1+20260423
         date: 2026-04-23
         summary: "Atualiza a trilha alpha com browser Fase 1 estabilizado, reorganizacao estrutural do codigo, snapshots versionados e refresh completo da documentacao"

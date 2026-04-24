@@ -35,6 +35,10 @@ static const char *g_cli_reference_text =
     "  print-host           - hostname\n"
     "  print-time           - uptime\n"
     "  do-sync              - sincroniza discos\n"
+    "  perf-boot            - metricas de boot\n"
+    "  perf-net             - metricas de rede/DNS\n"
+    "  perf-fs              - metricas de FS/cache\n"
+    "  perf-mem             - metricas de memoria\n"
     "  net-status           - estado da rede (x64)\n"
     "  net-ip               - exibe IPv4 local e mascara\n"
     "  net-gw               - exibe gateway atual\n"
@@ -240,7 +244,6 @@ static int setup_write_settings_and_mark(const char *setup_language,
   cstring_copy(settings.keyboard_layout, sizeof(settings.keyboard_layout),
                keyboard_value);
   cstring_copy(settings.language, sizeof(settings.language), setup_language);
-  cstring_copy(settings.network_mode, sizeof(settings.network_mode), "static");
   settings.splash_enabled = splash_enabled ? 1 : 0;
 
   const char *proc_config = "gravacao da configuracao do sistema";

@@ -1,0 +1,6 @@
+{
+  "max_regression_percent": 20.0,
+  "metric": "total_boot_to_login",
+  "source_log": "build/ci/smoke_x64_boot_perf.boot1.log",
+  "total_boot_to_login_us": 5675879
+}

@@ -12,6 +12,7 @@ from smoke_x64_auth import (
 )
 from smoke_x64_boot import smoke_first_boot, smoke_second_boot
 from smoke_x64_helpers import (
+    ensure_shell_after_login,
     run_cmd,
     run_cmd_expect_prompt,
     run_open_write,
@@ -27,6 +28,7 @@ __all__ = [
     "complete_iso_install",
     "login",
     "maybe_run_first_boot_setup",
+    "ensure_shell_after_login",
     "run_cmd",
     "run_cmd_expect_prompt",
     "run_open_write",

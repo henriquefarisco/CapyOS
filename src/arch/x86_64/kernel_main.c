@@ -271,6 +271,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('i');
   boot_metrics_init();
   dbgcon_putc('j');
+  boot_metrics_stage_begin("platform-core");
   if (apic_available()) {
     smp_detect_cpus(h->rsdp);
   }
@@ -293,6 +294,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('R');
   dbgcon_putc('S');
   dbgcon_putc('p');
+  boot_metrics_stage_end();
   if (apic_available() && !handoff_boot_services_active()) {
     apic_timer_set_callback(scheduler_tick);
     apic_timer_start(100);
@@ -303,6 +305,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   /* Stage 4/8: Keyboard */
   boot_ui_splash_set_status("Configuring keyboard...");
   boot_ui_splash_advance(4, 8);
+  boot_metrics_stage_begin("boot-config");
   keyboard_set_layout_by_name("us");
   {
     char handoff_layout_name[16];
@@ -345,26 +348,32 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   if (load_handoff_volume_key() == 0) {
     klog(KLOG_INFO, "[security] Volume key provisioned from installer.");
   }
+  boot_metrics_stage_end();
   dbgcon_putc('4');
 
   /* Stage 5/8: Storage */
   boot_ui_splash_set_status("Detecting storage...");
   boot_ui_splash_advance(5, 8);
+  boot_metrics_stage_begin("storage-probe");
   if (nvme_init() != 0) {
     klog(KLOG_INFO, "[nvme] No NVMe controller found.");
   }
+  boot_metrics_stage_end();
   dbgcon_putc('5');
 
   /* Stage 6/8: Serial */
   boot_ui_splash_set_status("Initializing serial...");
   boot_ui_splash_advance(6, 8);
+  boot_metrics_stage_begin("serial-console");
   com1_init();
   com1_puts("[COM1] CapyOS 64-bit serial console ready\r\n");
+  boot_metrics_stage_end();
   dbgcon_putc('6');
 
   /* Stage 7/8: Input devices */
   boot_ui_splash_set_status("Detecting input devices...");
   boot_ui_splash_advance(7, 8);
+  boot_metrics_stage_begin("input-probe");
   {
     int is_hyperv = hyperv_detect();
     struct x64_input_probe_result input_probe;
@@ -399,11 +408,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                         "No input device detected (keyboard/serial)");
     }
   }
+  boot_metrics_stage_end();
   dbgcon_putc('7');
 
   /* Stage 8/8: Network */
   boot_ui_splash_set_status("Configuring network...");
   boot_ui_splash_advance(8, 8);
+  boot_metrics_stage_begin("runtime-network");
   {
     int shell_runtime_rc;
     int validated_storage_ready = 0;
@@ -550,6 +561,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     kernel_update_recovery_snapshot_work(0);
     kernel_schedule_background_boot_work(shell_runtime_rc == 0);
   }
+  boot_metrics_stage_end();
   dbgcon_putc('8');
 
   /* --- End splash -------------------------------------------------------- */

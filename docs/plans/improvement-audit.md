@@ -1,7 +1,7 @@
 # CapyOS - Auditoria Completa e Plano de Melhorias
 
 Data de referencia: 2026-04-09.
-Versao de referencia: `0.8.0-alpha.1`
+Versao de referencia: `0.8.0-alpha.2`
 Gerado a partir de leitura integral do repositorio.
 
 Este documento cruza o estado real do codigo com os planos existentes

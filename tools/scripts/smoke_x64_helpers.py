@@ -43,6 +43,17 @@ def run_cmd_expect_prompt(
     session.wait_for(prompt, timeout=timeout, start_at=mk)
 
 
+def ensure_shell_after_login(session: SmokeSession, timeout: float, mode: str) -> str:
+    if mode == "shell":
+        return mode
+    print("[info] desktop autostart detected; exiting to CLI for smoke commands")
+    mk = session.marker()
+    session.send_line("exit")
+    session.wait_for("[desktop] session stopped", timeout=timeout, start_at=mk)
+    session.wait_for(">~> ", timeout=timeout, start_at=mk)
+    return "shell"
+
+
 def run_open_write(
     session: SmokeSession, filename: str, lines: list[str], timeout: float
 ) -> None:
@@ -69,23 +80,43 @@ def wait_for_vm_exit(session: SmokeSession, timeout: float) -> None:
     raise TimeoutError("timeout waiting VM process to exit")
 
 
+def vm_has_exited(session: SmokeSession) -> bool:
+    return session.proc is not None and session.proc.poll() is not None
+
+
 def trigger_reboot(session: SmokeSession, timeout: float) -> bool:
     reboot_markers = ("Reiniciando...", "Rebooting...")
     for _ in range(4):
+        if vm_has_exited(session):
+            return True
         mk = session.marker()
-        session.send_line("shutdown-reboot")
+        try:
+            session.send_line("shutdown-reboot")
+        except OSError:
+            return vm_has_exited(session) or any(marker in session.tail() for marker in reboot_markers)
         try:
             session.wait_for_any(reboot_markers, timeout=8.0, start_at=mk)
-            wait_for_vm_exit(session, timeout=timeout)
+            try:
+                wait_for_vm_exit(session, timeout=timeout)
+            except TimeoutError:
+                if any(marker in session.tail() for marker in reboot_markers):
+                    return True
+                raise
             return True
         except RuntimeError as exc:
             if "code 0" in str(exc):
                 return True
             raise
+        except OSError:
+            return vm_has_exited(session) or any(marker in session.tail() for marker in reboot_markers)
         except TimeoutError:
+            if vm_has_exited(session):
+                return True
             try:
                 session.wait_for("> ", timeout=8.0, start_at=mk)
             except TimeoutError:
+                if vm_has_exited(session):
+                    return True
                 pass
     return False
 
@@ -93,20 +124,36 @@ def trigger_reboot(session: SmokeSession, timeout: float) -> bool:
 def trigger_poweroff(session: SmokeSession, timeout: float) -> bool:
     poweroff_markers = ("Desligando...", "Powering off...", "Apagando...")
     for _ in range(4):
+        if vm_has_exited(session):
+            return True
         mk = session.marker()
-        session.send_line("shutdown-off")
+        try:
+            session.send_line("shutdown-off")
+        except OSError:
+            return vm_has_exited(session) or any(marker in session.tail() for marker in poweroff_markers)
         try:
             session.wait_for_any(poweroff_markers, timeout=8.0, start_at=mk)
-            wait_for_vm_exit(session, timeout=timeout)
+            try:
+                wait_for_vm_exit(session, timeout=timeout)
+            except TimeoutError:
+                if any(marker in session.tail() for marker in poweroff_markers):
+                    return True
+                raise
             return True
         except RuntimeError as exc:
             if "code 0" in str(exc):
                 return True
             raise
+        except OSError:
+            return vm_has_exited(session) or any(marker in session.tail() for marker in poweroff_markers)
         except TimeoutError:
+            if vm_has_exited(session):
+                return True
             try:
                 session.wait_for("> ", timeout=8.0, start_at=mk)
             except TimeoutError:
+                if vm_has_exited(session):
+                    return True
                 pass
     return False
 

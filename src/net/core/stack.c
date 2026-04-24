@@ -32,9 +32,11 @@ struct net_state {
   uint8_t initialized;
   uint8_t ready;
   uint8_t driver_available;
-  uint8_t reserved_pad;
+  uint8_t dhcp_lease_acquired;
   uint16_t ident_seq;
   uint32_t age_ticks;
+  uint32_t dhcp_attempts;
+  int32_t dhcp_last_error;
   const char *unavailable_reason;
   struct net_nic_probe nic;
   struct net_ipv4_config ipv4;
@@ -215,6 +217,7 @@ int net_stack_set_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
   g_net.ipv4.dns = dns;
   net_stack_mem_zero(g_net.arp, sizeof(g_net.arp));
   net_dhcp_reset(&g_net.dhcp);
+  g_net.dhcp_lease_acquired = 0;
   net_dns_reset(&g_net.dns);
   net_icmp_reset(&g_net.icmp);
   return 0;
@@ -240,9 +243,12 @@ int net_stack_status(struct net_stack_status *out) {
   out->hyperv_runtime_phase = g_net.hyperv_runtime.runtime_phase;
   out->hyperv_refresh_action = NET_HYPERV_RUNTIME_ACTION_INVALID_KIND;
   out->hyperv_gate_state = NET_HYPERV_RUNTIME_GATE_INVALID;
+  out->dhcp_lease_acquired = g_net.dhcp_lease_acquired;
   out->arp_entries = net_arp_count(g_net.arp, NET_ARP_CAPACITY);
+  out->dhcp_attempts = g_net.dhcp_attempts;
   out->hyperv_refresh_attempts = g_net.hyperv_runtime.refresh_attempts;
   out->hyperv_refresh_changes = g_net.hyperv_runtime.refresh_changes;
+  out->dhcp_last_error = g_net.dhcp_last_error;
   out->hyperv_last_error = g_net.hyperv_runtime.last_error;
   out->hyperv_last_result = g_net.hyperv_runtime.last_result;
   out->nic = g_net.nic;
@@ -421,9 +427,12 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
   uint32_t fallback_dns = 0;
   uint32_t stage_timeout = 0;
 
+  g_net.dhcp_attempts++;
   if (!g_net.initialized || !g_net.ready || timeout_ms < 200u) {
+    g_net.dhcp_last_error = -1;
     return -1;
   }
+  g_net.dhcp_lease_acquired = 0;
 
   fallback_addr = g_net.ipv4.addr;
   fallback_mask = g_net.ipv4.mask;
@@ -443,6 +452,7 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
                             NET_DHCP_MSG_DISCOVER, 0u, 0u,
                             net_stack_send_ipv4) != 0) {
     net_dhcp_reset(&g_net.dhcp);
+    g_net.dhcp_last_error = -2;
     return -1;
   }
 
@@ -456,6 +466,7 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
   if (!g_net.dhcp.offer_ready || g_net.dhcp.offered_ip == 0u ||
       g_net.dhcp.server_id == 0u) {
     net_dhcp_reset(&g_net.dhcp);
+    g_net.dhcp_last_error = -3;
     return -1;
   }
 
@@ -468,6 +479,7 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
                             g_net.dhcp.offered_ip, g_net.dhcp.server_id,
                             net_stack_send_ipv4) != 0) {
     net_dhcp_reset(&g_net.dhcp);
+    g_net.dhcp_last_error = -4;
     return -1;
   }
 
@@ -481,6 +493,7 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
   if (!g_net.dhcp.ack_ready || g_net.dhcp.nak_received ||
       g_net.dhcp.ack_ip == 0u) {
     net_dhcp_reset(&g_net.dhcp);
+    g_net.dhcp_last_error = -5;
     return -1;
   }
 
@@ -500,8 +513,11 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
                            g_net.dhcp.router, g_net.dhcp.dns);
   if (g_net.ipv4.addr == 0u) {
     g_net.ipv4.addr = fallback_addr;
+    g_net.dhcp_last_error = -6;
     return -1;
   }
+  g_net.dhcp_lease_acquired = 1;
+  g_net.dhcp_last_error = 0;
   return 0;
 }
 

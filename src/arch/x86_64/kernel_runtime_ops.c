@@ -21,6 +21,7 @@
 #include "arch/x86_64/storage_runtime.h"
 #include "auth/session.h"
 #include "auth/user.h"
+#include "boot/boot_metrics.h"
 #include "boot/handoff.h"
 #include "core/system_init.h"
 #include "drivers/hyperv/hyperv.h"
@@ -424,6 +425,7 @@ int init_shell_context(const struct user_record *user) {
   rc = x64_kernel_begin_shell_session(&state, user);
   if (rc == 0) {
     kernel_note_shell_session_ready();
+    boot_metrics_mark_login_ready();
     (void)klog_persist_flush_default();
     (void)kernel_sync_root_volume();
     if (state.desktop_autostart_pending) {

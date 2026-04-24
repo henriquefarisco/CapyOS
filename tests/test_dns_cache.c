@@ -71,6 +71,29 @@ void test_dns_cache_update(void) {
   else { FAIL("should be updated to 200"); }
 }
 
+void test_dns_cache_ttl(void) {
+  dns_cache_init();
+  dns_cache_insert("ttl.com", 1234, 1);
+  dns_cache_tick(1);
+
+  TEST("dns_cache_tick preserves entry before TTL");
+  uint32_t ip;
+  dns_cache_tick(101);
+  if (dns_cache_lookup("ttl.com", &ip) == 0 && ip == 1234) { PASS(); }
+  else { FAIL("should still be cached before TTL expires"); }
+
+  TEST("dns_cache_tick expires entry after TTL");
+  dns_cache_tick(102);
+  if (dns_cache_lookup("ttl.com", &ip) != 0) { PASS(); }
+  else { FAIL("should miss after TTL expires"); }
+
+  TEST("dns_cache_stats tracks expiration");
+  struct dns_cache_stats st;
+  dns_cache_stats_get(&st);
+  if (st.expired >= 1 && st.entries == 0) { PASS(); }
+  else { FAIL("expiration stats wrong"); }
+}
+
 int test_dns_cache_run(void) {
   printf("[test_dns_cache]\n");
   tests_run = 0;
@@ -79,6 +102,7 @@ int test_dns_cache_run(void) {
   test_dns_cache_flush();
   test_dns_cache_stats();
   test_dns_cache_update();
+  test_dns_cache_ttl();
   printf("  %d/%d passed\n", tests_passed, tests_run);
   return tests_run - tests_passed;
 }

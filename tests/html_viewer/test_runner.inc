@@ -12,6 +12,8 @@ int run_html_viewer_tests(void) {
   fails += test_html_viewer_redirect_limit_fails_controlled();
   fails += test_html_viewer_escape_cancels_loading_navigation();
   fails += test_html_viewer_loads_external_assets();
+  fails += test_html_viewer_http_cache_enforces_memory_budget();
+  fails += test_html_viewer_about_metrics_pages();
   fails += test_html_viewer_discards_stale_response();
   fails += test_html_viewer_safe_mode_on_large_document();
   fails += test_html_viewer_rejects_script_document();

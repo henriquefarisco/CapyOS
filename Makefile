@@ -323,8 +323,23 @@ $(BUILD)/x86_64/third_party/tinf/%.o: third_party/tinf/%.c | $(BUILD) $(BUILD_GE
 $(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
 	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(CAPYOS64_OBJS)
 
+.PHONY: prepare-x64-toolchain
+prepare-x64-toolchain: | $(BUILD)
+	@mkdir -p $(BUILD)/x86_64
+	@if [ ! -f "$(BUILD)/x86_64/.toolchain" ] || [ "$$(cat "$(BUILD)/x86_64/.toolchain")" != "$(TOOLCHAIN64)" ]; then \
+		echo "[build] Switching x64 toolchain to $(TOOLCHAIN64); cleaning x64 artifacts."; \
+		rm -rf "$(BUILD)/x86_64" "$(CAPYOS_ELF64)"; \
+		mkdir -p "$(BUILD)/x86_64"; \
+		printf '%s\n' "$(TOOLCHAIN64)" > "$(BUILD)/x86_64/.toolchain"; \
+	fi
+
 .PHONY: all64
+ifeq ($(X64_TOOLCHAIN_PREPARED),1)
 all64: $(CAPYOS_ELF64)
+else
+all64: prepare-x64-toolchain
+	$(MAKE) $(CAPYOS_ELF64) TOOLCHAIN64=$(TOOLCHAIN64) X64_TOOLCHAIN_PREPARED=1
+endif
 
 # UEFI loader (stub) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compila sÃƒÆ’Ã‚Â³ quando iso-uefi for chamado e gnu-efi estiver presente
 $(UEFI_LOADER_ELF): $(EFI_LOADER_SRC) | $(BUILD) $(BUILD)/boot
@@ -358,6 +373,17 @@ $(MANIFEST64): $(CAPYOS_ELF64) | $(BUILD)
 
 .PHONY: manifest64
 manifest64: $(MANIFEST64)
+
+.PHONY: release-checksums
+release-checksums:
+	@ISO_OUT="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
+	if [ ! -f "$$ISO_OUT" ]; then echo "[err] ISO nao encontrada: $$ISO_OUT"; exit 1; fi; \
+	sha256sum "$(CAPYOS_ELF64)" "$(UEFI_LOADER)" "$(MANIFEST64)" "$(BOOT_CONFIG_BIN)" "$$ISO_OUT" > "$(RELEASE_SHA256)"; \
+	echo "[ok] Checksums de release gravados em $(RELEASE_SHA256)"
+
+.PHONY: verify-release-checksums
+verify-release-checksums: release-checksums
+	sha256sum -c "$(RELEASE_SHA256)"
 
 # GPT disk image helper (ESP FAT32 + BOOT raw + DATA). NÃƒÆ’Ã‚Â£o requer sudo.
 DISK_GPT_IMG ?= build/disk-gpt.img
@@ -397,6 +423,7 @@ GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
 
 ISO_DIR_EFI ?= build/iso-uefi-root
 ISO_IMG_EFI ?= build/CapyOS-Installer-UEFI.iso
+RELEASE_SHA256 := $(BUILD)/release-artifacts.sha256
 EFI_BOOT := $(ISO_DIR_EFI)/EFI/BOOT
 BOOTX64 := $(EFI_BOOT)/BOOTX64.EFI
 EFI_STUB := $(BUILD)/boot/uefi_loader.efi
@@ -464,7 +491,27 @@ test: $(TEST_BIN)
 .PHONY: layout-audit
 layout-audit:
 	@echo "Auditando organizacao de codigo..."
+	python3 tools/scripts/audit_source_layout.py --strict
+
+.PHONY: layout-audit-report
+layout-audit-report:
+	@echo "Gerando relatorio de organizacao de codigo..."
 	python3 tools/scripts/audit_source_layout.py
+
+.PHONY: version-audit
+version-audit:
+	@echo "Auditando manifesto de versao..."
+	python3 tools/scripts/audit_version_manifest.py
+
+.PHONY: boot-perf-baseline-selftest
+boot-perf-baseline-selftest:
+	@echo "Validando parser de baseline de boot..."
+	python3 tools/scripts/check_boot_perf_baseline.py --self-test
+
+.PHONY: boot-perf-baseline
+boot-perf-baseline:
+	@if [ -z "$(BOOT_PERF_LOG)" ]; then echo "Usage: make boot-perf-baseline BOOT_PERF_LOG=build/ci/smoke_x64_cli.boot2.log"; exit 2; fi
+	python3 tools/scripts/check_boot_perf_baseline.py --log "$(BOOT_PERF_LOG)" $(BOOT_PERF_BASELINE_ARGS)
 
 .PHONY: check-toolchain
 check-toolchain:
@@ -475,9 +522,26 @@ check-toolchain:
 	@which xorriso >/dev/null 2>&1 || (echo "[err] xorriso nao encontrado (necessario para iso-uefi)"; exit 1)
 	@echo "[ok] Todas as dependencias encontradas."
 
+.PHONY: release-check
+release-check:
+	@echo "Executando gates de release robusta..."
+	$(MAKE) check-toolchain TOOLCHAIN64=elf
+	$(MAKE) test
+	$(MAKE) layout-audit
+	$(MAKE) version-audit
+	$(MAKE) boot-perf-baseline-selftest
+	$(MAKE) all64 TOOLCHAIN64=elf
+	$(MAKE) iso-uefi TOOLCHAIN64=elf
+	$(MAKE) verify-release-checksums TOOLCHAIN64=elf
+	@echo "[ok] Gates de release robusta passaram."
+
 smoke-x64-cli: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia)..."
 	python3 tools/scripts/smoke_x64_cli.py $(SMOKE_X64_CLI_ARGS)
+
+smoke-x64-boot-perf: all64 iso-uefi manifest64
+	@echo "Executando smoke test x64 de performance de boot..."
+	python3 tools/scripts/smoke_x64_cli.py --boot-perf-only --log build/ci/smoke_x64_boot_perf.log --disk build/ci/smoke_x64_boot_perf.img $(SMOKE_X64_BOOT_PERF_ARGS)
 
 smoke-x64-cli-nvme: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia) com NVMe..."
@@ -513,6 +577,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 disk-gpt provision-vhd legacy-disabled clean test layout-audit check-toolchain smoke-x64-cli smoke-x64-cli-nvme smoke-x64-iso inspect-disk
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-iso inspect-disk
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEP)

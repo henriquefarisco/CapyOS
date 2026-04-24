@@ -48,6 +48,8 @@ void html_viewer_request_sync(struct html_viewer_app *app,
       hv_strncmp(url, "about:blank", 11) == 0 ||
       hv_strncmp(url, "about:history", 13) == 0 ||
       hv_strncmp(url, "about:bookmarks", 15) == 0 ||
+      hv_strncmp(url, "about:network", 13) == 0 ||
+      hv_strncmp(url, "about:memory", 12) == 0 ||
       hv_strncmp(url, "about:settings", 14) == 0) {
     html_viewer_load_builtin(app, url);
     if (app->window) compositor_invalidate(app->window->id);

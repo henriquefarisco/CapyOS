@@ -1,3 +1,6 @@
+#include "arch/x86_64/kernel_volume_runtime.h"
+#include "auth/session.h"
+
 static int cmd_job_run(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
   struct system_work_status work;
@@ -39,38 +42,13 @@ static int cmd_job_run(struct shell_context *ctx, int argc, char **argv) {
 }
 
 static int update_runtime_writer(const char *path, const char *text) {
-  struct dentry *d = NULL;
-  struct file *f = NULL;
-  size_t len = 0u;
+  struct session_context *previous_session = session_active();
+  int rc = 0;
 
-  if (!path || !text) {
-    return -1;
-  }
-  while (text[len]) {
-    ++len;
-  }
-
-  if (vfs_lookup(path, &d) != 0) {
-    if (vfs_create(path, VFS_MODE_FILE, NULL) != 0) {
-      return -1;
-    }
-  } else if (d && d->refcount) {
-    d->refcount--;
-  }
-
-  f = vfs_open(path, VFS_OPEN_WRITE);
-  if (!f) {
-    return -1;
-  }
-  if (f->dentry && f->dentry->inode) {
-    f->position = 0;
-  }
-  if (vfs_write(f, text, len) != (long)len) {
-    vfs_close(f);
-    return -1;
-  }
-  vfs_close(f);
-  return 0;
+  session_set_active(NULL);
+  rc = x64_kernel_volume_runtime_write_text_file(path, text);
+  session_set_active(previous_session);
+  return rc;
 }
 
 static int refresh_update_agent_service_state(int rc,

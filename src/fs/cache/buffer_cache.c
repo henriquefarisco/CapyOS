@@ -12,6 +12,7 @@ static int cache_initialized = 0;
 static uint32_t g_last_error_block_no = 0;
 static int g_last_error_valid = 0;
 static int g_last_error_code = 0;
+static struct buffer_cache_stats g_buffer_cache_stats;
 
 static inline void dbg_putc(char ch) {
     __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
@@ -106,6 +107,9 @@ static struct buffer_head *buffer_evict(void) {
     if (bh->dirty && bh->valid) {
         buffer_write_back(bh);
     }
+    if (bh->valid || bh->dev) {
+        g_buffer_cache_stats.evictions++;
+    }
     hash_remove(bh);
     bh->dev = NULL;
     bh->block_no = 0;
@@ -133,6 +137,16 @@ void buffer_cache_init(void) {
     for (size_t i = 0; i < BUFFER_HASH_SIZE; ++i) {
         hash_table[i] = NULL;
     }
+    g_buffer_cache_stats.capacity = BUFFER_CACHE_MAX;
+    g_buffer_cache_stats.valid = 0;
+    g_buffer_cache_stats.dirty = 0;
+    g_buffer_cache_stats.pinned = 0;
+    g_buffer_cache_stats.hits = 0;
+    g_buffer_cache_stats.misses = 0;
+    g_buffer_cache_stats.evictions = 0;
+    g_buffer_cache_stats.writebacks = 0;
+    g_buffer_cache_stats.read_errors = 0;
+    g_buffer_cache_stats.write_errors = 0;
     cache_initialized = 1;
 }
 
@@ -146,12 +160,14 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
 
     struct buffer_head *bh = hash_lookup(dev, block_no);
     if (bh) {
+        g_buffer_cache_stats.hits++;
         if (bh->refcount == 0) {
             lru_remove(bh);
         }
         bh->refcount++;
         return bh;
     }
+    g_buffer_cache_stats.misses++;
 
     bh = buffer_evict();
     if (!bh) {
@@ -164,6 +180,7 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
     bh->refcount = 1;
 
     if (block_device_read(dev, block_no, bh->data) != 0) {
+        g_buffer_cache_stats.read_errors++;
         dbg_puts("[buf] read fail blk=");
         dbg_hex32(block_no);
         dbg_puts(" bsz=");
@@ -195,9 +212,11 @@ int buffer_write_back(struct buffer_head *bh) {
     }
     int rc = block_device_write(bh->dev, bh->block_no, bh->data);
     if (rc != 0) {
+        g_buffer_cache_stats.write_errors++;
         return rc;
     }
     bh->dirty = 0;
+    g_buffer_cache_stats.writebacks++;
     return 0;
 }
 
@@ -255,6 +274,32 @@ void buffer_cache_invalidate(struct block_device *dev) {
         bh->hash_next = NULL;
         if (bh->refcount == 0) {
             lru_insert_front(bh);
+        }
+    }
+}
+
+void buffer_cache_stats_get(struct buffer_cache_stats *out) {
+    if (!out) {
+        return;
+    }
+    if (!cache_initialized) {
+        buffer_cache_init();
+    }
+    *out = g_buffer_cache_stats;
+    out->capacity = BUFFER_CACHE_MAX;
+    out->valid = 0;
+    out->dirty = 0;
+    out->pinned = 0;
+    for (size_t i = 0; i < BUFFER_CACHE_MAX; ++i) {
+        const struct buffer_head *bh = &buffer_cache[i];
+        if (bh->valid) {
+            out->valid++;
+        }
+        if (bh->dirty) {
+            out->dirty++;
+        }
+        if (bh->refcount != 0) {
+            out->pinned++;
         }
     }
 }

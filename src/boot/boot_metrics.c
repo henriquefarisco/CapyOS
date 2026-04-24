@@ -52,6 +52,9 @@ void boot_metrics_stage_end(void) {
 }
 
 void boot_metrics_mark_login_ready(void) {
+  if (g_metrics.login_ready_tick != 0) {
+    return;
+  }
   g_metrics.login_ready_tick = bm_ticks();
   if (g_metrics.boot_start_tick > 0) {
     uint64_t delta = g_metrics.login_ready_tick - g_metrics.boot_start_tick;

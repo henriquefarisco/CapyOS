@@ -4,9 +4,9 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-23
-Versao de referencia: `0.8.0-alpha.1`
-Consolidacao atual de `develop`: reorganizacao estrutural ampla do codigo, browser HTML estabilizado na Fase 1, runtime x64/documentacao alinhados e trilha alpha atualizada para publicacao.
+Ultima atualizacao: 2026-04-24
+Versao de referencia: `0.8.0-alpha.2`
+Consolidacao atual de `develop`: plano de robustez em execucao com DHCP automatico no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP e smoke x64 persistente validado.
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -63,6 +63,7 @@ Observacao importante:
 ## Documentacao
 
 - indice principal: `docs/README.md`
+- indice de planos: `docs/plans/README.md`
 - arquitetura atual: `docs/architecture/system-overview.md`
 - plano-mestre do sistema: `docs/plans/system-master-plan.md`
 - plano-mestre de consolidacao atual: `docs/plans/capyos-master-improvement-plan.md`
@@ -176,15 +177,15 @@ acompanhar a evolucao visual do sistema por release alpha.
 
 ### Boot e login
 
-![Login do sistema](docs/screenshots/0.8.0-alpha.1/login-system.png)
+![Login do sistema](docs/screenshots/0.8.0-alpha.2/login-system.png)
 
-![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.1/bootstage1-iso.png)
+![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.2/bootstage1-iso.png)
 
 ### Desktop, navegador e apps
 
-![Desktop com navegador](docs/screenshots/0.8.0-alpha.1/desktop-browser1.png)
+![Desktop com navegador](docs/screenshots/0.8.0-alpha.2/desktop-browser1.png)
 
-![Desktop com apps](docs/screenshots/0.8.0-alpha.1/desktop-apps.png)
+![Desktop com apps](docs/screenshots/0.8.0-alpha.2/desktop-apps.png)
 
 ## Estado atual por dominio
 
@@ -222,7 +223,8 @@ acompanhar a evolucao visual do sistema por release alpha.
 
 - WSL/Linux com: `make`, `nasm`, `xorriso`, `grub-mkrescue`
 - toolchains:
-  - `x86_64-elf-*` (ou fallback `x86_64-linux-gnu-*`)
+  - `x86_64-elf-*` para build oficial endurecido
+  - `x86_64-linux-gnu-*` apenas como build rapido de desenvolvimento
 - UEFI: `gnu-efi`
 
 Checagem rapida:
@@ -242,10 +244,34 @@ Observacao de seguranca:
 
 ### Fluxo UEFI/GPT (64-bit)
 
+Build oficial endurecido:
+
+```bash
+make all64 TOOLCHAIN64=elf
+```
+
+Build rapido de desenvolvimento:
+
 ```bash
 make all64
+```
+
+Imagem UEFI:
+
+```bash
 make iso-uefi
 ```
+
+Gate local de release robusta:
+
+```bash
+make release-check
+```
+
+Esse alvo roda `check-toolchain` com `TOOLCHAIN64=elf`, testes de host,
+auditoria estrita de layout, auditoria de versao, build x64 endurecido,
+geracao da ISO UEFI e verificacao de checksums em
+`build/release-artifacts.sha256`.
 
 ### Testes de host
 
