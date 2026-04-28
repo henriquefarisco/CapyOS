@@ -137,6 +137,10 @@ Observacao inicial:
   automatico apos shutdown sujo; `capyfs_journal_integration.c` ja continha o
   hook completo (init, format na primeira montagem, replay condicional via
   `journal_needs_replay`); kernel compila sem erros em `feature/robustness-continuation`.
+- Em 2026-04-28, M0.5 implementado: `docs/reference/driver-support-matrix.md` criado com
+  tabelas por categoria (Virtualizadores, Rede, Armazenamento, Input, Sistema) cobrindo todos
+  os drivers no codigo; status Suportado/Laboratorio/Experimental/Fora-de-suporte alinhados
+  com decisoes do README.md.
 - Em 2026-04-28, M7.4 implementado: `capyfs_journal_integration` rastreia causa de recovery
   (NONE, WAL_REPLAY, WAL_REPLAY_FAILED, FORMAT) e reseta a cada mount_hook; campo
   `journal_recovery_cause` adicionado a `x64_kernel_recovery_status`; `recovery-status`
@@ -177,7 +181,7 @@ gates de entrega.
 | M0.2 | Plataforma primaria oficial `VMware + UEFI + E1000` | Parcial | `README.md` declara VMware + E1000 como caminho oficial atual | Refletir a mesma decisao em docs antigas que ainda citam outros caminhos como validos |
 | M0.3 | Classificar planos antigos como ativo, historico, substituido ou experimental | Implementado | `docs/plans/README.md` classifica todos os planos atuais como `Ativo`, `Historico`, `Experimental` ou `Substituido`; inspecao por script confirmou cobertura de todos os `docs/plans/*.md`; `make layout-audit` passou | Manter a tabela atualizada quando planos forem criados, arquivados ou substituidos |
 | M0.4 | Gates obrigatorios de merge/release | Implementado | `make release-check` orquestra `check-toolchain TOOLCHAIN64=elf`, `make test`, `make layout-audit`, `make version-audit`, `make boot-perf-baseline-selftest`, `make all64 TOOLCHAIN64=elf`, `make iso-uefi TOOLCHAIN64=elf` e verificacao SHA-256; passou em 2026-04-24 | Estender gate futuro com smoke VMware+E1000 e assinatura de artefatos |
-| M0.5 | Matriz de suporte de drivers e virtualizadores | Parcial | `README.md` lista VMware/E1000, QEMU/E1000 e Hyper-V fora de suporte | Criar tabela oficial por driver: suportado, laboratorio, experimental, fora de suporte |
+| M0.5 | Matriz de suporte de drivers e virtualizadores | Implementado | `docs/reference/driver-support-matrix.md` criado com tabelas por categoria (Rede, Armazenamento, Input, Sistema/Plataforma, Virtualizadores); status Suportado/Laboratorio/Experimental/Fora-de-suporte definidos e aplicados a todos os drivers presentes no codigo; alinhado com decisoes do `README.md` | Atualizar a tabela quando novos drivers forem adicionados ou promovidos de status |
 
 ## M1 - Release robusta e build reproduzivel
 
