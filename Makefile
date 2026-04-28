@@ -240,7 +240,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/net/protocols/tcp.o \
 	$(BUILD)/x86_64/net/services/dns_cache.o \
 	$(BUILD)/x86_64/net/services/http_encoding.o \
-	$(BUILD)/x86_64/net/services/http.o \
+	$(BUILD)/x86_64/net/services/http/prelude_headers_encoding.o \
+	$(BUILD)/x86_64/net/services/http/url_request_builder.o \
+	$(BUILD)/x86_64/net/services/http/transport.o \
+	$(BUILD)/x86_64/net/services/http/request_response.o \
+	$(BUILD)/x86_64/net/services/http/redirect_download.o \
 	$(BUILD)/x86_64/third_party/tinf/tinflate.o \
 	$(BUILD)/x86_64/third_party/tinf/tinfgzip.o \
 	$(BUILD)/x86_64/third_party/tinf/tinfzlib.o \
