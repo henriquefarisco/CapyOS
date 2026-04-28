@@ -1,4 +1,6 @@
-static UINT8 sum8_bytes(const UINT8 *p, UINTN len) {
+#include "internal/uefi_loader_internal.h"
+
+UINT8 sum8_bytes(const UINT8 *p, UINTN len) {
   UINT8 s = 0;
   for (UINTN i = 0; i < len; i++)
     s = (UINT8)(s + p[i]);
@@ -16,7 +18,7 @@ static BOOLEAN rsdp_sig_ok(const UINT8 *p) {
   return TRUE;
 }
 
-static BOOLEAN rsdp_is_valid_ptr(const VOID *ptr) {
+BOOLEAN rsdp_is_valid_ptr(const VOID *ptr) {
   if (!ptr)
     return FALSE;
   const UINT8 *p = (const UINT8 *)ptr;
@@ -57,7 +59,7 @@ static EFI_STATUS scan_rsdp_range(UINT64 start, UINT64 end, UINT64 *out_rsdp) {
   return EFI_NOT_FOUND;
 }
 
-static EFI_STATUS scan_rsdp(UINT64 *out_rsdp) {
+EFI_STATUS scan_rsdp(UINT64 *out_rsdp) {
   if (!out_rsdp)
     return EFI_INVALID_PARAMETER;
   *out_rsdp = 0;
@@ -85,7 +87,7 @@ static EFI_STATUS scan_rsdp(UINT64 *out_rsdp) {
   return EFI_NOT_FOUND;
 }
 
-static EFI_STATUS find_rsdp_memmap(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
+EFI_STATUS find_rsdp_memmap(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
   if (!st || !st->BootServices || !out_rsdp)
     return EFI_INVALID_PARAMETER;
   *out_rsdp = 0;
@@ -150,7 +152,7 @@ static EFI_STATUS find_rsdp_memmap(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
   return EFI_NOT_FOUND;
 }
 
-static EFI_STATUS find_rsdp(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
+EFI_STATUS find_rsdp(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
   if (!out_rsdp)
     return EFI_INVALID_PARAMETER;
   *out_rsdp = 0;
@@ -167,7 +169,7 @@ static EFI_STATUS find_rsdp(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
   return EFI_NOT_FOUND;
 }
 
-static EFI_STATUS copy_rsdp_low(EFI_SYSTEM_TABLE *st, UINT64 rsdp,
+EFI_STATUS copy_rsdp_low(EFI_SYSTEM_TABLE *st, UINT64 rsdp,
                                 UINT64 *out_copy) {
   if (!st || !st->BootServices || !out_copy)
     return EFI_INVALID_PARAMETER;
@@ -189,13 +191,8 @@ static EFI_STATUS copy_rsdp_low(EFI_SYSTEM_TABLE *st, UINT64 rsdp,
   *out_copy = (UINT64)dst_pa;
   return EFI_SUCCESS;
 }
-
-typedef struct {
-  EFI_FILE_HANDLE root;
-  EFI_FILE_HANDLE file;
-} log_file_t;
-
-static void log_close(log_file_t *lf) {
+
+void log_close(log_file_t *lf) {
   if (!lf)
     return;
   if (lf->file) {
@@ -208,7 +205,7 @@ static void log_close(log_file_t *lf) {
   }
 }
 
-static EFI_STATUS log_open(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
+EFI_STATUS log_open(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
                            log_file_t *out) {
   if (!out)
     return EFI_INVALID_PARAMETER;
@@ -246,7 +243,7 @@ static EFI_STATUS log_open(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   return EFI_SUCCESS;
 }
 
-static void log_write_ascii(log_file_t *lf, const char *s) {
+void log_write_ascii(log_file_t *lf, const char *s) {
   if (!lf || !lf->file || !s)
     return;
   UINTN len = 0;
@@ -257,7 +254,7 @@ static void log_write_ascii(log_file_t *lf, const char *s) {
   uefi_call_wrapper(lf->file->Write, 3, lf->file, &len, (VOID *)s);
 }
 
-static void log_write_u64_hex(log_file_t *lf, UINT64 v) {
+void log_write_u64_hex(log_file_t *lf, UINT64 v) {
   char buf[19];
   buf[0] = '0';
   buf[1] = 'x';
@@ -269,7 +266,7 @@ static void log_write_u64_hex(log_file_t *lf, UINT64 v) {
   log_write_ascii(lf, buf);
 }
 
-static void log_write_bytes_hex(log_file_t *lf, const UINT8 *p, UINTN len) {
+void log_write_bytes_hex(log_file_t *lf, const UINT8 *p, UINTN len) {
   if (!lf || !lf->file || !p || len == 0)
     return;
   if (len > 64)
@@ -288,7 +285,7 @@ static void log_write_bytes_hex(log_file_t *lf, const UINT8 *p, UINTN len) {
   log_write_ascii(lf, buf);
 }
 
-static EFI_STATUS get_gop(EFI_SYSTEM_TABLE *st,
+EFI_STATUS get_gop(EFI_SYSTEM_TABLE *st,
                           EFI_GRAPHICS_OUTPUT_PROTOCOL **out_gop) {
   EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
   return uefi_call_wrapper(st->BootServices->LocateProtocol, 3, &gop_guid, NULL,

@@ -1,3 +1,5 @@
+#include "internal/uefi_loader_internal.h"
+
 static EFI_STATUS write_boot_partition_raw(EFI_BLOCK_IO_PROTOCOL *bio,
                                            UINT64 boot_lba, UINT64 boot_sectors,
                                            const struct boot_manifest *mf,
@@ -42,7 +44,7 @@ static EFI_STATUS write_boot_partition_raw(EFI_BLOCK_IO_PROTOCOL *bio,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   EFI_HANDLE fs_handle = NULL;
   EFI_FILE_HANDLE root = NULL;
   EFI_STATUS stt = open_boot_volume(image, st, &fs_handle, &root);
@@ -612,16 +614,4 @@ static EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
                     EFI_SUCCESS, 0, NULL);
   return EFI_SUCCESS;
 }
-
-typedef struct {
-  CHAR8 signature[8]; /* "RSD PTR " */
-  UINT8 checksum;
-  CHAR8 oemid[6];
-  UINT8 revision;
-  UINT32 rsdt;
-  UINT32 length;
-  UINT64 xsdt;
-  UINT8 ext_checksum;
-  UINT8 reserved[3];
-} __attribute__((packed)) acpi_rsdp_t;
-
+

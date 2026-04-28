@@ -1,4 +1,6 @@
-static const CHAR16 *installer_language_code(installer_language_t language) {
+#include "internal/uefi_loader_internal.h"
+
+const CHAR16 *installer_language_code(installer_language_t language) {
   switch (language) {
   case INSTALLER_LANG_PT_BR:
     return L"pt-BR";
@@ -10,7 +12,7 @@ static const CHAR16 *installer_language_code(installer_language_t language) {
   }
 }
 
-static const CHAR16 *installer_language_name(installer_language_t language) {
+const CHAR16 *installer_language_name(installer_language_t language) {
   switch (language) {
   case INSTALLER_LANG_PT_BR:
     return L"Portugues (Brasil)";
@@ -22,7 +24,7 @@ static const CHAR16 *installer_language_name(installer_language_t language) {
   }
 }
 
-static UINT64 align_up_u64(UINT64 v, UINT64 a) {
+UINT64 align_up_u64(UINT64 v, UINT64 a) {
   if (a == 0)
     return v;
   UINT64 r = v % a;
@@ -31,7 +33,7 @@ static UINT64 align_up_u64(UINT64 v, UINT64 a) {
   return v + (a - r);
 }
 
-static UINT32 checksum32_words(const UINT8 *data, UINTN len) {
+UINT32 checksum32_words(const UINT8 *data, UINTN len) {
   if (!data || len == 0)
     return 0;
   UINT32 sum = 0;
@@ -49,7 +51,7 @@ static UINT32 checksum32_words(const UINT8 *data, UINTN len) {
   return sum;
 }
 
-static VOID build_manifest(struct boot_manifest *m, UINT32 kernel_lba,
+VOID build_manifest(struct boot_manifest *m, UINT32 kernel_lba,
                            UINT32 kernel_sectors, UINT32 cksum32) {
   if (!m)
     return;
@@ -72,7 +74,7 @@ static VOID build_manifest(struct boot_manifest *m, UINT32 kernel_lba,
   m->entries[0].reserved = 0;
 }
 
-static EFI_STATUS open_boot_volume(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
+EFI_STATUS open_boot_volume(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
                                    EFI_HANDLE *out_fs_handle,
                                    EFI_FILE_HANDLE *out_root) {
   if (!st || !st->BootServices || !out_fs_handle || !out_root)
@@ -104,7 +106,7 @@ static EFI_STATUS open_boot_volume(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   return EFI_SUCCESS;
 }
 
-static BOOLEAN boot_volume_is_readonly(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+BOOLEAN boot_volume_is_readonly(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   EFI_LOADED_IMAGE *li = NULL;
   EFI_STATUS stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, image,
                                      &LoadedImageProtocol, (VOID **)&li);
@@ -118,7 +120,7 @@ static BOOLEAN boot_volume_is_readonly(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   return bio->Media->ReadOnly ? TRUE : FALSE;
 }
 
-static BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   EFI_HANDLE fs_handle = NULL;
   EFI_FILE_HANDLE root = NULL;
   EFI_STATUS stt = open_boot_volume(image, st, &fs_handle, &root);
@@ -142,7 +144,7 @@ static BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   return FALSE;
 }
 
-static EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
+EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
                                      EFI_BLOCK_IO_PROTOCOL **out_bio) {
   if (!st || !st->BootServices || !out_bio)
     return EFI_INVALID_PARAMETER;
@@ -265,7 +267,7 @@ static int get_boot_partition_hint(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
                                         out_count);
 }
 
-static EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
+EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
                                                  UINT64 *out_data_start,
                                                  UINT64 *out_data_count,
                                                  UINT64 *out_esp_start,
@@ -393,7 +395,7 @@ static EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
+EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
                                                 EFI_SYSTEM_TABLE *st,
                                                 EFI_BLOCK_IO_PROTOCOL **out_bio,
                                                 UINT64 *out_data_start,

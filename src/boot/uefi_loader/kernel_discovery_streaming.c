@@ -1,3 +1,5 @@
+#include "internal/uefi_loader_internal.h"
+
 static EFI_STATUS try_manifest_from_gpt(EFI_BLOCK_IO_PROTOCOL *bio,
                                         struct boot_manifest **out_mf,
                                         UINTN *out_size, UINT32 *out_block_size,
@@ -254,7 +256,7 @@ static EFI_STATUS load_kernel(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   return lkst;
 }
 
-static EFI_STATUS load_kernel_streaming(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
+EFI_STATUS load_kernel_streaming(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
                                         EFI_PHYSICAL_ADDRESS *entry_out) {
   EFI_STATUS stt;
   EFI_LOADED_IMAGE *li = NULL;
@@ -409,23 +411,4 @@ static EFI_STATUS load_kernel_streaming(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   uefi_call_wrapper(root->Close, 1, root);
   return lkst;
 }
-
-// --- UEFI "installer" mode -------------------------------------------------
-
-#define INSTALL_ALIGN_LBA 2048ULL // 1 MiB
-#define INSTALL_ESP_SIZE_MIB 512ULL
-#define INSTALL_BOOT_SIZE_MIB 256ULL
-
-#define GPT_REVISION 0x00010000U
-#define GPT_HEADER_SIZE 92U
-#define GPT_NUM_ENTRIES 128U
-#define GPT_ENTRY_SIZE 128U
-#define GPT_ENTRIES_LBA 2ULL
-#define GPT_ENTRIES_SECTORS ((GPT_NUM_ENTRIES * GPT_ENTRY_SIZE) / 512U) // 32
-
-typedef enum {
-  INSTALLER_LANG_EN = 0,
-  INSTALLER_LANG_PT_BR = 1,
-  INSTALLER_LANG_ES = 2,
-} installer_language_t;
-
+

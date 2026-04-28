@@ -1,3 +1,5 @@
+#include "internal/uefi_loader_internal.h"
+
 typedef EFI_STATUS (*kernel_read_fn_t)(void *ctx, UINT64 offset, VOID *buf,
                                        UINTN size);
 
@@ -54,7 +56,7 @@ static EFI_STATUS kernel_read_from_memory(void *ctx, UINT64 offset, VOID *buf,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS kernel_read_from_blocks(void *ctx, UINT64 offset, VOID *buf,
+EFI_STATUS kernel_read_from_blocks(void *ctx, UINT64 offset, VOID *buf,
                                           UINTN size) {
   struct kernel_block_reader *reader = (struct kernel_block_reader *)ctx;
   UINT8 *dst = (UINT8 *)buf;
@@ -93,7 +95,7 @@ static EFI_STATUS kernel_read_from_blocks(void *ctx, UINT64 offset, VOID *buf,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS kernel_read_from_file(void *ctx, UINT64 offset, VOID *buf,
+EFI_STATUS kernel_read_from_file(void *ctx, UINT64 offset, VOID *buf,
                                         UINTN size) {
   struct kernel_file_reader *reader = (struct kernel_file_reader *)ctx;
   UINTN request = size;
@@ -186,7 +188,7 @@ static EFI_STATUS kernel_plan_from_headers(const Elf64_Ehdr *eh,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS kernel_reserve_fixed_window(EFI_SYSTEM_TABLE *st) {
+EFI_STATUS kernel_reserve_fixed_window(EFI_SYSTEM_TABLE *st) {
   EFI_PHYSICAL_ADDRESS reserve_base = KERNEL_FIXED_RESERVE_BASE;
   UINTN reserve_pages = (UINTN)(KERNEL_FIXED_RESERVE_BYTES >> 12);
   EFI_STATUS stt;
@@ -209,7 +211,7 @@ static EFI_STATUS kernel_reserve_fixed_window(EFI_SYSTEM_TABLE *st) {
   return EFI_SUCCESS;
 }
 
-static void kernel_release_fixed_window(EFI_SYSTEM_TABLE *st) {
+void kernel_release_fixed_window(EFI_SYSTEM_TABLE *st) {
   if (!st || !st->BootServices || g_kernel_reserved_pages == 0) {
     return;
   }
@@ -276,7 +278,7 @@ static void kernel_release_load_pages(EFI_SYSTEM_TABLE *st,
   uefi_call_wrapper(st->BootServices->FreePages, 2, load_base, pages);
 }
 
-static EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
+EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
                                           kernel_read_fn_t reader, void *ctx,
                                           UINT64 kernel_size,
                                           EFI_PHYSICAL_ADDRESS *entry_out) {
@@ -351,7 +353,7 @@ static EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
+EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
                                           VOID *kernel_buf, UINTN kernel_size,
                                           EFI_PHYSICAL_ADDRESS *entry_out) {
   if (kernel_size < sizeof(Elf64_Ehdr)) {

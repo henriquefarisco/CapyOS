@@ -329,8 +329,18 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/core/jpeg_loader.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
-EFI_LOADER_SRC = $(SRC_DIR)/boot/uefi_loader.c
-UEFI_LOADER_DEP = $(BUILD)/boot/uefi_loader.d
+EFI_LOADER_SRCS = \
+	$(SRC_DIR)/boot/uefi_loader/prelude_boot_files.c \
+	$(SRC_DIR)/boot/uefi_loader/kernel_loader.c \
+	$(SRC_DIR)/boot/uefi_loader/kernel_discovery_streaming.c \
+	$(SRC_DIR)/boot/uefi_loader/installer_disk_selection.c \
+	$(SRC_DIR)/boot/uefi_loader/recovery_gpt_layout.c \
+	$(SRC_DIR)/boot/uefi_loader/fat32_writer.c \
+	$(SRC_DIR)/boot/uefi_loader/installer_run.c \
+	$(SRC_DIR)/boot/uefi_loader/acpi_log_gop.c \
+	$(SRC_DIR)/boot/uefi_loader/efi_main.c
+EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS))
+UEFI_LOADER_DEPS = $(EFI_LOADER_OBJS:.o=.d)
 
 all: all64
 
@@ -382,10 +392,14 @@ all64: prepare-x64-toolchain
 endif
 
 # UEFI loader (stub) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compila sÃƒÆ’Ã‚Â³ quando iso-uefi for chamado e gnu-efi estiver presente
-$(UEFI_LOADER_ELF): $(EFI_LOADER_SRC) | $(BUILD) $(BUILD)/boot
+$(BUILD)/boot/uefi_loader/%.o: $(SRC_DIR)/boot/uefi_loader/%.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
 	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
-	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(UEFI_LOADER_DEP) -c $(EFI_LOADER_SRC) -o $(BUILD)/boot/uefi_loader.o
-	$(EFI_LD) $(EFI_LDFLAGS) -o $(UEFI_LOADER_ELF) $(BUILD)/boot/uefi_loader.o $(EFI_LIBS)
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(UEFI_LOADER_ELF): $(EFI_LOADER_OBJS) | $(BUILD) $(BUILD)/boot
+	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
+	$(EFI_LD) $(EFI_LDFLAGS) -o $(UEFI_LOADER_ELF) $(EFI_LOADER_OBJS) $(EFI_LIBS)
 
 $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
 	# UEFI espera PE/COFF (nÃƒÆ’Ã‚Â£o ELF). Converte o ELF gerado pelo gnu-efi em BOOTX64.EFI.
@@ -619,4 +633,4 @@ clean:
 	fi
 .PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-iso inspect-disk
 
--include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEP)
+-include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

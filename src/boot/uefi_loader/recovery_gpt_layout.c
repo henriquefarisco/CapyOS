@@ -1,4 +1,6 @@
-static void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st) {
+#include "internal/uefi_loader_internal.h"
+
+void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st) {
   if (!st || !st->BootServices || !st->BootServices->SetWatchdogTimer) {
     return;
   }
@@ -6,7 +8,7 @@ static void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st) {
 }
 
 /* UEFI readline with optional password masking */
-static UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
+UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
                            BOOLEAN mask) {
   if (!st || !st->ConIn || !buf || maxlen < 2)
     return 0;
@@ -54,7 +56,7 @@ static UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
 }
 
 /* Generate random recovery key shown during ISO install. */
-static void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,
+void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,
                                   UINTN key_len) {
   if (!key_out || key_len < 8) {
     return;
@@ -123,7 +125,7 @@ static void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,
   }
 }
 
-static EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
+EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
                               UINT64 sectors) {
   if (!bio || !bio->Media)
     return EFI_INVALID_PARAMETER;
@@ -173,7 +175,7 @@ static EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
  * This prevents stale bytes from previous installations from being interpreted
  * as an existing encrypted volume.
  */
-static EFI_STATUS scrub_data_partition_for_first_boot(
+EFI_STATUS scrub_data_partition_for_first_boot(
     EFI_BLOCK_IO_PROTOCOL *bio, UINT64 data_lba, UINT64 data_sectors) {
   if (!bio || !bio->Media || data_sectors == 0) {
     return EFI_INVALID_PARAMETER;
@@ -296,7 +298,7 @@ static EFI_STATUS write_protective_mbr(EFI_BLOCK_IO_PROTOCOL *bio,
                            512, mbr);
 }
 
-static EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
+EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
                                    EFI_BLOCK_IO_PROTOCOL *bio, UINT64 esp_mib,
                                    UINT64 boot_mib, UINT64 *out_esp_lba,
                                    UINT64 *out_esp_sectors,

@@ -1,3 +1,5 @@
+#include "internal/uefi_loader_internal.h"
+
 static BOOLEAN fat32_alloc_contig(UINT32 *fat, UINT32 fat_len,
                                   UINT32 bytes_per_cluster, UINT32 *next_free,
                                   UINTN bytes_needed, UINT32 *out_start,
@@ -107,7 +109,7 @@ static EFI_STATUS fat32_write_chain_contig(EFI_BLOCK_IO_PROTOCOL *bio,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
+EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
                                      UINT64 part_lba, UINT64 total_sectors,
                                      const UINT8 *bootx64, UINTN bootx64_sz,
                                      const UINT8 *kernel, UINTN kernel_sz,

@@ -1,119 +1,6 @@
-// CapyOS UEFI loader (x86_64): ELF64 loader that reads \\boot\\capyos64.bin
-// from the same volume as BOOTX64.EFI, loads PT_LOAD segments at p_paddr and
-// jumps to e_entry after ExitBootServices, passing a basic handoff.
-#include "boot/boot_manifest.h"
-#include "boot/boot_config.h"
-#include "boot/handoff.h"
-#include <efi.h>
-#include <efilib.h>
-#include <efiprot.h>
+#include "internal/uefi_loader_internal.h"
 
-#define DEBUGCON_PORT 0xE9
-static inline void dbgcon_putc(UINT8 c) {
-  __asm__ __volatile__("outb %0, %1" : : "a"(c), "Nd"((UINT16)DEBUGCON_PORT));
-}
-
-#define ELF_MAGIC 0x464C457F
-#define PT_LOAD 1
-#define EM_X86_64 62
-#define KERNEL_MAX_PHDRS 32
-#define KERNEL_BLOCK_SCRATCH_MAX 4096
-/* VMware UEFI lies about EfiConventionalMemory below ~16M and also reports
-   16M as free even when its own structures sit there. 0x400000 (4 MB) was
-   verified working in a prior session — far enough above firmware (~1MB
-   compat hole) and well below the 256MB+ region VMware reserves internally. */
-#define KERNEL_FIXED_RESERVE_BASE 0x400000ULL /* 4 MiB — VMware-safe load base */
-#define KERNEL_FIXED_RESERVE_BYTES (48ULL * 1024ULL * 1024ULL)
-
-#define GPT_HEADER_LBA 1
-#define GPT_SIG 0x5452415020494645ULL /* "EFI PART" */
-#define EFI_PART_TYPE_ESP                                                      \
-  {0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,                             \
-   0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B}
-/* TemporÃƒÂ¡rio: GUID de partiÃƒÂ§ÃƒÂ£o BOOT CAPYOS (ajustar no instalador GPT) */
-#define EFI_PART_TYPE_CAPYOS_BOOT                                              \
-  {0x76, 0x0b, 0x98, 0x04, 0x42, 0x10, 0x4c, 0x9b,                             \
-   0x86, 0x1f, 0x11, 0xe0, 0x29, 0xea, 0xc1, 0x01}
-#define EFI_PART_TYPE_LINUX_FS                                                 \
-  {0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,                             \
-   0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4}
-
-typedef struct {
-  UINT8 e_ident[16];
-  UINT16 e_type;
-  UINT16 e_machine;
-  UINT32 e_version;
-  UINT64 e_entry;
-  UINT64 e_phoff;
-  UINT64 e_shoff;
-  UINT32 e_flags;
-  UINT16 e_ehsize;
-  UINT16 e_phentsize;
-  UINT16 e_phnum;
-  UINT16 e_shentsize;
-  UINT16 e_shnum;
-  UINT16 e_shstrndx;
-} Elf64_Ehdr;
-
-typedef struct {
-  UINT32 p_type;
-  UINT32 p_flags;
-  UINT64 p_offset;
-  UINT64 p_vaddr;
-  UINT64 p_paddr;
-  UINT64 p_filesz;
-  UINT64 p_memsz;
-  UINT64 p_align;
-} Elf64_Phdr;
-
-typedef struct {
-  UINT64 signature;
-  UINT32 revision;
-  UINT32 header_size;
-  UINT32 header_crc32;
-  UINT32 reserved;
-  UINT64 current_lba;
-  UINT64 backup_lba;
-  UINT64 first_usable_lba;
-  UINT64 last_usable_lba;
-  UINT8 disk_guid[16];
-  UINT64 part_entry_lba;
-  UINT32 num_part_entries;
-  UINT32 part_entry_size;
-  UINT32 part_entries_crc32;
-} __attribute__((packed)) gpt_header_t;
-
-typedef struct {
-  UINT8 part_type_guid[16];
-  UINT8 uniq_guid[16];
-  UINT64 first_lba;
-  UINT64 last_lba;
-  UINT64 attrs;
-  UINT16 name[36];
-} __attribute__((packed)) gpt_entry_t;
-
-typedef struct {
-  UINT8 Type;
-  UINT8 SubType;
-  UINT8 Length[2];
-} __attribute__((packed)) dp_node_hdr_t;
-
-typedef struct {
-  dp_node_hdr_t Header;
-  UINT32 PartitionNumber;
-  UINT64 PartitionStart;
-  UINT64 PartitionSize;
-  UINT8 Signature[16];
-  UINT8 MBRType;
-  UINT8 SignatureType;
-} __attribute__((packed)) dp_hd_node_t;
-
-#define DP_TYPE_MEDIA 0x04
-#define DP_SUBTYPE_HARDDRIVE 0x01
-#define DP_TYPE_END 0x7F
-#define DP_SUBTYPE_END_ENTIRE 0xFF
-
-static BOOLEAN guid_eq(const UINT8 *a, const UINT8 *b) {
+BOOLEAN guid_eq(const UINT8 *a, const UINT8 *b) {
   for (UINTN i = 0; i < 16; i++) {
     if (a[i] != b[i])
       return FALSE;
@@ -121,16 +8,16 @@ static BOOLEAN guid_eq(const UINT8 *a, const UINT8 *b) {
   return TRUE;
 }
 
-static EFI_STATUS read_file(EFI_FILE_HANDLE root, CHAR16 *path, VOID **buf,
+EFI_STATUS read_file(EFI_FILE_HANDLE root, CHAR16 *path, VOID **buf,
                             UINTN *size);
 
-static struct boot_config_sector g_runtime_boot_cfg;
-static BOOLEAN g_runtime_boot_cfg_valid = FALSE;
-static EFI_PHYSICAL_ADDRESS g_kernel_reserved_base = 0;
-static UINTN g_kernel_reserved_pages = 0;
-static UINT8 g_kernel_block_scratch[KERNEL_BLOCK_SCRATCH_MAX];
+struct boot_config_sector g_runtime_boot_cfg;
+BOOLEAN g_runtime_boot_cfg_valid = FALSE;
+EFI_PHYSICAL_ADDRESS g_kernel_reserved_base = 0;
+UINTN g_kernel_reserved_pages = 0;
+UINT8 g_kernel_block_scratch[KERNEL_BLOCK_SCRATCH_MAX];
 
-static void bootcfg_clear(struct boot_config_sector *cfg) {
+void bootcfg_clear(struct boot_config_sector *cfg) {
   if (!cfg)
     return;
   for (UINTN i = 0; i < sizeof(*cfg); ++i) {
@@ -154,7 +41,7 @@ static CHAR16 ascii_upper_u16(CHAR16 c) {
   return c;
 }
 
-static void char16_to_ascii(char *out, UINTN out_len, const CHAR16 *in) {
+void char16_to_ascii(char *out, UINTN out_len, const CHAR16 *in) {
   if (!out || out_len == 0) {
     return;
   }
@@ -168,7 +55,7 @@ static void char16_to_ascii(char *out, UINTN out_len, const CHAR16 *in) {
   out[n] = 0;
 }
 
-static int ascii_streq(const char *a, const char *b) {
+int ascii_streq(const char *a, const char *b) {
   if (!a || !b) {
     return 0;
   }
@@ -182,7 +69,7 @@ static int ascii_streq(const char *a, const char *b) {
   return a[i] == b[i];
 }
 
-static int normalize_key_char16(const CHAR16 *in, char *out, UINTN out_len) {
+int normalize_key_char16(const CHAR16 *in, char *out, UINTN out_len) {
   if (!in || !out || out_len < 2) {
     return -1;
   }
@@ -207,7 +94,7 @@ static int normalize_key_char16(const CHAR16 *in, char *out, UINTN out_len) {
   return 0;
 }
 
-static EFI_STATUS load_boot_config_from_root(EFI_FILE_HANDLE root) {
+EFI_STATUS load_boot_config_from_root(EFI_FILE_HANDLE root) {
   if (!root) {
     return EFI_INVALID_PARAMETER;
   }
@@ -250,7 +137,7 @@ static EFI_STATUS load_boot_config_from_root(EFI_FILE_HANDLE root) {
   return g_runtime_boot_cfg_valid ? EFI_SUCCESS : EFI_LOAD_ERROR;
 }
 
-static EFI_STATUS open_file_read(EFI_FILE_HANDLE root, CHAR16 *path,
+EFI_STATUS open_file_read(EFI_FILE_HANDLE root, CHAR16 *path,
                                  EFI_FILE_HANDLE *out_fh, UINTN *out_size) {
   EFI_STATUS st;
   EFI_FILE_HANDLE fh = NULL;
@@ -300,7 +187,7 @@ static EFI_STATUS open_file_read(EFI_FILE_HANDLE root, CHAR16 *path,
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS read_file(EFI_FILE_HANDLE root, CHAR16 *path, VOID **buf,
+EFI_STATUS read_file(EFI_FILE_HANDLE root, CHAR16 *path, VOID **buf,
                             UINTN *size) {
   EFI_STATUS st;
   EFI_FILE_HANDLE fh = NULL;
