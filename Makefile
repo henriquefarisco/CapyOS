@@ -219,7 +219,13 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/help.o \
 	$(BUILD)/x86_64/shell/commands/session.o \
 	$(BUILD)/x86_64/shell/commands/system_info.o \
-	$(BUILD)/x86_64/shell/commands/system_control.o \
+	$(BUILD)/x86_64/shell/commands/system_control/service_helpers.o \
+	$(BUILD)/x86_64/shell/commands/system_control/config_commands.o \
+	$(BUILD)/x86_64/shell/commands/system_control/jobs_updates.o \
+	$(BUILD)/x86_64/shell/commands/system_control/service_target_resume.o \
+	$(BUILD)/x86_64/shell/commands/system_control/recovery_login_verify.o \
+	$(BUILD)/x86_64/shell/commands/system_control/recovery_storage.o \
+	$(BUILD)/x86_64/shell/commands/system_control/power_runtime_registry.o \
 	$(BUILD)/x86_64/shell/commands/network_common.o \
 	$(BUILD)/x86_64/shell/commands/network_diag.o \
 	$(BUILD)/x86_64/shell/commands/network_config.o \
