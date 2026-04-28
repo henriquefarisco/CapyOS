@@ -1,4 +1,5 @@
 #include "services/update_agent.h"
+#include "boot/boot_slot.h"
 #include "kernel/log/klog.h"
 
 #if !defined(UNIT_TEST)
@@ -790,4 +791,62 @@ void update_agent_status_get(struct system_update_status *out) {
     return;
   }
   *out = g_update_status;
+}
+
+int update_agent_apply_boot_slot(void) {
+  struct boot_slot s0;
+  uint32_t next_slot;
+
+  if (update_agent_poll() < 0) return -1;
+  if (!g_update_status.stage_ready || !g_update_status.pending_activation) {
+    return -2;
+  }
+  if (!g_update_status.staged_version[0]) {
+    return -3;
+  }
+
+  /* Pick the slot that is NOT currently ACTIVE. */
+  if (boot_slot_get(0, &s0) == 0 && s0.state == BOOT_SLOT_ACTIVE) {
+    next_slot = 1u;
+  } else {
+    next_slot = 0u;
+  }
+
+  if (boot_slot_stage(next_slot, g_update_status.staged_version, 0u) != 0) {
+    klog(KLOG_ERROR, "[update] Failed to stage boot slot for activation.");
+    return -4;
+  }
+  if (boot_slot_activate(next_slot) != 0) {
+    klog(KLOG_ERROR, "[update] Failed to activate boot slot.");
+    return -5;
+  }
+
+  klog(KLOG_INFO, "[update] Boot slot armed for transactional update.");
+  return 0;
+}
+
+int update_agent_confirm_health(void) {
+  if (boot_slot_confirm_health() != 0) {
+    klog(KLOG_WARN, "[update] Boot slot health confirm failed.");
+    return -1;
+  }
+  if (g_update_status.pending_activation) {
+    update_agent_set_pending_activation(0);
+  }
+  klog(KLOG_INFO, "[update] Boot health confirmed; update committed.");
+  return 0;
+}
+
+int update_agent_check_rollback(void) {
+  if (!boot_slot_needs_rollback()) {
+    return 0;
+  }
+  klog(KLOG_WARN, "[update] Unhealthy boot detected; initiating rollback.");
+  if (boot_slot_rollback() != 0) {
+    klog(KLOG_ERROR, "[update] Boot slot rollback failed.");
+    return -1;
+  }
+  update_agent_clear_stage();
+  klog(KLOG_INFO, "[update] Rollback complete; staged update cleared.");
+  return 1;
 }

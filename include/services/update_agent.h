@@ -50,4 +50,9 @@ int update_agent_clear_stage(void);
 int update_agent_set_pending_activation(int enabled);
 void update_agent_status_get(struct system_update_status *out);
 
+/* Transactional update integration with the boot slot system. */
+int update_agent_apply_boot_slot(void);
+int update_agent_confirm_health(void);
+int update_agent_check_rollback(void);
+
 #endif /* CORE_UPDATE_AGENT_H */
