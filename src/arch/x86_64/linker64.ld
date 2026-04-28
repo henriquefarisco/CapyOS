@@ -8,7 +8,7 @@ SECTIONS
        em 16M+ (gera firmware exception na escrita) e tambem em 256M+.
        4M e seguro: acima do BIOS-compat (~1MB) e fora das janelas
        internas do firmware VMware. Verificado em sessao anterior. */
-    . = 256M;
+    . = 4M;
 
     .text : ALIGN(4K) {
         *(.text)

@@ -22,7 +22,7 @@ static inline void dbgcon_putc(UINT8 c) {
    16M as free even when its own structures sit there. 0x400000 (4 MB) was
    verified working in a prior session — far enough above firmware (~1MB
    compat hole) and well below the 256MB+ region VMware reserves internally. */
-#define KERNEL_FIXED_RESERVE_BASE 0x10000000ULL /* 256 MiB */
+#define KERNEL_FIXED_RESERVE_BASE 0x400000ULL /* 4 MiB — VMware-safe load base */
 #define KERNEL_FIXED_RESERVE_BYTES (48ULL * 1024ULL * 1024ULL)
 
 #define GPT_HEADER_LBA 1
