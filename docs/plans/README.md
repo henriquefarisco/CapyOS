@@ -17,7 +17,7 @@ Estados aceitos neste indice:
 | `system-roadmap.md` | Ativo | Roadmap tecnico por dominio | Alinhar status no plano de robustez |
 | `system-execution-plan.md` | Ativo | Sequencia operacional do ciclo atual | Validar contra gates atuais antes de executar |
 | `capyos-master-improvement-plan.md` | Ativo | Consolidacao tecnica recente da trilha x64 | Complementa o plano de robustez |
-| `platform-hardening-plan.md` | Ativo | Hardening de plataforma x64 | Fonte de detalhes para M1 e M6 |
+| `platform-hardening-plan.md` | Historico | Hardening de plataforma x64 (era Hyper-V/QEMU como alvo) | Marcos A/B/C/D concluidos na trilha Hyper-V; trilha oficial e VMware+UEFI+E1000; detalhes de M1/M6 agora rastreados no plano de robustez |
 | `browser-status-roadmap.md` | Ativo | Roadmap especifico do browser | Fonte de detalhes para M8 |
 | `source-organization-roadmap.md` | Ativo | Reducao de monolitos e organizacao de codigo | Fonte de detalhes para M3 |
 | `mvp-implementation-plan.md` | Historico | Plano operacional anterior do MVP | Conferir com o plano de robustez antes de retomar tarefas |
