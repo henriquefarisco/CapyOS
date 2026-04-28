@@ -311,11 +311,26 @@ void hv_prefetch_dns(struct html_viewer_app *app);
 void hv_fetch_page_images(struct html_viewer_app *app,
                           int allow_network);
 
-#ifdef HTML_VIEWER_INTERNAL_ORCHESTRATOR
-static void hv_apply_node_attrs(struct html_node *node, const char *attrs,
-                                size_t len);
-static int hv_doc_queue_pending_css(struct html_document *doc,
-                                    const char *url);
-#endif
+int hv_tag_is_void(const char *tag);
+size_t hv_skip_block(const char *html, size_t len, size_t pos, const char *tag);
+size_t hv_collect_text_until_tag(const char *html, size_t len, size_t pos,
+                                  const char *tag, char *out, size_t out_len);
+size_t hv_parse_inline_content(const char *html, size_t len, size_t pos,
+                                const char *close_tag, struct html_document *doc,
+                                const struct html_node *tmpl);
+void hv_apply_node_attrs(struct html_node *node, const char *attrs, size_t len);
+int hv_doc_queue_pending_css(struct html_document *doc, const char *url);
+extern int g_hv_line_height_px;
+int html_viewer_wrap_text(struct gui_surface *surface, const struct font *f,
+                          int32_t x, int32_t y, int32_t max_width,
+                          const char *text, uint32_t color, int underline);
+int hv_wrap_text_scaled(struct gui_surface *surface, const struct font *f,
+                        int32_t x, int32_t y, int32_t max_width,
+                        const char *text, uint32_t color, int scale);
+void hv_draw_border_rect(struct gui_surface *s, int32_t x, int32_t y,
+                          int32_t w, int32_t h, int bw, uint32_t color);
+uint32_t html_viewer_node_color(const struct gui_theme_palette *theme,
+                                const struct html_node *node);
+int html_viewer_node_margin_bottom(const struct html_node *node);
 
 #endif
