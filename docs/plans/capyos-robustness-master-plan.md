@@ -137,6 +137,10 @@ Observacao inicial:
   automatico apos shutdown sujo; `capyfs_journal_integration.c` ja continha o
   hook completo (init, format na primeira montagem, replay condicional via
   `journal_needs_replay`); kernel compila sem erros em `feature/robustness-continuation`.
+- Em 2026-04-28, M3.4 implementado: `audit_source_layout.py` ganhou
+  `check_internal_boundary` que detecta includes cruzados de headers em pastas
+  `internal/` entre modulos distintos; includes relativos (`../internal/`) excluidos
+  por construcao; tree atual sem violacoes; `make layout-audit` passa em modo estrito.
 - Em 2026-04-28, M6.2 expandiu auditoria persistente para eventos de update e
   recovery: `update_agent` emite `[update]` no klog para stage, arm, disarm,
   clear e import (sucesso e falha por repositorio); comandos de recovery emitem
@@ -206,7 +210,7 @@ responsabilidade.
 | M3.1 | Regra de tamanho maximo para novos arquivos | Implementado | `tools/scripts/audit_source_layout.py` aplica limite de 900 linhas para C/runtime/testes com excecao documentada para dados estaticos; `make layout-audit` passou em modo estrito | Revisar o limite por release quando o codigo crescer |
 | M3.2 | Auditoria automatica de monolitos | Implementado | `make layout-audit` executa `audit_source_layout.py --strict` e falha com monolitos, headers internos ambiguos ou mistura suspeita; `make layout-audit-report` gera relatorio informativo; `make release-check` inclui o gate e passou | Manter excecoes documentadas e revisar limites por release |
 | M3.3 | Separacao por responsabilidade em rede/browser/shell | Implementado | Todos os 9 modulos monolito migrados para TUs em `develop` (html_viewer, shell_main, input_runtime, http, kernel_volume_runtime, capyfs/runtime, system_control, system_info, uefi_loader); cada modulo tem `internal/<mod>_internal.h` como fronteira; `make layout-audit` passa em modo estrito | Manter padrao em novos modulos; M3.4 (auditoria de includes) continua pendente |
-| M3.4 | Politica de includes e fronteiras internas | Ainda nao iniciado | Ha headers publicos e pastas internas, mas sem regra automatizada ampla | Adicionar auditoria de dependencia por subsistema |
+| M3.4 | Politica de includes e fronteiras internas | Implementado | `tools/scripts/audit_source_layout.py` detecta includes cruzados de headers `internal/` entre modulos distintos; inclui relativos (`../internal/`) por design (nao podem cruzar fronteiras); tree atual sem violacoes; `make layout-audit` passa em modo estrito | Manter a regra ativa em cada PR; estender com verificacao de `include/` publicos que exponham simbolos internos se necessario |
 | M3.5 | Atualizacao deste plano por feature relevante | Parcial | Este documento cria a regra | Incluir verificacao manual no checklist de PR/release |
 
 ## M4 - Processos, scheduler e servicos reais
