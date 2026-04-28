@@ -1,4 +1,5 @@
 #include "auth/user.h"
+#include "auth/auth_policy.h"
 #include "security/csprng.h"
 
 #include <stdint.h>
@@ -169,6 +170,9 @@ int user_record_init(const char *username,
         return -1;
     }
     if (cstring_length(home) >= USER_HOME_MAX) {
+        return -1;
+    }
+    if (auth_policy_validate_password(password, NULL) != 0) {
         return -1;
     }
 
@@ -552,6 +556,9 @@ int userdb_authenticate(const char *username, const char *password, struct user_
 
 int userdb_set_password(const char *username, const char *new_password) {
     if (!username || !new_password || username[0] == '\0' || new_password[0] == '\0') {
+        return -1;
+    }
+    if (auth_policy_validate_password(new_password, NULL) != 0) {
         return -1;
     }
     size_t source_len = 0;

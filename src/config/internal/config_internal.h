@@ -7,6 +7,7 @@
 #include "lang/localization.h"
 #include "services/service_manager.h"
 #include "auth/session.h"
+#include "auth/auth_policy.h"
 #include "auth/user.h"
 #include "drivers/console/tty.h"
 #include "drivers/input/keyboard.h"

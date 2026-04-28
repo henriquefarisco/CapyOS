@@ -32,12 +32,26 @@ void auth_policy_init(void) {
   ap_memset(g_attempts, 0, sizeof(g_attempts));
   g_config.max_attempts = AUTH_DEFAULT_MAX_ATTEMPTS;
   g_config.lockout_duration_ticks = (uint64_t)AUTH_DEFAULT_LOCKOUT_SECONDS * 2000000000ULL;
+  g_config.min_password_length = AUTH_DEFAULT_MIN_PASSWORD_LENGTH;
   g_config.audit_enabled = 1;
   g_initialized = 1;
 }
 
 void auth_policy_set_config(const struct auth_policy_config *cfg) {
-  if (cfg) g_config = *cfg;
+  if (!cfg) {
+    return;
+  }
+  g_config = *cfg;
+  if (g_config.max_attempts == 0) {
+    g_config.max_attempts = AUTH_DEFAULT_MAX_ATTEMPTS;
+  }
+  if (g_config.lockout_duration_ticks == 0) {
+    g_config.lockout_duration_ticks =
+        (uint64_t)AUTH_DEFAULT_LOCKOUT_SECONDS * 2000000000ULL;
+  }
+  if (g_config.min_password_length == 0) {
+    g_config.min_password_length = AUTH_DEFAULT_MIN_PASSWORD_LENGTH;
+  }
 }
 
 static struct auth_attempt *find_or_alloc(const char *username) {
@@ -122,6 +136,31 @@ void auth_policy_unlock(const char *username) {
   if (a) { a->locked = 0; a->failed_count = 0; }
 }
 
+int auth_policy_validate_password(const char *password, const char **reason) {
+  uint32_t min_len = g_initialized ? g_config.min_password_length
+                                   : AUTH_DEFAULT_MIN_PASSWORD_LENGTH;
+  uint32_t len = 0;
+  if (reason) {
+    *reason = NULL;
+  }
+  if (!password) {
+    if (reason) {
+      *reason = "password is required";
+    }
+    return -1;
+  }
+  while (password[len]) {
+    ++len;
+  }
+  if (len < min_len) {
+    if (reason) {
+      *reason = "password is shorter than the configured minimum length";
+    }
+    return -1;
+  }
+  return 0;
+}
+
 static void ap_print_u32(void (*print)(const char *), uint32_t v) {
   char buf[12]; int p = 0;
   if (v == 0) { buf[0] = '0'; buf[1] = 0; print(buf); return; }
@@ -135,6 +174,8 @@ void auth_policy_status(void (*print)(const char *)) {
   if (!print) return;
   print("Auth policy: max_attempts=");
   ap_print_u32(print, g_config.max_attempts);
+  print(" min_password_length=");
+  ap_print_u32(print, g_config.min_password_length);
   print(" audit="); print(g_config.audit_enabled ? "on" : "off");
   print("\nTracked accounts:\n");
   for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
