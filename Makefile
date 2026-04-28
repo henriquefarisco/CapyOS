@@ -104,7 +104,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/kernel_platform_runtime.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_shell_dispatch.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_shell_runtime.o \
-	$(BUILD)/x86_64/arch/x86_64/kernel_volume_runtime.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_volume_runtime/io_key_helpers.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_volume_runtime/key_storage_probe.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_volume_runtime/mount_initialize.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_volume_runtime/filesystem_helpers.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_volume_runtime/public_mount_api.o \
 	$(BUILD)/x86_64/arch/x86_64/platform_timer.o \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime_gpt.o \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime_hyperv.o \
