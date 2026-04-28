@@ -158,6 +158,18 @@ Observacao inicial:
   bug pre-existente de build de testes (`mkstemp` oculto pelo shim stdlib.h) foi
   corrigido em `tests/test_grub_cfg_builder.c`; `make layout-audit` e suite
   completa de testes passaram em `feature/robustness-continuation`.
+- Em 2026-04-28, M7.5 foi implementado com integracao transacional entre
+  `update_agent` e boot slots: `update_agent_apply_boot_slot()` ativa o slot
+  inativo com versao staged, `update_agent_confirm_health()` desarma rollback
+  apos health check e `update_agent_check_rollback()` reverte slot pendente e
+  limpa stage; `tests/test_update_transact.c` cobre pre-condicao, apply,
+  confirmacao de saude, rollback e no-op saudavel; `make test`, `make
+  layout-audit`, `make all64` e commit `b0855a4` validaram a entrega.
+- Em 2026-04-28, M8.3 iniciou budget por etapa no browser: estado explicito de
+  budget externo por navegacao, modulo `navigation_budget.c`, degradacao em
+  `safe_mode` quando CSS/imagens excedem `HV_EXTERNAL_FETCH_LIMIT` e log
+  persistente `[browser]` via `klog`; `tests/html_viewer/resource_cases.inc`
+  cobre esgotamento de budget e `make test` passou.
 - Em 2026-04-24, M6.1 passou a aplicar politica minima de senha e lockout no
   login real: `auth_policy` valida tamanho minimo, bloqueia apos falhas
   consecutivas configuradas, registra sucesso/falha e e coberto por
@@ -271,7 +283,7 @@ energia, corrupcao e update interrompido.
 | M7.2 | Replay automatico no mount | Implementado | `mount_capyfs` chama `capyfs_journal_mount_hook(dev, mnt->super.data_start)` apos montar com sucesso; o hook inicializa o journal, formata na primeira montagem pos-upgrade, e replaya entradas pendentes se `journal_needs_replay` retornar verdadeiro; logs `[capyfs-journal]` cobrem todos os caminhos; kernel compila sem erros com `TOOLCHAIN64=host` | Validar semantica de replay em smoke com shutdown sujo sintetico |
 | M7.3 | Fsck host com corrupcao sintetica | Implementado | `tests/test_capyfs_check.c` cobre 6 cenarios: volume valido, superbloco corrompido, referencia de bloco de root fora do bitmap, data_start com overflow de layout, bit reservado zerado no bitmap e dirent sem terminador nulo; todos passam em `make test` | Adicionar cenarios de reparo ativo quando capyfs_check ganhar modo de reparo |
 | M7.4 | Recovery distinguindo replay, reparo e fallback | Implementado | `capyfs_journal_integration` rastreia `g_journal_recovery_cause` (NONE, WAL_REPLAY, WAL_REPLAY_FAILED, FORMAT); resetado no inicio de cada `capyfs_journal_mount_hook`; `x64_kernel_recovery_status` expoe `journal_recovery_cause`; `recovery-status` imprime `journal-cause=wal-replay/none/first-mount-format`; `tests/test_capyfs_journal_cause.c` valida os 4 codigos de causa; `make test` e `make all64` passaram | Adicionar causa de fsck-repair quando capyfs_check ganhar modo de reparo ativo |
-| M7.5 | Update transacional com rollback seguro | Parcial | `update-agent` e boot slots existem; `update-import-manifest` importou e persistiu catalogo local no smoke x64 completo de 2026-04-24 | Adicionar payload verificado, apply atomico e health check de rollback |
+| M7.5 | Update transacional com rollback seguro | Implementado | `update_agent_apply_boot_slot()`, `update_agent_confirm_health()` e `update_agent_check_rollback()` integram stage/update com `boot_slot_stage`, `boot_slot_activate`, `boot_slot_confirm_health` e `boot_slot_rollback`; `tests/test_update_transact.c` cobre apply sem stage, apply com slot inativo, confirmacao de saude, rollback pendente e no-op saudavel; `make test`, `make layout-audit`, `make all64` e commit `b0855a4` passaram | Adicionar verificacao criptografica de payload e smoke de interrupcao real em trilha futura de release |
 
 ## M8 - Internet, navegacao e browser
 
@@ -282,7 +294,7 @@ rede instavel derrubem o sistema.
 |---|---|---|---|---|
 | M8.1 | Browser com estado formal e falha controlada | Parcial | `browser-status-roadmap.md` declara Fase 1 fechada, mas sem isolamento | Manter Fase 1 e iniciar isolamento quando processos estiverem prontos |
 | M8.2 | Isolamento por processo e watchdog | Ainda nao iniciado | Roadmap do browser lista Fase 2 aberta | Depende de M4: processos, scheduler e kill/restart seguro |
-| M8.3 | Render/fetch incremental | Parcial | Ha limites, cancelamento e mitigacoes de carregamento | Implementar pipeline incremental e budgets por etapa |
+| M8.3 | Render/fetch incremental | Parcial | `navigation_budget.c` centraliza budget externo por navegacao; CSS/imagens de rede consomem `external_fetch_attempts`, entram em `safe_mode` ao exceder `HV_EXTERNAL_FETCH_LIMIT`, preservam motivo em `last_error_reason` e registram `[browser] external resource budget exhausted` no `klog`; `tests/html_viewer/resource_cases.inc` cobre o esgotamento e `make test` passou | Estender budgets para parse/layout/paint e fatiar fetch/render em etapas cooperativas |
 | M8.4 | DNS cache com TTL e HTTP cache | Implementado | `src/net/services/dns_cache.c` aplica TTL em segundos; `tests/test_dns_cache.c` valida expiracao; `src/apps/html_viewer/common.c` limita cache HTTP a `HV_HTTP_CACHE_TOTAL_MAX`, coleta estatisticas e rejeita `no-store`; `tests/html_viewer/resource_cases.inc` valida budget e eviccao; `make release-check` passou em 2026-04-23 | Evoluir para cache persistente ou ETag/If-None-Match somente apos metricas de uso real |
 | M8.5 | Telemetria de browser e rede | Implementado | `about:network` expoe DNS cache e HTTP cache; `about:memory` expoe heap e memoria do cache HTTP; `tests/html_viewer/resource_cases.inc` valida as paginas; `make release-check` passou em 2026-04-23 | Expandir com latencia por request e counters por etapa quando o pipeline incremental estiver pronto |
 | M8.6 | JavaScript robusto e sandboxed | Ainda nao iniciado | Roadmap declara JS robusto como fase futura | Iniciar somente apos isolamento e budgets confiaveis |

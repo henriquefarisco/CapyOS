@@ -143,6 +143,10 @@ void html_viewer_poll_background(struct html_viewer_app *app) {
       app->external_css_loaded = g_hv_browser_job.staged_app->external_css_loaded;
       app->external_images_loaded =
           g_hv_browser_job.staged_app->external_images_loaded;
+      app->external_fetch_attempts =
+          g_hv_browser_job.staged_app->external_fetch_attempts;
+      app->resource_budget_exhausted =
+          g_hv_browser_job.staged_app->resource_budget_exhausted;
       app->navigation_id = g_hv_browser_job.staged_app->navigation_id;
       app->active_navigation_id = g_hv_browser_job.staged_app->active_navigation_id;
       app->nav_state = g_hv_browser_job.staged_app->nav_state;

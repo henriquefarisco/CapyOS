@@ -15,6 +15,18 @@ int http_request(const struct http_request *req, struct http_response *resp) {
       "<html><head><title>Asset Page</title>"
       "<link rel=\"stylesheet\" href=\"https://assets.test/site.css\"></head>"
       "<body><h1>Asset Title</h1><img alt=\"Pixel\" src=\"https://assets.test/pixel.png\"></body></html>";
+  static const char budget_body[] =
+      "<html><head><title>Budget Page</title>"
+      "<link rel=\"stylesheet\" href=\"https://assets.test/budget-style-1.css\">"
+      "<link rel=\"stylesheet\" href=\"https://assets.test/budget-style-2.css\">"
+      "<link rel=\"stylesheet\" href=\"https://assets.test/budget-style-3.css\">"
+      "<link rel=\"stylesheet\" href=\"https://assets.test/budget-style-4.css\"></head>"
+      "<body><h1>Budget Title</h1>"
+      "<img alt=\"Budget Pixel 1\" src=\"https://assets.test/budget-pixel-1.png\">"
+      "<img alt=\"Budget Pixel 2\" src=\"https://assets.test/budget-pixel-2.png\">"
+      "<img alt=\"Budget Pixel 3\" src=\"https://assets.test/budget-pixel-3.png\">"
+      "<img alt=\"Budget Pixel 4\" src=\"https://assets.test/budget-pixel-4.png\">"
+      "</body></html>";
   static const char imported_css_body[] =
       "<html><head><title>Imported CSS Page</title>"
       "<link rel=\"preload\" as=\"style\" href=\"https://assets.test/import-root.css\"></head>"
@@ -112,7 +124,9 @@ int http_request(const struct http_request *req, struct http_response *resp) {
     return 0;
   }
 
-  if (strcmp(req->host, "assets.test") == 0 && strcmp(req->path, "/site.css") == 0) {
+  if (strcmp(req->host, "assets.test") == 0 &&
+      (strcmp(req->path, "/site.css") == 0 ||
+       strncmp(req->path, "/budget-style-", 14) == 0)) {
     len = strlen(css_body);
     resp->status_code = 200;
     resp->body = (uint8_t *)malloc(len + 1);
@@ -169,6 +183,8 @@ int http_request(const struct http_request *req, struct http_response *resp) {
   }
 
   if ((strcmp(req->host, "assets.test") == 0 && strcmp(req->path, "/pixel.png") == 0) ||
+      (strcmp(req->host, "assets.test") == 0 &&
+       strncmp(req->path, "/budget-pixel-", 14) == 0) ||
       (strcmp(req->host, "cdnbase.test") == 0 && strcmp(req->path, "/assets/pixel.png") == 0)) {
     len = sizeof(png_body);
     resp->status_code = 200;
@@ -266,6 +282,8 @@ int http_request(const struct http_request *req, struct http_response *resp) {
     text_body = landing_body;
   } else if (strcmp(req->host, "example.com") == 0 && strcmp(req->path, "/assets") == 0) {
     text_body = asset_body;
+  } else if (strcmp(req->host, "example.com") == 0 && strcmp(req->path, "/budget") == 0) {
+    text_body = budget_body;
   } else if (strcmp(req->host, "example.com") == 0 && strcmp(req->path, "/imported-css") == 0) {
     text_body = imported_css_body;
   } else if (strcmp(req->host, "example.com") == 0 && strcmp(req->path, "/style-import") == 0) {

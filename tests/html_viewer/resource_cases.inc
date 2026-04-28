@@ -88,6 +88,42 @@ static int test_html_viewer_http_cache_enforces_memory_budget(void) {
   return fails;
 }
 
+static int test_html_viewer_external_resource_budget_logs_failure(void) {
+  struct html_viewer_app *app = NULL;
+  int fails = 0;
+
+  memset(&g_test_window, 0, sizeof(g_test_window));
+  klog_reset();
+  html_viewer_open();
+  app = (struct html_viewer_app *)g_test_window.user_data;
+  fails += expect_true(app != NULL, "browser should open before resource-budget test");
+  if (!app) return fails;
+
+  html_viewer_navigate(app, "https://example.com/budget");
+
+  fails += expect_true(app->nav_state == HTML_VIEWER_NAV_READY,
+                       "resource-budget page should degrade without failing navigation");
+  fails += expect_true(app->safe_mode == 1,
+                       "resource-budget page should enable safe mode");
+  fails += expect_true(app->resource_budget_exhausted == 1,
+                       "resource-budget page should record exhausted budget");
+  fails += expect_true(app->external_fetch_attempts == HV_EXTERNAL_FETCH_LIMIT,
+                       "resource-budget page should stop at the fetch budget");
+  fails += expect_true(app->external_css_loaded == HV_EXTERNAL_CSS_LIMIT,
+                       "resource-budget page should spend CSS stage budget first");
+  fails += expect_true(app->external_images_loaded == 2,
+                       "resource-budget page should stop remaining image fetches");
+  fails += expect_true(strstr(app->last_error_reason,
+                              "External resource budget exhausted") != NULL,
+                       "resource-budget page should expose a controlled reason");
+  fails += expect_true(strstr(klog_serialize(),
+                              "[browser] external resource budget exhausted") != NULL,
+                       "resource-budget exhaustion should be persisted through klog");
+
+  if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
+  return fails;
+}
+
 static int test_html_viewer_about_metrics_pages(void) {
   struct html_viewer_app *app = NULL;
   int fails = 0;

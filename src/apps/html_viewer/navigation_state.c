@@ -279,6 +279,7 @@ void html_viewer_begin_navigation(struct html_viewer_app *app, const char *url) 
   app->safe_mode = 0;
   app->external_css_loaded = 0;
   app->external_images_loaded = 0;
+  hv_resource_budget_reset(app);
   app->last_error_reason[0] = '\0';
   kstrcpy(app->last_stage, sizeof(app->last_stage), "loading");
   if (url && url[0]) {

@@ -111,6 +111,9 @@ Entrega atual:
 - CSS externo passa a enfileirar `@import` relativo ao proprio arquivo CSS
 - `<style>` inline tambem passa a enfileirar `@import`
 - fila de CSS pendente evita duplicar a mesma folha
+- budget externo por navegacao centralizado em `navigation_budget.c`
+- esgotamento de budget de CSS/imagens ativa `safe_mode`, preserva motivo em
+  `last_error_reason` e registra `[browser]` no `klog`
 
 ## Fase 1 - Estabilizacao do browser atual
 
@@ -228,6 +231,8 @@ Importante:
 - imagem nao suportada preserva alt text e estado de erro
 - `@import` em CSS externo respeita limite de folhas carregadas
 - `@import` em bloco `<style>` respeita limite de folhas carregadas
+- CSS/imagens externas respeitam budget total por navegacao e registram falha
+  persistente quando excedido
 - redirects 301/302/303/307/308 sao validados
 - cadeia de redirect acima do limite falha de forma controlada
 - cancelamento por `Esc` sai de `loading` para `cancelled`
@@ -309,11 +314,24 @@ Importante:
 - adicionada validacao de cancelamento por `Esc`
 - Fase 1 marcada como fechada no documento oficial
 
+### 2026-04-28 - Primeiro budget de pipeline externo
+
+- adicionado modulo `navigation_budget.c` para centralizar budget externo por
+  navegacao
+- fetches de CSS e imagens de rede agora consomem `external_fetch_attempts`
+  antes de emitir requisicao HTTP
+- esgotamento de budget ativa `safe_mode`, marca
+  `resource_budget_exhausted`, preserva motivo controlado e registra
+  `[browser] external resource budget exhausted` no `klog`
+- adicionado teste de regressao para pagina com excesso de CSS/imagens,
+  validando degradacao sem falhar a navegacao
+
 ## Proximos passos
 
 1. Validar a Fase 1 em VM com paginas reais leves e medias.
 2. Investigar aplicacao de regras CSS importadas em seletores de texto gerados pelo parser.
 3. Adicionar decodificador real para WebP/AVIF ou conversao previa no pipeline de recursos.
 4. Melhorar fallback visual para paginas JS-heavy que tenham pouco HTML estatico.
-5. Identificar gargalos restantes de fetch/render para paginas pesadas.
-6. Planejar a transicao para Fase 2 com processo isolado e watchdog.
+5. Estender budget cooperativo para parse/layout/paint.
+6. Identificar gargalos restantes de fetch/render para paginas pesadas.
+7. Planejar a transicao para Fase 2 com processo isolado e watchdog.

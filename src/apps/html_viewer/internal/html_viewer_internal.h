@@ -237,6 +237,10 @@ void html_viewer_set_transport_error(struct html_viewer_app *app);
 void html_viewer_set_status_error(struct html_viewer_app *app, int status_code);
 void html_viewer_set_error(struct html_viewer_app *app, const char *title,
                            const char *message);
+void hv_resource_budget_reset(struct html_viewer_app *app);
+int hv_resource_budget_take(struct html_viewer_app *app, const char *stage);
+void hv_resource_budget_mark_exhausted(struct html_viewer_app *app,
+                                       const char *stage);
 
 void html_viewer_load_text_document(struct html_viewer_app *app,
                                     const char *title, const char *text,

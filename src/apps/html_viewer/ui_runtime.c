@@ -23,6 +23,7 @@ void html_viewer_load_quick_start(struct html_viewer_app *app) {
   app->redirect_count = 0;
   app->external_css_loaded = 0;
   app->external_images_loaded = 0;
+  hv_resource_budget_reset(app);
   app->last_error_reason[0] = '\0';
   kstrcpy(app->last_stage, sizeof(app->last_stage), "ready");
   kstrcpy(app->url, sizeof(app->url), "about:newtab");

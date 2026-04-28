@@ -302,6 +302,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/apps/task_manager.o \
 	$(BUILD)/x86_64/apps/html_viewer/common.o \
 	$(BUILD)/x86_64/apps/html_viewer/navigation_state.o \
+	$(BUILD)/x86_64/apps/html_viewer/navigation_budget.o \
 	$(BUILD)/x86_64/apps/html_viewer/response_classification.o \
 	$(BUILD)/x86_64/apps/html_viewer/text_url_helpers.o \
 	$(BUILD)/x86_64/apps/html_viewer/async_runtime.o \
@@ -514,7 +515,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer/html_tree_helpers.c src/apps/html_viewer/ui_shell.c src/apps/html_viewer/render_primitives.c src/apps/html_viewer/render_tree.c src/apps/html_viewer/html_parser.c src/apps/html_viewer/app_entry_async.c src/apps/html_viewer/resource_loading.c src/apps/html_viewer/public_api.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
+	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/navigation_budget.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer/html_tree_helpers.c src/apps/html_viewer/ui_shell.c src/apps/html_viewer/render_primitives.c src/apps/html_viewer/render_tree.c src/apps/html_viewer/html_parser.c src/apps/html_viewer/app_entry_async.c src/apps/html_viewer/resource_loading.c src/apps/html_viewer/public_api.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
                src/util/kstring.c src/fs/journal/journal.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \

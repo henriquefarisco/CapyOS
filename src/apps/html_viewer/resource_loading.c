@@ -335,6 +335,7 @@ void hv_fetch_external_css(struct html_viewer_app *app) {
     } else {
       kmemzero(&req, sizeof(req));
       kmemzero(&resp, sizeof(resp));
+      if (!hv_resource_budget_take(app, "css")) break;
       if (html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp) == 0) {
         if (resp.body && resp.body_len > 0 && resp.body_len <= HV_TEXT_BODY_LIMIT) {
           hv_http_cache_store(abs_url, &resp);
@@ -453,6 +454,7 @@ void hv_fetch_page_images(struct html_viewer_app *app, int allow_network) {
       body = cached->body;
       body_len = cached->body_len;
     } else {
+      if (!hv_resource_budget_take(app, "image")) break;
       kmemzero(&req, sizeof(req));
       kmemzero(&resp, sizeof(resp));
       if (html_viewer_issue_request(app, abs_url, HTTP_GET, NULL, 0, &req, &resp) != 0 ||
