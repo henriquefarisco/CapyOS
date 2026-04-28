@@ -1,4 +1,5 @@
 #include "internal/system_control_internal.h"
+#include "kernel/log/klog.h"
 
 int cmd_recovery_storage_repair(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
@@ -80,6 +81,7 @@ int cmd_recovery_storage_repair(struct shell_context *ctx, int argc, char **argv
           "falha ao reconstruir a arvore minima de diretorios",
           "failed to rebuild the minimum directory tree",
           "fallo al reconstruir el arbol minimo de directorios"));
+      klog(KLOG_ERROR, "[recovery] Failed to rebuild minimum directory tree.");
       return -1;
     }
     if (recovery_storage_rewrite_config(ctx) != 0) {
@@ -104,11 +106,17 @@ int cmd_recovery_storage_repair(struct shell_context *ctx, int argc, char **argv
           "falha ao recriar/redefinir a conta admin",
           "failed to recreate/reset the admin account",
           "fallo al recrear/restablecer la cuenta admin"));
+      klog(KLOG_ERROR, "[recovery] Failed to reset admin account during storage repair.");
       return -1;
+    }
+
+    if (admin_password) {
+      klog(KLOG_INFO, "[recovery] Admin account reset during storage repair.");
     }
 
     admin_exists = userdb_find("admin", NULL) == 0;
     sync_and_flush();
+    klog(KLOG_INFO, "[recovery] Persistent base revalidated.");
 
     shell_print_ok(localization_select(
         language,

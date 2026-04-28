@@ -125,6 +125,26 @@ Observacao inicial:
   update/smoke, incluindo `make test`, `make layout-audit`, `make version-audit`,
   `make boot-perf-baseline-selftest`, `make all64 TOOLCHAIN64=elf`,
   `make iso-uefi TOOLCHAIN64=elf` e verificacao SHA-256 dos artefatos.
+- Em 2026-04-28, M7.1 fechado: `tests/test_journal.c` valida commit/replay/abort/
+  checkpoint do WAL; bug de durabilidade corrigido em `journal_commit` — superbloco
+  nao era persistido apos avanco do head, fazendo re-init ignorar entradas
+  comprometidas; suite completa passa.
+- Em 2026-04-28, M7.3 fechado: `tests/test_capyfs_check.c` ganhou tres cenarios
+  de corrupcao sintetica adicionais (overflow de layout, bit reservado zerado no
+  bitmap de blocos e dirent sem terminador nulo); suite completa passa.
+- Em 2026-04-28, M7.2 implementado: `mount_capyfs` agora chama
+  `capyfs_journal_mount_hook` ao fim do mount com sucesso, ativando replay
+  automatico apos shutdown sujo; `capyfs_journal_integration.c` ja continha o
+  hook completo (init, format na primeira montagem, replay condicional via
+  `journal_needs_replay`); kernel compila sem erros em `feature/robustness-continuation`.
+- Em 2026-04-28, M6.2 expandiu auditoria persistente para eventos de update e
+  recovery: `update_agent` emite `[update]` no klog para stage, arm, disarm,
+  clear e import (sucesso e falha por repositorio); comandos de recovery emitem
+  `[recovery]` para reparo de base, reset de admin e login de recuperacao;
+  `tests/test_audit_events.c` cobre seis cenarios de audit via klog_flush;
+  bug pre-existente de build de testes (`mkstemp` oculto pelo shim stdlib.h) foi
+  corrigido em `tests/test_grub_cfg_builder.c`; `make layout-audit` e suite
+  completa de testes passaram em `feature/robustness-continuation`.
 - Em 2026-04-24, M6.1 passou a aplicar politica minima de senha e lockout no
   login real: `auth_policy` valida tamanho minimo, bloqueia apos falhas
   consecutivas configuradas, registra sucesso/falha e e coberto por
@@ -185,7 +205,7 @@ responsabilidade.
 |---|---|---|---|---|
 | M3.1 | Regra de tamanho maximo para novos arquivos | Implementado | `tools/scripts/audit_source_layout.py` aplica limite de 900 linhas para C/runtime/testes com excecao documentada para dados estaticos; `make layout-audit` passou em modo estrito | Revisar o limite por release quando o codigo crescer |
 | M3.2 | Auditoria automatica de monolitos | Implementado | `make layout-audit` executa `audit_source_layout.py --strict` e falha com monolitos, headers internos ambiguos ou mistura suspeita; `make layout-audit-report` gera relatorio informativo; `make release-check` inclui o gate e passou | Manter excecoes documentadas e revisar limites por release |
-| M3.3 | Separacao por responsabilidade em rede/browser/shell | Parcial | `network_bootstrap`, `html_viewer` e shell ja foram modularizados | Aplicar o mesmo padrao a novos servicos, storage e update |
+| M3.3 | Separacao por responsabilidade em rede/browser/shell | Implementado | Todos os 9 modulos monolito migrados para TUs em `develop` (html_viewer, shell_main, input_runtime, http, kernel_volume_runtime, capyfs/runtime, system_control, system_info, uefi_loader); cada modulo tem `internal/<mod>_internal.h` como fronteira; `make layout-audit` passa em modo estrito | Manter padrao em novos modulos; M3.4 (auditoria de includes) continua pendente |
 | M3.4 | Politica de includes e fronteiras internas | Ainda nao iniciado | Ha headers publicos e pastas internas, mas sem regra automatizada ampla | Adicionar auditoria de dependencia por subsistema |
 | M3.5 | Atualizacao deste plano por feature relevante | Parcial | Este documento cria a regra | Incluir verificacao manual no checklist de PR/release |
 
@@ -222,7 +242,7 @@ de dados antes de ampliar apps e internet.
 | ID | Item | Status | Evidencia | Proximo passo |
 |---|---|---|---|---|
 | M6.1 | Politica de senha e lockout | Implementado | `auth_policy_validate_password` aplica tamanho minimo; `system_login` chama `auth_policy_check_allowed`, `auth_policy_record_success` e `auth_policy_record_failure`; `user_record_init` e `userdb_set_password` validam a politica; `tests/test_auth_policy.c` cobre senha minima, lockout, unlock e `auth-status`; `make test` passou | Evoluir depois para persistir contadores de lockout entre boots e politicas por perfil |
-| M6.2 | Auditoria persistente de eventos sensiveis | Parcial | `klog` persistente existe | Registrar login, falhas, rede, update, recovery e privilegios |
+| M6.2 | Auditoria persistente de eventos sensiveis | Parcial | `klog` persistente existe; `[auth]` cobre login/falha/lockout; `[net]` cobre DHCP; `[update]` cobre stage/arm/disarm/clear/import-sucesso/import-mismatch; `[recovery]` cobre reparo, reset-admin e login de recuperacao; `tests/test_audit_events.c` valida cenarios de update | Expandir privilegios (M6.3); validar persistencia em smoke real com `/var/log/capyos_klog.txt` |
 | M6.3 | Privilegios centralizados | Parcial | VFS tem metadados/permissoes iniciais; `update-import-manifest` usa escritor de runtime privilegiado controlado para atualizar `/system/update/latest.ini` sem enfraquecer permissoes de usuario | Centralizar checagens para comandos e paths criticos e substituir elevacoes locais por API unica |
 | M6.4 | Build oficial endurecido | Parcial | `make release-check` passou em 2026-04-24 com `TOOLCHAIN64=elf`, `-fstack-protector-strong`, layout estrito, version audit, baseline self-test, ISO UEFI e verificacao SHA-256; build host permanece apenas para desenvolvimento | Completar assinatura dos checksums e smoke VMware+E1000 antes de promover para `Implementado` |
 | M6.5 | Integridade autenticada de metadata CAPYFS | Ainda nao iniciado | AES-XTS protege confidencialidade, mas integridade segue pendente | Projetar metadata autenticada e migracao de formato |
@@ -234,9 +254,9 @@ energia, corrupcao e update interrompido.
 
 | ID | Item | Status | Evidencia | Proximo passo |
 |---|---|---|---|---|
-| M7.1 | Journal/WAL de metadata CAPYFS | Parcial | `src/fs/journal` e integracao CAPYFS existem no build | Validar semantica de replay e atomicidade por operacao |
-| M7.2 | Replay automatico no mount | Ainda nao iniciado | Docs citam necessidade de replay/recovery | Implementar replay em montagem apos shutdown sujo |
-| M7.3 | Fsck host com corrupcao sintetica | Parcial | `capyfs_check` e testes existem | Criar amostras de corrupcao e reparo real |
+| M7.1 | Journal/WAL de metadata CAPYFS | Implementado | `tests/test_journal.c` valida 5 cenarios: formato e estado limpo, init apos format, commit-replay-verificacao de payload, abort-sem-replay e checkpoint-limpa-replay; bug de durabilidade corrigido em `journal_commit` (superbloco nao era persistido apos avanco do head, causando perda do journal em re-init); todos os cenarios passam em `make test` | Validar semantica de atomicidade em smoke real com shutdown sintetico |
+| M7.2 | Replay automatico no mount | Implementado | `mount_capyfs` chama `capyfs_journal_mount_hook(dev, mnt->super.data_start)` apos montar com sucesso; o hook inicializa o journal, formata na primeira montagem pos-upgrade, e replaya entradas pendentes se `journal_needs_replay` retornar verdadeiro; logs `[capyfs-journal]` cobrem todos os caminhos; kernel compila sem erros com `TOOLCHAIN64=host` | Validar semantica de replay em smoke com shutdown sujo sintetico |
+| M7.3 | Fsck host com corrupcao sintetica | Implementado | `tests/test_capyfs_check.c` cobre 6 cenarios: volume valido, superbloco corrompido, referencia de bloco de root fora do bitmap, data_start com overflow de layout, bit reservado zerado no bitmap e dirent sem terminador nulo; todos passam em `make test` | Adicionar cenarios de reparo ativo quando capyfs_check ganhar modo de reparo |
 | M7.4 | Recovery distinguindo replay, reparo e fallback | Parcial | Recovery e comandos de manutencao existem | Separar estados e mensagens de recovery por causa raiz |
 | M7.5 | Update transacional com rollback seguro | Parcial | `update-agent` e boot slots existem; `update-import-manifest` importou e persistiu catalogo local no smoke x64 completo de 2026-04-24 | Adicionar payload verificado, apply atomico e health check de rollback |
 

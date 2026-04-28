@@ -1,4 +1,5 @@
 #include "services/update_agent.h"
+#include "kernel/log/klog.h"
 
 #if !defined(UNIT_TEST)
 #include "fs/vfs.h"
@@ -667,12 +668,14 @@ int update_agent_import_manifest_path(const char *path) {
     g_update_status.last_result = -19;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "imported manifest does not match selected update repository");
+    klog(KLOG_WARN, "[update] Manifest import rejected: repository mismatch.");
     return -19;
   }
   if (writer(g_update_status.manifest_path, buffer) != 0) {
     g_update_status.last_result = -21;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "failed to persist imported manifest");
+    klog(KLOG_WARN, "[update] Failed to persist imported manifest.");
     return -21;
   }
 
@@ -683,6 +686,7 @@ int update_agent_import_manifest_path(const char *path) {
   local_copy(g_update_status.summary, sizeof(g_update_status.summary),
              "manifest imported into local catalog");
   g_update_status.last_result = 0;
+  klog(KLOG_INFO, "[update] Manifest imported into local catalog.");
   return 0;
 }
 
@@ -720,8 +724,10 @@ int update_agent_stage_latest(void) {
     g_update_status.last_result = -9;
     local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                "failed to persist staged update");
+    klog(KLOG_WARN, "[update] Failed to persist staged update.");
     return -9;
   }
+  klog(KLOG_INFO, "[update] Update staged.");
   return update_agent_poll();
 }
 
@@ -735,6 +741,7 @@ int update_agent_clear_stage(void) {
                       : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
     (void)remover(UPDATE_AGENT_STATE_PATH);
   }
+  klog(KLOG_INFO, "[update] Staged update cleared.");
   return update_agent_poll();
 }
 
@@ -755,15 +762,19 @@ int update_agent_set_pending_activation(int enabled) {
       g_update_status.last_result = -11;
       local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                  "failed to arm staged update");
+      klog(KLOG_WARN, "[update] Failed to arm staged update.");
       return -11;
     }
+    klog(KLOG_INFO, "[update] Update armed for activation.");
   } else if (g_update_status.stage_ready) {
     if (write_state_file(0, g_update_status.staged_manifest_path) != 0) {
       g_update_status.last_result = -12;
       local_copy(g_update_status.summary, sizeof(g_update_status.summary),
                  "failed to disarm staged update");
+      klog(KLOG_WARN, "[update] Failed to disarm staged update.");
       return -12;
     }
+    klog(KLOG_INFO, "[update] Update activation disarmed.");
   } else {
     update_agent_remove_file_fn remover = active_remover();
     if (remover) {

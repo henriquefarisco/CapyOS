@@ -1,4 +1,5 @@
 #include "internal/capyfs_runtime_internal.h"
+#include "fs/capyfs_journal_integration.h"
 
 int capyfs_format(struct block_device *dev,
                   uint32_t inode_count,
@@ -207,5 +208,8 @@ int mount_capyfs(struct block_device *dev, struct super_block *sb) {
     cstring_copy(root_dentry->name, VFS_NAME_MAX, "/");
 
     sb->root = root_dentry;
+
+    capyfs_journal_mount_hook(dev, mnt->super.data_start);
+
     return 0;
 }

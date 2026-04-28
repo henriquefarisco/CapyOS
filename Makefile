@@ -488,7 +488,7 @@ all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_html_viewer.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_html_viewer.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/fs/capyfs/capyfs_check.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
@@ -515,7 +515,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
 	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer/html_tree_helpers.c src/apps/html_viewer/ui_shell.c src/apps/html_viewer/render_primitives.c src/apps/html_viewer/render_tree.c src/apps/html_viewer/html_parser.c src/apps/html_viewer/app_entry_async.c src/apps/html_viewer/resource_loading.c src/apps/html_viewer/public_api.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
-               src/util/kstring.c \
+               src/util/kstring.c src/fs/journal/journal.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
                tests/test_dns_cache.c src/net/services/dns_cache.c \

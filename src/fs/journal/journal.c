@@ -258,6 +258,21 @@ int journal_commit(struct journal_transaction *txn) {
   if (txn->data_buffer) { kfree(txn->data_buffer); txn->data_buffer = NULL; }
   txn->committed = 1;
   j->dirty = 1;
+
+  /* Persist updated head to superblock so replay survives a crash.
+   * Without this, a re-init would see head == tail and skip replay. */
+  {
+    uint8_t *sb_buf = (uint8_t *)kmalloc(j->dev->block_size);
+    if (sb_buf) {
+      uint32_t i;
+      uint8_t *src = (uint8_t *)&j->sb;
+      for (i = 0; i < j->dev->block_size; i++) sb_buf[i] = 0;
+      for (i = 0; i < sizeof(j->sb) && i < j->dev->block_size; i++)
+        sb_buf[i] = src[i];
+      journal_write_block(j, 0, sb_buf);
+      kfree(sb_buf);
+    }
+  }
   return 0;
 }
 

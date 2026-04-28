@@ -18,6 +18,8 @@ int run_service_manager_tests(void);
 int run_service_boot_policy_tests(void);
 int run_work_queue_tests(void);
 int run_update_agent_tests(void);
+int run_audit_events_tests(void);
+int run_journal_tests(void);
 int run_gen_boot_config_tests(void);
 int run_user_home_tests(void);
 int run_html_viewer_tests(void);
@@ -66,6 +68,8 @@ int main(void) {
     failures += run_service_boot_policy_tests();
     failures += run_work_queue_tests();
     failures += run_update_agent_tests();
+    failures += run_audit_events_tests();
+    failures += run_journal_tests();
     failures += run_gen_boot_config_tests();
     failures += run_user_home_tests();
     failures += run_html_viewer_tests();

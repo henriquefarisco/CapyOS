@@ -1,4 +1,5 @@
 #include "internal/system_control_internal.h"
+#include "kernel/log/klog.h"
 
 int cmd_recovery_login(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
@@ -77,6 +78,7 @@ int cmd_recovery_login(struct shell_context *ctx, int argc, char **argv) {
     return -1;
   }
 
+  klog(KLOG_INFO, "[recovery] Recovery login: returning to normal mode.");
   shell_print_ok(localization_select(language,
                                      "retornando ao login normal com alvo",
                                      "returning to the normal login with target",

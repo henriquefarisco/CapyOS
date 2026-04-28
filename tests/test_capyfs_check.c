@@ -172,11 +172,107 @@ static int test_bad_root_inode_bitmap_reference(void) {
     return fails;
 }
 
+static int test_bad_layout_data_start_overflow(void) {
+    struct mem_backend mem;
+    struct block_device dev;
+    struct capyfs_check_report report;
+    int fails = 0;
+
+    mem_backend_init(&mem, 128u);
+    write_valid_minimal_capyfs(&mem);
+    /* data_start == block_count makes the layout invalid */
+    ((struct capy_super *)mem.data)->data_start = 128u;
+    dev.name = "mem-capyfs";
+    dev.block_size = CAPYFS_BLOCK_SIZE;
+    dev.block_count = 128u;
+    dev.ctx = &mem;
+    dev.ops = &g_mem_ops;
+
+    fails += expect_true(capyfs_check(&dev, &report) == 0,
+                         "capyfs_check should handle layout overflow");
+    fails += expect_true(report.result == CAPYFS_CHECK_BAD_LAYOUT,
+                         "overflowed data_start must classify as BAD_LAYOUT");
+    fails += expect_true(report.detail_primary == 128u,
+                         "bad layout report should expose the bad data_start");
+
+    mem_backend_free(&mem);
+    return fails;
+}
+
+static int test_bad_bitmap_reserved_block_clear(void) {
+    struct mem_backend mem;
+    struct block_device dev;
+    struct capyfs_check_report report;
+    int fails = 0;
+
+    mem_backend_init(&mem, 128u);
+    write_valid_minimal_capyfs(&mem);
+    /* Clear bit 0 in the block bitmap — superblock must always be reserved */
+    mem.data[CAPYFS_BLOCK_SIZE] &= (uint8_t)~0x01u;
+    dev.name = "mem-capyfs";
+    dev.block_size = CAPYFS_BLOCK_SIZE;
+    dev.block_count = 128u;
+    dev.ctx = &mem;
+    dev.ops = &g_mem_ops;
+
+    fails += expect_true(capyfs_check(&dev, &report) == 0,
+                         "capyfs_check should detect cleared reserved bitmap bit");
+    fails += expect_true(report.result == CAPYFS_CHECK_BAD_BITMAP,
+                         "cleared reserved bit must classify as BAD_BITMAP");
+    fails += expect_true(report.detail_primary == 0u,
+                         "bad bitmap report should identify block 0 as the offender");
+
+    mem_backend_free(&mem);
+    return fails;
+}
+
+static int test_bad_dirent_no_null_terminator(void) {
+    struct mem_backend mem;
+    struct block_device dev;
+    struct capyfs_check_report report;
+    struct capy_inode_disk *root;
+    struct capy_dirent_disk dirent;
+    int fails = 0;
+
+    mem_backend_init(&mem, 128u);
+    write_valid_minimal_capyfs(&mem);
+
+    /* Give root inode a data block and add a malformed dirent without null */
+    root = (struct capy_inode_disk *)(mem.data + (3u * CAPYFS_BLOCK_SIZE));
+    root->size = (uint32_t)sizeof(struct capy_dirent_disk);
+    root->direct[0] = 5u;
+
+    /* Mark block 5 as used in the block bitmap */
+    bitmap_set(mem.data + CAPYFS_BLOCK_SIZE, 5u);
+
+    /* Write a dirent with ino set but no null in the name */
+    memset(&dirent, 0xFFu, sizeof(dirent));
+    dirent.ino = 1u;
+    memcpy(mem.data + (5u * CAPYFS_BLOCK_SIZE), &dirent, sizeof(dirent));
+
+    dev.name = "mem-capyfs";
+    dev.block_size = CAPYFS_BLOCK_SIZE;
+    dev.block_count = 128u;
+    dev.ctx = &mem;
+    dev.ops = &g_mem_ops;
+
+    fails += expect_true(capyfs_check(&dev, &report) == 0,
+                         "capyfs_check should detect malformed dirents");
+    fails += expect_true(report.result == CAPYFS_CHECK_BAD_DIRENT,
+                         "dirent without null terminator must classify as BAD_DIRENT");
+
+    mem_backend_free(&mem);
+    return fails;
+}
+
 int run_capyfs_check_tests(void) {
     int fails = 0;
     fails += test_valid_minimal_volume();
     fails += test_bad_superblock();
     fails += test_bad_root_inode_bitmap_reference();
+    fails += test_bad_layout_data_start_overflow();
+    fails += test_bad_bitmap_reserved_block_clear();
+    fails += test_bad_dirent_no_null_terminator();
     if (fails == 0) {
         printf("[tests] capyfs_check OK\n");
     }

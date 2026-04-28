@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 700
+#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +6,9 @@
 #include <unistd.h>
 
 #include "grub_cfg_builder.h"
+
+/* mkstemp is in system stdlib.h, which is shadowed by include/stdlib.h in this build */
+extern int mkstemp(char *template);
 
 static int test_build_includes_console_and_entries(void) {
   char buffer[1024];
