@@ -1,4 +1,6 @@
-static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv) {
+#include "internal/system_info_internal.h"
+
+int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -96,7 +98,7 @@ static int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv)
 #endif
 }
 
-static int cmd_recovery_report(struct shell_context *ctx, int argc, char **argv) {
+int cmd_recovery_report(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     char *content = NULL;
     size_t content_len = 0;
@@ -125,7 +127,7 @@ static int cmd_recovery_report(struct shell_context *ctx, int argc, char **argv)
     return 0;
 }
 
-static int cmd_recovery_history(struct shell_context *ctx, int argc, char **argv) {
+int cmd_recovery_history(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     char *content = NULL;
     size_t content_len = 0;

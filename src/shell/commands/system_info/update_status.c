@@ -1,4 +1,6 @@
-static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
+#include "internal/system_info_internal.h"
+
+int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     struct system_update_status status;
     (void)ctx;
@@ -64,7 +66,7 @@ static int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_update_history(struct shell_context *ctx, int argc, char **argv) {
+int cmd_update_history(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     char *content = NULL;
     size_t content_len = 0;

@@ -218,7 +218,13 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/core/shell_main/run_loop.o \
 	$(BUILD)/x86_64/shell/commands/help.o \
 	$(BUILD)/x86_64/shell/commands/session.o \
-	$(BUILD)/x86_64/shell/commands/system_info.o \
+	$(BUILD)/x86_64/shell/commands/system_info/basic_print_commands.o \
+	$(BUILD)/x86_64/shell/commands/system_info/service_job_status.o \
+	$(BUILD)/x86_64/shell/commands/system_info/update_status.o \
+	$(BUILD)/x86_64/shell/commands/system_info/performance_commands.o \
+	$(BUILD)/x86_64/shell/commands/system_info/recovery_overview.o \
+	$(BUILD)/x86_64/shell/commands/system_info/recovery_storage.o \
+	$(BUILD)/x86_64/shell/commands/system_info/recovery_network_registry.o \
 	$(BUILD)/x86_64/shell/commands/system_control/service_helpers.o \
 	$(BUILD)/x86_64/shell/commands/system_control/config_commands.o \
 	$(BUILD)/x86_64/shell/commands/system_control/jobs_updates.o \

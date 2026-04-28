@@ -1,3 +1,5 @@
+#include "internal/system_info_internal.h"
+
 static int service_matches_filter(const char *filter, const char *name) {
     return !filter || !filter[0] || shell_string_equal(filter, name);
 }
@@ -6,7 +8,7 @@ static int work_matches_filter(const char *filter, const char *name) {
     return !filter || !filter[0] || shell_string_equal(filter, name);
 }
 
-static void shell_print_signed_result(int32_t value) {
+void shell_print_signed_result(int32_t value) {
     if (value < 0) {
         shell_print("-");
         shell_print_number((uint32_t)(-value));
@@ -39,12 +41,12 @@ static void shell_print_service_dependencies(uint32_t dependency_mask) {
     }
 }
 
-static void shell_print_bool_flag(const char *label, int value) {
+void shell_print_bool_flag(const char *label, int value) {
     shell_print(label);
     shell_print(value ? "yes" : "no");
 }
 
-static void shell_print_path_status(const char *path) {
+void shell_print_path_status(const char *path) {
     struct vfs_stat st;
     int rc = vfs_stat_path(path, &st);
     shell_print(path);
@@ -59,7 +61,7 @@ static void shell_print_path_status(const char *path) {
     shell_newline();
 }
 
-static int shell_recovery_capyfs_check(struct capyfs_check_report *out) {
+int system_info_recovery_capyfs_check(struct capyfs_check_report *out) {
     struct super_block *root = vfs_root();
     if (!root || !root->bdev || !out) {
         return -1;
@@ -67,7 +69,7 @@ static int shell_recovery_capyfs_check(struct capyfs_check_report *out) {
     return capyfs_check(root->bdev, out);
 }
 
-static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) {
+int cmd_service_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     const char *filter = NULL;
     size_t count = 0;
@@ -147,7 +149,7 @@ static int cmd_service_status(struct shell_context *ctx, int argc, char **argv) 
     return 0;
 }
 
-static int cmd_job_status(struct shell_context *ctx, int argc, char **argv) {
+int cmd_job_status(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     const char *filter = NULL;
     size_t count = 0;

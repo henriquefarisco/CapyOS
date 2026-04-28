@@ -1,4 +1,6 @@
-static int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv) {
+#include "internal/system_info_internal.h"
+
+int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     (void)ctx;
     if (shell_help_requested(argc, argv)) {

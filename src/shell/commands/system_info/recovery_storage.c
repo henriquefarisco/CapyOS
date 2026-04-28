@@ -1,4 +1,6 @@
-static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv) {
+#include "internal/system_info_internal.h"
+
+int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -28,7 +30,7 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
         x64_kernel_recovery_status_get(&status);
         config_ok = vfs_stat_path("/system/config.ini", &config_stat) == 0;
         userdb_ok = vfs_stat_path(USER_DB_PATH, &userdb_stat) == 0;
-        fs_report_ok = shell_recovery_capyfs_check(&fs_report) == 0;
+        fs_report_ok = system_info_recovery_capyfs_check(&fs_report) == 0;
 
         shell_print_bool_flag("fs.ready=", status.shell_fs_ready);
         shell_print(" ");
@@ -120,7 +122,7 @@ static int cmd_recovery_storage(struct shell_context *ctx, int argc, char **argv
 #endif
 }
 
-static int cmd_recovery_storage_check(struct shell_context *ctx, int argc, char **argv) {
+int cmd_recovery_storage_check(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -153,7 +155,7 @@ static int cmd_recovery_storage_check(struct shell_context *ctx, int argc, char 
             return -1;
         }
 
-        rc = shell_recovery_capyfs_check(&report);
+        rc = system_info_recovery_capyfs_check(&report);
         if (rc != 0) {
             shell_print_error(localization_select(
                 language,

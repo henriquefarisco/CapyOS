@@ -1,24 +1,6 @@
-#include "shell/commands.h"
-#include "shell/core.h"
+#include "internal/system_info_internal.h"
 
-#include "lang/localization.h"
-#include "services/service_boot_policy.h"
-#include "services/service_manager.h"
-#include "services/update_agent.h"
-#include "auth/user.h"
-#include "core/version.h"
-#include "core/work_queue.h"
-#include "drivers/timer/pit.h"
-#if defined(__x86_64__)
-#include "arch/x86_64/kernel_runtime_control.h"
-#include "arch/x86_64/storage_runtime.h"
-#include "net/stack.h"
-#endif
-#include "fs/capyfs.h"
-#include "fs/vfs.h"
-#include "memory/kmem.h"
-
-static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
@@ -37,7 +19,7 @@ static int cmd_print_me(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_print_id(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_id(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
@@ -62,7 +44,7 @@ static int cmd_print_id(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_print_host(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_host(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
@@ -79,7 +61,7 @@ static int cmd_print_host(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_print_version(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_version(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
@@ -125,7 +107,7 @@ static void format_hms(uint32_t seconds, char *out, size_t out_len) {
     out[8] = '\0';
 }
 
-static int cmd_print_time(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_time(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
@@ -150,7 +132,7 @@ static int cmd_print_time(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_print_insomnia(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_insomnia(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     if (shell_help_requested(argc, argv)) {
         shell_print(localization_select(
@@ -173,7 +155,7 @@ static int cmd_print_insomnia(struct shell_context *ctx, int argc, char **argv) 
     return 0;
 }
 
-static int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
+int cmd_print_envs(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     struct system_update_status status;
     if (shell_help_requested(argc, argv)) {

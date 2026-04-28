@@ -1,8 +1,4 @@
-#include "boot/boot_metrics.h"
-#include "fs/buffer.h"
-#include "memory/kmem.h"
-#include "net/dns_cache.h"
-#include "net/stack.h"
+#include "internal/system_info_internal.h"
 
 static void perf_print_u64(uint64_t value) {
     char buf[24];
@@ -29,7 +25,7 @@ static void perf_print_size_kib(size_t bytes) {
     shell_print(" KiB");
 }
 
-static int cmd_perf_boot(struct shell_context *ctx, int argc, char **argv) {
+int cmd_perf_boot(struct shell_context *ctx, int argc, char **argv) {
     struct boot_metrics metrics;
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -54,7 +50,7 @@ static int cmd_perf_boot(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_perf_net(struct shell_context *ctx, int argc, char **argv) {
+int cmd_perf_net(struct shell_context *ctx, int argc, char **argv) {
     struct dns_cache_stats dns;
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -111,7 +107,7 @@ static int cmd_perf_net(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_perf_fs(struct shell_context *ctx, int argc, char **argv) {
+int cmd_perf_fs(struct shell_context *ctx, int argc, char **argv) {
     struct buffer_cache_stats stats;
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
@@ -146,7 +142,7 @@ static int cmd_perf_fs(struct shell_context *ctx, int argc, char **argv) {
     return 0;
 }
 
-static int cmd_perf_mem(struct shell_context *ctx, int argc, char **argv) {
+int cmd_perf_mem(struct shell_context *ctx, int argc, char **argv) {
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
         shell_print("Usage: perf-mem\nShows kernel heap usage counters.\n");
