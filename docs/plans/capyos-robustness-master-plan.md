@@ -137,6 +137,11 @@ Observacao inicial:
   automatico apos shutdown sujo; `capyfs_journal_integration.c` ja continha o
   hook completo (init, format na primeira montagem, replay condicional via
   `journal_needs_replay`); kernel compila sem erros em `feature/robustness-continuation`.
+- Em 2026-04-28, M7.4 implementado: `capyfs_journal_integration` rastreia causa de recovery
+  (NONE, WAL_REPLAY, WAL_REPLAY_FAILED, FORMAT) e reseta a cada mount_hook; campo
+  `journal_recovery_cause` adicionado a `x64_kernel_recovery_status`; `recovery-status`
+  imprime `journal-cause=` para distinguir tipo de recovery; `tests/test_capyfs_journal_cause.c`
+  cobre 4 causas e helper de label; suite passa.
 - Em 2026-04-28, M3.4 implementado: `audit_source_layout.py` ganhou
   `check_internal_boundary` que detecta includes cruzados de headers em pastas
   `internal/` entre modulos distintos; includes relativos (`../internal/`) excluidos
@@ -261,7 +266,7 @@ energia, corrupcao e update interrompido.
 | M7.1 | Journal/WAL de metadata CAPYFS | Implementado | `tests/test_journal.c` valida 5 cenarios: formato e estado limpo, init apos format, commit-replay-verificacao de payload, abort-sem-replay e checkpoint-limpa-replay; bug de durabilidade corrigido em `journal_commit` (superbloco nao era persistido apos avanco do head, causando perda do journal em re-init); todos os cenarios passam em `make test` | Validar semantica de atomicidade em smoke real com shutdown sintetico |
 | M7.2 | Replay automatico no mount | Implementado | `mount_capyfs` chama `capyfs_journal_mount_hook(dev, mnt->super.data_start)` apos montar com sucesso; o hook inicializa o journal, formata na primeira montagem pos-upgrade, e replaya entradas pendentes se `journal_needs_replay` retornar verdadeiro; logs `[capyfs-journal]` cobrem todos os caminhos; kernel compila sem erros com `TOOLCHAIN64=host` | Validar semantica de replay em smoke com shutdown sujo sintetico |
 | M7.3 | Fsck host com corrupcao sintetica | Implementado | `tests/test_capyfs_check.c` cobre 6 cenarios: volume valido, superbloco corrompido, referencia de bloco de root fora do bitmap, data_start com overflow de layout, bit reservado zerado no bitmap e dirent sem terminador nulo; todos passam em `make test` | Adicionar cenarios de reparo ativo quando capyfs_check ganhar modo de reparo |
-| M7.4 | Recovery distinguindo replay, reparo e fallback | Parcial | Recovery e comandos de manutencao existem | Separar estados e mensagens de recovery por causa raiz |
+| M7.4 | Recovery distinguindo replay, reparo e fallback | Implementado | `capyfs_journal_integration` rastreia `g_journal_recovery_cause` (NONE, WAL_REPLAY, WAL_REPLAY_FAILED, FORMAT); resetado no inicio de cada `capyfs_journal_mount_hook`; `x64_kernel_recovery_status` expoe `journal_recovery_cause`; `recovery-status` imprime `journal-cause=wal-replay/none/first-mount-format`; `tests/test_capyfs_journal_cause.c` valida os 4 codigos de causa; `make test` e `make all64` passaram | Adicionar causa de fsck-repair quando capyfs_check ganhar modo de reparo ativo |
 | M7.5 | Update transacional com rollback seguro | Parcial | `update-agent` e boot slots existem; `update-import-manifest` importou e persistiu catalogo local no smoke x64 completo de 2026-04-24 | Adicionar payload verificado, apply atomico e health check de rollback |
 
 ## M8 - Internet, navegacao e browser
