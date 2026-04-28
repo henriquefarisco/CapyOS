@@ -87,7 +87,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/boot/entry64.o \
 	$(BUILD)/x86_64/arch/x86_64/interrupts.o \
 	$(BUILD)/x86_64/arch/x86_64/cpu/interrupts_asm.o \
-	$(BUILD)/x86_64/arch/x86_64/input_runtime.o \
+	$(BUILD)/x86_64/arch/x86_64/input_runtime/prelude_ports.o \
+	$(BUILD)/x86_64/arch/x86_64/input_runtime/keyboard_decode_probe.o \
+	$(BUILD)/x86_64/arch/x86_64/input_runtime/polling.o \
+	$(BUILD)/x86_64/arch/x86_64/input_runtime/backend_management.o \
+	$(BUILD)/x86_64/arch/x86_64/input_runtime/status_hyperv.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_input_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_runtime_coordinator.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
