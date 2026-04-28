@@ -37,6 +37,7 @@ static int test_html_viewer_loads_style_block_imports_once(void);
 static int test_html_viewer_http_cache_enforces_memory_budget(void);
 static int test_html_viewer_about_metrics_pages(void);
 static int test_html_viewer_external_resource_budget_logs_failure(void);
+static int test_html_viewer_render_budget_logs_failure(void);
 static char g_last_http_host[192];
 static char g_last_http_path[768];
 static uint16_t g_last_http_port = 0;

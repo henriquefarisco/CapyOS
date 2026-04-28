@@ -124,6 +124,56 @@ static int test_html_viewer_external_resource_budget_logs_failure(void) {
   return fails;
 }
 
+static int test_html_viewer_render_budget_logs_failure(void) {
+  static uint32_t pixels[320 * 160];
+  struct html_viewer_app *app = NULL;
+  int fails = 0;
+
+  memset(&g_test_window, 0, sizeof(g_test_window));
+  memset(pixels, 0, sizeof(pixels));
+  klog_reset();
+  html_viewer_open();
+  app = (struct html_viewer_app *)g_test_window.user_data;
+  fails += expect_true(app != NULL, "browser should open before render-budget test");
+  if (!app) return fails;
+
+  g_test_window.surface.pixels = pixels;
+  g_test_window.surface.width = 320;
+  g_test_window.surface.height = 160;
+  g_test_window.surface.pitch = 320 * sizeof(uint32_t);
+
+  hv_doc_reset(&app->doc);
+  app->doc.node_count = HV_RENDER_NODE_BUDGET + 4;
+  for (int i = 0; i < app->doc.node_count; i++) {
+    app->doc.nodes[i].type = HTML_NODE_TEXT;
+    app->doc.nodes[i].hidden = 1;
+    strcpy(app->doc.nodes[i].text, "hidden paint workload");
+  }
+  app->safe_mode = 0;
+  hv_render_budget_reset(app);
+  html_viewer_set_state(app, HTML_VIEWER_NAV_READY, "ready");
+
+  html_viewer_paint(app);
+
+  fails += expect_true(app->safe_mode == 1,
+                       "render-budget exhaustion should enable safe mode");
+  fails += expect_true(app->render_budget_exhausted == 1,
+                       "render-budget exhaustion should be recorded");
+  fails += expect_true(app->render_nodes_visited == HV_RENDER_NODE_BUDGET,
+                       "paint should stop at the render node budget");
+  fails += expect_true(strcmp(app->last_stage, "paint") == 0,
+                       "render-budget exhaustion should identify paint stage");
+  fails += expect_true(strstr(app->last_error_reason,
+                              "Render node budget exhausted") != NULL,
+                       "render-budget exhaustion should expose a reason");
+  fails += expect_true(strstr(klog_serialize(),
+                              "[browser] render node budget exhausted") != NULL,
+                       "render-budget exhaustion should be persisted through klog");
+
+  if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
+  return fails;
+}
+
 static int test_html_viewer_about_metrics_pages(void) {
   struct html_viewer_app *app = NULL;
   int fails = 0;

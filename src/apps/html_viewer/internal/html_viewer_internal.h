@@ -28,6 +28,7 @@
 #define HV_EXTERNAL_FETCH_LIMIT 6
 #define HV_EXTERNAL_IMAGE_LIMIT 4
 #define HV_EXTERNAL_CSS_LIMIT 4
+#define HV_RENDER_NODE_BUDGET 128
 #define HV_ERROR_REASON_MAX 191
 #define HV_HTML_SNIFF_LIMIT 8192
 #define HV_META_REFRESH_AUTO_LIMIT_SECONDS 5
@@ -241,6 +242,9 @@ void hv_resource_budget_reset(struct html_viewer_app *app);
 int hv_resource_budget_take(struct html_viewer_app *app, const char *stage);
 void hv_resource_budget_mark_exhausted(struct html_viewer_app *app,
                                        const char *stage);
+void hv_render_budget_reset(struct html_viewer_app *app);
+void hv_render_budget_begin_frame(struct html_viewer_app *app);
+int hv_render_budget_take(struct html_viewer_app *app, const char *stage);
 
 void html_viewer_load_text_document(struct html_viewer_app *app,
                                     const char *title, const char *text,

@@ -114,6 +114,8 @@ Entrega atual:
 - budget externo por navegacao centralizado em `navigation_budget.c`
 - esgotamento de budget de CSS/imagens ativa `safe_mode`, preserva motivo em
   `last_error_reason` e registra `[browser]` no `klog`
+- paint/layout passa a ter budget por frame com parada em
+  `HV_RENDER_NODE_BUDGET`, motivo controlado e log persistente `[browser]`
 
 ## Fase 1 - Estabilizacao do browser atual
 
@@ -233,6 +235,8 @@ Importante:
 - `@import` em bloco `<style>` respeita limite de folhas carregadas
 - CSS/imagens externas respeitam budget total por navegacao e registram falha
   persistente quando excedido
+- paint de documentos com muitos nos para no budget por frame e registra falha
+  persistente sem travar a navegacao inteira
 - redirects 301/302/303/307/308 sao validados
 - cadeia de redirect acima do limite falha de forma controlada
 - cancelamento por `Esc` sai de `loading` para `cancelled`
@@ -326,12 +330,25 @@ Importante:
 - adicionado teste de regressao para pagina com excesso de CSS/imagens,
   validando degradacao sem falhar a navegacao
 
+### 2026-04-28 - Budget de paint/layout por frame
+
+- o mesmo modulo de budget passou a controlar tambem o custo de paint por frame
+- cada chamada de `html_viewer_paint()` reinicia `render_nodes_visited` e para
+  ao atingir `HV_RENDER_NODE_BUDGET`
+- esgotamento de paint ativa `safe_mode`, marca `render_budget_exhausted`,
+  preserva `last_stage=paint` e registra `[browser] render node budget
+  exhausted` no `klog`
+- corrigida a ordem do null-check de `html_viewer_paint()` para nao ler
+  `app->scroll_offset` antes de validar `app`
+- adicionado teste de regressao com documento sinteticamente grande para
+  validar degradacao controlada no paint
+
 ## Proximos passos
 
 1. Validar a Fase 1 em VM com paginas reais leves e medias.
 2. Investigar aplicacao de regras CSS importadas em seletores de texto gerados pelo parser.
 3. Adicionar decodificador real para WebP/AVIF ou conversao previa no pipeline de recursos.
 4. Melhorar fallback visual para paginas JS-heavy que tenham pouco HTML estatico.
-5. Estender budget cooperativo para parse/layout/paint.
+5. Estender budget cooperativo para parse e layout profundo.
 6. Identificar gargalos restantes de fetch/render para paginas pesadas.
 7. Planejar a transicao para Fase 2 com processo isolado e watchdog.

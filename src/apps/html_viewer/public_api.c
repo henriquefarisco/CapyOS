@@ -8,10 +8,12 @@ void html_viewer_paint(struct html_viewer_app *app) {
   struct gui_surface *s = NULL;
   const struct font *f = font_default();
   const struct gui_theme_palette *theme = compositor_theme();
-  int32_t y = 28 - app->scroll_offset;
+  int32_t y = 28;
   if (!app || !app->window || !f || !theme) return;
+  y -= app->scroll_offset;
   html_viewer_poll_background(app);
   s = &app->window->surface;
+  hv_render_budget_begin_frame(app);
 
   /* Use body CSS background-color if set, else default theme */
   {
@@ -106,6 +108,10 @@ void html_viewer_paint(struct html_viewer_app *app) {
     int i;
     for (i = 0; i < app->doc.node_count; i++) {
       struct html_node *node = &app->doc.nodes[i];
+      if (!hv_render_budget_take(app, "paint")) {
+        if (il_x > 0) { y = il_y + il_h; il_x = 0; }
+        break;
+      }
       if (node->hidden) {
         if (il_x > 0) { y = il_y + il_h; il_x = 0; }
         node->il_x_left = 0; node->il_x_right = 0;

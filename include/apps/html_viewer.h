@@ -147,6 +147,8 @@ struct html_viewer_app {
   uint8_t external_images_loaded;
   uint8_t external_fetch_attempts;
   uint8_t resource_budget_exhausted;
+  uint16_t render_nodes_visited;
+  uint8_t render_budget_exhausted;
   uint32_t navigation_id;
   uint32_t active_navigation_id;
   enum html_viewer_nav_state nav_state;

@@ -170,6 +170,10 @@ Observacao inicial:
   `safe_mode` quando CSS/imagens excedem `HV_EXTERNAL_FETCH_LIMIT` e log
   persistente `[browser]` via `klog`; `tests/html_viewer/resource_cases.inc`
   cobre esgotamento de budget e `make test` passou.
+- Em 2026-04-28, M8.3 foi estendido para budget de paint/layout: cada frame
+  zera `render_nodes_visited`, para em `HV_RENDER_NODE_BUDGET`, ativa
+  `safe_mode`, preserva motivo de falha e registra `[browser] render node
+  budget exhausted` no `klog`; a suite `html_viewer` cobre o esgotamento.
 - Em 2026-04-24, M6.1 passou a aplicar politica minima de senha e lockout no
   login real: `auth_policy` valida tamanho minimo, bloqueia apos falhas
   consecutivas configuradas, registra sucesso/falha e e coberto por
@@ -294,7 +298,7 @@ rede instavel derrubem o sistema.
 |---|---|---|---|---|
 | M8.1 | Browser com estado formal e falha controlada | Parcial | `browser-status-roadmap.md` declara Fase 1 fechada, mas sem isolamento | Manter Fase 1 e iniciar isolamento quando processos estiverem prontos |
 | M8.2 | Isolamento por processo e watchdog | Ainda nao iniciado | Roadmap do browser lista Fase 2 aberta | Depende de M4: processos, scheduler e kill/restart seguro |
-| M8.3 | Render/fetch incremental | Parcial | `navigation_budget.c` centraliza budget externo por navegacao; CSS/imagens de rede consomem `external_fetch_attempts`, entram em `safe_mode` ao exceder `HV_EXTERNAL_FETCH_LIMIT`, preservam motivo em `last_error_reason` e registram `[browser] external resource budget exhausted` no `klog`; `tests/html_viewer/resource_cases.inc` cobre o esgotamento e `make test` passou | Estender budgets para parse/layout/paint e fatiar fetch/render em etapas cooperativas |
+| M8.3 | Render/fetch incremental | Parcial | `navigation_budget.c` centraliza budgets por navegacao/frame; CSS/imagens de rede consomem `external_fetch_attempts` e paint consome `render_nodes_visited`; esgotamento ativa `safe_mode`, preserva motivo em `last_error_reason` e registra `[browser] external resource budget exhausted` ou `[browser] render node budget exhausted` no `klog`; `tests/html_viewer/resource_cases.inc` cobre ambos e `make test` passou | Estender budgets para parse/layout mais profundo e fatiar fetch/render em etapas cooperativas |
 | M8.4 | DNS cache com TTL e HTTP cache | Implementado | `src/net/services/dns_cache.c` aplica TTL em segundos; `tests/test_dns_cache.c` valida expiracao; `src/apps/html_viewer/common.c` limita cache HTTP a `HV_HTTP_CACHE_TOTAL_MAX`, coleta estatisticas e rejeita `no-store`; `tests/html_viewer/resource_cases.inc` valida budget e eviccao; `make release-check` passou em 2026-04-23 | Evoluir para cache persistente ou ETag/If-None-Match somente apos metricas de uso real |
 | M8.5 | Telemetria de browser e rede | Implementado | `about:network` expoe DNS cache e HTTP cache; `about:memory` expoe heap e memoria do cache HTTP; `tests/html_viewer/resource_cases.inc` valida as paginas; `make release-check` passou em 2026-04-23 | Expandir com latencia por request e counters por etapa quando o pipeline incremental estiver pronto |
 | M8.6 | JavaScript robusto e sandboxed | Ainda nao iniciado | Roadmap declara JS robusto como fase futura | Iniciar somente apos isolamento e budgets confiaveis |
