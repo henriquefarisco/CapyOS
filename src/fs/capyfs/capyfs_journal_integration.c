@@ -10,6 +10,7 @@
  * before the filesystem becomes usable.
  */
 #include "fs/capyfs.h"
+#include "fs/capyfs_journal_integration.h"
 #include "fs/journal.h"
 #include "fs/block.h"
 #include "fs/buffer.h"
@@ -20,6 +21,21 @@
 #include <stdint.h>
 
 #define CAPYFS_JOURNAL_BLOCKS 32
+
+static uint8_t g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_NONE;
+
+uint8_t capyfs_journal_last_recovery_cause(void) {
+    return g_journal_recovery_cause;
+}
+
+const char *capyfs_journal_recovery_cause_label(uint8_t cause) {
+    switch ((enum capyfs_journal_recovery_cause)cause) {
+    case CAPYFS_JOURNAL_RECOVERY_WAL_REPLAY:        return "wal-replay";
+    case CAPYFS_JOURNAL_RECOVERY_WAL_REPLAY_FAILED: return "wal-replay-failed";
+    case CAPYFS_JOURNAL_RECOVERY_FORMAT:            return "first-mount-format";
+    default:                                        return "none";
+    }
+}
 
 /* Per-mount journal state. Stored alongside the capyfs_mount in sb->fs_private
  * area. Since we cannot change the internal capyfs_mount struct without
@@ -66,6 +82,8 @@ static struct capyfs_journal_slot *journal_slot_alloc(struct block_device *dev) 
  * negative on fatal error.
  */
 int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start) {
+    g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_NONE;
+
     if (!dev || data_start < CAPYFS_JOURNAL_BLOCKS + 2) {
         klog(KLOG_INFO, "[capyfs-journal] No journal region available, skipping.");
         return 0;
@@ -89,6 +107,7 @@ int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start) {
             slot->active = 0;
             return 0; /* non-fatal: FS works without journal */
         }
+        g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_FORMAT;
         return 0;
     }
 
@@ -97,9 +116,10 @@ int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start) {
         rc = journal_replay(&slot->jrnl);
         if (rc != 0) {
             klog(KLOG_ERROR, "[capyfs-journal] Journal replay failed!");
-            /* Continue anyway — data may be partially recovered */
+            g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_WAL_REPLAY_FAILED;
         } else {
             klog(KLOG_INFO, "[capyfs-journal] Journal replay completed.");
+            g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_WAL_REPLAY;
         }
     } else {
         klog(KLOG_DEBUG, "[capyfs-journal] Journal clean, no replay needed.");

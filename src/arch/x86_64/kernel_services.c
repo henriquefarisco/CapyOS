@@ -365,6 +365,7 @@ void x64_kernel_recovery_status_get(struct x64_kernel_recovery_status *out) {
   out->persistent_storage = g_shell_persistent_storage ? 1u : 0u;
   out->recovery_ram_fallback = g_shell_recovery_ram_fallback ? 1u : 0u;
   out->reason = g_boot_policy_decision.reason;
+  out->journal_recovery_cause = capyfs_journal_last_recovery_cause();
   out->bootstrap_target = g_boot_policy_decision.bootstrap_target;
   out->requested_target = g_boot_policy_decision.requested_target;
   out->boot_target = g_boot_policy_decision.final_target;

@@ -2,6 +2,7 @@
 #define ARCH_X86_64_KERNEL_RUNTIME_CONTROL_H
 
 #include "services/update_agent.h"
+#include "fs/capyfs_journal_integration.h"
 
 #include <stdint.h>
 
@@ -14,6 +15,7 @@ struct x64_kernel_recovery_status {
   uint8_t persistent_storage;
   uint8_t recovery_ram_fallback;
   uint8_t reason;
+  uint8_t journal_recovery_cause;
   uint32_t bootstrap_target;
   uint32_t requested_target;
   uint32_t boot_target;

@@ -90,6 +90,10 @@ int cmd_recovery_status(struct shell_context *ctx, int argc, char **argv) {
         shell_print(status.update_staged_version[0] ? status.update_staged_version : "-");
         shell_newline();
 
+        shell_print("journal-cause=");
+        shell_print(capyfs_journal_recovery_cause_label(status.journal_recovery_cause));
+        shell_newline();
+
         shell_print("summary: ");
         shell_print(x64_kernel_recovery_reason_summary());
         shell_newline();
