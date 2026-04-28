@@ -44,17 +44,18 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   // instalacao anterior — pular modo instalador mesmo que readonly/marker.
   BOOLEAN install_marker = boot_volume_has_marker(image, systab);
   BOOLEAN install_ro = boot_volume_is_readonly(image, systab);
+  BOOLEAN install_cdrom = boot_device_is_cdrom(image, systab);
   BOOLEAN already_installed = (g_runtime_boot_cfg_valid &&
       (g_runtime_boot_cfg.flags & BOOT_CONFIG_FLAG_HAS_SETUP_DATA));
-  if (already_installed && (install_marker || install_ro)) {
+  if (already_installed && (install_marker || install_ro || install_cdrom)) {
     Print(L"[UEFI] Instalacao anterior detectada; ignorando modo instalador "
-          L"(marker=%d readonly=%d)\r\n",
-          install_marker ? 1 : 0, install_ro ? 1 : 0);
+          L"(marker=%d readonly=%d cdrom=%d)\r\n",
+          install_marker ? 1 : 0, install_ro ? 1 : 0, install_cdrom ? 1 : 0);
   }
-  if (!already_installed && (install_marker || install_ro)) {
+  if (!already_installed && (install_marker || install_ro || install_cdrom)) {
     kernel_release_fixed_window(systab);
-    Print(L"[UEFI] Modo instalador detectado (marker=%d readonly=%d)\r\n",
-          install_marker ? 1 : 0, install_ro ? 1 : 0);
+    Print(L"[UEFI] Modo instalador detectado (marker=%d readonly=%d cdrom=%d)\r\n",
+          install_marker ? 1 : 0, install_ro ? 1 : 0, install_cdrom ? 1 : 0);
     EFI_STATUS ist = installer_run(image, systab);
     if (!EFI_ERROR(ist)) {
       Print(L"[UEFI] Instalador concluiu; aguardando reinicio do firmware.\r\n");

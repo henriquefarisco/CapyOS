@@ -181,7 +181,12 @@ def _require_dir_entry(
 
 
 def _validate_iso_tree(repo_root: Path) -> None:
-    iso_tree = (repo_root / "build/iso-uefi-root/boot").resolve()
+    iso_root = (repo_root / "build/iso-uefi-root").resolve()
+    marker = iso_root / "CAPYOS.INI"
+    if not marker.exists():
+        raise FileNotFoundError(f"missing ISO installer marker: {marker}")
+
+    iso_tree = iso_root / "boot"
     required = ("capyos64.bin", "manifest.bin", "capycfg.bin")
     for name in required:
         path = iso_tree / name

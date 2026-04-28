@@ -404,7 +404,7 @@ $(UEFI_LOADER_ELF): $(EFI_LOADER_OBJS) | $(BUILD) $(BUILD)/boot
 $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
 	# UEFI espera PE/COFF (nÃƒÆ’Ã‚Â£o ELF). Converte o ELF gerado pelo gnu-efi em BOOTX64.EFI.
 	x86_64-linux-gnu-objcopy --subsystem=efi-app \
-	  -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
+	  -j .text -j .rodata -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
 	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
 
 .PHONY: iso-uefi
@@ -413,6 +413,7 @@ iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_E
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
 	mkdir -p $(ISO_DIR_EFI)/boot
+	printf 'INSTALLER=1\n' > $(ISO_DIR_EFI)/CAPYOS.INI
 	cp $(CAPYOS_ELF64) $(ISO_DIR_EFI)/boot/capyos64.bin
 	cp $(MANIFEST64) $(ISO_DIR_EFI)/boot/manifest.bin
 	cp $(BOOT_CONFIG_BIN) $(ISO_DIR_EFI)/boot/capycfg.bin

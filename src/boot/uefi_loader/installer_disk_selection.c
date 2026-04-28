@@ -127,21 +127,70 @@ BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   if (EFI_ERROR(stt) || !root)
     return FALSE;
 
-  EFI_FILE_HANDLE fh = NULL;
-  stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"\\CAPYOS.INI",
-                          EFI_FILE_MODE_READ, 0);
-  if (EFI_ERROR(stt)) {
-    stt = uefi_call_wrapper(root->Open, 5, root, &fh, L"CAPYOS.INI",
+  CHAR16 *paths[] = {
+      L"\\CAPYOS.INI",
+      L"CAPYOS.INI",
+      L"\\boot\\capyos.ini",
+      L"boot\\capyos.ini",
+      L"\\BOOT\\CAPYOS.INI",
+      L"BOOT\\CAPYOS.INI",
+  };
+  for (UINTN i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+    EFI_FILE_HANDLE fh = NULL;
+    stt = uefi_call_wrapper(root->Open, 5, root, &fh, paths[i],
                             EFI_FILE_MODE_READ, 0);
-  }
-  if (!EFI_ERROR(stt) && fh) {
-    uefi_call_wrapper(fh->Close, 1, fh);
-    uefi_call_wrapper(root->Close, 1, root);
-    return TRUE;
+    if (!EFI_ERROR(stt) && fh) {
+      uefi_call_wrapper(fh->Close, 1, fh);
+      uefi_call_wrapper(root->Close, 1, root);
+      return TRUE;
+    }
   }
 
   uefi_call_wrapper(root->Close, 1, root);
   return FALSE;
+}
+
+static BOOLEAN device_path_has_cdrom_node(VOID *dp_raw) {
+  dp_node_hdr_t *node = (dp_node_hdr_t *)dp_raw;
+  while (node) {
+    UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
+    if (len < sizeof(dp_node_hdr_t)) {
+      return FALSE;
+    }
+    if (node->Type == DP_TYPE_END) {
+      return FALSE;
+    }
+    if (node->Type == DP_TYPE_MEDIA && node->SubType == DP_SUBTYPE_CDROM) {
+      return TRUE;
+    }
+    node = (dp_node_hdr_t *)((UINT8 *)node + len);
+  }
+  return FALSE;
+}
+
+BOOLEAN boot_device_is_cdrom(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+  if (!st || !st->BootServices) {
+    return FALSE;
+  }
+
+  EFI_LOADED_IMAGE *li = NULL;
+  EFI_STATUS stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, image,
+                                     &LoadedImageProtocol, (VOID **)&li);
+  if (EFI_ERROR(stt) || !li) {
+    return FALSE;
+  }
+
+  if (li->FilePath && device_path_has_cdrom_node((VOID *)li->FilePath)) {
+    return TRUE;
+  }
+
+  VOID *dp_raw = NULL;
+  stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, li->DeviceHandle,
+                          &DevicePathProtocol, (VOID **)&dp_raw);
+  if (EFI_ERROR(stt) || !dp_raw) {
+    return FALSE;
+  }
+  return device_path_has_cdrom_node(dp_raw);
 }
 
 EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,

@@ -32,6 +32,7 @@
 
 #define DP_TYPE_MEDIA 0x04
 #define DP_SUBTYPE_HARDDRIVE 0x01
+#define DP_SUBTYPE_CDROM 0x02
 #define DP_TYPE_END 0x7F
 #define DP_SUBTYPE_END_ENTIRE 0xFF
 
@@ -215,6 +216,7 @@ EFI_STATUS open_boot_volume(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
                             EFI_FILE_HANDLE *out_root);
 BOOLEAN boot_volume_is_readonly(EFI_HANDLE image, EFI_SYSTEM_TABLE *st);
 BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st);
+BOOLEAN boot_device_is_cdrom(EFI_HANDLE image, EFI_SYSTEM_TABLE *st);
 EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
                               EFI_BLOCK_IO_PROTOCOL **bio_out);
 EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
