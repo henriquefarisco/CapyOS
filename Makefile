@@ -196,7 +196,12 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/fs/storage/offset_wrapper.o \
 	$(BUILD)/x86_64/fs/storage/chunk_wrapper.o \
 	$(BUILD)/x86_64/fs/storage/partition.o \
-	$(BUILD)/x86_64/fs/capyfs/capyfs.o \
+	$(BUILD)/x86_64/fs/capyfs/runtime/prelude_ops.o \
+	$(BUILD)/x86_64/fs/capyfs/runtime/file_io.o \
+	$(BUILD)/x86_64/fs/capyfs/runtime/inode_block_alloc.o \
+	$(BUILD)/x86_64/fs/capyfs/runtime/directory_entries.o \
+	$(BUILD)/x86_64/fs/capyfs/runtime/namespace_ops.o \
+	$(BUILD)/x86_64/fs/capyfs/runtime/format_mount.o \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_check.o \
 	$(BUILD)/x86_64/fs/vfs/vfs.o \
 	$(BUILD)/x86_64/security/crypt.o \
