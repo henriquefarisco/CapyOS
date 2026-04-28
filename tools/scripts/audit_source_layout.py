@@ -8,10 +8,13 @@ repeatable map for incremental clean-code refactors.
 from __future__ import annotations
 
 import argparse
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+INCLUDE_RE = re.compile(r'#\s*include\s+"([^"]+)"')
 
 
 DEFAULT_ROOTS = ("src", "include", "tests", "tools", ".")
@@ -104,6 +107,50 @@ def module_name(path: Path) -> str:
     return parts[0]
 
 
+def owning_module_of_internal_include(include_path: str) -> str | None:
+    """Return the src/ module that owns an internal header, or None if not internal."""
+    if "/internal/" not in include_path:
+        return None
+    parts = include_path.split("/")
+    try:
+        idx = parts.index("internal")
+    except ValueError:
+        return None
+    prefix = parts[:idx]
+    if not prefix:
+        return None
+    if prefix[0] == "arch" and len(prefix) >= 2:
+        return "src/" + "/".join(prefix[:3])
+    return "src/" + prefix[0]
+
+
+def check_internal_boundary(repo: Path, infos: list[FileInfo]) -> list[str]:
+    """Detect files that include another module's internal/ headers."""
+    violations: list[str] = []
+    for info in infos:
+        if info.language not in {"c", "c-header", "c-fragment"}:
+            continue
+        if not info.path.parts or info.path.parts[0] != "src":
+            continue
+        file_mod = module_name(info.path)
+        try:
+            content = (repo / info.path).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for m in INCLUDE_RE.finditer(content):
+            inc = m.group(1)
+            if inc.startswith("."):
+                continue
+            owner = owning_module_of_internal_include(inc)
+            if owner is None or owner == file_mod:
+                continue
+            violations.append(
+                f"cross-module internal include: {info.path} "
+                f"includes \"{inc}\" (owned by {owner})"
+            )
+    return violations
+
+
 def print_section(title: str) -> None:
     print(f"\n## {title}")
 
@@ -174,6 +221,8 @@ def main() -> int:
         }
         if len(code_langs) > 2 and not mod.startswith("tools"):
             warnings.append(f"mixed implementation languages in {mod}: {', '.join(sorted(code_langs))}")
+
+    warnings.extend(check_internal_boundary(repo, infos))
 
     if warnings:
         for warning in warnings:
