@@ -15,6 +15,16 @@ sistema instalado suba corretamente pelo disco provisionado.
 - Disco provisionado por `tools/scripts/provision_gpt.py`
 - Auditoria basica aprovada por `make inspect-disk IMG=<imagem>`
 
+Observacao para ISO UEFI:
+- `BOOTX64.EFI` precisa preservar a secao `.rodata` durante a conversao
+  PE/COFF. O loader usa literais dessa secao para localizar `CAPYOS.INI`,
+  imprimir o wizard e abrir os payloads de boot.
+- O ISO oficial deve conter `CAPYOS.INI` na raiz do ISO e tambem no
+  `efiboot.img`. A validacao automatica em `smoke_x64_common.py` verifica o
+  marcador da arvore ISO antes de iniciar o QEMU.
+- Em boot El Torito, o loader tambem aceita midia CD-ROM detectada pelo device
+  path UEFI, alem do marcador e do atributo readonly.
+
 ## 2. Validacao do boot
 
 ### 2.1 Firmware e loader
@@ -102,6 +112,18 @@ Smoke principal:
 make smoke-x64-cli
 ```
 
+Smoke do instalador ISO:
+
+```bash
+python3 tools/scripts/smoke_x64_iso_install.py --build
+```
+
+Smoke de cancelamento do instalador ISO:
+
+```bash
+python3 tools/scripts/smoke_x64_iso_cancel.py --build
+```
+
 Auditoria de disco:
 
 ```bash
@@ -124,6 +146,8 @@ make test
 
 ## 7. Lacunas atuais
 
-- o instalador por ISO ainda nao tem smoke dedicado de ponta a ponta
+- o instalador por ISO ja entra no wizard, executa o fluxo interativo e grava o
+  disco; falhas apos o reboot pelo HDD instalado devem ser tratadas como
+  problemas do runtime instalado, nao como ausencia do instalador
 - USB HID/XHCI continua incompleto
 - o caminho `EFI ConIn` ainda mantem parte do boot em modo hibrido
