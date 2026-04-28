@@ -198,7 +198,11 @@ CAPYOS64_OBJS = \
 	$(BEARSSL_OBJS) \
 	$(BUILD)/x86_64/util/stack_protector.o \
 	$(BUILD)/x86_64/util/kstring.o \
-	$(BUILD)/x86_64/shell/core/shell_main.o \
+	$(BUILD)/x86_64/shell/core/shell_main/context_commands.o \
+	$(BUILD)/x86_64/shell/core/shell_main/string_path_helpers.o \
+	$(BUILD)/x86_64/shell/core/shell_main/output_files.o \
+	$(BUILD)/x86_64/shell/core/shell_main/diagnostics.o \
+	$(BUILD)/x86_64/shell/core/shell_main/run_loop.o \
 	$(BUILD)/x86_64/shell/commands/help.o \
 	$(BUILD)/x86_64/shell/commands/session.o \
 	$(BUILD)/x86_64/shell/commands/system_info.o \
