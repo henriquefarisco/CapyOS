@@ -15,6 +15,9 @@ Escopo atual:
   - guia historico de investigacao; Hyper-V nao e trilha suportada de release
 - `testing/boot-and-cli-validation.md`
   - roteiro de validacao do boot, login, CLI e persistencia
+- `testing/pr-and-release-checklist.md`
+  - checklist humano de PR/release que complementa os gates automaticos
+    (`make test`, `make layout-audit`, `make release-check`)
 - `reference/cli-reference.md`
   - referencia dos comandos do CapyCLI
 - `plans/mvp-implementation-plan.md`

@@ -8,6 +8,12 @@
  * the data_start region. When formatting, these blocks are reserved.
  * On mount, if the journal has uncommitted entries, they are replayed
  * before the filesystem becomes usable.
+ *
+ * When the kernel runtime installs a root secret via
+ * capyfs_journal_install_root_secret(), this layer derives a per-volume
+ * HMAC key by HMAC-SHA256(root_secret, super_bytes) and uses
+ * journal_format_authenticated() / journal_set_hmac_key() so the journal
+ * runs in authenticated mode (JOURNAL_VERSION_AUTH).
  */
 #include "fs/capyfs.h"
 #include "fs/capyfs_journal_integration.h"
@@ -16,13 +22,18 @@
 #include "fs/buffer.h"
 #include "kernel/log/klog.h"
 #include "memory/kmem.h"
+#include "security/crypt.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #define CAPYFS_JOURNAL_BLOCKS 32
+#define CAPYFS_JOURNAL_ROOT_SECRET_MAX 64
 
 static uint8_t g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_NONE;
+
+static uint8_t  g_journal_root_secret[CAPYFS_JOURNAL_ROOT_SECRET_MAX];
+static uint32_t g_journal_root_secret_len = 0;
 
 uint8_t capyfs_journal_last_recovery_cause(void) {
     return g_journal_recovery_cause;
@@ -35,6 +46,48 @@ const char *capyfs_journal_recovery_cause_label(uint8_t cause) {
     case CAPYFS_JOURNAL_RECOVERY_FORMAT:            return "first-mount-format";
     default:                                        return "none";
     }
+}
+
+void capyfs_journal_install_root_secret(const uint8_t *secret, uint32_t len) {
+    if (!secret || len == 0 || len > CAPYFS_JOURNAL_ROOT_SECRET_MAX) {
+        capyfs_journal_clear_root_secret();
+        return;
+    }
+    for (uint32_t i = 0; i < len; i++) g_journal_root_secret[i] = secret[i];
+    for (uint32_t i = len; i < CAPYFS_JOURNAL_ROOT_SECRET_MAX; i++) {
+        g_journal_root_secret[i] = 0;
+    }
+    g_journal_root_secret_len = len;
+}
+
+void capyfs_journal_clear_root_secret(void) {
+    for (uint32_t i = 0; i < CAPYFS_JOURNAL_ROOT_SECRET_MAX; i++) {
+        g_journal_root_secret[i] = 0;
+    }
+    g_journal_root_secret_len = 0;
+}
+
+int capyfs_journal_root_secret_installed(void) {
+    return g_journal_root_secret_len > 0 ? 1 : 0;
+}
+
+/* Derive a per-volume HMAC key as HMAC-SHA256(root_secret, super_bytes).
+ * Returns the number of bytes written to `out` on success, or 0 if no
+ * superblock or no root secret is available. */
+static uint32_t derive_volume_hmac_key(const void *super_bytes,
+                                       uint32_t super_len,
+                                       uint8_t *out, uint32_t out_max) {
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    uint32_t copy = 0;
+    if (!out || out_max == 0) return 0;
+    if (g_journal_root_secret_len == 0) return 0;
+    if (!super_bytes || super_len == 0) return 0;
+    crypt_hmac_sha256(g_journal_root_secret, g_journal_root_secret_len,
+                      (const uint8_t *)super_bytes, super_len, digest);
+    copy = (out_max < SHA256_DIGEST_SIZE) ? out_max : SHA256_DIGEST_SIZE;
+    for (uint32_t i = 0; i < copy; i++) out[i] = digest[i];
+    for (uint32_t i = 0; i < SHA256_DIGEST_SIZE; i++) digest[i] = 0;
+    return copy;
 }
 
 /* Per-mount journal state. Stored alongside the capyfs_mount in sb->fs_private
@@ -81,7 +134,8 @@ static struct capyfs_journal_slot *journal_slot_alloc(struct block_device *dev) 
  * Returns 0 on success (including "no journal found, skipping"),
  * negative on fatal error.
  */
-int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start) {
+int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start,
+                              const void *super_bytes, uint32_t super_len) {
     g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_NONE;
 
     if (!dev || data_start < CAPYFS_JOURNAL_BLOCKS + 2) {
@@ -95,13 +149,28 @@ int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start) {
         return 0;
     }
 
+    uint8_t derived_key[JOURNAL_HMAC_KEY_MAX];
+    uint32_t derived_key_len = derive_volume_hmac_key(super_bytes, super_len,
+                                                      derived_key,
+                                                      sizeof(derived_key));
+
     uint64_t journal_start = (uint64_t)(data_start - CAPYFS_JOURNAL_BLOCKS);
 
     int rc = journal_init(&slot->jrnl, dev, journal_start, CAPYFS_JOURNAL_BLOCKS);
     if (rc != 0) {
         /* Journal not formatted yet — first mount after upgrade. Format it. */
-        klog(KLOG_INFO, "[capyfs-journal] Formatting journal region.");
-        rc = journal_format(&slot->jrnl, dev, journal_start, CAPYFS_JOURNAL_BLOCKS);
+        if (derived_key_len > 0) {
+            klog(KLOG_INFO,
+                 "[capyfs-journal] Formatting authenticated journal region.");
+            rc = journal_format_authenticated(&slot->jrnl, dev, journal_start,
+                                              CAPYFS_JOURNAL_BLOCKS,
+                                              derived_key, derived_key_len);
+        } else {
+            klog(KLOG_INFO, "[capyfs-journal] Formatting journal region.");
+            rc = journal_format(&slot->jrnl, dev, journal_start,
+                                CAPYFS_JOURNAL_BLOCKS);
+        }
+        for (uint32_t i = 0; i < sizeof(derived_key); i++) derived_key[i] = 0;
         if (rc != 0) {
             klog(KLOG_WARN, "[capyfs-journal] Journal format failed.");
             slot->active = 0;
@@ -110,6 +179,19 @@ int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start) {
         g_journal_recovery_cause = CAPYFS_JOURNAL_RECOVERY_FORMAT;
         return 0;
     }
+
+    /* Existing journal opened. If it is authenticated, install the per-volume
+     * key derived from the superblock so replay can verify the HMAC tags. */
+    if (journal_is_authenticated(&slot->jrnl) || slot->jrnl.sb.version >= 2) {
+        if (derived_key_len == 0) {
+            klog(KLOG_WARN,
+                 "[capyfs-journal] Authenticated journal but no root secret "
+                 "or superblock available; replay will be refused.");
+        } else {
+            (void)journal_set_hmac_key(&slot->jrnl, derived_key, derived_key_len);
+        }
+    }
+    for (uint32_t i = 0; i < sizeof(derived_key); i++) derived_key[i] = 0;
 
     if (journal_needs_replay(&slot->jrnl)) {
         klog(KLOG_INFO, "[capyfs-journal] Replaying journal after unclean shutdown.");

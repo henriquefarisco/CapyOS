@@ -210,6 +210,207 @@ static int test_checkpoint_clears_replay(void) {
   return fails;
 }
 
+static const uint8_t HMAC_KEY_GOOD[16] = {
+  0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+  0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01
+};
+
+static const uint8_t HMAC_KEY_BAD[16] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+};
+
+static int test_authenticated_format_marks_v2(void) {
+  struct journal j;
+  int fails = 0;
+  setup();
+  fails += expect_true(
+      journal_format_authenticated(&j, &g_dev, 0u, 32u,
+                                   HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "format_authenticated should succeed");
+  fails += expect_true(j.sb.version == JOURNAL_VERSION_AUTH,
+                       "authenticated journal must use JOURNAL_VERSION_AUTH");
+  fails += expect_true(journal_is_authenticated(&j) == 1,
+                       "journal_is_authenticated should report true");
+  teardown();
+  return fails;
+}
+
+static int test_authenticated_commit_replay_with_correct_key(void) {
+  struct journal j;
+  struct journal_transaction txn;
+  uint8_t payload[JOURNAL_TEST_BLOCK_SIZE];
+  uint8_t readback[JOURNAL_TEST_BLOCK_SIZE];
+  int fails = 0;
+  setup();
+
+  uint32_t target = 40u;
+  memset(payload, 0xA1u, sizeof(payload));
+
+  fails += expect_true(
+      journal_format_authenticated(&j, &g_dev, 0u, 32u,
+                                   HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "format_authenticated should succeed");
+  fails += expect_true(journal_begin(&j, &txn) == 0,
+                       "journal_begin (auth) should succeed");
+  fails += expect_true(
+      journal_log_block(&txn, (uint64_t)target, payload, 0u,
+                        JOURNAL_TEST_BLOCK_SIZE) == 0,
+      "journal_log_block (auth) should accept block");
+  fails += expect_true(journal_commit(&txn) == 0,
+                       "journal_commit (auth) should succeed");
+  fails += expect_true(journal_needs_replay(&j) != 0,
+                       "auth journal should need replay after commit");
+
+  struct journal j2;
+  fails += expect_true(journal_init(&j2, &g_dev, 0u, 32u) == 0,
+                       "init for auth replay should succeed");
+  fails += expect_true(j2.sb.version == JOURNAL_VERSION_AUTH,
+                       "re-init must preserve auth version");
+  fails += expect_true(
+      journal_set_hmac_key(&j2, HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "set_hmac_key with correct key should succeed");
+  fails += expect_true(journal_replay(&j2) == 0,
+                       "replay with correct key should succeed");
+  fails += expect_true(journal_needs_replay(&j2) == 0,
+                       "auth journal must be clean after replay");
+
+  memset(readback, 0, sizeof(readback));
+  fails += expect_true(block_device_read(&g_dev, target, readback) == 0,
+                       "target block must be readable after auth replay");
+  fails += expect_true(memcmp(readback, payload, JOURNAL_TEST_BLOCK_SIZE) == 0,
+                       "replayed payload must match original");
+
+  teardown();
+  return fails;
+}
+
+static int test_authenticated_replay_rejects_wrong_key(void) {
+  struct journal j;
+  struct journal_transaction txn;
+  uint8_t payload[JOURNAL_TEST_BLOCK_SIZE];
+  uint8_t readback[JOURNAL_TEST_BLOCK_SIZE];
+  int fails = 0;
+  setup();
+
+  uint32_t target = 40u;
+  memset(payload, 0xC2u, sizeof(payload));
+
+  fails += expect_true(
+      journal_format_authenticated(&j, &g_dev, 0u, 32u,
+                                   HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "format_authenticated should succeed");
+  fails += expect_true(journal_begin(&j, &txn) == 0, "begin");
+  fails += expect_true(
+      journal_log_block(&txn, target, payload, 0u, JOURNAL_TEST_BLOCK_SIZE) == 0,
+      "log_block");
+  fails += expect_true(journal_commit(&txn) == 0, "commit");
+
+  struct journal j2;
+  fails += expect_true(journal_init(&j2, &g_dev, 0u, 32u) == 0,
+                       "init for replay");
+  fails += expect_true(
+      journal_set_hmac_key(&j2, HMAC_KEY_BAD, sizeof(HMAC_KEY_BAD)) == 0,
+      "set_hmac_key (wrong key) should still succeed structurally");
+  fails += expect_true(journal_replay(&j2) != 0,
+                       "replay with wrong key must NOT return 0");
+
+  memset(readback, 0xFFu, sizeof(readback));
+  fails += expect_true(block_device_read(&g_dev, target, readback) == 0,
+                       "target block must be readable");
+  fails += expect_true(memcmp(readback, payload, JOURNAL_TEST_BLOCK_SIZE) != 0,
+                       "wrong-key replay must NOT apply payload");
+
+  teardown();
+  return fails;
+}
+
+static int test_authenticated_replay_refuses_without_key(void) {
+  struct journal j;
+  struct journal_transaction txn;
+  uint8_t payload[JOURNAL_TEST_BLOCK_SIZE];
+  uint8_t readback[JOURNAL_TEST_BLOCK_SIZE];
+  int fails = 0;
+  setup();
+
+  uint32_t target = 40u;
+  memset(payload, 0xD3u, sizeof(payload));
+
+  fails += expect_true(
+      journal_format_authenticated(&j, &g_dev, 0u, 32u,
+                                   HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "format_authenticated should succeed");
+  fails += expect_true(journal_begin(&j, &txn) == 0, "begin");
+  fails += expect_true(
+      journal_log_block(&txn, target, payload, 0u, JOURNAL_TEST_BLOCK_SIZE) == 0,
+      "log_block");
+  fails += expect_true(journal_commit(&txn) == 0, "commit");
+
+  struct journal j2;
+  fails += expect_true(journal_init(&j2, &g_dev, 0u, 32u) == 0,
+                       "init for replay");
+  /* No journal_set_hmac_key call: replay must refuse rather than fall back to
+   * an unauthenticated path that would silently apply data. */
+  fails += expect_true(journal_replay(&j2) != 0,
+                       "auth replay without key must return error");
+
+  memset(readback, 0xFFu, sizeof(readback));
+  fails += expect_true(block_device_read(&g_dev, target, readback) == 0,
+                       "target readable");
+  fails += expect_true(memcmp(readback, payload, JOURNAL_TEST_BLOCK_SIZE) != 0,
+                       "no-key replay must NOT apply payload");
+
+  teardown();
+  return fails;
+}
+
+static int test_authenticated_replay_detects_payload_tamper(void) {
+  struct journal j;
+  struct journal_transaction txn;
+  uint8_t payload[JOURNAL_TEST_BLOCK_SIZE];
+  uint8_t readback[JOURNAL_TEST_BLOCK_SIZE];
+  int fails = 0;
+  setup();
+
+  uint32_t target = 40u;
+  memset(payload, 0xE4u, sizeof(payload));
+
+  fails += expect_true(
+      journal_format_authenticated(&j, &g_dev, 0u, 32u,
+                                   HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "format_authenticated should succeed");
+  fails += expect_true(journal_begin(&j, &txn) == 0, "begin");
+  fails += expect_true(
+      journal_log_block(&txn, target, payload, 0u, JOURNAL_TEST_BLOCK_SIZE) == 0,
+      "log_block");
+  fails += expect_true(journal_commit(&txn) == 0, "commit");
+
+  /* Tamper with the staged payload on disk: flip a byte in the data block
+   * that follows the WRITE_META header. WRITE_META is at journal block 1,
+   * payload at block 2 (within the journal area). With start_block=0, the
+   * staged payload sits at absolute block 2. */
+  uint8_t *staged = g_mem.data + (size_t)2 * JOURNAL_TEST_BLOCK_SIZE;
+  staged[10] ^= 0xFFu;
+
+  struct journal j2;
+  fails += expect_true(journal_init(&j2, &g_dev, 0u, 32u) == 0,
+                       "init for tamper-replay");
+  fails += expect_true(
+      journal_set_hmac_key(&j2, HMAC_KEY_GOOD, sizeof(HMAC_KEY_GOOD)) == 0,
+      "set_hmac_key");
+  fails += expect_true(journal_replay(&j2) != 0,
+                       "tampered payload must fail HMAC verification");
+
+  memset(readback, 0xFFu, sizeof(readback));
+  fails += expect_true(block_device_read(&g_dev, target, readback) == 0,
+                       "target readable");
+  fails += expect_true(memcmp(readback, payload, JOURNAL_TEST_BLOCK_SIZE) != 0,
+                       "tampered replay must NOT yield original payload");
+
+  teardown();
+  return fails;
+}
+
 int run_journal_tests(void) {
   int fails = 0;
   fails += test_format_and_clean_state();
@@ -217,6 +418,11 @@ int run_journal_tests(void) {
   fails += test_commit_and_replay();
   fails += test_abort_does_not_replay();
   fails += test_checkpoint_clears_replay();
+  fails += test_authenticated_format_marks_v2();
+  fails += test_authenticated_commit_replay_with_correct_key();
+  fails += test_authenticated_replay_rejects_wrong_key();
+  fails += test_authenticated_replay_refuses_without_key();
+  fails += test_authenticated_replay_detects_payload_tamper();
   if (fails == 0) {
     printf("[tests] journal OK\n");
   }

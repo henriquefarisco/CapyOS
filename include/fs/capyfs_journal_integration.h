@@ -14,7 +14,19 @@ enum capyfs_journal_recovery_cause {
 uint8_t capyfs_journal_last_recovery_cause(void);
 const char *capyfs_journal_recovery_cause_label(uint8_t cause);
 
-int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start);
+/* Kernel root secret used to derive per-volume HMAC keys for the journal.
+ * The kernel runtime should call install_root_secret() once with the
+ * post-unlock active volume key (or another stable per-system secret) so
+ * journals on this system can use authenticated mode. clear() wipes it. */
+void capyfs_journal_install_root_secret(const uint8_t *secret, uint32_t len);
+void capyfs_journal_clear_root_secret(void);
+int  capyfs_journal_root_secret_installed(void);
+
+/* Mount hook. Pass `super_bytes`/`super_len` for the volume superblock so
+ * the integration layer can derive a per-volume HMAC key when a root secret
+ * is installed; pass NULL/0 to keep legacy (v1) behaviour. */
+int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start,
+                              const void *super_bytes, uint32_t super_len);
 int capyfs_journal_write_metadata(struct block_device *dev,
                                    uint32_t target_block,
                                    const void *data,

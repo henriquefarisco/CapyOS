@@ -124,6 +124,48 @@ enum html_viewer_nav_state {
   HTML_VIEWER_NAV_CANCELLED
 };
 
+/* Stable string label for a navigation state. Used by the audit trail
+ * and the about:status-like diagnostic surfaces. */
+const char *html_viewer_state_name(enum html_viewer_nav_state state);
+
+/* Returns 1 if the given transition is allowed by the browser state
+ * machine. Today this is permissive (every state accepts CANCELLED and
+ * FAILED, plus the natural progression) so we can record violations
+ * without breaking existing callers; a future tightening can flip it. */
+int html_viewer_state_transition_allowed(enum html_viewer_nav_state from,
+                                         enum html_viewer_nav_state to);
+
+/* Strict transition mode. When enabled, an invalid transition (as judged by
+ * html_viewer_state_transition_allowed) is escalated to a hard navigation
+ * failure: the navigation is forced into HTML_VIEWER_NAV_FAILED with a
+ * descriptive reason instead of being silently accepted. The default is
+ * permissive (warn-only) so existing call sites do not break; tests and
+ * release builds can opt into strict mode after every call site has been
+ * audited. */
+void html_viewer_state_strict_mode_set(int enabled);
+int  html_viewer_state_strict_mode_enabled(void);
+
+/* Isolation hook callbacks. The browser does not own a separate process
+ * yet, but every concrete app already touches process-scoped state
+ * (cookies, in-flight requests, render budget). Once M4 lands a real
+ * process, a supervisor registers these to coordinate kill/restart and
+ * heartbeats. For now they are no-ops; the wiring stays in place so that
+ * future supervision does not need to refactor every call site. */
+struct html_viewer_isolation_ops {
+    /* Called whenever the browser enters a stable state (READY, FAILED,
+     * CANCELLED, or IDLE). The supervisor uses this as a heartbeat. */
+    void (*heartbeat)(uint32_t navigation_id,
+                      enum html_viewer_nav_state state);
+    /* Called when the browser detects an unrecoverable error (budget
+     * exhaustion, repeated transport failure, parse OOM). The supervisor
+     * may decide to kill/restart the isolated process. */
+    void (*on_fatal)(uint32_t navigation_id, const char *stage,
+                     const char *reason);
+};
+
+void html_viewer_set_isolation_ops(const struct html_viewer_isolation_ops *ops);
+const struct html_viewer_isolation_ops *html_viewer_isolation_ops(void);
+
 struct html_viewer_app {
   struct gui_window *window;
   struct html_document doc;
@@ -149,6 +191,8 @@ struct html_viewer_app {
   uint8_t resource_budget_exhausted;
   uint16_t render_nodes_visited;
   uint8_t render_budget_exhausted;
+  uint16_t parse_nodes_visited;
+  uint8_t parse_budget_exhausted;
   uint32_t navigation_id;
   uint32_t active_navigation_id;
   enum html_viewer_nav_state nav_state;

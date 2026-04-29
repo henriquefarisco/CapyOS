@@ -80,10 +80,30 @@ static void hv_parse_leave(void) {
 }
 
 int hv_parse_locked(const char *html, size_t len, struct html_document *doc) {
+  /* Backward-compatible entry: parses without enforcing the parse budget.
+   * Used for internal scaffolding and tests. Production navigations should
+   * call hv_parse_locked_with_app to keep parse work bounded. */
   int rc = 0;
   hv_doc_release_assets(doc);
   hv_parse_enter();
+  hv_parse_app_set(NULL);
   rc = html_parse(html, len, doc);
+  hv_parse_app_set(NULL);
+  hv_parse_leave();
+  return rc;
+}
+
+int hv_parse_locked_with_app(struct html_viewer_app *app, const char *html,
+                              size_t len, struct html_document *doc) {
+  int rc = 0;
+  hv_doc_release_assets(doc);
+  hv_parse_enter();
+  if (app) {
+    hv_parse_budget_reset(app);
+  }
+  hv_parse_app_set(app);
+  rc = html_parse(html, len, doc);
+  hv_parse_app_set(NULL);
   hv_parse_leave();
   return rc;
 }

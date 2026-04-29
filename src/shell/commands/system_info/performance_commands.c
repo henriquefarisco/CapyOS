@@ -139,6 +139,11 @@ int cmd_perf_fs(struct shell_context *ctx, int argc, char **argv) {
     shell_print(" write_errors=");
     perf_print_u64(stats.write_errors);
     shell_newline();
+    shell_print("  readaheads=");
+    perf_print_u64(stats.readaheads);
+    shell_print(" writeback_passes=");
+    perf_print_u64(stats.writeback_passes);
+    shell_newline();
     return 0;
 }
 

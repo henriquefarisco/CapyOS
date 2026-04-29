@@ -311,7 +311,7 @@ void html_viewer_apply_response(
     if (local_opts.fetch_external_assets) {
       hv_http_cache_tick();
     }
-    hv_parse_locked(html_body, html_len, &app->doc);
+    hv_parse_locked_with_app(app, html_body, html_len, &app->doc);
     hv_simplify_degraded_doc(&app->doc);
     if (app->doc.node_count == 0 || hv_doc_visible_text_count(&app->doc) == 0) {
       char detected_title[HTML_TITLE_MAX];

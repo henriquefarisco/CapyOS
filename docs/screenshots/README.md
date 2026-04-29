@@ -12,6 +12,9 @@ comparacao visual da evolucao do sistema ao longo do tempo.
 
 ## Estrutura atual
 
+- `0.8.0-alpha.3/`
+  - snapshots oficiais usados no README e na divulgacao atual; identicos aos
+    da `0.8.0-alpha.2` porque o ciclo focou em robustez interna (journal HMAC,
+    privilege API, op_budget, parse budget) sem mudanca visual relevante
 - `0.8.0-alpha.2/`
 - `0.8.0-alpha.1/`
-  - snapshots oficiais usados no README e na divulgacao atual

@@ -7,6 +7,7 @@
 #include "drivers/storage/efi_block.h"
 #include "fs/buffer.h"
 #include "fs/capyfs.h"
+#include "fs/capyfs_journal_integration.h"
 #include "fs/vfs.h"
 #include "memory/kmem.h"
 #include "security/crypt.h"
@@ -42,6 +43,21 @@ static inline int streq(const char *a, const char *b) {
 static inline void secure_memzero(void *ptr, size_t len) {
   volatile uint8_t *p = (volatile uint8_t *)ptr;
   while (len--) *p++ = 0;
+}
+
+/* Install the per-system root secret used by the CAPYFS journal to derive
+ * per-volume HMAC keys. This must be called BEFORE mount_root_capyfs on an
+ * encrypted volume so the first mount's journal hook can run in
+ * authenticated mode. The volume key string is used as the secret; the
+ * actual per-volume HMAC key is derived from it + the volume superblock. */
+static inline void install_journal_root_secret_from_key(const char *key) {
+  if (!key || !key[0]) {
+    capyfs_journal_clear_root_secret();
+    return;
+  }
+  size_t len = 0;
+  while (key[len]) ++len;
+  capyfs_journal_install_root_secret((const uint8_t *)key, (uint32_t)len);
 }
 static inline void io_print(const struct x64_kernel_volume_runtime_io *io,
                              const char *message) {

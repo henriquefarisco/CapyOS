@@ -49,6 +49,9 @@ int test_pmm_run(void);
 int test_task_run(void);
 int test_dns_cache_run(void);
 int test_boot_slot_run(void);
+int run_op_budget_tests(void);
+int run_privilege_tests(void);
+int run_buffer_cache_pacing_tests(void);
 
 int main(void) {
     int failures = 0;
@@ -101,6 +104,9 @@ int main(void) {
     failures += test_task_run();
     failures += test_dns_cache_run();
     failures += test_boot_slot_run();
+    failures += run_op_budget_tests();
+    failures += run_privilege_tests();
+    failures += run_buffer_cache_pacing_tests();
 
     if (failures == 0) {
         printf("Todos os testes passaram.\n");

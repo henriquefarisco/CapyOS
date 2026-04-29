@@ -1,5 +1,75 @@
 #include "internal/html_viewer_internal.h"
 
+#ifndef UNIT_TEST
+#include "kernel/log/klog.h"
+#endif
+
+const char *html_viewer_state_name(enum html_viewer_nav_state state) {
+  switch (state) {
+  case HTML_VIEWER_NAV_IDLE:
+    return "idle";
+  case HTML_VIEWER_NAV_LOADING:
+    return "loading";
+  case HTML_VIEWER_NAV_REDIRECTING:
+    return "redirecting";
+  case HTML_VIEWER_NAV_RENDERING:
+    return "rendering";
+  case HTML_VIEWER_NAV_READY:
+    return "ready";
+  case HTML_VIEWER_NAV_FAILED:
+    return "failed";
+  case HTML_VIEWER_NAV_CANCELLED:
+    return "cancelled";
+  default:
+    return "unknown";
+  }
+}
+
+int html_viewer_state_transition_allowed(enum html_viewer_nav_state from,
+                                         enum html_viewer_nav_state to) {
+  /* Cancelled or failed transitions are always allowed (escape hatch). */
+  if (to == HTML_VIEWER_NAV_CANCELLED || to == HTML_VIEWER_NAV_FAILED) {
+    return 1;
+  }
+  switch (from) {
+  case HTML_VIEWER_NAV_IDLE:
+  case HTML_VIEWER_NAV_READY:
+  case HTML_VIEWER_NAV_FAILED:
+  case HTML_VIEWER_NAV_CANCELLED:
+    /* Stable states may start a new navigation. */
+    return (to == HTML_VIEWER_NAV_LOADING || to == HTML_VIEWER_NAV_IDLE);
+  case HTML_VIEWER_NAV_LOADING:
+    return (to == HTML_VIEWER_NAV_REDIRECTING ||
+            to == HTML_VIEWER_NAV_RENDERING ||
+            to == HTML_VIEWER_NAV_READY);
+  case HTML_VIEWER_NAV_REDIRECTING:
+    return (to == HTML_VIEWER_NAV_LOADING ||
+            to == HTML_VIEWER_NAV_RENDERING ||
+            to == HTML_VIEWER_NAV_READY);
+  case HTML_VIEWER_NAV_RENDERING:
+    return (to == HTML_VIEWER_NAV_READY);
+  default:
+    return 0;
+  }
+}
+
+static const struct html_viewer_isolation_ops *g_isolation_ops = NULL;
+
+void html_viewer_set_isolation_ops(const struct html_viewer_isolation_ops *ops) {
+  g_isolation_ops = ops;
+}
+
+const struct html_viewer_isolation_ops *html_viewer_isolation_ops(void) {
+  return g_isolation_ops;
+}
+
+static int html_viewer_state_is_terminal(enum html_viewer_nav_state state) {
+  return state == HTML_VIEWER_NAV_READY ||
+         state == HTML_VIEWER_NAV_FAILED ||
+         state == HTML_VIEWER_NAV_CANCELLED ||
+         state == HTML_VIEWER_NAV_IDLE;
+}
+
 int hv_text_looks_codeish(const char *text) {
   size_t len = 0;
   size_t spaces = 0;
@@ -244,16 +314,63 @@ int hv_build_cookie_header(struct html_viewer_app *app, const char *host,
   return wrote_any;
 }
 
+static int g_html_viewer_strict_mode = 0;
+
+void html_viewer_state_strict_mode_set(int enabled) {
+  g_html_viewer_strict_mode = enabled ? 1 : 0;
+}
+
+int html_viewer_state_strict_mode_enabled(void) {
+  return g_html_viewer_strict_mode;
+}
+
 void html_viewer_set_state(struct html_viewer_app *app,
                            enum html_viewer_nav_state state,
                            const char *stage) {
   if (!app) return;
+  enum html_viewer_nav_state from = app->nav_state;
+  int suspicious = (from != state &&
+                    !html_viewer_state_transition_allowed(from, state));
+  if (suspicious) {
+#ifndef UNIT_TEST
+    klog(KLOG_WARN, "[browser] suspicious state transition");
+#endif
+    if (g_html_viewer_strict_mode) {
+      /* Hard escalation: route the transition to FAILED so the rest of the
+       * pipeline observes a coherent navigation outcome instead of a state
+       * pair that violates the state machine. */
+      kstrcpy(app->last_stage, sizeof(app->last_stage),
+              stage && stage[0] ? stage : "state-machine");
+      kstrcpy(app->last_error_reason, sizeof(app->last_error_reason),
+              "Suspicious browser state transition (strict mode).");
+      app->nav_state = HTML_VIEWER_NAV_FAILED;
+      app->loading = 0;
+      if (g_isolation_ops && g_isolation_ops->heartbeat) {
+        g_isolation_ops->heartbeat(app->active_navigation_id,
+                                   HTML_VIEWER_NAV_FAILED);
+      }
+      if (g_isolation_ops && g_isolation_ops->on_fatal) {
+        g_isolation_ops->on_fatal(app->active_navigation_id, app->last_stage,
+                                  app->last_error_reason);
+      }
+      return;
+    }
+  }
   app->nav_state = state;
   app->loading = (state == HTML_VIEWER_NAV_LOADING ||
                   state == HTML_VIEWER_NAV_REDIRECTING ||
                   state == HTML_VIEWER_NAV_RENDERING);
   if (stage && stage[0]) {
     kstrcpy(app->last_stage, sizeof(app->last_stage), stage);
+  }
+  if (g_isolation_ops && g_isolation_ops->heartbeat &&
+      html_viewer_state_is_terminal(state)) {
+    g_isolation_ops->heartbeat(app->active_navigation_id, state);
+  }
+  if (state == HTML_VIEWER_NAV_FAILED && g_isolation_ops &&
+      g_isolation_ops->on_fatal) {
+    g_isolation_ops->on_fatal(app->active_navigation_id, app->last_stage,
+                              app->last_error_reason);
   }
 }
 
@@ -281,6 +398,7 @@ void html_viewer_begin_navigation(struct html_viewer_app *app, const char *url) 
   app->external_images_loaded = 0;
   hv_resource_budget_reset(app);
   hv_render_budget_reset(app);
+  hv_parse_budget_reset(app);
   app->last_error_reason[0] = '\0';
   kstrcpy(app->last_stage, sizeof(app->last_stage), "loading");
   if (url && url[0]) {

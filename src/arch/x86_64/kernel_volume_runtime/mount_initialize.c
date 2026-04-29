@@ -179,6 +179,9 @@ int initialize_encrypted_data_volume(
     dbg_puts("[kvr] crypt blk0 read fail\n");
   }
   buffer_cache_invalidate(crypt_dev);
+  /* Install the journal root secret BEFORE mount_root_capyfs so the format-
+   * triggered journal hook produces an authenticated journal from day one. */
+  install_journal_root_secret_from_key(state->active_volume_key);
   if (mount_root_capyfs(state, io, crypt_dev, "DATA cifrada") != 0) {
     dbg_puts("[kvr] mount after format fail\n");
     buffer_cache_invalidate(crypt_dev);

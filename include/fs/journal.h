@@ -7,8 +7,13 @@
 
 #define JOURNAL_MAGIC 0x4A524E4C
 #define JOURNAL_VERSION 1
+#define JOURNAL_VERSION_AUTH 2
 #define JOURNAL_MAX_BLOCKS 256
 #define JOURNAL_ENTRY_MAX_BLOCKS 16
+#define JOURNAL_HMAC_TAG_SIZE 16
+#define JOURNAL_HMAC_KEY_MAX 32
+
+#define JOURNAL_ENTRY_FLAG_HMAC 0x1u
 
 enum journal_entry_type {
   JOURNAL_ENTRY_INVALID = 0,
@@ -60,6 +65,8 @@ struct journal {
   int replaying;
   uint8_t *buffer;
   size_t buffer_size;
+  uint8_t hmac_key[JOURNAL_HMAC_KEY_MAX];
+  uint32_t hmac_key_len;
 };
 
 struct journal_transaction {
@@ -76,6 +83,12 @@ int journal_init(struct journal *j, struct block_device *dev,
                  uint64_t start_block, uint32_t block_count);
 int journal_format(struct journal *j, struct block_device *dev,
                    uint64_t start_block, uint32_t block_count);
+int journal_format_authenticated(struct journal *j, struct block_device *dev,
+                                 uint64_t start_block, uint32_t block_count,
+                                 const uint8_t *key, uint32_t key_len);
+int journal_set_hmac_key(struct journal *j, const uint8_t *key,
+                         uint32_t key_len);
+int journal_is_authenticated(const struct journal *j);
 int journal_replay(struct journal *j);
 int journal_checkpoint(struct journal *j);
 

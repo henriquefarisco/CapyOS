@@ -32,6 +32,8 @@ struct buffer_cache_stats {
     uint64_t writebacks;
     uint64_t read_errors;
     uint64_t write_errors;
+    uint64_t readaheads;
+    uint64_t writeback_passes;
 };
 
 void buffer_cache_init(void);
@@ -44,5 +46,24 @@ void buffer_cache_invalidate(struct block_device *dev);
 void buffer_cache_stats_get(struct buffer_cache_stats *out);
 int buffer_cache_last_error_block(uint32_t *out_block_no);
 int buffer_cache_last_error_code(void);
+
+/* Speculative read-ahead: brings up to count consecutive blocks starting at
+ * start_block into the cache without holding any refcount. Stops early on
+ * the first read error. Returns the number of blocks successfully loaded. */
+uint32_t buffer_cache_readahead(struct block_device *dev,
+                                uint32_t start_block, uint32_t count);
+
+/* Background writeback pacer: flushes up to max_blocks dirty entries for the
+ * given device (or all devices if dev is NULL) without removing them from the
+ * cache. Stops early on the first write error. Returns the number of blocks
+ * written back. Designed for cooperative pacing from idle ticks/jobs so a
+ * long burst of dirty blocks does not stall input or UI when sync is
+ * eventually called. */
+uint32_t buffer_cache_writeback_pass(struct block_device *dev,
+                                     uint32_t max_blocks);
+
+/* Number of dirty blocks currently held for the given device, or for all
+ * devices when dev is NULL. */
+uint32_t buffer_cache_dirty_count(struct block_device *dev);
 
 #endif

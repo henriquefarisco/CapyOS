@@ -11,10 +11,14 @@ int run_html_viewer_tests(void) {
   fails += test_html_viewer_all_common_redirect_statuses();
   fails += test_html_viewer_redirect_limit_fails_controlled();
   fails += test_html_viewer_escape_cancels_loading_navigation();
+  fails += test_html_viewer_state_machine_helpers();
+  fails += test_html_viewer_strict_transition_escalates();
+  fails += test_html_viewer_isolation_hooks();
   fails += test_html_viewer_loads_external_assets();
   fails += test_html_viewer_http_cache_enforces_memory_budget();
   fails += test_html_viewer_external_resource_budget_logs_failure();
   fails += test_html_viewer_render_budget_logs_failure();
+  fails += test_html_viewer_parse_budget_logs_failure();
   fails += test_html_viewer_about_metrics_pages();
   fails += test_html_viewer_discards_stale_response();
   fails += test_html_viewer_safe_mode_on_large_document();

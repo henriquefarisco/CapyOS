@@ -29,6 +29,7 @@
 #define HV_EXTERNAL_IMAGE_LIMIT 4
 #define HV_EXTERNAL_CSS_LIMIT 4
 #define HV_RENDER_NODE_BUDGET 128
+#define HV_PARSE_NODE_BUDGET 384
 #define HV_ERROR_REASON_MAX 191
 #define HV_HTML_SNIFF_LIMIT 8192
 #define HV_META_REFRESH_AUTO_LIMIT_SECONDS 5
@@ -150,6 +151,8 @@ int hv_is_space(char ch);
 int hv_streq_ci(const char *a, const char *b);
 int hv_contains_ci(const char *text, const char *needle);
 int hv_parse_locked(const char *html, size_t len, struct html_document *doc);
+int hv_parse_locked_with_app(struct html_viewer_app *app, const char *html,
+                              size_t len, struct html_document *doc);
 void hv_copy_prefix(char *dst, size_t dst_len, const char *src, size_t src_len);
 size_t hv_path_directory_length(const char *path);
 void hv_trim_text(char *text);
@@ -245,6 +248,12 @@ void hv_resource_budget_mark_exhausted(struct html_viewer_app *app,
 void hv_render_budget_reset(struct html_viewer_app *app);
 void hv_render_budget_begin_frame(struct html_viewer_app *app);
 int hv_render_budget_take(struct html_viewer_app *app, const char *stage);
+void hv_parse_budget_reset(struct html_viewer_app *app);
+int hv_parse_budget_take(struct html_viewer_app *app, const char *stage);
+void hv_parse_budget_mark_exhausted(struct html_viewer_app *app,
+                                    const char *stage);
+void hv_parse_app_set(struct html_viewer_app *app);
+struct html_viewer_app *hv_parse_app_get(void);
 
 void html_viewer_load_text_document(struct html_viewer_app *app,
                                     const char *title, const char *text,

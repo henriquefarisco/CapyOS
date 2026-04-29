@@ -3,6 +3,15 @@
 struct html_node *html_push_node(struct html_document *doc) {
   struct html_node *node = NULL;
   if (!doc || doc->node_count >= HTML_MAX_NODES) return NULL;
+  /* Parse-phase budget. The current parsing app (set via hv_parse_app_set)
+   * is consulted; if no parse is in progress, the budget is skipped (this
+   * keeps internal scaffolding pages like quick_start unrestricted). */
+  {
+    struct html_viewer_app *parse_app = hv_parse_app_get();
+    if (parse_app && !hv_parse_budget_take(parse_app, "parse")) {
+      return NULL;
+    }
+  }
   node = &doc->nodes[doc->node_count++];
   kmemzero(node, sizeof(*node));
   node->type = HTML_NODE_TEXT;

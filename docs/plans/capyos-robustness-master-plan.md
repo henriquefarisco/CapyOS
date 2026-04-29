@@ -185,6 +185,86 @@ Observacao inicial:
 - O build padrao ainda usa `x86_64-linux-gnu-*` e desativa stack protector,
   conforme aviso do `Makefile`; ele fica documentado como build rapido de
   desenvolvimento, enquanto `TOOLCHAIN64=elf` e a trilha endurecida.
+- Em 2026-04-28, M6.5 saiu de `Ainda nao iniciado` para `Parcial`: o journal
+  do CAPYFS ganhou modo autenticado (`JOURNAL_VERSION_AUTH = 2`) com tag
+  HMAC-SHA256 truncada em 16 bytes embutida no bloco COMMIT, key por volume
+  injetada via `journal_set_hmac_key()`/`journal_format_authenticated()`,
+  defer-and-verify no replay para que dados forjados nao sejam aplicados,
+  recusa explicita de replay em volume v2 sem chave configurada e cinco
+  testes novos em `tests/test_journal.c` cobrindo formato, replay com chave
+  correta, replay com chave errada, replay sem chave e detecao de tamper de
+  payload; falta integrar a derivacao de chave por volume em
+  `capyfs_journal_integration.c`.
+- Em 2026-04-28, M5.4 avancou de `Parcial` para `Implementado` em sua
+  primitiva: `buffer_cache_readahead()`, `buffer_cache_writeback_pass()` e
+  `buffer_cache_dirty_count()` foram adicionados a `include/fs/buffer.h` e
+  `src/fs/cache/buffer_cache.c`, com contadores `readaheads` e
+  `writeback_passes` expostos via `perf-fs`; consumidores reais (FS,
+  scheduler tick) ainda devem chamar essas APIs em proxima trilha.
+- Em 2026-04-28, M5.5 ganhou primitiva generica de orcamento/cancelamento
+  em `include/util/op_budget.h` + `src/util/op_budget.c`, cobrindo
+  consumo, exaustao, cancelamento externo, reset e razao estavel; coberto
+  por `tests/test_op_budget.c`. A integracao em rede/storage segue como
+  proximo passo.
+- Em 2026-04-28, M6.3 passou a oferecer API centralizada
+  `include/auth/privilege.h` + `src/auth/privilege.c` com
+  `privilege_user_is_admin`, `privilege_session_is_admin`,
+  `privilege_active_is_admin`, `privilege_check_admin_or_self`,
+  `privilege_log_denied` e `privilege_log_granted`; `add-user` e `set-pass`
+  em `user_manage.c` migraram para essa API e emitem `[priv] denied`
+  consistente; `tests/test_privilege.c` cobre os casos principais.
+- Em 2026-04-28, M8.1 ganhou estado formal observavel:
+  `html_viewer_state_name`, `html_viewer_state_transition_allowed` e
+  ganchos de isolamento `html_viewer_set_isolation_ops`/heartbeat/on_fatal
+  (placeholder ate processos reais existirem); `set_state` agora emite
+  `[browser] suspicious state transition` no klog quando uma transicao
+  invalida acontece; coberto por `test_html_viewer_state_machine_helpers`
+  e `test_html_viewer_isolation_hooks` em
+  `tests/html_viewer/navigation_cases.inc`.
+- Em 2026-04-28, M8.3 foi estendido para a fase de parse: novo
+  `HV_PARSE_NODE_BUDGET` aplicado por `hv_parse_budget_take()` dentro de
+  `html_push_node` quando `hv_parse_app_get()` esta ativo; `forms_and_response.c`
+  agora usa `hv_parse_locked_with_app(app, ...)` para o caminho real, enquanto
+  paginas internas (about:home, error pages) ficam fora do orcamento via
+  `hv_parse_locked` legado; `tests/html_viewer/resource_cases.inc` ganhou
+  `test_html_viewer_parse_budget_logs_failure` validando flag, safe_mode,
+  motivo e log `[browser] parse node budget exhausted`.
+- Em 2026-04-28, M3.5 ganhou checklist humano em
+  `docs/testing/pr-and-release-checklist.md`, indexado em
+  `docs/README.md`, cobrindo gates automaticos, atualizacao do plano de
+  robustez, performance, seguranca, browser, FS e documentacao.
+- Em 2026-04-29, M6.3 foi promovido para `Implementado` apos auditoria
+  confirmar que todos os call sites de privilegio admin no shell ja
+  passam pela API centralizada (`user_manage.c` migrou e nenhum outro
+  comando faz `role == "admin"`); usos remanescentes de `"admin"` em
+  `recovery_storage.c` e `service_helpers.c` referem-se ao USUARIO admin
+  (operacoes), nao a checagem de privilegio.
+- Em 2026-04-29, M6.5 ganhou integracao de chave por volume:
+  `capyfs_journal_install_root_secret()`/`clear_root_secret()`/
+  `root_secret_installed()` foram adicionados ao header e `capyfs_journal_mount_hook`
+  agora aceita superblock e deriva chave HMAC por volume com
+  `HMAC-SHA256(root_secret, super_bytes)`; o runtime de mount em
+  `kernel_volume_runtime` instala o segredo derivado da chave do volume
+  ANTES de `mount_root_capyfs` para que a primeira montagem ja crie
+  journal autenticado; `tests/test_capyfs_journal_cause.c` ganhou
+  `test_root_secret_install_clear` e `test_authenticated_mount_with_super`.
+- Em 2026-04-29, M5.4 ganhou cobertura de testes em
+  `tests/test_buffer_cache_pacing.c` validando read-ahead com clamp por
+  block_count, refusal de block_size errado, budget de writeback respeitando
+  `max_blocks` (3 entao 100), parada na falha do backend e recuperacao
+  apos retorno do backend; suite registrada em `test_runner.c`.
+- Em 2026-04-29, M8.1 ganhou modo estrito opt-in:
+  `html_viewer_state_strict_mode_set/enabled` em `include/apps/html_viewer.h`;
+  quando ativo, transicoes invalidas em `set_state` sao escaladas para
+  `HTML_VIEWER_NAV_FAILED` com motivo `Suspicious browser state transition
+  (strict mode).` e disparam `on_fatal` no isolation hook; permissive mode
+  permanece o default; coberto por
+  `test_html_viewer_strict_transition_escalates`.
+- Em 2026-04-29, versao alpha promovida para `0.8.0-alpha.3+20260429`:
+  `VERSION.yaml`, `include/core/version.h`, `README.md`,
+  `docs/screenshots/0.8.0-alpha.3/`, `docs/releases/capyos-0.8.0-alpha.3+20260429.md`,
+  `docs/screenshots/README.md` e `docs/releases/README.md` alinhados;
+  `make version-audit` passou.
 
 ## M0 - Verdade oficial e governanca tecnica
 
@@ -236,7 +316,7 @@ responsabilidade.
 | M3.2 | Auditoria automatica de monolitos | Implementado | `make layout-audit` executa `audit_source_layout.py --strict` e falha com monolitos, headers internos ambiguos ou mistura suspeita; `make layout-audit-report` gera relatorio informativo; `make release-check` inclui o gate e passou | Manter excecoes documentadas e revisar limites por release |
 | M3.3 | Separacao por responsabilidade em rede/browser/shell | Implementado | Todos os 9 modulos monolito migrados para TUs em `develop` (html_viewer, shell_main, input_runtime, http, kernel_volume_runtime, capyfs/runtime, system_control, system_info, uefi_loader); cada modulo tem `internal/<mod>_internal.h` como fronteira; `make layout-audit` passa em modo estrito | Manter padrao em novos modulos; M3.4 (auditoria de includes) continua pendente |
 | M3.4 | Politica de includes e fronteiras internas | Implementado | `tools/scripts/audit_source_layout.py` detecta includes cruzados de headers `internal/` entre modulos distintos; inclui relativos (`../internal/`) por design (nao podem cruzar fronteiras); tree atual sem violacoes; `make layout-audit` passa em modo estrito | Manter a regra ativa em cada PR; estender com verificacao de `include/` publicos que exponham simbolos internos se necessario |
-| M3.5 | Atualizacao deste plano por feature relevante | Parcial | Este documento cria a regra | Incluir verificacao manual no checklist de PR/release |
+| M3.5 | Atualizacao deste plano por feature relevante | Implementado | `docs/testing/pr-and-release-checklist.md` formaliza o checklist humano que cobre atualizacao da matriz, gates automaticos, performance, seguranca, browser e FS; indexado em `docs/README.md` | Revisar o checklist a cada release e adicionar itens novos quando aparecerem dominios |
 
 ## M4 - Processos, scheduler e servicos reais
 
@@ -260,8 +340,8 @@ Objetivo: medir antes de otimizar e impedir regressao de boot, FS, rede e UI.
 | M5.1 | Metricas de boot por estagio | Implementado | `perf-boot` expoe 6 estagios (`platform-core`, `boot-config`, `storage-probe`, `serial-console`, `input-probe`, `runtime-network`) e total ate login; `make smoke-x64-boot-perf` e `make release-check` passaram em 2026-04-24 | Refinar granularidade depois que houver historico de regressao |
 | M5.2 | Comandos de diagnostico de performance | Implementado | `perf-boot`, `perf-net`, `perf-fs` e `perf-mem` foram registrados no CapyCLI e documentados em `docs/reference/cli-reference.md`; `make release-check` passou em 2026-04-24 | Expandir saida conforme novos contadores forem adicionados |
 | M5.3 | Baseline de regressao de boot | Implementado | `docs/performance/boot-baseline.json` registra `total_boot_to_login_us=5675879`; `make boot-perf-baseline BOOT_PERF_LOG=build/ci/smoke_x64_boot_perf.boot1.log` validou limite de 20% | Criar baselines separados quando VMware+E1000 e Hyper-V tiverem smokes oficiais estaveis |
-| M5.4 | Otimizacao de FS/cache | Parcial | `buffer_cache_stats_get` expoe validos, sujos, pinned, hits, misses, evictions, writebacks e erros; `perf-fs` imprime esses contadores | Adicionar write-back controlado e read-ahead simples apos baseline |
-| M5.5 | Operacoes longas sem travar input/UI | Parcial | Browser tem mitigacoes e yield hook de rede | Generalizar budgets e cancelamento para rede/browser/storage |
+| M5.4 | Otimizacao de FS/cache | Implementado | `buffer_cache_stats_get` expoe validos, sujos, pinned, hits, misses, evictions, writebacks, erros, `readaheads` e `writeback_passes`; `perf-fs` imprime esses contadores; APIs `buffer_cache_readahead`, `buffer_cache_writeback_pass` e `buffer_cache_dirty_count` expostas em `include/fs/buffer.h`; `tests/test_buffer_cache_pacing.c` cobre clamp de read-ahead, mismatch de block_size, budget de writeback, parada em erro do backend e recuperacao | Conectar consumidores reais (capyfs/runtime, scheduler tick) quando M4 entregar workers; adicionar microbenchmark de regressao no smoke quando o harness oficial estiver pronto |
+| M5.5 | Operacoes longas sem travar input/UI | Parcial | Browser tem mitigacoes e yield hook de rede; `include/util/op_budget.h` + `src/util/op_budget.c` introduzem primitiva generica `op_budget` com consumo, exaustao, cancelamento externo, reset e razao estavel; `tests/test_op_budget.c` cobre os caminhos | Adotar `op_budget` em rede/storage/browser para uniformizar cancelamento e remover budgets ad-hoc |
 
 ## M6 - Seguranca base
 
@@ -272,9 +352,9 @@ de dados antes de ampliar apps e internet.
 |---|---|---|---|---|
 | M6.1 | Politica de senha e lockout | Implementado | `auth_policy_validate_password` aplica tamanho minimo; `system_login` chama `auth_policy_check_allowed`, `auth_policy_record_success` e `auth_policy_record_failure`; `user_record_init` e `userdb_set_password` validam a politica; `tests/test_auth_policy.c` cobre senha minima, lockout, unlock e `auth-status`; `make test` passou | Evoluir depois para persistir contadores de lockout entre boots e politicas por perfil |
 | M6.2 | Auditoria persistente de eventos sensiveis | Parcial | `klog` persistente existe; `[auth]` cobre login/falha/lockout; `[net]` cobre DHCP; `[update]` cobre stage/arm/disarm/clear/import-sucesso/import-mismatch; `[recovery]` cobre reparo, reset-admin e login de recuperacao; `tests/test_audit_events.c` valida cenarios de update | Expandir privilegios (M6.3); validar persistencia em smoke real com `/var/log/capyos_klog.txt` |
-| M6.3 | Privilegios centralizados | Parcial | VFS tem metadados/permissoes iniciais; `update-import-manifest` usa escritor de runtime privilegiado controlado para atualizar `/system/update/latest.ini` sem enfraquecer permissoes de usuario | Centralizar checagens para comandos e paths criticos e substituir elevacoes locais por API unica |
+| M6.3 | Privilegios centralizados | Implementado | `include/auth/privilege.h` + `src/auth/privilege.c` definem API unica (`privilege_user_is_admin`, `privilege_session_is_admin`, `privilege_active_is_admin`, `privilege_check_admin_or_self`, `privilege_log_denied`, `privilege_log_granted`); `add-user` e `set-pass` em `user_manage.c` usam essa API e emitem `[priv] denied`; auditoria 2026-04-29 confirmou que nenhum outro comando de shell faz checagem `role == "admin"` (usos remanescentes de `"admin"` em `recovery_storage.c` e `service_helpers.c` operam sobre o usuario admin, nao sobre privilegio); `tests/test_privilege.c` cobre admin/usuario/admin-or-self/sessao ativa | Estender quando novos dominios de privilegio surgirem (ex.: capabilities por servico) |
 | M6.4 | Build oficial endurecido | Parcial | `make release-check` passou em 2026-04-24 com `TOOLCHAIN64=elf`, `-fstack-protector-strong`, layout estrito, version audit, baseline self-test, ISO UEFI e verificacao SHA-256; build host permanece apenas para desenvolvimento | Completar assinatura dos checksums e smoke VMware+E1000 antes de promover para `Implementado` |
-| M6.5 | Integridade autenticada de metadata CAPYFS | Ainda nao iniciado | AES-XTS protege confidencialidade, mas integridade segue pendente | Projetar metadata autenticada e migracao de formato |
+| M6.5 | Integridade autenticada de metadata CAPYFS | Implementado | Journal v2 autenticado em `src/fs/journal/journal.c` (`JOURNAL_VERSION_AUTH = 2`, tag HMAC-SHA256 truncado em 16 bytes embutida no bloco COMMIT, defer-and-verify no replay, recusa de volumes v2 sem chave); integracao por volume em `src/fs/capyfs/capyfs_journal_integration.c` (`capyfs_journal_install_root_secret`, `capyfs_journal_clear_root_secret`, `capyfs_journal_root_secret_installed` e `capyfs_journal_mount_hook(dev, data_start, super_bytes, super_len)` derivando chave com `HMAC-SHA256(root_secret, super_bytes)`); runtime de mount em `arch/x86_64/kernel_volume_runtime/{public_mount_api,mount_initialize}.c` instala o segredo a partir da chave do volume ANTES de `mount_root_capyfs` para que a primeira montagem ja crie journal autenticado; `tests/test_journal.c` cobre formato, replay com chave correta, recusa por chave errada/ausente e tamper; `tests/test_capyfs_journal_cause.c` cobre `install/clear/installed` e mount autenticado com superblock | Mover a chave armazenada para fora do bloco do journal e estender HMAC para metadata fora-do-journal (bitmap, inode table, superblock) em ciclo futuro |
 
 ## M7 - CAPYFS, recovery e update transacional
 
@@ -296,9 +376,9 @@ rede instavel derrubem o sistema.
 
 | ID | Item | Status | Evidencia | Proximo passo |
 |---|---|---|---|---|
-| M8.1 | Browser com estado formal e falha controlada | Parcial | `browser-status-roadmap.md` declara Fase 1 fechada, mas sem isolamento | Manter Fase 1 e iniciar isolamento quando processos estiverem prontos |
+| M8.1 | Browser com estado formal e falha controlada | Implementado | `html_viewer_state_name`, `html_viewer_state_transition_allowed`, `html_viewer_set_isolation_ops` (heartbeat + on_fatal) formalizam o ciclo de vida; `set_state` registra `[browser] suspicious state transition` no klog quando uma transicao invalida e detectada; modo estrito opt-in (`html_viewer_state_strict_mode_set/enabled`) escala transicoes invalidas para `HTML_VIEWER_NAV_FAILED` com motivo estavel `Suspicious browser state transition (strict mode).` e dispara `on_fatal` no isolation hook; permissive mode permanece o default; `tests/html_viewer/navigation_cases.inc` cobre transicoes validas/invalidas, modo estrito (`test_html_viewer_strict_transition_escalates`) e ganchos de isolamento | Conectar isolation ops ao supervisor real e habilitar strict mode globalmente em release builds quando M4 entregar processos |
 | M8.2 | Isolamento por processo e watchdog | Ainda nao iniciado | Roadmap do browser lista Fase 2 aberta | Depende de M4: processos, scheduler e kill/restart seguro |
-| M8.3 | Render/fetch incremental | Parcial | `navigation_budget.c` centraliza budgets por navegacao/frame; CSS/imagens de rede consomem `external_fetch_attempts` e paint consome `render_nodes_visited`; esgotamento ativa `safe_mode`, preserva motivo em `last_error_reason` e registra `[browser] external resource budget exhausted` ou `[browser] render node budget exhausted` no `klog`; `tests/html_viewer/resource_cases.inc` cobre ambos e `make test` passou | Estender budgets para parse/layout mais profundo e fatiar fetch/render em etapas cooperativas |
+| M8.3 | Render/fetch incremental | Parcial | `navigation_budget.c` centraliza budgets por navegacao/frame; CSS/imagens de rede consomem `external_fetch_attempts`, paint consome `render_nodes_visited` e parse consome `parse_nodes_visited` (`HV_PARSE_NODE_BUDGET = 384`) via `hv_parse_budget_take` em `html_push_node` quando `hv_parse_app_get()` indica navegacao real; `forms_and_response.c` usa `hv_parse_locked_with_app(app, ...)` para o caminho real e paginas internas continuam isentas; esgotamento ativa `safe_mode`, preserva motivo em `last_error_reason` e registra `[browser] parse|external resource|render node budget exhausted` no `klog`; `tests/html_viewer/resource_cases.inc` cobre os tres, incluindo `test_html_viewer_parse_budget_logs_failure` | Fatiar fetch/parse/render em etapas cooperativas explicitas via `op_budget` quando o supervisor de processos existir |
 | M8.4 | DNS cache com TTL e HTTP cache | Implementado | `src/net/services/dns_cache.c` aplica TTL em segundos; `tests/test_dns_cache.c` valida expiracao; `src/apps/html_viewer/common.c` limita cache HTTP a `HV_HTTP_CACHE_TOTAL_MAX`, coleta estatisticas e rejeita `no-store`; `tests/html_viewer/resource_cases.inc` valida budget e eviccao; `make release-check` passou em 2026-04-23 | Evoluir para cache persistente ou ETag/If-None-Match somente apos metricas de uso real |
 | M8.5 | Telemetria de browser e rede | Implementado | `about:network` expoe DNS cache e HTTP cache; `about:memory` expoe heap e memoria do cache HTTP; `tests/html_viewer/resource_cases.inc` valida as paginas; `make release-check` passou em 2026-04-23 | Expandir com latencia por request e counters por etapa quando o pipeline incremental estiver pronto |
 | M8.6 | JavaScript robusto e sandboxed | Ainda nao iniciado | Roadmap declara JS robusto como fase futura | Iniciar somente apos isolamento e budgets confiaveis |

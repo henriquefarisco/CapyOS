@@ -4,9 +4,9 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-24
-Versao de referencia: `0.8.0-alpha.2`
-Consolidacao atual de `develop`: plano de robustez em execucao com DHCP automatico no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP e smoke x64 persistente validado.
+Ultima atualizacao: 2026-04-29
+Versao de referencia: `0.8.0-alpha.3`
+Consolidacao atual de `develop`: plano de robustez em execucao com DHCP automatico no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP, smoke x64 persistente, journal CAPYFS autenticado por volume, primitiva `op_budget`, API de privilegios centralizada, pacing do buffer cache e estado formal do navegador com modo estrito.
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -177,15 +177,15 @@ acompanhar a evolucao visual do sistema por release alpha.
 
 ### Boot e login
 
-![Login do sistema](docs/screenshots/0.8.0-alpha.2/login-system.png)
+![Login do sistema](docs/screenshots/0.8.0-alpha.3/login-system.png)
 
-![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.2/bootstage1-iso.png)
+![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.3/bootstage1-iso.png)
 
 ### Desktop, navegador e apps
 
-![Desktop com navegador](docs/screenshots/0.8.0-alpha.2/desktop-browser1.png)
+![Desktop com navegador](docs/screenshots/0.8.0-alpha.3/desktop-browser1.png)
 
-![Desktop com apps](docs/screenshots/0.8.0-alpha.2/desktop-apps.png)
+![Desktop com apps](docs/screenshots/0.8.0-alpha.3/desktop-apps.png)
 
 ## Estado atual por dominio
 

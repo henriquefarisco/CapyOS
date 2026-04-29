@@ -147,6 +147,8 @@ void buffer_cache_init(void) {
     g_buffer_cache_stats.writebacks = 0;
     g_buffer_cache_stats.read_errors = 0;
     g_buffer_cache_stats.write_errors = 0;
+    g_buffer_cache_stats.readaheads = 0;
+    g_buffer_cache_stats.writeback_passes = 0;
     cache_initialized = 1;
 }
 
@@ -313,3 +315,74 @@ int buffer_cache_last_error_block(uint32_t *out_block_no) {
 }
 
 int buffer_cache_last_error_code(void) { return g_last_error_code; }
+
+uint32_t buffer_cache_readahead(struct block_device *dev,
+                                uint32_t start_block, uint32_t count) {
+    if (!cache_initialized) {
+        buffer_cache_init();
+    }
+    if (!dev || dev->block_size != BUFFER_BLOCK_SIZE || count == 0) {
+        return 0;
+    }
+    uint32_t loaded = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (start_block + i < start_block) {
+            break; /* overflow guard */
+        }
+        if (dev->block_count && (start_block + i) >= dev->block_count) {
+            break;
+        }
+        struct buffer_head *bh = buffer_get(dev, start_block + i);
+        if (!bh) {
+            break;
+        }
+        buffer_release(bh);
+        loaded++;
+    }
+    g_buffer_cache_stats.readaheads += loaded;
+    return loaded;
+}
+
+uint32_t buffer_cache_writeback_pass(struct block_device *dev,
+                                     uint32_t max_blocks) {
+    if (!cache_initialized) {
+        buffer_cache_init();
+    }
+    if (max_blocks == 0) {
+        return 0;
+    }
+    uint32_t written = 0;
+    /* Walk LRU from tail (least recently used) so frequently re-touched
+     * blocks have a chance to coalesce more writes before being flushed. */
+    struct buffer_head *bh = lru_tail;
+    while (bh && written < max_blocks) {
+        struct buffer_head *prev = bh->lru_prev;
+        if (bh->valid && bh->dirty && (!dev || bh->dev == dev)) {
+            int rc = buffer_write_back(bh);
+            if (rc != 0) {
+                /* error already counted in stats by buffer_write_back */
+                break;
+            }
+            written++;
+        }
+        bh = prev;
+    }
+    if (written > 0) {
+        g_buffer_cache_stats.writeback_passes++;
+    }
+    return written;
+}
+
+uint32_t buffer_cache_dirty_count(struct block_device *dev) {
+    if (!cache_initialized) {
+        buffer_cache_init();
+    }
+    uint32_t count = 0;
+    for (size_t i = 0; i < BUFFER_CACHE_MAX; ++i) {
+        const struct buffer_head *bh = &buffer_cache[i];
+        if (!bh->valid || !bh->dirty) continue;
+        if (dev && bh->dev != dev) continue;
+        count++;
+    }
+    return count;
+}

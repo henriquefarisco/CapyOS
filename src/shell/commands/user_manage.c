@@ -2,6 +2,7 @@
 #include "shell/core.h"
 
 #include "lang/localization.h"
+#include "auth/privilege.h"
 #include "auth/user.h"
 #include "auth/user_prefs.h"
 #include "fs/vfs.h"
@@ -165,15 +166,12 @@ static const char *user_manage_text(const char *language,
   }
 }
 
-static int role_is_admin(const struct user_record *user) {
-  return user && shell_string_equal(user->role, "admin");
-}
-
-static int ensure_admin(struct shell_context *ctx) {
+static int ensure_admin(struct shell_context *ctx, const char *action) {
   const char *language = shell_current_language();
   const struct user_record *user =
       ctx && ctx->session ? session_user(ctx->session) : NULL;
-  if (!role_is_admin(user)) {
+  if (!privilege_user_is_admin(user)) {
+    privilege_log_denied(action, user);
     shell_print_error(user_manage_text(language, USER_MANAGE_DENIED));
     return -1;
   }
@@ -263,7 +261,7 @@ static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
     shell_newline();
     return -1;
   }
-  if (ensure_admin(ctx) != 0) {
+  if (ensure_admin(ctx, "add-user") != 0) {
     return -1;
   }
 
@@ -388,8 +386,8 @@ static int cmd_set_pass(struct shell_context *ctx, int argc, char **argv) {
     return -1;
   }
 
-  int is_self = shell_string_equal(current->username, target_user);
-  if (!is_self && !role_is_admin(current)) {
+  if (!privilege_check_admin_or_self(current, target_user)) {
+    privilege_log_denied("set-pass:other", current);
     shell_print_error(user_manage_text(language, USER_MANAGE_PASS_DENIED));
     return -1;
   }

@@ -174,6 +174,56 @@ static int test_html_viewer_render_budget_logs_failure(void) {
   return fails;
 }
 
+static int test_html_viewer_parse_budget_logs_failure(void) {
+  struct html_viewer_app *app = NULL;
+  int fails = 0;
+
+  memset(&g_test_window, 0, sizeof(g_test_window));
+  klog_reset();
+  html_viewer_open();
+  app = (struct html_viewer_app *)g_test_window.user_data;
+  fails += expect_true(app != NULL, "browser should open before parse-budget test");
+  if (!app) return fails;
+
+  /* Build a body with more <p> tags than HV_PARSE_NODE_BUDGET so
+   * html_push_node hits the soft cap before HTML_MAX_NODES. */
+  static char html_buf[40 * 1024];
+  size_t pos = 0;
+  pos += (size_t)snprintf(html_buf + pos, sizeof(html_buf) - pos,
+                           "<html><head><title>Parse Budget</title></head>"
+                           "<body><h1>Parse Budget</h1>");
+  for (int i = 0;
+       i < HV_PARSE_NODE_BUDGET + 32 &&
+       pos + 32 < sizeof(html_buf);
+       i++) {
+    pos += (size_t)snprintf(html_buf + pos, sizeof(html_buf) - pos,
+                             "<p>x</p>");
+  }
+  pos += (size_t)snprintf(html_buf + pos, sizeof(html_buf) - pos,
+                           "</body></html>");
+
+  hv_doc_reset(&app->doc);
+  hv_parse_budget_reset(app);
+  app->safe_mode = 0;
+  hv_parse_locked_with_app(app, html_buf, pos, &app->doc);
+
+  fails += expect_true(app->parse_budget_exhausted == 1,
+                       "parse-budget exhaustion should set the flag");
+  fails += expect_true(app->safe_mode == 1,
+                       "parse-budget exhaustion should enable safe mode");
+  fails += expect_true(strstr(app->last_error_reason,
+                              "Parse node budget exhausted") != NULL,
+                       "parse-budget exhaustion should expose a reason");
+  fails += expect_true(strcmp(app->last_stage, "parse") == 0,
+                       "parse-budget exhaustion should identify parse stage");
+  fails += expect_true(strstr(klog_serialize(),
+                              "[browser] parse node budget exhausted") != NULL,
+                       "parse-budget exhaustion should reach klog");
+
+  if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
+  return fails;
+}
+
 static int test_html_viewer_about_metrics_pages(void) {
   struct html_viewer_app *app = NULL;
   int fails = 0;

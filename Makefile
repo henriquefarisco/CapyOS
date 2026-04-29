@@ -211,6 +211,7 @@ CAPYOS64_OBJS = \
 	$(BEARSSL_OBJS) \
 	$(BUILD)/x86_64/util/stack_protector.o \
 	$(BUILD)/x86_64/util/kstring.o \
+	$(BUILD)/x86_64/util/op_budget.o \
 	$(BUILD)/x86_64/shell/core/shell_main/context_commands.o \
 	$(BUILD)/x86_64/shell/core/shell_main/string_path_helpers.o \
 	$(BUILD)/x86_64/shell/core/shell_main/output_files.o \
@@ -286,6 +287,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/boot/boot_metrics.o \
 	$(BUILD)/x86_64/arch/x86_64/smp.o \
 	$(BUILD)/x86_64/auth/auth_policy.o \
+	$(BUILD)/x86_64/auth/privilege.o \
 	$(BUILD)/x86_64/kernel/pipe.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
@@ -520,7 +522,10 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
                tests/test_dns_cache.c src/net/services/dns_cache.c \
-               tests/test_boot_slot.c src/boot/boot_slot.c
+               tests/test_boot_slot.c src/boot/boot_slot.c \
+               tests/test_op_budget.c src/util/op_budget.c \
+               tests/test_privilege.c src/auth/privilege.c \
+               tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

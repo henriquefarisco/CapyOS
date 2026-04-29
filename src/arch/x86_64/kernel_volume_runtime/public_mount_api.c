@@ -87,6 +87,9 @@ int x64_kernel_volume_runtime_mount_encrypted_data_volume(
     dbg_puts("[kvr] try existing volume with handoff key\n");
     struct block_device *crypt_dev = open_crypt_volume_with_password(
         state, data_dev, state->handoff_volume_key);
+    /* Install the journal root secret BEFORE mount so the journal hook can
+     * derive a per-volume HMAC key on this very first mount. */
+    install_journal_root_secret_from_key(state->handoff_volume_key);
     if (crypt_dev && mount_root_capyfs(state, io, crypt_dev, "DATA cifrada") == 0) {
       dbg_puts("[kvr] existing volume mount with handoff key ok\n");
       local_copy(state->active_volume_key, state->active_volume_key_size,
@@ -136,6 +139,10 @@ int x64_kernel_volume_runtime_mount_encrypted_data_volume(
       struct block_device *crypt_dev =
           open_crypt_volume_with_password(state, data_dev, candidates[i]);
       if (!crypt_dev) continue;
+      /* Install the journal root secret derived from the candidate key BEFORE
+       * mount so the journal hook can run in authenticated mode. If mount
+       * fails the secret is replaced on the next iteration. */
+      install_journal_root_secret_from_key(candidates[i]);
       if (mount_root_capyfs(state, io, crypt_dev, "DATA cifrada") == 0) {
         mounted = 1;
         break;

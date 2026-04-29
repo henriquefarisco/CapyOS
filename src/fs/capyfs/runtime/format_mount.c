@@ -209,7 +209,8 @@ int mount_capyfs(struct block_device *dev, struct super_block *sb) {
 
     sb->root = root_dentry;
 
-    capyfs_journal_mount_hook(dev, mnt->super.data_start);
+    capyfs_journal_mount_hook(dev, mnt->super.data_start,
+                              &mnt->super, sizeof(mnt->super));
 
     return 0;
 }
