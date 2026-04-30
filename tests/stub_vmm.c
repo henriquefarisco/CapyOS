@@ -30,6 +30,19 @@ struct vmm_address_space *vmm_create_address_space(void) {
     return as;
 }
 
+/* M4 phase 7c: process_fork now calls vmm_clone_address_space.
+ * Host tests do not exercise the actual page-table walk; they just
+ * need a non-NULL clone that round-trips through destroy. The stub
+ * therefore mirrors create_address_space (fresh empty AS) so that
+ * the existing test_process_iter / test_process_destroy contracts
+ * keep passing. The real CoW behaviour is locked elsewhere by
+ * test_pmm_refcount and test_vmm_cow. */
+struct vmm_address_space *vmm_clone_address_space(
+    const struct vmm_address_space *src) {
+    (void)src;
+    return vmm_create_address_space();
+}
+
 void vmm_destroy_address_space(struct vmm_address_space *as) {
     if (!as) return;
     if (as->refcount > 0) {
@@ -64,4 +77,22 @@ int elf_load_from_file(struct process *proc, const char *path) {
 uint64_t pit_ticks(void) {
     static uint64_t fake_ticks = 0;
     return ++fake_ticks;
+}
+
+/* M4 phase 8f.1: tss.c references this symbol from interrupts.c. The
+ * real interrupts.c is not linked into the host unit-test binary
+ * (it does cli/sti and lgdt), so we provide a no-op stub that lets
+ * tss_layout tests link cleanly. */
+void x64_gdt_write_tss_descriptor(uint64_t low_bytes, uint64_t high_bytes) {
+    (void)low_bytes;
+    (void)high_bytes;
+}
+
+/* M4 phase 8f.4: user_task_init.c stores &x64_user_first_dispatch in
+ * t->context.rip so context_switch can later jump into the synthetic
+ * iretq path. The host build only cares about the SYMBOL ADDRESS;
+ * nothing actually calls this in the test binary. */
+void x64_user_first_dispatch(void) {
+    /* Intentionally empty: host tests inspect t->context.rip ==
+     * &x64_user_first_dispatch but never invoke the trampoline. */
 }

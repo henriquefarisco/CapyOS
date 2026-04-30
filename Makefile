@@ -106,6 +106,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_input_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_runtime_coordinator.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
+	$(BUILD)/x86_64/arch/x86_64/preemptive_boot.o \
+	$(BUILD)/x86_64/arch/x86_64/preemptive_demo.o \
+	$(BUILD)/x86_64/arch/x86_64/tss.o \
+	$(BUILD)/x86_64/arch/x86_64/arch_sched_hooks.o \
 	$(BUILD)/x86_64/arch/x86_64/framebuffer_console.o \
 	$(BUILD)/x86_64/arch/x86_64/boot_splash.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_io_helpers.o \
@@ -269,11 +273,14 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/elf_loader.o \
 	$(BUILD)/x86_64/kernel/embedded_hello.o \
 	$(BUILD)/x86_64/kernel/user_init.o \
+	$(BUILD)/x86_64/kernel/user_task_init.o \
 	$(BUILD)/x86_64/kernel/process.o \
 	$(BUILD)/x86_64/kernel/process_iter.o \
 	$(HELLO_BLOB_OBJ) \
 	$(BUILD)/x86_64/memory/pmm.o \
+	$(BUILD)/x86_64/memory/pmm_refcount.o \
 	$(BUILD)/x86_64/memory/vmm.o \
+	$(BUILD)/x86_64/memory/vmm_cow.o \
 	$(BUILD)/x86_64/memory/vmm_regions.o \
 	$(BUILD)/x86_64/fs/journal/journal.o \
 	$(BUILD)/x86_64/fs/fsck/fsck.o \
@@ -636,9 +643,13 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_process_destroy.c \
                tests/test_vmm_anon_regions.c \
                tests/test_service_runner.c src/services/service_runner.c \
-               tests/test_context_switch.c \
+               tests/test_context_switch.c tests/stub_arch_sched_hooks.c \
                tests/test_syscall_msr.c \
                tests/test_fault_classify.c src/arch/x86_64/fault_classify.c \
+               tests/test_pmm_refcount.c src/memory/pmm_refcount.c \
+               tests/test_vmm_cow.c src/memory/vmm_cow.c \
+               tests/test_tss_layout.c src/arch/x86_64/tss.c \
+               tests/test_user_task_init.c src/kernel/user_task_init.c \
                tests/test_cpu_local.c src/arch/x86_64/cpu/cpu_local.c \
                tests/test_enter_user_mode.c src/arch/x86_64/process_user_mode.c \
                tests/test_capylibc_abi.c \
@@ -765,6 +776,105 @@ smoke-x64-hello-segfault:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_hello_segfault.py $(SMOKE_X64_HELLO_SEGFAULT_ARGS)
 
+# M4 phase 8b: wiring smoke for the preemptive scheduler flip.
+# Builds the kernel with `-DCAPYOS_PREEMPTIVE_SCHEDULER` so the
+# `#ifdef` blocks in kernel_main.c are emitted, then verifies that
+# the boot path actually flips the policy from cooperative to PRIORITY
+# and marks `sched_running=1` BEFORE the existing 100Hz APIC tick
+# starts firing scheduler_tick. The smoke does NOT yet demonstrate
+# that two competing tasks are preempted on quantum exhaustion -
+# that end-to-end demo lands in phase 8c.
+#
+# `make clean` is forced for the same reason as `smoke-x64-hello-user`:
+# the per-source `.d` files do not track preprocessor macros.
+smoke-x64-preemptive:
+	@echo "Executando smoke test x64 (preemptive scheduler wiring)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_preemptive.py $(SMOKE_X64_PREEMPTIVE_ARGS)
+
+# M4 phase 8e: two-task kernel-mode preemption demo.
+# Builds the kernel with both `-DCAPYOS_PREEMPTIVE_SCHEDULER` and
+# `-DCAPYOS_PREEMPTIVE_DEMO` so the boot path one-way-jumps into
+# busy_a (via the phase 8e first-task trampoline) instead of
+# reaching the shell. The smoke verifies BOTH busy_a and busy_b
+# emit their markers multiple times to debugcon, which is the
+# canonical end-to-end proof of preemptive scheduling.
+smoke-x64-preemptive-demo:
+	@echo "Executando smoke test x64 (preemptive two-task demo)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_PREEMPTIVE_DEMO'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_preemptive_demo.py $(SMOKE_X64_PREEMPTIVE_DEMO_ARGS)
+
+# M4 phase 8f.3: end-to-end ring-3 preemption smoke.
+# Builds the kernel with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO`
+# AND the userland `hello` binary with `-DCAPYOS_HELLO_BUSY` so the
+# embedded hello loops forever emitting markers via SYS_WRITE. The
+# smoke proves three things in one boot:
+#
+#   1. The TSS scaffolding from phase 8f.1 actually works: the first
+#      APIC tick fired from ring 3 does NOT triple-fault the kernel
+#      (no TSS == #DF on every ring 3 -> ring 0 IRQ entry).
+#   2. The per-task RSP0 swap from phase 8f.2 keeps subsequent ticks
+#      landing on the right kernel stack.
+#   3. iretq correctly returns to ring 3 after every tick is
+#      serviced, so hello_busy continues looping and the marker
+#      reappears in the debugcon log.
+#
+# `make clean` is forced for the same reason as the other preemptive
+# smokes: per-source .d files do not track preprocessor macros.
+smoke-x64-preemptive-user:
+	@echo "Executando smoke test x64 (preemptive user-mode / hello_busy)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_preemptive_user.py $(SMOKE_X64_PREEMPTIVE_USER_ARGS)
+
+# M4 phase 8f.5: end-to-end TWO-task ring-3 preemption smoke.
+# Builds the kernel with `CAPYOS_PREEMPTIVE_SCHEDULER +
+# CAPYOS_BOOT_RUN_HELLO + CAPYOS_BOOT_RUN_TWO_BUSY` and userland
+# with `CAPYOS_HELLO_BUSY`. The kernel spawns TWO copies of the
+# embedded hello, arms the second via the synthetic IRET frame
+# builder (8f.4), iretqs into the first (rank=0), and lets the
+# scheduler dispatch the second on quantum exhaustion (rank=1).
+# The smoke asserts BOTH `[busyU0]` AND `[busyU1]` markers appear
+# at least N times in the debugcon log -- the canonical end-to-end
+# proof that ring-3 tasks alternate under tick-driven preemption.
+smoke-x64-preemptive-user-2task:
+	@echo "Executando smoke test x64 (preemptive user-mode 2 tasks)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO -DCAPYOS_BOOT_RUN_TWO_BUSY' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_preemptive_user_2task.py $(SMOKE_X64_PREEMPTIVE_USER_2TASK_ARGS)
+
+# M4 phase 9: aggregate target that runs the FULL preemptive
+# scheduler smoke matrix end-to-end. Exists so CI can invoke a
+# single Make target instead of listing every smoke individually,
+# and so a developer can sanity-check the entire 8a..8f stack
+# against a known QEMU/OVMF environment with one command.
+#
+# Each sub-smoke does its own `make clean` + `make all64` with the
+# right `EXTRA_CFLAGS64` because the per-source `.d` files do not
+# track preprocessor macros. The aggregate therefore re-builds the
+# kernel four times; this is the price of macro-gated boot
+# variants and matches the trade-off the existing smokes already
+# accept individually.
+smoke-x64-preemptive-all:
+	@echo "Executando suite completa de smokes preemptivos M4..."
+	$(MAKE) smoke-x64-preemptive
+	$(MAKE) smoke-x64-preemptive-demo
+	$(MAKE) smoke-x64-preemptive-user
+	$(MAKE) smoke-x64-preemptive-user-2task
+	@echo "[ok] Suite preemptiva completa passou."
+
 smoke-x64-iso: all64 iso-uefi manifest64
 	@echo "Executando smoke test da ISO oficial (instalacao + reboot + persistencia)..."
 	python3 tools/scripts/smoke_x64_iso_install.py $(SMOKE_X64_ISO_ARGS)
@@ -795,6 +905,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-iso inspect-disk capylibc hello-elf hello-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-iso inspect-disk capylibc hello-elf hello-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

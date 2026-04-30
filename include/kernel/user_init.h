@@ -48,4 +48,25 @@ int kernel_spawn_embedded_hello(struct process **out_proc);
  * macro on the cross-compiler command line. */
 int kernel_boot_run_embedded_hello(void);
 
+/* M4 phase 8f.5: spawn TWO copies of the embedded hello binary,
+ * arm each via the synthetic IRET frame builder so they are
+ * dispatched through the scheduler (NOT via the boot iretq), and
+ * iretq into the FIRST one to bootstrap ring 3. The second is
+ * naturally entered by the scheduler at the first quantum
+ * exhaustion via `x64_user_first_dispatch`.
+ *
+ * Each copy receives a distinct `rank` value (0 or 1) in RAX,
+ * which capylibc's crt0 forwards to main() so the BUSY arm of
+ * hello emits a per-rank marker ([busyU0] or [busyU1]). The
+ * `smoke-x64-preemptive-user-2task` harness asserts BOTH markers
+ * appear at least N times in the debugcon log -- the canonical
+ * end-to-end proof of ring-3 preemption.
+ *
+ * On allocation/load failure of either copy this function
+ * destroys whatever was built and returns the failing
+ * `enum kernel_spawn_result` so the caller can fall back to the
+ * shell. On success the function does NOT return: ring 3 is
+ * entered for the first task and the scheduler takes over. */
+int kernel_boot_run_two_busy_users(void);
+
 #endif /* KERNEL_USER_INIT_H */

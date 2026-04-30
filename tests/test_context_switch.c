@@ -32,6 +32,7 @@
 
 #include "kernel/scheduler.h"
 #include "kernel/task.h"
+#include "stub_arch_sched_hooks.h"
 #include "stub_context_switch.h"
 
 extern void task_set_current(struct task *t);
@@ -60,6 +61,7 @@ static void reset_world(void) {
     task_system_init();
     scheduler_init(SCHED_POLICY_COOPERATIVE);
     task_set_current((struct task *)0);
+    stub_arch_sched_hooks_log_clear();
     stub_context_switch_log_clear();
 }
 
@@ -358,6 +360,217 @@ static void test_unblock_ignores_other_channels(void) {
     else FAIL("non-matching unblock disturbed task");
 }
 
+/* -------------------- 5. Preemptive tick (M4 phase 8a) ----------------- */
+
+static void test_task_create_initializes_quantum(void) {
+    reset_world();
+    struct task *t = task_create("fresh", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    TEST("task_create initialises quantum_remaining to SCHED_DEFAULT_QUANTUM");
+    if (t && t->quantum_remaining == SCHED_DEFAULT_QUANTUM) PASS();
+    else FAIL("quantum_remaining was not seeded");
+}
+
+static void test_preemptive_tick_decrements_without_switch(void) {
+    reset_world();
+    scheduler_init(SCHED_POLICY_PRIORITY);
+
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    a->state = TASK_STATE_RUNNING;
+    task_set_current(a);
+    a->quantum_remaining = SCHED_DEFAULT_QUANTUM;
+
+    uint32_t switches_before = stub_context_switch_log_count();
+    scheduler_tick();
+
+    TEST("preemptive tick decrements quantum");
+    if (a->quantum_remaining == SCHED_DEFAULT_QUANTUM - 1) PASS();
+    else FAIL("quantum was not decremented");
+
+    TEST("preemptive tick does NOT context-switch while quantum>0");
+    if (stub_context_switch_log_count() == switches_before) PASS();
+    else FAIL("unexpected context_switch on tick with quantum>0");
+}
+
+static void test_preemptive_tick_switches_on_quantum_exhaustion(void) {
+    const struct stub_context_switch_entry *entry;
+    reset_world();
+    scheduler_init(SCHED_POLICY_PRIORITY);
+
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    a->state = TASK_STATE_RUNNING;
+    task_set_current(a);
+    a->quantum_remaining = 1; /* one tick from exhaustion */
+
+    uint32_t switches_before = stub_context_switch_log_count();
+    scheduler_tick();
+
+    TEST("quantum exhaustion triggers exactly one context_switch");
+    if (stub_context_switch_log_count() == switches_before + 1u) PASS();
+    else FAIL("expected exactly one context_switch on quantum boundary");
+
+    TEST("quantum is reseeded to SCHED_DEFAULT_QUANTUM after exhaustion");
+    if (a->quantum_remaining == SCHED_DEFAULT_QUANTUM) PASS();
+    else FAIL("quantum was not reseeded after preemption");
+
+    TEST("context_switch arguments use the old/new task contexts");
+    entry = stub_context_switch_log_at(switches_before);
+    if (entry && entry->old_ctx == &a->context && entry->new_ctx == &b->context)
+        PASS();
+    else FAIL("context_switch was called with wrong task contexts");
+}
+
+static void test_preemptive_tick_idle_picks_runnable(void) {
+    reset_world();
+    scheduler_init(SCHED_POLICY_PRIORITY);
+
+    struct task *runnable = task_create("runnable", noop_entry, (void *)0,
+                                        TASK_PRIORITY_NORMAL);
+    scheduler_add(runnable);
+    /* No current task: tick must pick someone runnable. */
+    task_set_current((struct task *)0);
+
+    scheduler_tick();
+
+    TEST("preemptive tick picks a runnable task when current is NULL");
+    if (task_current() == runnable) PASS();
+    else FAIL("scheduler did not promote runnable task on idle tick");
+}
+
+/* -------------------- 6. Arch sched hook (M4 phase 8f.2) -------------- */
+
+static void test_arch_hook_fires_on_block_switch(void) {
+    reset_world();
+    struct task *t1 = task_create("t1", noop_entry, (void *)0,
+                                  TASK_PRIORITY_NORMAL);
+    struct task *t2 = task_create("t2", noop_entry, (void *)0,
+                                  TASK_PRIORITY_NORMAL);
+    scheduler_add(t1);
+    scheduler_add(t2);
+    t1->state = TASK_STATE_RUNNING;
+    task_set_current(t1);
+
+    uint32_t before = stub_arch_sched_hooks_call_count();
+    scheduler_block_current(NULL);
+
+    TEST("arch hook fires exactly once on block-driven switch");
+    if (stub_arch_sched_hooks_call_count() == before + 1u) PASS();
+    else FAIL("hook did not fire on block");
+
+    TEST("arch hook target is the about-to-run task (t2)");
+    if (stub_arch_sched_hooks_last_target() == t2) PASS();
+    else FAIL("hook fired with wrong target");
+}
+
+static void test_arch_hook_fires_on_preemptive_quantum_exhaust(void) {
+    reset_world();
+    scheduler_init(SCHED_POLICY_PRIORITY);
+
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    a->state = TASK_STATE_RUNNING;
+    task_set_current(a);
+    a->quantum_remaining = 1;
+
+    uint32_t before = stub_arch_sched_hooks_call_count();
+    scheduler_tick();
+
+    TEST("arch hook fires on preemptive tick switch");
+    if (stub_arch_sched_hooks_call_count() == before + 1u) PASS();
+    else FAIL("hook did not fire on preemption");
+
+    TEST("arch hook target on preemption is task b");
+    if (stub_arch_sched_hooks_last_target() == b) PASS();
+    else FAIL("hook target wrong on preemption");
+}
+
+static void test_arch_hook_does_not_fire_on_no_op_schedule(void) {
+    reset_world();
+    /* Empty run queue: scheduler_yield -> schedule -> pick_next
+     * returns NULL, so the early-return path is taken before any
+     * task_set_current / context_switch / arch hook. */
+    scheduler_set_running(1);
+    uint32_t before = stub_arch_sched_hooks_call_count();
+    scheduler_yield();
+
+    TEST("arch hook does NOT fire when pick_next returns NULL");
+    if (stub_arch_sched_hooks_call_count() == before) PASS();
+    else FAIL("hook fired on a no-op schedule");
+
+    scheduler_set_running(0);
+}
+
+static void test_arch_hook_fires_before_context_switch(void) {
+    /* Order matters: the new task's RSP0 must already be programmed
+     * when context_switch jumps so any subsequent IRQ in the new
+     * task lands on the right kernel stack. The stub_context_switch
+     * log records context_switch invocations; the arch hook log
+     * records hook invocations. We assert hook count == cs count
+     * after one block-driven switch, AND that the hook target is
+     * the same task whose context is `new` in the cs entry. */
+    reset_world();
+    struct task *t1 = task_create("t1", noop_entry, (void *)0,
+                                  TASK_PRIORITY_NORMAL);
+    struct task *t2 = task_create("t2", noop_entry, (void *)0,
+                                  TASK_PRIORITY_NORMAL);
+    scheduler_add(t1);
+    scheduler_add(t2);
+    t1->state = TASK_STATE_RUNNING;
+    task_set_current(t1);
+
+    uint32_t cs_before = stub_context_switch_log_count();
+    uint32_t hook_before = stub_arch_sched_hooks_call_count();
+    scheduler_block_current(NULL);
+
+    TEST("hook count == cs count after one switch");
+    if (stub_arch_sched_hooks_call_count() - hook_before ==
+        stub_context_switch_log_count() - cs_before) PASS();
+    else FAIL("hook/cs counts drifted");
+
+    const struct stub_context_switch_entry *e =
+        stub_context_switch_log_at(cs_before);
+    TEST("hook target context matches cs `new_ctx`");
+    if (e && stub_arch_sched_hooks_last_target() &&
+        &((struct task *)stub_arch_sched_hooks_last_target())->context ==
+            e->new_ctx) PASS();
+    else FAIL("hook target / cs new_ctx mismatch");
+}
+
+static void test_scheduler_set_running_toggles_flag(void) {
+    reset_world();
+    TEST("scheduler_set_running(0) clears sched_running");
+    scheduler_set_running(0);
+    if (!scheduler_running()) PASS();
+    else FAIL("flag did not clear");
+
+    TEST("scheduler_set_running(1) sets sched_running");
+    scheduler_set_running(1);
+    if (scheduler_running()) PASS();
+    else FAIL("flag did not set");
+
+    TEST("scheduler_set_running normalises non-zero positive truth");
+    scheduler_set_running(42);
+    if (scheduler_running()) PASS();
+    else FAIL("non-zero positive value did not enable scheduler");
+
+    /* Restore default for downstream blocks. */
+    scheduler_set_running(0);
+}
+
 int test_context_switch_run(void) {
     printf("[test_context_switch]\n");
     tests_run = 0;
@@ -374,6 +587,15 @@ int test_context_switch_run(void) {
     test_sleep_triggers_context_switch();
     test_unblock_promotes_blocked_to_ready();
     test_unblock_ignores_other_channels();
+    test_task_create_initializes_quantum();
+    test_preemptive_tick_decrements_without_switch();
+    test_preemptive_tick_switches_on_quantum_exhaustion();
+    test_preemptive_tick_idle_picks_runnable();
+    test_arch_hook_fires_on_block_switch();
+    test_arch_hook_fires_on_preemptive_quantum_exhaust();
+    test_arch_hook_does_not_fire_on_no_op_schedule();
+    test_arch_hook_fires_before_context_switch();
+    test_scheduler_set_running_toggles_flag();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;
 }

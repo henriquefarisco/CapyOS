@@ -104,4 +104,63 @@ context_switch:
 
 .size context_switch, .-context_switch
 
+# void context_switch_into_first(struct task_context *new_ctx) (M4 phase 8e)
+#
+# One-way jump into a freshly-created task: loads the task's saved
+# regs, RSP, RFLAGS and RIP, then `jmp`s to the entry. The caller's
+# stack/RIP is intentionally abandoned because there is no "old"
+# context to save into - this is the kernel's bootstrap into the
+# very first task it dispatches.
+#
+# Why this and not context_switch?
+#   The conventional context_switch saves the caller's callee-saved
+#   regs into `old`. Calling it for the first dispatch would clobber
+#   `old` (the first task's own context) with the boot stack/RIP,
+#   meaning the first task's saved entry RIP would be lost and it
+#   would never actually run its entry function. Phase 8e demo
+#   needs the first task to ACTUALLY execute its body, so we expose
+#   a noreturn helper that only restores `new`.
+#
+# Argument: rdi = struct task_context * for the task to enter.
+# Behaviour: noreturn. The caller must have already done
+#   task_set_current(new) and scheduler_set_running(1) and any other
+#   setup before invoking this.
+
+.global context_switch_into_first
+.type context_switch_into_first, @function
+context_switch_into_first:
+    cli
+
+    # Optional cr3 switch (mirrors context_switch behaviour).
+    movq 0x48(%rdi), %rax
+    testq %rax, %rax
+    jz .Lcsif_no_cr3
+    movq %cr3, %rcx
+    cmpq %rax, %rcx
+    je .Lcsif_no_cr3
+    movq %rax, %cr3
+.Lcsif_no_cr3:
+
+    # Restore callee-saved regs from new context.
+    movq 0x10(%rdi), %rbx
+    movq 0x18(%rdi), %r12
+    movq 0x20(%rdi), %r13
+    movq 0x28(%rdi), %r14
+    movq 0x30(%rdi), %r15
+    movq 0x08(%rdi), %rbp
+    movq 0x00(%rdi), %rsp
+
+    # Restore RFLAGS (typically 0x202 = IF=1 for tasks created via
+    # task_create). This re-enables interrupts at the same instant
+    # control transfers into the task body, mirroring context_switch.
+    movq 0x40(%rdi), %rax
+    pushq %rax
+    popfq
+
+    # Jump to the task entry. Abandoning the boot stack is intentional.
+    movq 0x38(%rdi), %rax
+    jmpq *%rax
+
+.size context_switch_into_first, .-context_switch_into_first
+
 .section .note.GNU-stack,"",@progbits

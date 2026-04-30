@@ -31,7 +31,6 @@ Estados aceitos neste indice:
 | Documento | Papel atual | Fonte preferida / observacao |
 |---|---|---|
 | [`capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md) | Plano vivo principal de robustez, status e evidencias | Fonte primaria para M0-M8 |
-| [`m4-finalization-progress.md`](active/m4-finalization-progress.md) | Detalhamento das fases M4.1-M4.5 (fases 0-11) | Notas tecnicas de execucao do M4 |
 | [`system-master-plan.md`](active/system-master-plan.md) | Visao macro de evolucao do sistema | Usar junto do plano de robustez |
 | [`system-roadmap.md`](active/system-roadmap.md) | Roadmap tecnico por dominio | Alinhar status no plano de robustez |
 | [`system-execution-plan.md`](active/system-execution-plan.md) | Sequencia operacional do ciclo atual | Validar contra gates atuais antes de executar |
@@ -43,6 +42,7 @@ Estados aceitos neste indice:
 
 | Documento | Conclusao | Substituido por / observacao |
 |---|---|---|
+| [`m4-finalization-progress.md`](historical/m4-finalization-progress.md) | M4.1-M4.5 entregues 2026-04-30 (31/31 sub-fases) | Notas tecnicas de execucao do M4 (CoW, scheduler preemptivo, TSS/RSP0, ring-3 preemption); referido pelo "Update 2026-04-30" do plano de robustez |
 | [`platform-hardening-plan.md`](historical/platform-hardening-plan.md) | Marcos A/B/C/D concluidos na trilha Hyper-V/QEMU | Trilha oficial agora e VMware+UEFI+E1000; detalhes de M1/M6 rastreados no plano de robustez |
 | [`mvp-implementation-plan.md`](historical/mvp-implementation-plan.md) | Plano operacional do MVP encerrado | Conferir com o plano de robustez antes de retomar tarefas |
 | [`architecture-restructure-and-improvements.md`](historical/architecture-restructure-and-improvements.md) | Ideias de reorganizacao arquitetural | Preferir `active/source-organization-roadmap.md` e `architecture/source-layout.md` |

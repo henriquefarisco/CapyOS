@@ -26,6 +26,11 @@ void apic_timer_start(uint32_t frequency_hz);
 void apic_timer_stop(void);
 uint64_t apic_timer_ticks(void);
 void apic_timer_set_callback(void (*callback)(void));
+/* M4 phase 8c: APIC timer IRQ handler. Must be installed at IRQ 0 via
+ * irq_install_handler() before apic_timer_start(), otherwise the IDT
+ * stub at vector 32 finds no handler in g_irq_handlers[0] and the
+ * scheduler_tick callback never actually fires. */
+void apic_timer_irq_handler(void);
 
 int apic_available(void);
 uint64_t apic_base_address(void);

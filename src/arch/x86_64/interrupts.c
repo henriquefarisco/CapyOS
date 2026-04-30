@@ -81,7 +81,13 @@ extern void x64_unhandled_vector_stub(void);
  * in Ring 3; without them the CPU faults with #GP on SYSRET regardless
  * of what STAR contains. tests/test_syscall_msr.c locks both the
  * selector ordering and the DPL bits in the access bytes. */
-static struct x64_gdt_entry g_gdt[5];
+/* M4 phase 8f.1: GDT grew from 5 to 7 slots to make room for the
+ * 64-bit TSS descriptor, which is 16 bytes wide and occupies two
+ * adjacent slots (5 and 6, selector 0x28). The kernel/user data and
+ * code selectors are unchanged so SYSRET still lands cleanly in
+ * Ring 3. tests/test_tss_layout.c locks the descriptor encoding;
+ * tests/test_syscall_msr.c locks the kernel/user selector layout. */
+static struct x64_gdt_entry g_gdt[7];
 static struct x64_descriptor_ptr g_gdtr;
 static struct x64_idt_entry g_idt[IDT_ENTRIES];
 static struct x64_descriptor_ptr g_idtr;
@@ -225,10 +231,28 @@ __attribute__((optimize("O0"))) void gdt_init(void) {
   x64_gdt_set(2, 0, 0, 0x92u, 0x00u);
   x64_gdt_set(3, 0, 0, 0xF2u, 0x00u);
   x64_gdt_set(4, 0, 0, 0xFAu, 0x20u);
+  /* M4 phase 8f.1: slots 5 and 6 are reserved for the 64-bit TSS
+   * descriptor that tss_init() will write later via the helper
+   * x64_gdt_write_tss_descriptor(). Zero them up-front so an LTR
+   * issued before tss_init() (which would be a kernel bug) faults
+   * predictably with #TS instead of running off undefined memory. */
+  x64_gdt_set(5, 0, 0, 0, 0);
+  x64_gdt_set(6, 0, 0, 0, 0);
 
   g_gdtr.limit = (uint16_t)(sizeof(g_gdt) - 1u);
   g_gdtr.base = (uint64_t)(uintptr_t)&g_gdt[0];
   x64_load_gdt(&g_gdtr);
+}
+
+/* M4 phase 8f.1: tss_init() owns the encoding of the TSS descriptor
+ * (it has the C struct layout in scope) but the static GDT lives in
+ * this TU. This helper writes the two 8-byte halves into the
+ * pre-reserved slots 5 and 6. The helper is the only writer of
+ * those slots after the initial zero-out in gdt_init(). */
+void x64_gdt_write_tss_descriptor(uint64_t low_bytes, uint64_t high_bytes) {
+  uint64_t *raw = (uint64_t *)(void *)&g_gdt[5];
+  raw[0] = low_bytes;
+  raw[1] = high_bytes;
 }
 
 /* Keep the early descriptor-table path scalar. Auto-vectorized XMM moves here

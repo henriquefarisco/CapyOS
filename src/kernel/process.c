@@ -123,6 +123,29 @@ struct process *process_fork(struct process *parent) {
    * stays consistent if a future fork()-time hook walks children. */
   process_unlink_child(child);
   process_link_child(child, parent);
+
+  /* M4 phase 7c: replace the empty AS that process_create allocated
+   * with a CoW clone of the parent's AS. The clone bumps the
+   * underlying frames' refcounts so the existing parent mappings
+   * stay valid; both AS now share writable pages as RO+COW so the
+   * next write from either side faults into the recovery path.
+   *
+   * On clone failure we tear down the partially-built child via
+   * process_destroy so callers do not observe a half-initialised
+   * process slot. */
+  if (parent->address_space) {
+    struct vmm_address_space *cloned =
+        vmm_clone_address_space(parent->address_space);
+    if (!cloned) {
+      process_destroy(child);
+      return NULL;
+    }
+    if (child->address_space) {
+      vmm_destroy_address_space(child->address_space);
+    }
+    child->address_space = cloned;
+  }
+
   child->brk = parent->brk;
   child->heap_start = parent->heap_start;
   child->stack_top = parent->stack_top;

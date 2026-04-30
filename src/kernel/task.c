@@ -1,5 +1,6 @@
 #pragma GCC optimize("O0")
 #include "kernel/task.h"
+#include "kernel/scheduler.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 
@@ -48,6 +49,11 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
   t->cpu_time_ns = 0;
   t->wake_tick = 0;
   t->exit_code = 0;
+  /* M4 phase 8a: every task gets a fresh quantum so the very first
+   * preemptive tick after schedule(t) does not immediately context-switch
+   * away (which would happen if quantum_remaining were 0 from kmalloc-zero
+   * and the tick decremented-and-checked in the same pass). */
+  t->quantum_remaining = SCHED_DEFAULT_QUANTUM;
   t->next = NULL;
   t->prev = NULL;
   t->wait_channel = NULL;

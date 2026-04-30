@@ -21,6 +21,9 @@
 #include "arch/x86_64/hyperv_runtime_coordinator.h"
 #include "arch/x86_64/input_runtime.h"
 #include "arch/x86_64/interrupts.h"
+#include "arch/x86_64/preemptive_boot.h"
+#include "arch/x86_64/preemptive_demo.h"
+#include "arch/x86_64/tss.h"
 #include "arch/x86_64/kernel_platform_runtime.h"
 #include "arch/x86_64/kernel_runtime_control.h"
 #include "arch/x86_64/native_runtime_gate.h"
@@ -368,6 +371,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   cpu_local_init((uint64_t)(uintptr_t)
                      (g_syscall_kernel_stack +
                       sizeof(g_syscall_kernel_stack)));
+  /* M4 phase 8f.1: TSS scaffolding for ring-3 IRQ safety. Same
+   * call as the non-CAPYOS_BOOT_RUN_HELLO path below; idempotent
+   * so issuing it twice is harmless. */
+  tss_init((uint64_t)(uintptr_t)
+               (g_syscall_kernel_stack +
+                sizeof(g_syscall_kernel_stack)));
   dbgcon_putc('z');
   dbgcon_putc(kmem_debug_header_ok() ? 'c' : 'C');
   syscall_init();
@@ -453,6 +462,17 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                         sizeof(g_syscall_kernel_stack)));
     klog(KLOG_INFO,
          "[cpu_local] Per-CPU area armed; IA32_GS_BASE = &cpu_local.");
+    /* M4 phase 8f.1: install the TSS so ring 3 -> ring 0 IRQ
+     * transitions have a defined kernel stack (RSP0). Reuses the
+     * same shared kernel stack as the syscall path; phase 8f.2 will
+     * swap RSP0 to a per-task kernel stack on every context_switch
+     * to avoid clobbering when two ring-3 tasks preempt each other.
+     * Idempotent: a later tss_init from a different code path
+     * refreshes RSP0 without re-issuing LTR. */
+    tss_init((uint64_t)(uintptr_t)
+                 (g_syscall_kernel_stack +
+                  sizeof(g_syscall_kernel_stack)));
+    klog(KLOG_INFO, "[tss] TSS loaded; ring-3 -> ring-0 IRQs safe.");
     syscall_init();
     dbgcon_putc('v');
     klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
@@ -470,7 +490,17 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     klog(KLOG_INFO,
          "[user_init] CAPYOS_BOOT_RUN_HELLO defined; spawning hello.");
     {
+#ifdef CAPYOS_BOOT_RUN_TWO_BUSY
+      /* M4 phase 8f.5: spawn TWO user processes that run the BUSY
+       * arm of hello with rank=0/1 so each emits a distinct marker
+       * ([busyU0] / [busyU1]). The smoke verifies BOTH appear,
+       * proving end-to-end ring-3 preemption between two real user
+       * tasks. The helper is `noreturn` on success. */
+      dbgcon_write("[user_init] CAPYOS_BOOT_RUN_TWO_BUSY defined; spawning two.\n");
+      int hello_rc = kernel_boot_run_two_busy_users();
+#else
       int hello_rc = kernel_boot_run_embedded_hello();
+#endif
       dbgcon_putc('E');
       if (hello_rc < 0) {
         dbgcon_putc('-');
@@ -493,10 +523,24 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('S');
   dbgcon_putc('p');
   boot_metrics_stage_end();
+  /* M4 phase 8b/c/d preemptive boot wiring. Helpers are no-ops when
+   * CAPYOS_PREEMPTIVE_SCHEDULER is undefined; see
+   * include/arch/x86_64/preemptive_boot.h for the call-order contract. */
+  capyos_preemptive_install_policy();
   if (apic_available() && !handoff_boot_services_active()) {
     apic_timer_set_callback(scheduler_tick);
+    capyos_preemptive_install_irq0();
     apic_timer_start(100);
     klog(KLOG_INFO, "[scheduler] Preemptive tick armed at 100Hz.");
+    capyos_preemptive_mark_running();
+    capyos_preemptive_observe_ticks();
+    /* M4 phase 8e: two-task kernel-mode preemption demo. No-op
+     * unless CAPYOS_PREEMPTIVE_DEMO is defined. When the demo is
+     * active this call NEVER RETURNS (it abandons the boot stack
+     * via the first-task trampoline and proceeds inside busy_a's
+     * body); the rest of kernel_main below is intentionally
+     * unreachable for the demo build. */
+    capyos_preemptive_demo_run();
   }
   dbgcon_putc('3');
 

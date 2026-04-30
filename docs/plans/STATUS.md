@@ -8,7 +8,7 @@ Este documento é o **resumo executivo** dos planos vivos. Para detalhes técnic
 e evidências, consultar:
 
 - [`active/capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md) — fonte primária M0–M8
-- [`active/m4-finalization-progress.md`](active/m4-finalization-progress.md) — detalhamento das fases M4 (0–11)
+- [`historical/m4-finalization-progress.md`](historical/m4-finalization-progress.md) — detalhamento das fases M4 (0–11), arquivado em 2026-04-30 após 31/31 fases concluídas
 - [`active/system-master-plan.md`](active/system-master-plan.md) — visão macro do produto
 - [`active/system-execution-plan.md`](active/system-execution-plan.md) — sequência operacional
 - [`README.md`](README.md) — índice de classificação dos planos
@@ -89,7 +89,7 @@ A coluna **Conclusão (%)** é uma estimativa pragmática:
 
 ---
 
-## M4 Finalization — Fases (de [`m4-finalization-progress.md`](active/m4-finalization-progress.md))
+## M4 Finalization — Fases (de [`m4-finalization-progress.md`](historical/m4-finalization-progress.md))
 
 | Fase | Descrição | Status | Asserts | Depende de |
 |---|---|---|---|---|
@@ -110,27 +110,39 @@ A coluna **Conclusão (%)** é uma estimativa pragmática:
 | 6.6 | Zombie reaping (`process_reap_orphans`) | ✅ DONE | +21 | 6.5 |
 | 7a | Recoverable user `#PF` seam | ✅ DONE | 50 | 4 |
 | 7b | Real demand-paging body + RSS | ✅ DONE | +33 | 7a |
-| **7c** | CoW (clone AS + RO PTE flips) | 🔴 Não iniciado | — | 7b + `vmm_clone_address_space` |
-| **8** | Flip preemptivo + smoke QEMU automático | 🔴 Não iniciado | — | 7b + APIC timer ativo |
-| **9** | Integração de smokes (host + QEMU) | 🔴 Não iniciado | — | 8 |
-| **10** | Docs + release | 🔴 Não iniciado | — | 9 |
-| **11** | Cleanup | 🔴 Não iniciado | — | 10 |
+| **7c** | CoW (clone AS + RO PTE flips, decisão pura, refcount table) | ✅ DONE | +35 | 7b |
+| **8a** | Preemptive primitives (quantum init + `scheduler_set_running`) | ✅ DONE | +9 | 7b |
+| **8b** | `kernel_main` wiring + `smoke-x64-preemptive` | ✅ DONE | CI | 8a |
+| **8c** | APIC IRQ 0 install fix (`irq_install_handler(0, apic_timer_irq_handler)`) + smoke marker | ✅ DONE | CI | 8b |
+| **8d** | Global `sti` site + observation soak (`apic_timer_ticks > 0`) + extração `preemptive_boot.c` | ✅ DONE | CI | 8c |
+| **8e** | First-task trampoline (`context_switch_into_first`) + two-task kernel demo + `smoke-x64-preemptive-demo` | ✅ DONE | CI | 8d |
+| **8f.1** | TSS scaffolding (struct + GDT slot + LTR) p/ ring-3 IRQ safety | ✅ DONE | +17 | 8e |
+| **8f.2** | Per-task RSP0 swap (cpu_local + TSS) via `arch_sched_apply_kernel_stack` hook | ✅ DONE | +7 | 8f.1 |
+| **8f.3** | Single-task ring-3 preemption smoke (`CAPYOS_HELLO_BUSY` + `smoke-x64-preemptive-user`) | ✅ DONE | CI | 8f.2 |
+| **8f.4** | Synthetic IRET frame builder (`x64_user_first_dispatch` + `user_task_arm_for_first_dispatch`) | ✅ DONE | +15 | 8f.3 |
+| **8f.5** | Two-task ring-3 spawn helper (`kernel_boot_run_two_busy_users`) + RAX rank passing via crt0 + `smoke-x64-preemptive-user-2task` | ✅ DONE | +5 / CI | 8f.4 |
+| **9** | Integração de smokes via `smoke-x64-preemptive-all` agregador | ✅ DONE | CI | 8f.5 |
+| **10** | Docs + release: master plan bumped (M4.1–M4.5 → Implementado), m4-finalization-progress.md atualizado, STATUS consolidado | ✅ DONE | docs | 9 |
+| **11** | Cleanup: m4-finalization-progress.md marcado como `READY_TO_ARCHIVE`, .PHONY consolidado, layout-audit limpo | ✅ DONE | docs | 10 |
 
-**Progresso M4:** 17/22 fases concluídas → **~77%** das fases planejadas.
+**Progresso M4:** **31/31 fases concluídas → 100%** 🎉
+
+Toda a M4 (M4.1 Scheduler integrado, M4.2 Processos isolados, M4.3 Syscalls
+básicas, M4.4 Networkd/logger/update-agent como jobs, M4.5 Task manager
+real) está em estado **Implementado**. A tabela do master plan
+(`docs/plans/active/capyos-robustness-master-plan.md`) traz a nota
+"Update 2026-04-30" consolidando o fechamento.
 
 ### Grafo de dependências M4
 
 ```
-0 ─┬─ 1 ─ 2 ─ 3 ─ 3.5 ─┬─ 4 ──┬─ 7a ─ 7b ─ 7c
-                       │      │
-                       │      └─ 5f
+0 ─┬─ 1 ─ 2 ─ 3 ─ 3.5 ─┬─ 4 ──┬─ 7a ─ 7b ─┬─ 7c
+                       │      │           │
+                       │      └─ 5f       └─ 8a ─ 8b ─ 8c ─ 8d ─ 8e ─ 8f ─ 9 ─ 10 ─ 11
                        │
                        └─ 5a ─ 5b ─ 5c ─┬─ 5d ─ 5e
                                         │
                                         └─ 6 ─ 6.5 ─ 6.6
-                                                       │
-                                                       ▼
-                                               7b ─ 8 ─ 9 ─ 10 ─ 11
 ```
 
 ---

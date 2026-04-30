@@ -22,8 +22,22 @@ _start:
     # Anchor the frame so any future stack-walker emits a sane backtrace.
     xorq %rbp, %rbp
 
-    # call int main(void); future M4 phase 6 will load argc/argv from
-    # the SysV process stack here.
+    # M4 phase 8f.5: forward RAX -> RDI so a kernel-injected "rank"
+    # value (set via the synth IRET frame's RAX slot by
+    # user_task_arm_for_first_dispatch_with_rax) reaches main()
+    # as its first arg per the System V x86_64 ABI. Tasks that did
+    # NOT come through the synth-frame path see RAX=0 (a fresh
+    # task created via task_create has all GP regs zeroed; an
+    # iretq-from-boot path leaves RAX as whatever it was at the
+    # iretq site, but the existing kernel_boot_run_embedded_hello
+    # zeroes argc/argv setup), so main() sees rank=0 by default
+    # which keeps the existing single-task hello path unchanged.
+    movq %rax, %rdi
+
+    # call int main(int rank); future milestones will load real
+    # argc/argv from the SysV process stack here once fork/exec
+    # land. Until then `rank` is the only channel from the kernel
+    # to user space at startup.
     call main
 
     # main's return value is in %eax; sign-extend into %rdi for the

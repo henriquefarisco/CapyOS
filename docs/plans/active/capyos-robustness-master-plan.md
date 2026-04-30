@@ -379,6 +379,23 @@ service-runner como task, telemetria CPU%/RSS e smoke QEMU) usam essa base.
 | M4.4 | `networkd`, `logger` e `update-agent` como jobs reais | Parcial | `service_manager` existe com polling, backoff e targets; M4 fase 1 introduziu `service-runner`, kernel task observavel via `task_iter` cuja iteracao orquestra `service_manager_poll_due` + `work_queue_poll_due`; `kernel_service_poll` agora delega para `service_runner_step` mantendo a mesma cadencia cooperativa | Flip do scheduler para preemptivo na M4 fase 8 (e remocao do delegate cooperativo) para que o runner rode pelo proprio dispatch loop |
 | M4.5 | Task manager com tarefas reais | Parcial | App `task_manager` agora suporta tres views (Services/Tasks/Processes) com tab strip, iteracao via `task_iter`/`process_iter`, contagem por view, selecao/scroll por view e Restart limitado a Services; comando `perf-task` no shell publica os mesmos snapshots; testes host `test_task_iter`, `test_task_stats` e `test_process_iter` (42 asserts) cobrem iteradores, ordenacao estavel, snapshots e labels | Cobrir kill-by-row em Tasks/Processes apos M4 fase 8 (fault isolation) e ligar a coluna CPU%/RSS a telemetria da fase 7 |
 
+**Update 2026-04-30 (M4 fase 7c + 8a-8f.5 + 9-11 entregues):** todos
+os 5 itens M4.1-M4.5 transitaram de "Parcial" para **Implementado** no
+fechamento da fase 8 (preemptive scheduler) + fase 7c (CoW) + bloco
+de consolidacao 9-11. Status detalhado por sub-fase em
+`docs/plans/historical/m4-finalization-progress.md` e em
+`docs/plans/STATUS.md`. A suite host adicionou 110+ asserts cobrindo
+decisao CoW (`vmm_cow`), refcount de paginas (`pmm_refcount`), TSS
+layout (`tss_layout`), arch sched hook, synthetic IRET frame builder
+(`user_task_init`) e quantum/preemptive tick (`context_switch`). A
+suite QEMU adicionou 4 smokes preemptivos (`smoke-x64-preemptive`,
+`smoke-x64-preemptive-demo`, `smoke-x64-preemptive-user`,
+`smoke-x64-preemptive-user-2task`) + agregador
+`smoke-x64-preemptive-all`, provando end-to-end que duas tarefas em
+ring 3 alternam sob a tick de 100 Hz do APIC. As "Proximo passo"
+columns abaixo continuam refletindo o estado pre-2026-04-30 para
+preservar a trilha historica.
+
 ## M5 - Performance mensuravel
 
 Objetivo: medir antes de otimizar e impedir regressao de boot, FS, rede e UI.

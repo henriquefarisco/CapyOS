@@ -267,15 +267,12 @@ static void test_pf_kill(void) {
         if (arch_fault_classify(&pf) == ARCH_FAULT_KILL_PROCESS) PASS();
         else FAIL("protection violation read did not kill");
     }
-    /* Protection violation write. Phase 7b extends RECOVERABLE to
-     * cover this case once CoW lands; today it must still kill. */
-    {
-        struct arch_fault_info pf = make_pf(PF_U | PF_P | PF_W,
-                                            USER_CS_RPL3);
-        TEST("user #PF U=1 P=1 W=1 -> KILL (CoW deferred to phase 7b)");
-        if (arch_fault_classify(&pf) == ARCH_FAULT_KILL_PROCESS) PASS();
-        else FAIL("protection violation write did not kill");
-    }
+    /* Protection violation read on present page. No legitimate user
+     * scenario asks the VMM to recover this: text segments and
+     * mprotect-RO mappings are explicitly read-only and reads on
+     * them never fault, so a #PF here means the user touched
+     * something it shouldn't. Stays KILL post-phase-7c. */
+    /* (covered by the U=1 P=1 W=0 test just above) */
     /* Reserved bit set: page table is corrupt, cannot recover safely. */
     {
         struct arch_fault_info pf = make_pf(PF_U | PF_RSVD, USER_CS_RPL3);
@@ -310,6 +307,50 @@ static void test_pf_kernel_always_panics(void) {
     }
 }
 
+/* ---- 7c. CoW candidates (M4 phase 7c) ------------------------------ */
+
+static void test_pf_cow_candidate(void) {
+    /* Phase 7c: a write on a present page from user mode is now a
+     * RECOVERABLE candidate at the classifier level. The VMM body
+     * inspects the PTE's software COW bit and either reuses-in-place
+     * or allocates a copy; if the PTE is genuinely RO (text, mprotect
+     * RO) the VMM returns -1 and the dispatcher escalates back to
+     * KILL_PROCESS. The classifier no longer pre-judges that case. */
+    {
+        struct arch_fault_info pf = make_pf(PF_U | PF_P | PF_W,
+                                            USER_CS_RPL3);
+        TEST("user #PF U=1 P=1 W=1 -> RECOVERABLE (CoW candidate)");
+        if (arch_fault_classify(&pf) == ARCH_FAULT_RECOVERABLE) PASS();
+        else FAIL("CoW candidate not flagged recoverable");
+    }
+    /* RSVD trumps the CoW candidate shape: corrupt page table is
+     * never recoverable regardless of P/W. */
+    {
+        struct arch_fault_info pf = make_pf(PF_U | PF_P | PF_W | PF_RSVD,
+                                            USER_CS_RPL3);
+        TEST("user #PF P=1 W=1 RSVD=1 -> KILL_PROCESS");
+        if (arch_fault_classify(&pf) == ARCH_FAULT_KILL_PROCESS) PASS();
+        else FAIL("RSVD did not override CoW candidate");
+    }
+    /* PK trumps CoW too. */
+    {
+        struct arch_fault_info pf = make_pf(PF_U | PF_P | PF_W | PF_PK,
+                                            USER_CS_RPL3);
+        TEST("user #PF P=1 W=1 PK=1 -> KILL_PROCESS");
+        if (arch_fault_classify(&pf) == ARCH_FAULT_KILL_PROCESS) PASS();
+        else FAIL("PK did not override CoW candidate");
+    }
+    /* Kernel-mode write-on-present #PF is still a kernel bug;
+     * phase 7c does not extend the user-only RECOVERABLE arm
+     * to ring 0. */
+    {
+        struct arch_fault_info pf = make_pf(PF_P | PF_W, KERNEL_CS);
+        TEST("kernel #PF P=1 W=1 -> PANIC (CoW does not apply)");
+        if (arch_fault_classify(&pf) == ARCH_FAULT_KERNEL_PANIC) PASS();
+        else FAIL("kernel CoW shape leaked recoverable");
+    }
+}
+
 /* ---- 8. Enum value contract ---------------------------------------- */
 
 static void test_enum_contract(void) {
@@ -338,6 +379,7 @@ int test_fault_classify_run(void) {
     test_user_reserved_panic();
     test_pf_recoverable();
     test_pf_kill();
+    test_pf_cow_candidate();
     test_pf_kernel_always_panics();
     test_enum_contract();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);

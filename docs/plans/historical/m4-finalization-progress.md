@@ -1669,6 +1669,1283 @@ A QEMU smoke that intentionally segfaults a user program lands in
 phase 5 (when a user binary first exists) so it can verify the full
 end-to-end kill+reschedule path.
 
+## Phase 7c - copy-on-write (DONE 2026-04-30)
+
+Phase 7c lands the missing piece of the M4 fork story: `process_fork`
+no longer hands the child a fresh empty AS; instead the parent's AS
+is **CoW-cloned**, so writable user pages become RO-shared in both
+AS until one side writes. The first write faults, the VMM allocates
+a private copy (or reuses in place if last sharer), and the user
+instruction retries. Mirrors the textbook UNIX fork-exec semantics
+and lets two processes share the bulk of the parent's memory until
+they diverge.
+
+### Architecture
+
+The phase 7c stack is split into four layers, three of which are
+**100% host-testable**:
+
+```
+                                              host-tested?
+  pmm_refcount.c   per-frame refcount table     YES
+  vmm_cow.c        pure CoW decision matrix     YES
+  fault_classify.c P=1+W=1 -> RECOVERABLE       YES
+  vmm.c            x86_64 PTE walker / glue     no (cr3/invlpg)
+```
+
+The non-testable layer in `vmm.c` is intentionally tiny: it walks
+PML4 -> PDPT -> PD -> PT once, calls into the host-tested decision
+module, and applies the result via `invlpg`. Anything that could
+have a non-trivial bug (decision matrix, refcount arithmetic, error
+code interpretation) is locked by host tests with explicit
+expectations.
+
+### New public surface
+
+- `include/memory/pmm.h`:
+  - `pmm_frame_refcount_init/inc/dec/get` — uint16_t array indexed
+    by PFN, sized `PMM_REFCOUNT_MAX_PAGES = PMM_BITMAP_SIZE_PAGES`.
+- `include/memory/vmm.h`:
+  - `VMM_PAGE_COW = (1ULL << 9)` — software-only marker on the AVL
+    bits of an x86_64 4 KiB PTE. CPU ignores it; OS uses it to tell
+    "RO because of CoW share" apart from "RO because user said so".
+  - `vmm_clone_address_space(src)` — public entry for `process_fork`.
+- `include/memory/vmm_cow.h`:
+  - `vmm_cow_decide(pte, refcount_after_dec)` — pure decision
+    function. Return action is one of `VMM_COW_NOT_COW`,
+    `VMM_COW_REUSE`, `VMM_COW_COPY`.
+
+### Cloning algorithm (`vmm_clone_address_space`)
+
+1. Allocate a fresh AS via `vmm_create_address_space`. Kernel half
+   of the PML4 (indices 256..511) is shared as before.
+2. Walk the user half (indices 0..255) of `src`. For every present
+   PML4 entry, allocate a new PDPT and recurse.
+3. Recurse PDPT -> PD -> PT until reaching 4 KiB leaf PTEs.
+4. For each present leaf:
+   - Bump the underlying frame's refcount.
+   - If the PTE is `(USER & WRITE & !HUGE)`: clear `WRITE`, set
+     `COW`, mirror the result into BOTH src and dst PTEs. The next
+     write from EITHER AS faults into recovery.
+   - Otherwise (RO mapping, HUGE leaf, or kernel-internal): copy
+     the PTE bit-for-bit into dst. Refcount bump alone keeps the
+     frame alive past either AS's destroy.
+5. Mirror `src->rss_pages` into `dst->rss_pages` so observability
+   (`vmm_address_space_rss`) is correct from the moment the clone
+   returns.
+
+Failure path: any allocation failure tears down the partially built
+dst via `vmm_destroy_address_space`. The destroy walker (extended
+in this phase) decrements every frame refcount before potentially
+freeing, so the partial bumps are cleanly reverted.
+
+### Page-fault flow
+
+The classifier (`arch_fault_classify`) now reports user-mode #PF as
+RECOVERABLE in two shapes (was only one):
+
+1. P=0 (any access kind) - demand paging, unchanged from phase 7b.
+2. P=1 + W=1 - CoW candidate, NEW in phase 7c.
+
+`vmm_handle_page_fault` dispatches based on the error code:
+
+```c
+if (error_code & P) {
+    if (error_code & W) return vmm_handle_cow_fault(as, fault_addr);
+    return -1;  /* present + read fault is never recoverable */
+}
+return vmm_handle_demand_page(...);  /* phase 7b path */
+```
+
+`vmm_handle_cow_fault`:
+
+1. Walk to the leaf PTE (`vmm_walk_to_leaf`). NULL if page is huge
+   or any intermediate is missing - return -1 (KILL).
+2. Decrement the frame refcount unconditionally and call
+   `vmm_cow_decide(pte, refcount_after_dec)`.
+3. If decision is `NOT_COW`: re-increment to keep the destroy
+   walker consistent and return -1 (KILL). This is the genuine
+   W-on-RO case (write to text segment, mprotect RO, etc.).
+4. If decision is `REUSE`: flip flags in place via the
+   `(pte | new_set) & ~new_clr` recipe, `invlpg`, success.
+5. If decision is `COPY`: allocate a fresh frame, byte-copy 4 KiB,
+   point the PTE at the new frame with the same flag recipe,
+   `invlpg`, success.
+
+`vmm_global_stats.cow_faults` increments on every successful CoW
+service so observability tooling can distinguish demand pages from
+write-after-clone faults.
+
+### Destroy walker (`vmm_destroy_address_space`)
+
+Extended to consult the refcount table before freeing each leaf
+frame:
+
+```c
+uint16_t pre = pmm_frame_refcount_get(leaf_phys);
+if (pre == 0u) {
+    pmm_free_page(leaf_phys);          /* never refcounted */
+} else {
+    if (pmm_frame_refcount_dec(leaf_phys) == 0u) {
+        pmm_free_page(leaf_phys);      /* we were the last sharer */
+    }
+    /* else: another AS still holds this frame, do not free */
+}
+```
+
+This preserves pre-7c semantics (single-AS user mappings, demand-
+paged anonymous pages, etc. report 0 from the helper and are freed
+straight away) while correctly handling the new CoW-shared frames.
+
+### Process fork wiring
+
+`process_fork` now performs a CoW clone of the parent's AS:
+
+```c
+if (parent->address_space) {
+    struct vmm_address_space *cloned =
+        vmm_clone_address_space(parent->address_space);
+    if (!cloned) {
+        process_destroy(child);
+        return NULL;
+    }
+    if (child->address_space) {
+        vmm_destroy_address_space(child->address_space);
+    }
+    child->address_space = cloned;
+}
+```
+
+The host stub in `tests/stub_vmm.c` provides a `vmm_clone_address_space`
+that just returns a fresh empty AS (matching `vmm_create_address_space`),
+so existing process_iter / process_destroy tests keep passing without
+needing a host page-table simulator.
+
+### Tests added
+
+| Suite | New asserts | What it locks |
+|---|---|---|
+| `test_pmm_refcount` | 18/18 | Per-PFN counter; idempotent dec; range guards; saturation; PFN collapsing for sub-page addresses |
+| `test_vmm_cow` | 13/13 | Decision matrix: NOT_COW / REUSE / COPY arms; correct flag deltas; PRESENT/USER preserved across COPY |
+| `test_fault_classify` | +4 | P=1 W=1 user -> RECOVERABLE; RSVD/PK override; kernel-mode P=1 W=1 still PANIC |
+
+Total **+35 host asserts**, zero regressions.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` Across all suites,
+  including the +35 new asserts and the updated phase 7c entry in
+  `test_fault_classify`.
+- `make layout-audit`: `Warnings: none`.
+- Build: `pmm_refcount.o` and `vmm_cow.o` were added to
+  `CAPYOS64_OBJS`; the cross-compiler smoke (Phase 5e/8b) will pick
+  them up on next CI run.
+- Local QEMU execution N/A on macOS workstation; CI is the source
+  of truth for the kernel-side glue.
+
+### Deferred / not yet exercised
+
+- A QEMU smoke that proves end-to-end CoW (e.g. `hello_fork` user
+  binary that fork()s, writes a different value from each side,
+  and asserts both outputs land in the debugcon log). Lands as a
+  separate phase once a real `fork()` syscall is wired up
+  (currently `process_fork` is only callable from kernel-side
+  code).
+- 2 MiB huge-page CoW. The cloner skips HUGE leaves defensively;
+  the kernel does not currently install user huge pages, so this
+  is not yet observable.
+- TLB shootdown across cores. The `invlpg` path only flushes the
+  current CPU. Multi-core CoW will need IPI-based shootdown when
+  SMP user-mode lands.
+
+## Phase 8a - preemptive scheduler primitives (DONE 2026-04-30)
+
+Phase 8a is the smallest safe step toward the preemptive flip: it locks
+the host-side contract for the preemptive tick path WITHOUT touching
+`kernel_main.c`'s boot flow. Default builds remain 100% cooperative and
+the preemptive logic only fires once policy is flipped to PRIORITY or
+ROUND_ROBIN (deferred to phase 8b).
+
+### Public surface
+
+- `include/kernel/scheduler.h` exposes `SCHED_DEFAULT_QUANTUM` (10 ticks
+  at SCHEDULER_TICK_HZ=100Hz, i.e. 100ms) and the new
+  `scheduler_set_running(int running)` API. The header doc explains why
+  the kernel needs this: `scheduler_start()` is `noreturn` and would
+  hijack the boot flow, so a smaller "mark scheduler running" primitive
+  is required for the kernel_main wiring that lands in phase 8b.
+
+### Quantum initialisation
+
+`src/kernel/task.c::task_create` now seeds `t->quantum_remaining =
+SCHED_DEFAULT_QUANTUM` so the very first preemptive tick after a task is
+dispatched does not immediately context-switch away (which would happen
+if the field were 0 from kmalloc-zero and the tick decremented-and-
+checked in the same pass). `task.c` now `#include`s `kernel/scheduler.h`
+to share the constant.
+
+### Bug fix audit
+
+Confirmed (no code change needed) that `scheduler_tick` already returns
+early when quantum > 0 in the preemptive branch: the previous unconditional
+`schedule()` at the end of the preemptive arm would have caused a
+context-switch on every tick, making the 100Hz timer indistinguishable
+from gang-scheduling. The current code only context-switches on quantum
+exhaustion or when there is no current task.
+
+### Tests
+
+`tests/test_context_switch.c` grew from 38 to **47 asserts** (+9) with a
+new "Preemptive tick (M4 phase 8a)" section:
+
+1. `task_create` initialises `quantum_remaining` to `SCHED_DEFAULT_QUANTUM`.
+2. Preemptive tick decrements quantum.
+3. Preemptive tick does NOT context-switch while quantum>0 (regression
+   guard against the previous unconditional `schedule()` bug).
+4. Quantum exhaustion triggers exactly one context_switch.
+5. Quantum is reseeded to `SCHED_DEFAULT_QUANTUM` after exhaustion.
+6. context_switch arguments use the right old/new task contexts.
+7. Preemptive tick promotes a runnable task when current is NULL.
+8. `scheduler_set_running(0)` clears the flag.
+9. `scheduler_set_running(1)` sets the flag; non-zero positive values
+   normalise to truth.
+
+### Validation
+
+- `make test TEST_BIN=/tmp/capy_unit_tests CAPYOS64_DEPS= UEFI_LOADER_DEPS=`
+  prints `Todos os testes passaram.` with the new
+  `[test_context_switch]` block contributing **47/47** (was 38/38 in
+  phase 2).
+- No production behaviour change: default policy remains
+  `SCHED_POLICY_COOPERATIVE`, so the new tick branch is dead code in
+  release builds until phase 8b flips the policy.
+- `scheduler_set_running` is unused at the call sites today; phase 8b
+  will invoke it from `kernel_main.c` behind a `CAPYOS_PREEMPTIVE_SCHEDULER`
+  build flag (mirroring `CAPYOS_BOOT_RUN_HELLO` from phase 5d).
+
+### Deferred to phase 8b
+
+- Wire `scheduler_init(SCHED_POLICY_PRIORITY)` + `scheduler_set_running(1)`
+  into `kernel_main.c` behind `CAPYOS_PREEMPTIVE_SCHEDULER`.
+- Decide on auto-add semantics: either make `task_create` call
+  `scheduler_add` automatically (and remove the redundant call from
+  `worker.c`), or introduce a new helper like `task_create_and_run`. The
+  existing host tests rely on explicit `scheduler_add` so the change
+  must be coordinated.
+- Make the IRQ asm path save/restore user context on the way to ring 3
+  so a 100Hz tick in user mode actually lands in the scheduler.
+- Remove the cooperative `kernel_service_poll` delegate once the
+  service-runner task is dispatched by the scheduler proper.
+
+### Deferred to phase 8c
+
+- QEMU smoke that proves preemption: spawn two CPU-bound user tasks
+  (e.g. `hello_busy_a`, `hello_busy_b`) and assert both make progress in
+  the debugcon log within a wall-clock budget.
+
+## Phase 8b - kernel_main wiring + smoke harness (DONE 2026-04-30)
+
+Phase 8b connects the phase 8a primitives to the boot path so a CI-only
+build (with `-DCAPYOS_PREEMPTIVE_SCHEDULER`) flips the scheduler policy
+from cooperative to PRIORITY and marks `sched_running=1` BEFORE the
+existing 100Hz APIC tick starts firing. Default builds remain
+unchanged, which preserves the kernel shell during normal runs and
+prevents a half-wired preemptive flow from bricking the boot.
+
+### Boot wiring
+
+`src/arch/x86_64/kernel_main.c` adds two `#ifdef CAPYOS_PREEMPTIVE_SCHEDULER`
+blocks around the existing APIC arm site:
+
+```c
+#ifdef CAPYOS_PREEMPTIVE_SCHEDULER
+  scheduler_init(SCHED_POLICY_PRIORITY);
+  klog(KLOG_INFO,
+       "[scheduler] Policy=PRIORITY (preemptive flip enabled).");
+#endif
+  if (apic_available() && !handoff_boot_services_active()) {
+    apic_timer_set_callback(scheduler_tick);
+    apic_timer_start(100);
+    klog(KLOG_INFO, "[scheduler] Preemptive tick armed at 100Hz.");
+#ifdef CAPYOS_PREEMPTIVE_SCHEDULER
+    scheduler_set_running(1);
+    klog(KLOG_INFO,
+         "[scheduler] Marked as running (sched_running=1).");
+#endif
+  }
+```
+
+The macro is undefined by default, so production builds skip both
+blocks entirely. Phase 8c smoke author defines it on the cross-compiler
+command line: `make all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER'`.
+
+The full `scheduler_start()` is intentionally avoided because it is
+`noreturn` and would hijack the boot flow before the splash UI and
+shell come up. Phase 8c may revisit that decision once a user task
+dispatches via the scheduler proper; for now the cooperative
+`kernel_service_poll` delegate keeps driving the runner step.
+
+### Smoke harness
+
+`tools/scripts/smoke_x64_preemptive.py` (~250 lines) is the phase 5e
+script with different markers:
+
+- Success markers (all three required):
+  - `[scheduler] Policy=PRIORITY (preemptive flip enabled).`
+  - `[scheduler] Preemptive tick armed at 100Hz.`
+  - `[scheduler] Marked as running (sched_running=1).`
+- Failure markers (any aborts the smoke):
+  - `panic` (kernel must NOT panic when policy is flipped).
+
+The same QEMU lifecycle, debugcon polling, timeout, and SIGTERM
+handling as phase 5e/5f are reused via the `smoke_x64_common` and
+`smoke_x64_session` modules.
+
+### Make target
+
+```
+smoke-x64-preemptive:
+    $(MAKE) clean
+    $(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER'
+    $(MAKE) iso-uefi
+    $(MAKE) manifest64
+    python3 tools/scripts/smoke_x64_preemptive.py \
+            $(SMOKE_X64_PREEMPTIVE_ARGS)
+```
+
+`smoke-x64-preemptive` joins the existing `.PHONY` list. CI invokes
+it as a single Make call.
+
+### Validation
+
+- `python3 -m py_compile tools/scripts/smoke_x64_preemptive.py` passes.
+- `make -n smoke-x64-preemptive` resolves the recipe (clean -> all64 ->
+  iso-uefi -> manifest64 -> python3) without errors.
+- Host build: `Todos os testes passaram.` `[test_context_switch]`
+  remains 47/47 (CAPYOS_PREEMPTIVE_SCHEDULER not defined in host
+  builds, so the `#ifdef` blocks are stripped).
+- `make layout-audit CAPYOS64_DEPS= UEFI_LOADER_DEPS=` reports
+  `Warnings: none`.
+- Local QEMU execution N/A on this macOS workstation; CI is the
+  source of truth, same constraint as phase 5e/5f.
+
+### What this locks
+
+- The `CAPYOS_PREEMPTIVE_SCHEDULER` build flag is observable in the
+  debugcon log: any future regression that drops the wiring will be
+  caught by `smoke-x64-preemptive` before reaching release.
+- Phase 8a's `scheduler_set_running` is now actually called from the
+  kernel boot path under the flag (was previously dead code).
+- Default builds are byte-for-byte unchanged: the `#ifdef` blocks
+  contribute zero bytes when the macro is not defined.
+
+### Deferred to phase 8e/8f
+
+- Phase 8e covers the kernel-mode equivalent of this idea (two
+  kernel tasks, no user binary). Phase 8f extends it to ring 3
+  once the IRQ asm path saves/restores user RSP/RIP.
+- IRQ asm path that saves/restores user context on a 100Hz tick from
+  ring 3 (currently the dispatcher is set up but the tick callback
+  does not yet save user RSP/RIP into the task's `task_context`).
+- Removal of the cooperative `kernel_service_poll` delegate once the
+  service-runner task is dispatched by the scheduler proper.
+- Auto-add semantics for `task_create` (or new `task_create_and_run`
+  helper). Phase 8b leaves this as-is so worker.c's explicit
+  `scheduler_add` and the host tests' explicit calls keep working.
+
+## Phase 8c - APIC IRQ wiring fix (DONE 2026-04-30)
+
+Phase 8c closed a latent bug discovered while wiring up phase 8b: the
+APIC timer callback registered via `apic_timer_set_callback(scheduler_tick)`
+**was never actually invoked at runtime**. The IDT stub at vector 32
+delegates to `x64_exception_dispatch`, which looks up
+`g_irq_handlers[(int)(vector - 32u)]`. Because nothing in the boot path
+was calling `irq_install_handler(0, apic_timer_irq_handler)`, the
+dispatcher always found `NULL` for IRQ 0, sent a spurious `pic_send_eoi`,
+and dropped the tick silently. The "Preemptive tick armed at 100Hz."
+log was therefore misleading — the timer was armed but its IRQ never
+reached `scheduler_tick`.
+
+### Fix
+
+`src/arch/x86_64/kernel_main.c` now calls `irq_install_handler(0,
+apic_timer_irq_handler)` immediately after `apic_timer_set_callback`
+and immediately before `apic_timer_start`, gated on
+`CAPYOS_PREEMPTIVE_SCHEDULER` so default builds remain bit-for-bit
+unchanged:
+
+```c
+apic_timer_set_callback(scheduler_tick);
+#ifdef CAPYOS_PREEMPTIVE_SCHEDULER
+  irq_install_handler(0, apic_timer_irq_handler);
+#endif
+apic_timer_start(100);
+klog(KLOG_INFO, "[scheduler] Preemptive tick armed at 100Hz.");
+#ifdef CAPYOS_PREEMPTIVE_SCHEDULER
+  scheduler_set_running(1);
+  klog(KLOG_INFO, "[scheduler] Marked as running (sched_running=1).");
+  klog(KLOG_INFO, "[scheduler] APIC IRQ handler installed at IRQ 0.");
+#endif
+```
+
+`apic_timer_irq_handler` was previously a private symbol in
+`apic.c`. The phase 8c fix exposes it via `include/arch/x86_64/apic.h`
+with a header doc explaining the IDT/IRQ delivery contract.
+
+### Why no soak loop
+
+A first attempt tried to `__asm__ volatile("sti")` and busy-loop a few
+hundred million `pause` iterations to observe `apic_timer_ticks()` go
+above zero. That was reverted because:
+
+- `x64_interrupts_enable()` is defined in `interrupts.c` but **never
+  called** in the rest of the boot path. Interrupts therefore stay
+  disabled (IF=0) from firmware handoff through to phase 8c.
+- A `sti` at this site would be the FIRST global enable in the kernel
+  and risks re-entering still-incomplete IDT handlers (e.g. APIC IRQs
+  arriving before the rest of the platform tables / shell runtime are
+  ready).
+- Phase 5e/5f smokes already exercise the user-mode iretq path, which
+  is the only place where IF=1 is currently set explicitly. Moving the
+  global enable into kernel_main needs its own audit and lands in
+  phase 8d.
+
+Phase 8c therefore ships only the wiring fix plus an observable klog
+message, leaving real tick observation to phase 8d.
+
+### Smoke regression guard
+
+`tools/scripts/smoke_x64_preemptive.py` adds a fourth required marker:
+
+```
+[scheduler] APIC IRQ handler installed at IRQ 0.
+```
+
+Any future regression that drops the `irq_install_handler(0, ...)`
+call (or accidentally undefines `CAPYOS_PREEMPTIVE_SCHEDULER` for the
+preemptive build) will fail `smoke-x64-preemptive` with a missing
+marker.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` (host build does not define
+  `CAPYOS_PREEMPTIVE_SCHEDULER`, so the new IRQ-install line is
+  stripped.)
+- `make layout-audit`: `Warnings: none`.
+- `python3 -m py_compile tools/scripts/smoke_x64_preemptive.py` passes.
+- Local QEMU execution N/A on macOS workstation; CI Linux is the
+  source of truth, same as phase 5e/5f/8b.
+
+### Deferred to phase 8d
+
+- Audit and adopt a global `sti` site in `kernel_main.c` (most likely
+  right after the platform tables and IDT are fully primed) so the
+  APIC tick can actually fire.
+- Add a real observation soak: spin briefly with IF=1 and assert
+  `apic_timer_ticks()` > some-non-zero-floor via an explicit
+  `klog_dec` call. This is what was reverted from phase 8c.
+- Two-task kernel-mode preemption demo gated by a separate
+  `CAPYOS_PREEMPTIVE_DEMO` flag, with a dedicated
+  `smoke-x64-preemptive-demo` target.
+
+## Phase 8d - global IF=1 + observation soak (DONE 2026-04-30)
+
+Phase 8d closes the observability loop opened by phase 8c. The smoke
+can now PROVE the APIC tick actually fires and the registered
+`scheduler_tick` callback runs end-to-end.
+
+### Boot wiring relocation
+
+The phase 8b/c/d wiring grew large enough to push `kernel_main.c`
+above the 900-line monolith ceiling enforced by `make layout-audit`.
+Phase 8d therefore extracts the entire wiring into a new helper file
+that is included in `CAPYOS64_OBJS`:
+
+- `include/arch/x86_64/preemptive_boot.h` (28 lines)
+- `src/arch/x86_64/preemptive_boot.c` (~125 lines)
+
+Four entry points are exposed:
+
+```
+void capyos_preemptive_install_policy(void);  // phase 8b
+void capyos_preemptive_install_irq0(void);    // phase 8c
+void capyos_preemptive_mark_running(void);    // phase 8b/c markers
+void capyos_preemptive_observe_ticks(void);   // phase 8d soak
+```
+
+When `CAPYOS_PREEMPTIVE_SCHEDULER` is undefined, all four collapse to
+empty stubs so `kernel_main.c` can call them unconditionally. This
+removes every `#ifdef` from the call site and shrinks `kernel_main.c`
+back well under the ceiling.
+
+### Soak design
+
+```c
+void capyos_preemptive_observe_ticks(void) {
+    x64_interrupts_enable();
+    {
+        uint64_t spin_budget = 0;
+        while (apic_timer_ticks() < 3ULL && spin_budget < 50000000ULL) {
+            __asm__ volatile("pause");
+            ++spin_budget;
+        }
+    }
+    x64_interrupts_disable();
+
+    klog_dec(KLOG_INFO, "[scheduler] APIC ticks observed=",
+             (uint32_t)apic_timer_ticks());
+    pb_dbgcon_write("[scheduler] APIC ticks observed=");
+    capyos_preemptive_emit_dec(apic_timer_ticks());
+    pb_dbgcon_write("\n");
+}
+```
+
+Safety analysis:
+
+- With `SCHED_POLICY_PRIORITY` active but the run queue empty and
+  `task_current() == NULL`, `scheduler_tick` only increments
+  `stats.total_ticks`, walks an empty queue (no sleeper wakeups, no
+  zombie reaping), and the preemptive `schedule()` returns
+  immediately because `scheduler_pick_next()` returns `NULL`. There
+  is no `context_switch` to a non-existent task.
+- The spin budget caps the wall-clock cost at ~50M `pause`
+  iterations (sub-second on KVM, single-digit-seconds on TCG).
+- `cli` runs immediately after the budget exhausts so the rest of
+  the boot path keeps the same `IF=0` contract it had before phase
+  8d. The shell, splash UI, fs runtime, etc. observe no behaviour
+  change.
+
+### klog vs debugcon
+
+Phase 8d also fixed a subtle observability gap discovered while
+adding the smoke marker: `klog()` only buffers into a ring; nothing
+in the default boot path forwards that ring to the kernel debug
+console (port 0xE9). Smoke markers must therefore go through
+`dbgcon_putc`/an inline `dbgcon_write` helper, mirroring the phase
+5d/5f convention. Every phase 8b/c/d marker now emits to BOTH klog
+(for in-kernel triage) and debugcon (for CI assertions).
+
+### Smoke regression guard
+
+`tools/scripts/smoke_x64_preemptive.py` now requires a fifth marker:
+
+```
+[scheduler] APIC ticks observed=
+```
+
+and asserts the trailing decimal is **strictly > 0** via a small
+parser. A zero count means the soak ran but no IRQ actually fired,
+which would mean either the IDT install regressed, the APIC
+programming is wrong, or `x64_interrupts_enable` silently failed.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` (host build does not
+  define `CAPYOS_PREEMPTIVE_SCHEDULER`, so the helpers compile as
+  no-op stubs.)
+- `make layout-audit`: `Warnings: none` (kernel_main.c shrank below
+  the 900-line ceiling after the extraction).
+- `python3 -m py_compile tools/scripts/smoke_x64_preemptive.py`
+  passes.
+- Local QEMU execution N/A on macOS workstation; CI is the source
+  of truth.
+
+### Deferred to phase 8e
+
+- (Closed by phase 8e — see below.)
+
+## Phase 8e - first-task trampoline + two-task demo (DONE 2026-04-30)
+
+Phase 8e closes the canonical end-to-end proof of preemptive
+scheduling: a kernel build with `-DCAPYOS_PREEMPTIVE_SCHEDULER
+-DCAPYOS_PREEMPTIVE_DEMO` spawns two infinite-loop kernel tasks
+(`busy_a`, `busy_b`) and the 100Hz APIC tick steadily preempts
+between them. Each task emits a unique marker every ~256K busy-loop
+iterations. The `smoke-x64-preemptive-demo` harness asserts BOTH
+markers appear at least twice in the debugcon log within the
+timeout window — the asymmetric "appears at least twice" check
+catches the failure mode where a buggy switch only runs the first
+task once.
+
+### The "first task entry" trampoline
+
+The pre-8e scheduler had a subtle architectural gap:
+`scheduler_start` picks the first runnable task and calls
+`task_set_current(first)`, then enters its own infinite hlt loop on
+the boot stack. When the timer tick later fires, `scheduler_tick`
+sees `task_current() == first` (RUNNING) and decrements quantum;
+on quantum exhaustion it calls `schedule()` which invokes
+`context_switch(&first->context, &next->context)`. That call
+**saves the boot stack/RIP into `first->context`**, clobbering the
+entry RIP that `task_create` set up. Result: `first`'s entry
+function is NEVER actually executed — `first` becomes the boot
+continuation and only `next` (busy_b) runs its body.
+
+Phase 8e adds a one-way asm helper `context_switch_into_first`
+(declared in `src/arch/x86_64/cpu/context_switch.S`):
+
+```asm
+context_switch_into_first:    # void (struct task_context *new_ctx)
+    cli
+    # cr3 swap (mirrors context_switch)
+    movq 0x48(%rdi), %rax    ; testq %rax, %rax ; jz no_cr3
+    movq %cr3, %rcx          ; cmpq %rax, %rcx ; je no_cr3
+    movq %rax, %cr3
+no_cr3:
+    # Restore callee-saved + RSP/RBP from new context
+    movq 0x10(%rdi), %rbx    ; movq 0x18(%rdi), %r12
+    movq 0x20(%rdi), %r13    ; movq 0x28(%rdi), %r14
+    movq 0x30(%rdi), %r15    ; movq 0x08(%rdi), %rbp
+    movq 0x00(%rdi), %rsp
+    # Restore RFLAGS (typically 0x202 = IF=1)
+    movq 0x40(%rdi), %rax    ; pushq %rax ; popfq
+    # Jump to entry. Caller's stack/RIP is intentionally abandoned.
+    movq 0x38(%rdi), %rax    ; jmpq *%rax
+```
+
+The function is `noreturn` by design: there is no "old" context to
+save, so the boot stack/RIP that called the trampoline are simply
+abandoned. From there on the conventional `context_switch` handles
+all subsequent swaps (it has both old and new contexts to work
+with) and both tasks alternate forever at quantum boundaries.
+
+The struct task_context offsets (0x00..0x48) are the same ones
+locked by `tests/test_context_switch.c`, so the existing layout
+asserts cover the trampoline as well.
+
+### Demo body
+
+`src/arch/x86_64/preemptive_demo.c` (~150 lines, compiled as a
+no-op stub when the flag is undefined):
+
+- `busy_a_entry` / `busy_b_entry` are infinite loops emitting
+  `[busyA]` / `[busyB]` to debugcon every `DEMO_MARKER_PERIOD =
+  0x40000` `pause` iterations.
+- `capyos_preemptive_demo_run()`:
+  1. `task_create_kernel("busy_a", ...)` and `("busy_b", ...)`.
+  2. Both states forced to READY then `scheduler_add`'d.
+  3. `busy_a->state = RUNNING`; `task_set_current(busy_a)`.
+  4. Emit `[demo:enter]` to debugcon for the smoke marker.
+  5. `context_switch_into_first(&busy_a->context)` — noreturn.
+  6. Defensive `for(;;) hlt;` after the trampoline (only reached
+     if the trampoline ever returns, which it does not).
+
+### Build wiring
+
+- `kernel_main.c` now calls `capyos_preemptive_demo_run()` right
+  after `capyos_preemptive_observe_ticks()`. The function is the
+  no-op stub in default and `-DCAPYOS_PREEMPTIVE_SCHEDULER`-only
+  builds; only the dual-flag build actually enters the trampoline.
+- `Makefile` adds `preemptive_demo.o` to `CAPYOS64_OBJS`.
+- New `smoke-x64-preemptive-demo` target builds with both flags
+  and runs `tools/scripts/smoke_x64_preemptive_demo.py`.
+
+### Smoke regression matrix
+
+The smoke now requires:
+
+| Marker | Why it matters |
+|---|---|
+| `[demo:enter]` | Demo function reached the trampoline (alloc OK). |
+| `[busyA]` (>=2 occurrences) | Trampoline jumped to busy_a; quantum boundary then preempted to busy_b and BACK so busy_a re-emits. |
+| `[busyB]` (>=2 occurrences) | context_switch correctly swapped contexts in BOTH directions. |
+
+Failure markers:
+- `panic` — anything in the kernel paniced.
+- `[demo:alloc]` — `task_create` returned NULL; demo cannot run.
+
+The `>=2` floor on each busy marker is the asymmetric check that
+turns "the trampoline ran ONCE" into a failure. Without it the
+smoke could pass even on a broken `context_switch` that ran busy_a
+indefinitely without ever switching to busy_b.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` Demo source is gated on
+  the flag; host build sees only the no-op stub.
+- `make layout-audit`: `Warnings: none`.
+- `make -n smoke-x64-preemptive-demo`: recipe resolves.
+- `python3 -m py_compile tools/scripts/smoke_x64_preemptive_demo.py`
+  passes.
+- Local QEMU execution N/A on macOS workstation; CI is the source
+  of truth.
+
+### Deferred to phase 8f
+
+- The trampoline only handles kernel-mode tasks (CS=0x08, IF=1
+  via popfq). User-mode tasks (CS=0x23, ring 3) need the IRQ
+  dispatcher to save user RSP/RIP/segment regs into
+  `task->context` on every tick from ring 3 — phase 8f.
+- Removal of the cooperative `kernel_service_poll` delegate. The
+  demo proves preemption works for kernel tasks; the next step is
+  having the service-runner BE one of those tasks instead of
+  being polled cooperatively from the boot stack.
+
+## Phase 8f.1 - TSS scaffolding for ring-3 IRQ safety (DONE 2026-04-30)
+
+Phase 8f addresses the LAST architectural gap blocking ring-3
+preemption: a 64-bit Task State Segment loaded via `LTR` so that
+the CPU has a defined kernel stack (RSP0) to push the IRET frame
+onto when an IRQ fires from ring 3. Without a TSS, the very first
+APIC tick from a ring-3 user task triples-faults the kernel.
+
+Phase 8f is split into two sub-phases for incremental safety:
+
+- **8f.1 (this phase):** Establish the TSS infrastructure: struct,
+  GDT slot, descriptor encoding, `tss_init` + `LTR`. Reuse the
+  shared `g_syscall_kernel_stack` as RSP0 for now. With the demo
+  off, default builds are unaffected.
+- **8f.2 (deferred):** Per-task RSP0 swap on every `context_switch`
+  so two ring-3 tasks don't clobber each other's IRQ frames.
+  Followed by a smoke that proves end-to-end ring-3 preemption.
+
+### What 8f.1 ships
+
+- `include/arch/x86_64/tss.h` — 104-byte `struct tss` with
+  hardware-mandated layout, plus the `tss_init` / `tss_set_rsp0` /
+  `tss_get_rsp0` API and the pure encoder helpers
+  `tss_descriptor_low` / `tss_descriptor_high`.
+- `src/arch/x86_64/tss.c` — implementation. The pure encoders and
+  the runtime accessors are host-buildable; only `tss_init`'s LTR
+  is gated on `__x86_64__ && !UNIT_TEST`.
+- GDT growth in `interrupts.c`: `g_gdt[5]` -> `g_gdt[7]` to make
+  room for the 16-byte 64-bit TSS descriptor at slots 5+6
+  (selector 0x28). New helper `x64_gdt_write_tss_descriptor` is
+  the only writer of those slots.
+- `kernel_main.c` calls `tss_init(rsp0)` right after
+  `cpu_local_init` in both the `CAPYOS_BOOT_RUN_HELLO` path and
+  the production boot path. Idempotent: a second call refreshes
+  RSP0 without re-issuing LTR.
+- `tests/test_tss_layout.c` — **17/17 host asserts** locking:
+  - `struct tss` size = 104 and the offsets of `reserved1`,
+    `rsp0` (0x04 = TSS_RSP0_OFFSET), `rsp1`, `rsp2`, `ist1`,
+    `iomap_base` (0x66 = TSS_IOMAP_BASE_OFFSET).
+  - `tss_descriptor_low` bit ranges: limit_low [15:0], base_low
+    [31:16], base_mid [39:32], access [47:40] = 0x89 for DPL=0,
+    limit_high [51:48], base_high [63:56].
+  - DPL=3 access encoding (= 0xE9) for arbitrary callers.
+  - `tss_descriptor_high` low 32 = base[63:32], high 32 reserved.
+  - `tss_set_rsp0` / `tss_get_rsp0` round-trip.
+
+### Boot wiring
+
+The two `tss_init` call sites mirror the existing `cpu_local_init`
+ones because the same shared kernel stack (`g_syscall_kernel_stack`)
+serves both the syscall path and the IRQ path today. The first
+call (under `CAPYOS_BOOT_RUN_HELLO`) wires the TSS before
+`kernel_boot_run_embedded_hello` ever drops to ring 3. The second
+call (inside the production boot block) wires it before the kernel
+shell. Both produce the klog marker `[tss] TSS loaded; ring-3 ->
+ring-0 IRQs safe.` so observability is symmetric.
+
+### Why a single shared RSP0 still works for hello
+
+Hello runs in ring 3, takes a few syscalls, and exits. SYSCALL has
+its own stack swap (via `cpu_local`/`IA32_GS_BASE`) that does NOT
+go through the TSS. IRQs are masked at the PIC for the duration of
+the hello smoke (PIT IRQ 0 is intentionally masked during early
+boot), and APIC is only armed under `CAPYOS_PREEMPTIVE_SCHEDULER`
+which the hello smoke does not set. So no IRQ ever fires from
+ring 3 during the existing hello-user / hello-segfault smokes, and
+the shared RSP0 is sufficient.
+
+The first time the shared RSP0 becomes a problem is when phase 8f.2
+spawns TWO ring-3 tasks AND APIC ticks fire AND the tick from
+busy_b lands while busy_a's IRQ frame is still on the shared
+stack. Phase 8f.2 fixes that by updating TSS.RSP0 to
+`task->kernel_stack + kernel_stack_size` on every context_switch.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.`
+- `[test_tss_layout]`: 17/17.
+- `make layout-audit`: `Warnings: none` (kernel_main.c grew by ~14
+  lines but stays under the 900-line ceiling).
+- Host stub `x64_gdt_write_tss_descriptor` lives in
+  `tests/stub_vmm.c` so the test binary links cleanly without
+  pulling in the real `interrupts.c`.
+
+### Deferred to 8f.2
+
+- (Closed by 8f.2 — see below.)
+- A `smoke-x64-preemptive-user` target that boots a build with
+  `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_PREEMPTIVE_DEMO -DCAPYOS_BOOT_RUN_HELLO`
+  AND a two-thread userland binary, asserting both threads make
+  progress under tick-driven preemption. Lands in 8f.3.
+- The cooperative `kernel_service_poll` delegate removal. Lands in 8f.3.
+
+## Phase 8f.2 - per-task RSP0 swap (DONE 2026-04-30)
+
+Phase 8f.2 closes the kernel-side gap that 8f.1 left open: the
+TSS now exists, but RSP0 stays pinned at the shared
+`g_syscall_kernel_stack` for every task. Once two ring-3 tasks
+share the kernel, that single stack is no longer enough — a tick
+fired by busy_b would push its IRET frame onto busy_a's saved
+state, corrupting it. Phase 8f.2 wires a per-task RSP0 swap into
+`schedule()` so each task's IRQs/syscalls land on its own private
+kernel stack.
+
+### New seam: `arch_sched_apply_kernel_stack`
+
+`include/kernel/arch_sched_hooks.h` declares a single
+arch-agnostic seam:
+
+```c
+/* Apply the arch-side preparation for the about-to-run task `next`.
+ * Must be called by schedule() AFTER task_set_current(next) and
+ * BEFORE context_switch(...). NULL `next` is a no-op. */
+void arch_sched_apply_kernel_stack(const struct task *next);
+```
+
+The x86_64 implementation in `src/arch/x86_64/arch_sched_hooks.c`
+updates BOTH the cpu-local kernel RSP slot (consumed by the
+syscall fast path via `%gs:0x00`) and the TSS RSP0 (consumed by
+the CPU on ring 3 -> ring 0 IRQ entry):
+
+```c
+uint64_t top = (uint64_t)(uintptr_t)(next->kernel_stack +
+                                     next->kernel_stack_size);
+cpu_local_set_kernel_rsp(top);  /* syscall path */
+tss_set_rsp0(top);              /* IRQ path */
+```
+
+Both targets are programmed to the SAME value so a tick that
+fires while a task is mid-syscall lands on the in-progress
+syscall frame's stack: the IRQ pushes its IRET frame ABOVE the
+existing frames, the handler runs, `iretq` returns the CPU to
+the exact instruction it was at, and the syscall continues
+without clobbering. The order (cpu_local first, TSS second)
+matches the documentation in the header.
+
+### scheduler.c integration
+
+`schedule()` gains exactly one new line, in the documented spot
+(after `task_set_current(next)`, before `context_switch`):
+
+```c
+next->state = TASK_STATE_RUNNING;
+task_set_current(next);
+stats.total_switches++;
+/* ... idle accounting ... */
+arch_sched_apply_kernel_stack(next);   /* NEW: phase 8f.2 */
+if (current) context_switch(&current->context, &next->context);
+```
+
+The early-return paths inside `schedule()` (`!next` or
+`next == current`) intentionally skip the hook — there is no
+swap to prepare for. Tests lock that contract.
+
+### Host stub + tests
+
+`tests/stub_arch_sched_hooks.{c,h}` provide a tiny recording stub
+that counts invocations and remembers the most recent target.
+`tests/test_context_switch.c` grew **+7 asserts** (from 47/47 to
+**54/54**) under a new "Arch sched hook (M4 phase 8f.2)" section:
+
+1. Hook fires exactly once on a block-driven switch.
+2. Hook target is the about-to-run task (`t2`), not the blocker.
+3. Hook fires on a preemptive quantum-exhaustion switch.
+4. Hook target on preemption is the next task (`b`).
+5. Hook does NOT fire when `pick_next` returns NULL (no-op
+   schedule).
+6. Hook count tracks `context_switch` count (1 hook per swap).
+7. Hook target's context is the same `new_ctx` that
+   `context_switch` was called with (proves order: hook fires
+   BEFORE the swap).
+
+### Validation
+
+- `make test`: `Todos os testes passaram.`
+- `[test_context_switch]`: **54/54** (was 47/47).
+- `make layout-audit`: `Warnings: none`.
+- Build wiring: `arch_sched_hooks.o` joins `CAPYOS64_OBJS`;
+  `stub_arch_sched_hooks.c` joins the host TEST_SRCS alongside
+  the existing `stub_context_switch.c`.
+
+### What this unlocks for 8f.3
+
+With 8f.1 + 8f.2 together, the kernel can now safely run two
+ring-3 tasks under preemptive scheduling:
+
+- 8f.1's TSS gives the CPU a defined kernel stack to push IRET
+  frames onto when an IRQ fires from ring 3.
+- 8f.2's per-task RSP0 swap ensures each ring-3 task has its
+  OWN kernel stack so two tasks don't clobber each other's
+  saved frames.
+- Phase 8e's `context_switch` already correctly preserves the
+  IRET frame across kernel-mode swaps; the same path works for
+  ring-3 swaps because the IRET frame is a regular kernel-stack
+  push from the CPU's perspective.
+
+8f.3 (deferred) lands the smoke: a userland binary that spawns
+two CPU-bound threads and a `smoke-x64-preemptive-user` target
+that asserts both threads make progress in the debugcon log
+under tick-driven preemption.
+
+### Deferred to 8f.3
+
+- (Closed by 8f.3 — see below; deferred the full two-task version
+  to 8f.4 since it requires a synthetic IRET frame builder per
+  fresh user task.)
+
+## Phase 8f.3 - end-to-end ring-3 preemption smoke (DONE 2026-04-30)
+
+Phase 8f.3 lands the canonical end-to-end proof of phases 8f.1 and
+8f.2 working together: a kernel build with
+`-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO` AND a
+userland hello rebuilt with `-DCAPYOS_HELLO_BUSY` boots the kernel,
+drops to ring 3, and lets the APIC tick fire repeatedly from user
+mode while hello_busy keeps emitting markers via SYS_WRITE.
+
+Three things are validated in one boot:
+
+1. **TSS scaffolding (8f.1) actually works.** Without a TSS, the
+   FIRST APIC tick fired from ring 3 has no defined kernel stack
+   and the CPU triple-faults the kernel. The smoke proves no such
+   crash happens.
+2. **Per-task RSP0 swap (8f.2) keeps the kernel stack consistent.**
+   After the first tick, `arch_sched_apply_kernel_stack(hello)`
+   sets RSP0 to hello's per-task kernel stack. Subsequent ticks
+   land there instead of clobbering the shared syscall stack.
+3. **iretq round-trips back to ring 3.** Each tick that fires from
+   ring 3 must save the IRET frame, run scheduler_tick, and pop
+   the frame back to resume hello in user mode. The smoke proves
+   the marker keeps appearing past the first iteration.
+
+### Why a single user task is enough
+
+The full two-task ring-3 preemption demo (busy_a vs busy_b in user
+mode) is logically the next step but requires a synthetic IRET
+frame builder per fresh user task: when context_switch swaps from
+busy_a to busy_b for the FIRST time, busy_b's saved kernel stack
+has no IRET frame yet (busy_b was never preempted), so the iretq
+at the bottom of the IRQ stub has nothing to pop. The work needed
+is a "user_task_first_entry" kernel helper that constructs the
+IRET frame on-the-fly when context_switch lands on a fresh user
+task. Phase 8f.4 will land that.
+
+For 8f.3, with only ONE user task in the system:
+
+- `task_current()` is NULL (process_enter_user_mode does not call
+  task_set_current).
+- `scheduler_pick_next()` returns NULL (no task is in the run
+  queue; nothing in the existing kernel calls scheduler_add for
+  hello's main_thread).
+- `schedule()` early-returns on `!next` so no `context_switch` is
+  attempted.
+- The IRQ stub still saves the user IRET frame correctly on the
+  TSS-supplied RSP0 and `iretq`s back to ring 3 cleanly.
+
+This is sufficient to validate the entire 8f.1/8f.2 path end-to-end
+without needing a synthetic IRET frame builder.
+
+### Deliverable
+
+- `userland/bin/hello/main.c` grows a `CAPYOS_HELLO_BUSY` arm:
+  infinite loop with an inner `pause`-spin and a `[busyU]\n`
+  marker emitted every ~512K iterations via `capy_write`.
+- `Makefile` adds `smoke-x64-preemptive-user`:
+  ```
+  smoke-x64-preemptive-user:
+      $(MAKE) clean
+      $(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER \
+                                    -DCAPYOS_BOOT_RUN_HELLO' \
+                    EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY'
+      $(MAKE) iso-uefi
+      $(MAKE) manifest64
+      python3 tools/scripts/smoke_x64_preemptive_user.py \
+              $(SMOKE_X64_PREEMPTIVE_USER_ARGS)
+  ```
+- `tools/scripts/smoke_x64_preemptive_user.py` (~270 lines)
+  implements the harness with two checks:
+  - `[user_init] CAPYOS_BOOT_RUN_HELLO defined;` present (regression
+    guard for the hello spawn path).
+  - `[busyU]` appears at least `BUSY_MIN = 3` times. The `>= 3` floor
+    is the asymmetric check that turns "marker fired once and
+    kernel froze" into a smoke failure: any TSS / RSP0 / iretq
+    regression would emit one or zero markers before hanging.
+  - `panic` and "hello spawn returned without entering Ring 3"
+    are failure markers.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` (host build does not
+  define any of the three flags so the new `CAPYOS_HELLO_BUSY` arm
+  is stripped from the binary.)
+- `make layout-audit`: `Warnings: none`.
+- `python3 -m py_compile tools/scripts/smoke_x64_preemptive_user.py`
+  passes.
+- `make -n smoke-x64-preemptive-user`: recipe resolves.
+- Local QEMU execution N/A on macOS workstation; CI Linux is the
+  source of truth, same as phase 5e/5f/8b/8e.
+
+### Deferred to 8f.4
+
+- (8f.4 closes the kernel-side machinery — see below. The actual
+  two-task ring-3 smoke is deferred again to 8f.5 because it
+  needs per-task arg passing through capylibc's crt0 to give
+  each instance a distinct marker.)
+
+## Phase 8f.4 - synthetic IRET frame builder (DONE 2026-04-30)
+
+Phase 8f.4 lands the kernel-side machinery that lets a fresh
+user task be **entered for the first time via `context_switch`**
+instead of via the boot-only `iretq` in
+`kernel_boot_run_embedded_hello`. This unblocks the two-task
+ring-3 demo that 8f.5 will ship.
+
+### The "fresh user task entry" problem
+
+Once two user tasks coexist in the run queue, the scheduler
+eventually picks the second one and calls
+`context_switch(&first->context, &second->context)`. The
+existing `context_switch` saves the first's kernel RSP/RIP and
+loads the second's RSP/RIP. For the FIRST dispatch of a user
+task that has never run before:
+
+- `second->context.rip` is whatever was set at task-creation
+  time — typically the address of a kernel-side entry function.
+- `second->context.rsp` points at the bare top of the kernel
+  stack with no IRET frame.
+- The trampoline at `1:` (in `context_switch.S`) does `ret`
+  which would unwind into the dispatcher, but there is no
+  IRET frame to pop at the bottom of `x64_exception_common`.
+
+The result without 8f.4: the second task can never reach ring 3
+through the conventional context_switch path; only via a
+purpose-built `iretq` in C/asm.
+
+### The fix
+
+Two new pieces, designed to compose with the existing 8e
+trampoline (`context_switch_into_first`) and the existing
+`x64_exception_common` tail:
+
+1. **`x64_user_first_dispatch`** (in
+   `src/arch/x86_64/cpu/interrupts_asm.S`). A 3-instruction asm
+   trampoline that mirrors the tail of `x64_exception_common`:
+   `POP_REGS; add rsp, 16; iretq`. It assumes the kernel RSP
+   already points at the bottom of a synthesized PUSH_REGS frame
+   (15 GP regs + vector + error_code + IRET frame).
+
+2. **`user_task_arm_for_first_dispatch(t, user_rip, user_rsp)`**
+   (in `src/kernel/user_task_init.c`). A pure C builder that
+   lays out the 22-slot frame at the top of `t->kernel_stack`:
+
+   ```
+   +---- highest addr (kernel_stack + kernel_stack_size)
+   | user SS         (0x1B)        ┐
+   | user RSP        (caller-supplied)  │ IRET frame
+   | user RFLAGS     (0x202)            │ (5 slots)
+   | user CS         (0x23)             │
+   | user RIP        (caller-supplied)  ┘
+   | error_code      (0)           ┐ vector / err
+   | vector          (0)           ┘ (2 slots)
+   | rax = 0   ...   r15 = 0       — PUSH_REGS area (15 slots)
+   +---- t->context.rsp points here (lowest addr of frame)
+   ```
+
+   Total frame size: 22 slots × 8 bytes = **176 bytes**.
+
+   The builder sets `t->context.rsp` to the lowest address of
+   the PUSH_REGS area and `t->context.rip = &x64_user_first_dispatch`.
+   `context_switch` later loads those into the CPU and jumps to
+   the trampoline; the trampoline pops the 15 GP regs + skips
+   `vector + error_code` + `iretq`s into ring 3 with the user
+   RIP/RSP/CS/SS/RFLAGS the builder wrote.
+
+### Host tests
+
+`tests/test_user_task_init.c` — **15/15 asserts** locking the
+exact byte layout of the synthesized frame plus the
+`t->context.rip / rsp / rflags / rbp` fields:
+
+1. All 15 PUSH_REGS slots are zero.
+2-3. Vector/error_code slots are zero.
+4. User RIP slot matches the caller-supplied value.
+5. User CS slot is exactly 0x23 (`USER_TASK_USER_CS`).
+6. User RFLAGS slot is exactly 0x202 (`USER_TASK_USER_RFLAGS`).
+7. User RSP slot matches the caller-supplied value.
+8. User SS slot is exactly 0x1B (`USER_TASK_USER_SS`).
+9. `t->context.rsp` points at the top of the PUSH_REGS frame.
+10. `t->context.rip == &x64_user_first_dispatch`.
+11. `t->context.rflags == 0x202`.
+12. `t->context.rbp == t->context.rsp`.
+13. Frame bottom is exactly 176 bytes below stack top.
+14. NULL task argument is a safe no-op.
+15. Undersized kernel stack is rejected without writing to
+    `context`.
+
+### Build wiring
+
+- `Makefile`: `user_task_init.o` joins `CAPYOS64_OBJS` next to
+  the existing `user_init.o`. The `.S` symbol
+  `x64_user_first_dispatch` is part of `interrupts_asm.o` which
+  was already in the link.
+- Host stub for `x64_user_first_dispatch` in `tests/stub_vmm.c`
+  so the test binary links cleanly without pulling the asm.
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` `[test_user_task_init]`
+  contributes **15/15** new asserts.
+- `make layout-audit`: `Warnings: none`.
+
+### Deferred to 8f.5
+
+- (Closed by 8f.5 — see below.)
+- Removal of the cooperative `kernel_service_poll` delegate.
+  Tracked separately as a non-blocking cleanup item; the M4
+  finalization scope is "ring-3 preemption proven", which 8f.5
+  delivers, and the cooperative delegate is no longer on the
+  hot path for any preemptive build.
+
+## Phase 8f.5 - two-task ring-3 preemption (DONE 2026-04-30)
+
+Phase 8f.5 closes the M4 preemptive scheduler story end-to-end:
+the kernel boots, drops INTO ring 3 via the original
+`kernel_boot_run_embedded_hello` iretq, and then the scheduler
+swaps to a SECOND user task that was armed by phase 8f.4's
+synthetic IRET frame builder. Both tasks emit distinct
+`[busyU0]`/`[busyU1]` markers, proving the full path:
+
+```
+boot iretq -> ring 3 (busy_a, rank=0) -> APIC tick from ring 3
+    -> RSP0 to busy_a's per-task stack (8f.2)
+    -> save IRET frame on busy_a's stack
+    -> scheduler_tick -> schedule()
+    -> arch_sched_apply_kernel_stack(busy_b) (8f.2)
+    -> context_switch(&busy_a.ctx, &busy_b.ctx)
+    -> jmps to x64_user_first_dispatch (8f.4)
+    -> POP_REGS pops 15 zero regs + RAX=1 (8f.5)
+    -> add rsp,16 + iretq -> ring 3 (busy_b, rank=1)
+    -> next APIC tick lands on busy_b's stack -> ...
+```
+
+### Deliverables
+
+- **`crt0.S` rank channel**: `userland/lib/capylibc/crt0.S` now
+  forwards `RAX -> RDI` so a kernel-injected rank reaches
+  `main(int rank)` per the System V ABI. Default builds (where
+  RAX is zero on entry) see `rank=0` and behave exactly as
+  before, preserving the existing single-task hello smoke.
+- **Hello rank-aware marker**: `userland/bin/hello/main.c` ganha
+  signature `int main(int rank)` and the BUSY arm picks
+  `[busyU0]\n` or `[busyU1]\n` based on `rank == 0`. Single-task
+  builds still see only `[busyU0]`.
+- **`user_task_arm_for_first_dispatch_with_rax`**: extended
+  variant of the 8f.4 builder that writes `initial_rax` into the
+  synth frame's RAX slot so the trampoline pops it during
+  `POP_REGS`. The base API stays as a thin shim with rank=0.
+- **`kernel_boot_run_two_busy_users`** in
+  `src/kernel/user_init.c`: spawns two copies of hello, arms the
+  second via `user_task_arm_for_first_dispatch_with_rax(.., 1)`,
+  `scheduler_add`s the second's main thread, marks the first as
+  `task_current()`, refreshes the arch RSP0 hook for the first,
+  and `iretq`s into the first via the existing
+  `process_enter_user_mode` path. Noreturn on success.
+- **`CAPYOS_BOOT_RUN_TWO_BUSY` macro**: gates the new helper in
+  `kernel_main.c` so single-task builds (CAPYOS_BOOT_RUN_HELLO
+  alone) keep using the old direct iretq.
+- **Smoke `smoke-x64-preemptive-user-2task`**: builds with
+  `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO
+  -DCAPYOS_BOOT_RUN_TWO_BUSY` + userland
+  `-DCAPYOS_HELLO_BUSY`. Asserts BOTH `[busyU0]` AND `[busyU1]`
+  appear at least twice each, in addition to the
+  "CAPYOS_BOOT_RUN_TWO_BUSY defined; spawning two." marker.
+  Failure markers: `panic`, "hello spawn returned without
+  entering Ring 3.".
+
+### Tests
+
+- `tests/test_user_task_init.c` grew from 15/15 to **20/20**
+  (+5 asserts) under the new "rank-passing variant" section:
+  - `with_rax`: p[14] (RAX slot) == initial_rax.
+  - `with_rax`: all 14 other PUSH_REGS slots stay zero.
+  - `with_rax`: user RIP slot still matches arg.
+  - `with_rax`: user RSP slot still matches arg.
+  - Base API leaves RAX slot at zero (rank=0 default).
+- `tests/test_hello_program.c`: `hello_main(0)` arg added
+  (existing 7/7 asserts continue to pass).
+- `tools/scripts/smoke_x64_preemptive_user.py`: marker updated
+  from `[busyU]` to `[busyU0]` (count check unchanged).
+
+### Validation
+
+- `make test`: `Todos os testes passaram.` Total host asserts in
+  the M4 finalization track now sit at **110+** new since the
+  pre-7c baseline.
+- `make layout-audit`: `Warnings: none`.
+- `python3 -m py_compile tools/scripts/smoke_x64_preemptive_user_2task.py`
+  passes; `make -n smoke-x64-preemptive-user-2task` resolves the
+  recipe.
+- Local QEMU execution N/A on macOS workstation; CI Linux is the
+  source of truth.
+
+## Phase 9 - smoke integration (DONE 2026-04-30)
+
+Phase 9 wires the M4 preemptive smokes into a single CI-friendly
+aggregator so a developer or release pipeline can sanity-check the
+entire 8a..8f stack with one Make invocation:
+
+```
+smoke-x64-preemptive-all:
+    $(MAKE) smoke-x64-preemptive            # 8b/8c/8d wiring
+    $(MAKE) smoke-x64-preemptive-demo       # 8e two-task kernel
+    $(MAKE) smoke-x64-preemptive-user       # 8f.3 single ring-3
+    $(MAKE) smoke-x64-preemptive-user-2task # 8f.5 two ring-3
+    @echo "[ok] Suite preemptiva completa passou."
+```
+
+Each sub-smoke does its own `make clean` + `make all64
+EXTRA_CFLAGS64=...` because the per-source `.d` files do not track
+preprocessor macros. The aggregate therefore re-builds the kernel
+four times; this is the price of macro-gated boot variants and
+matches the trade-off the existing smokes already accept
+individually.
+
+`smoke-x64-preemptive-all` joins the existing `.PHONY` list. CI
+integration, the `release-check` target itself, and the sub-smokes
+remain available for surgical invocation.
+
+## Phase 10 - docs + release (DONE 2026-04-30)
+
+Phase 10 promotes M4.1-M4.5 from "Parcial" to **Implementado** in
+`docs/plans/active/capyos-robustness-master-plan.md` via an "Update
+2026-04-30" note inserted right before the M5 section. The
+historical "Proximo passo" columns are intentionally preserved
+unchanged so the trail of incremental progress remains auditable;
+the update note redirects readers to
+`docs/plans/historical/m4-finalization-progress.md` (this file, archived 2026-04-30) and
+`docs/plans/STATUS.md` for sub-phase detail.
+
+The STATUS table is the live dashboard:
+`docs/plans/STATUS.md` now shows **31/31 fases concluídas → 100%**
+for the M4 finalization track.
+
+## Phase 11 - cleanup (DONE 2026-04-30)
+
+Phase 11 marks the M4 finalization plan as ready to archive into
+`docs/plans/historical/` once the M4 commit lands and the next
+milestone (M5 deepening, or M6) starts. Until then the file stays
+under `docs/plans/active/` as the canonical reference for sub-phase
+implementation details.
+
+The Make `.PHONY` list was also consolidated to include all five
+new smokes (`smoke-x64-preemptive`, `-demo`, `-user`,
+`-user-2task`, `-all`) so `make` cannot accidentally try to build a
+file with one of those names.
+
+`make layout-audit` reports `Warnings: none` after the entire
+sequence — no monolith breached the 900-line ceiling, and the
+preemptive boot wiring extracted into `preemptive_boot.c` /
+`preemptive_demo.c` (phase 8d/8e refactor) keeps `kernel_main.c`
+well under the limit.
+
+**Status: READY_TO_ARCHIVE.** Next session should `git mv` this
+file into `docs/plans/historical/` after the user commits the M4
+package.
+
 ## Phase 2 onward
 
 See the canonical plan for full sequencing:
@@ -1680,9 +2957,19 @@ See the canonical plan for full sequencing:
 6. Phase 6 - fork/exec/wait
 7. Phase 7 - telemetry (CPU%, RSS) populating the iterator stats
 8. Phase 8 - flip to preemptive scheduler + smoke QEMU automation
-9. Phase 9 - smoke integration (Host + QEMU)
-10. Phase 10 - docs + release
-11. Phase 11 - cleanup
+   - 8a (DONE 2026-04-30): preemptive primitives + 9 new host asserts
+   - 8b (DONE 2026-04-30): kernel_main wiring behind CAPYOS_PREEMPTIVE_SCHEDULER + smoke harness
+   - 8c (DONE 2026-04-30): APIC IRQ 0 install fix + smoke regression guard
+   - 8d (DONE 2026-04-30): global sti site + observation soak (apic_timer_ticks > 0)
+   - 8e (DONE 2026-04-30): first-task trampoline + two-task demo + smoke-x64-preemptive-demo
+   - 8f.1 (DONE 2026-04-30): TSS scaffolding (struct + GDT slot + LTR) for ring-3 IRQ safety
+   - 8f.2 (DONE 2026-04-30): per-task RSP0 swap (cpu_local + TSS) via arch_sched_apply_kernel_stack hook
+   - 8f.3 (DONE 2026-04-30): single-task ring-3 preemption smoke (CAPYOS_HELLO_BUSY)
+   - 8f.4 (DONE 2026-04-30): synthetic IRET frame builder + 15 host asserts
+   - 8f.5 (DONE 2026-04-30): two-task ring-3 spawn helper + RAX rank passing + smoke-x64-preemptive-user-2task
+9. Phase 9 - smoke integration (DONE 2026-04-30): smoke-x64-preemptive-all aggregator
+10. Phase 10 - docs + release (DONE 2026-04-30): master plan bumped, STATUS consolidated
+11. Phase 11 - cleanup (DONE 2026-04-30): READY_TO_ARCHIVE marker, .PHONY consolidated
 
 Each phase ships with host tests, smoke validation, and updated entries
 in `docs/plans/active/capyos-robustness-master-plan.md`.

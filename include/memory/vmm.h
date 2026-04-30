@@ -14,6 +14,16 @@
 #define VMM_PAGE_DIRTY    (1ULL << 6)
 #define VMM_PAGE_HUGE     (1ULL << 7)
 #define VMM_PAGE_GLOBAL   (1ULL << 8)
+/* M4 phase 7c: software-only "copy-on-write" marker.
+ *
+ * Bits 9, 10, 11 are AVL (available) bits in x86_64 4 KiB PTEs - the
+ * CPU ignores them, so they are free for OS bookkeeping. We use bit
+ * 9 to remember that a present-but-RO PTE is a CoW share rather
+ * than an explicitly read-only mapping (text segment, etc.). The
+ * page-fault handler reads this bit to decide between "it's a
+ * legitimate write to a CoW share" (allocate copy or flip RW back)
+ * and "it's a write to a real RO page" (kill the process). */
+#define VMM_PAGE_COW      (1ULL << 9)
 #define VMM_PAGE_NX       (1ULL << 63)
 
 #define VMM_KERNEL_BASE 0xFFFF800000000000ULL
@@ -74,6 +84,28 @@ struct vmm_stats {
 
 void vmm_init(void);
 struct vmm_address_space *vmm_create_address_space(void);
+/* M4 phase 7c: copy-on-write clone.
+ *
+ * Builds a new address space whose user mappings (lower half of the
+ * PML4, indices 0..255) shadow `src` page-by-page. The kernel half
+ * (indices 256..511) is shared as before.
+ *
+ * For every present user PTE in `src`:
+ *   - The destination AS gets an identical PTE pointing at the same
+ *     physical frame.
+ *   - If the PTE was writable AND its underlying frame can be CoW'd,
+ *     BOTH the source and destination PTE have VMM_PAGE_WRITE
+ *     cleared and VMM_PAGE_COW set, and the frame's refcount is
+ *     bumped by one (src already counted as one sharer; dst becomes
+ *     the second). The next write from either side faults, and
+ *     `vmm_handle_page_fault` resolves it via `vmm_cow_decide`.
+ *   - Already read-only mappings (text segment, mprotect-RO, etc.)
+ *     are duplicated as-is with a refcount bump but no flag flip.
+ *
+ * Returns NULL on allocation failure. The returned AS has refcount=1
+ * exactly like `vmm_create_address_space`. */
+struct vmm_address_space *vmm_clone_address_space(
+    const struct vmm_address_space *src);
 void vmm_destroy_address_space(struct vmm_address_space *as);
 struct vmm_address_space *vmm_kernel_address_space(void);
 void vmm_switch_address_space(struct vmm_address_space *as);

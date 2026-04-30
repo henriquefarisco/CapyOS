@@ -1,6 +1,7 @@
 #pragma GCC optimize("O0")
 #include "kernel/scheduler.h"
 #include "kernel/task.h"
+#include "kernel/arch_sched_hooks.h"
 #include <stddef.h>
 
 static struct task *run_queue_head = NULL;
@@ -10,7 +11,9 @@ static enum scheduler_policy current_policy = SCHED_POLICY_COOPERATIVE;
 static struct scheduler_stats stats;
 static int sched_running = 0;
 
-#define SCHED_DEFAULT_QUANTUM 10
+/* SCHED_DEFAULT_QUANTUM is defined in include/kernel/scheduler.h so that
+ * task_create() can reuse the same constant when initialising
+ * quantum_remaining (M4 phase 8a). */
 
 extern void context_switch(struct task_context *old, struct task_context *new_ctx);
 extern void task_set_current(struct task *t);
@@ -106,6 +109,14 @@ static void schedule(void) {
     stats.idle_ticks++;
   }
 
+  /* M4 phase 8f.2: arch-side preparation for `next`. On x86_64 this
+   * updates IA32_GS_BASE-backed cpu_local.kernel_rsp AND the TSS
+   * RSP0 to point at the new task's per-task kernel stack so any
+   * subsequent syscall or IRQ from ring 3 lands on the right
+   * stack. The host stub in tests/stub_arch_sched_hooks.c records
+   * the call so test_context_switch can lock the contract. */
+  arch_sched_apply_kernel_stack(next);
+
   if (current) {
     context_switch(&current->context, &next->context);
   }
@@ -182,9 +193,19 @@ void scheduler_tick(void) {
         schedule();
         return;
       }
+      /* Quantum still has budget: do NOT context-switch on this tick.
+       * The previous unconditional schedule() here forced a switch on
+       * every tick which made preemption indistinguishable from
+       * gang-scheduling and starved the running task. */
+      return;
     }
+    /* No current task (or current is idle): pick someone to run. */
     schedule();
   }
+}
+
+void scheduler_set_running(int running) {
+  sched_running = running ? 1 : 0;
 }
 
 void scheduler_set_policy(enum scheduler_policy policy) {

@@ -34,8 +34,25 @@ static const char k_msg[] = "hello, capyland\n";
 #ifdef CAPYOS_HELLO_FAULT
 static const char k_fault_marker[] = "before-fault\n";
 #endif
+#ifdef CAPYOS_HELLO_BUSY
+/* M4 phase 8f.3: marker emitted in a loop so the smoke can prove
+ * that an APIC tick fired from ring 3 does NOT crash the kernel
+ * (TSS / RSP0 path works) and that iretq correctly returns to user
+ * mode after the tick is serviced. The bracketed prefix matches the
+ * convention used by the kernel-mode preemption demo (phase 8e).
+ *
+ * M4 phase 8f.5: when the kernel spawns TWO copies of this binary
+ * via kernel_boot_run_two_busy_users, each copy receives a distinct
+ * `rank` value as its first main() argument (rank 0 -> [busyU0],
+ * rank 1 -> [busyU1]). The smoke harness asserts BOTH markers
+ * appear at least N times to prove ring-3 preemption swaps actually
+ * resume each task. Single-task builds (phase 8f.3) see rank=0 and
+ * emit only [busyU0]. */
+static const char k_busy_marker_0[] = "[busyU0]\n";
+static const char k_busy_marker_1[] = "[busyU1]\n";
+#endif
 
-int main(void) {
+int main(int rank) {
 #ifdef CAPYOS_HELLO_FAULT
     /* Phase 5f smoke: verify the fault-kill path end-to-end.
      *
@@ -65,7 +82,39 @@ int main(void) {
     /* Unreachable on a working kernel; kept so the compiler does
      * not flag a noreturn path. */
     return 1;
+#elif defined(CAPYOS_HELLO_BUSY)
+    /* M4 phase 8f.3 / 8f.5: ring-3 preemption smoke body.
+     *
+     * Loops forever, emitting a marker every N busy iterations.
+     * The smoke harness asserts the marker appears at least
+     * BUSY_MIN times within the wall-clock window. With APIC
+     * armed at 100Hz and a multi-second timeout the user task is
+     * guaranteed to take many ticks; if any of them crashed the
+     * kernel (TSS missing, RSP0 wrong, iretq mis-staged) the
+     * marker would simply stop appearing.
+     *
+     * The `rank` argument is non-zero only when the kernel spawned
+     * two copies of this binary; rank 0 emits [busyU0] and rank 1
+     * emits [busyU1]. */
+    const char *marker =
+        (rank == 0) ? k_busy_marker_0 : k_busy_marker_1;
+    size_t marker_len =
+        (rank == 0) ? sizeof(k_busy_marker_0) - 1u
+                    : sizeof(k_busy_marker_1) - 1u;
+    for (;;) {
+        for (volatile uint64_t spin = 0; spin < 0x80000ULL; ++spin) {
+            __asm__ volatile("pause");
+        }
+        capy_write(1, marker, marker_len);
+    }
+    /* Unreachable: the loop is intentionally infinite so the smoke
+     * has an unlimited window of opportunity to observe the marker.
+     * The kernel-side scheduler will eventually preempt this task
+     * out via the APIC tick and back via iretq, exactly the path
+     * the smoke is validating. */
+    return 0;
 #else
+    (void)rank;
     /* sizeof - 1 strips the implicit NUL terminator that the kernel
      * console does not need to emit. */
     capy_write(1, k_msg, sizeof(k_msg) - 1);

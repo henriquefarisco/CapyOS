@@ -26,6 +26,7 @@
  *   bit 15 SGX  : 1 = SGX-specific access
  */
 #define PF_ERR_PRESENT     (1u << 0)
+#define PF_ERR_WRITE       (1u << 1)
 #define PF_ERR_USER        (1u << 2)
 #define PF_ERR_RESERVED    (1u << 3)
 #define PF_ERR_PROTECTKEY  (1u << 5)
@@ -67,30 +68,46 @@ static int vector_is_user_recoverable(uint64_t vector) {
   }
 }
 
-/* Phase 7a (M4 finalization): is this user-mode #PF a candidate for the
- * VMM recovery path? The CPL check is performed by the caller; this
- * helper only decides based on vector + error code.
+/* Phase 7a/7c: is this user-mode #PF a candidate for the VMM recovery
+ * path? The CPL check is performed by the caller; this helper only
+ * decides based on vector + error code.
  *
- * A page fault is "potentially recoverable" when:
- *   - vector == 14 (#PF), AND
- *   - the page was not present (bit 0 P clear), AND
- *   - no reserved-bit corruption (bit 3 clear), AND
- *   - no protection-key violation (bit 5 clear).
+ * Two recoverable shapes are accepted today:
  *
- * Anything else (P=1 protection violation, RSVD=1 page-table corruption,
- * PK=1 PKRU violation) is rejected here and falls through to the
- * existing KILL_PROCESS path so a misbehaving user program is contained
- * even when `vmm_handle_page_fault` does nothing yet.
+ *   1. (Phase 7a) Demand-paging: page not present (P=0), no reserved
+ *      bit set, no protection-key violation. The VMM looks up the
+ *      faulting address in the AS's anon-region registry and either
+ *      maps a fresh zero-filled page or refuses (-> KILL_PROCESS).
  *
- * Future phases extend this rule (e.g. P=1 with W=1 on a CoW-marked
- * page becomes recoverable when copy-on-write lands). The host tests
- * in `tests/test_fault_classify.c` lock the current matrix so those
- * extensions are explicit. */
+ *   2. (Phase 7c) Copy-on-write: page present (P=1) with a write
+ *      access (W=1), again with no RSVD/PK noise. The VMM checks
+ *      the PTE's software COW bit and either reuses-in-place (last
+ *      sharer) or allocates a private copy. If the PTE was NOT
+ *      flagged CoW, the VMM returns -1 and the dispatcher
+ *      escalates to KILL_PROCESS - so a genuine W-on-RO violation
+ *      against an explicitly read-only mapping (text segment,
+ *      mprotect-RO, ...) still kills the process, exactly as it
+ *      did before phase 7c.
+ *
+ * Anything else (RSVD=1 page-table corruption, PK=1 PKRU violation,
+ * #PF on present-without-write) is rejected here and falls through
+ * to the existing KILL_PROCESS path. The host tests in
+ * `tests/test_fault_classify.c` lock the full matrix. */
 static int pf_error_code_is_recoverable(uint64_t error_code) {
-  if (error_code & PF_ERR_PRESENT) return 0;
   if (error_code & PF_ERR_RESERVED) return 0;
   if (error_code & PF_ERR_PROTECTKEY) return 0;
-  return 1;
+
+  /* Shape 1: demand-paging (P=0). Every variant of the access bits
+   * is acceptable: read/write/exec on a not-present page is what
+   * the VMM exists to service. */
+  if (!(error_code & PF_ERR_PRESENT)) return 1;
+
+  /* Shape 2: copy-on-write candidate (P=1 + W=1). Only the write-on-
+   * present arm reaches the VMM; the read-on-present and exec-on-
+   * present arms are RW/NX violations that must KILL_PROCESS. */
+  if (error_code & PF_ERR_WRITE) return 1;
+
+  return 0;
 }
 
 enum arch_fault_action

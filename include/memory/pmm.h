@@ -34,4 +34,39 @@ int pmm_low_memory(void);
 void pmm_set_reclaim_callback(void (*cb)(void));
 uint64_t pmm_alloc_page_reclaim(void);
 
+/* Phase 7c: per-frame reference counters used by copy-on-write.
+ *
+ * `vmm_clone_address_space` needs to know how many address spaces
+ * share a given physical page so the page-fault handler can decide
+ * between "we are the last sharer, flip RW back" and "another AS
+ * still maps this page, allocate a copy". The counter is incremented
+ * each time a frame becomes RO-shared via clone, and decremented as
+ * each sharer either writes (and gets its own copy) or unmaps.
+ *
+ * The default count for a freshly-allocated frame is 1 (the
+ * allocator hands ownership to a single caller). Frames that were
+ * never refcount-touched return 0 from `pmm_frame_refcount_get` so
+ * code paths that ignore CoW (kernel mappings, single-AS user
+ * mappings) continue to work without bookkeeping overhead.
+ *
+ * Backed by a fixed-size uint16_t array indexed by PFN. The table
+ * is sized to cover the same upper bound as the PMM bitmap
+ * (PMM_BITMAP_SIZE * 8 frames). Out-of-range frames are silently
+ * ignored to make the helpers safe to call without bounds checks
+ * at the caller (notably from page-table walkers).
+ *
+ * The table lives in src/memory/pmm_refcount.c so it can be linked
+ * into the host unit-test binary alongside vmm_regions.c without
+ * pulling in pmm.c (which has no inline asm but does have global
+ * state we do not want to share with the tests). */
+#define PMM_BITMAP_SIZE_PAGES (64u * 1024u)
+#define PMM_REFCOUNT_MAX_PAGES (PMM_BITMAP_SIZE_PAGES)
+
+void pmm_frame_refcount_init(void);
+void pmm_frame_refcount_inc(uint64_t phys_addr);
+/* Decrement and return the new value. Returns 0 if the table is at
+ * 0 already (idempotent / safe to call on never-refcounted frames). */
+uint16_t pmm_frame_refcount_dec(uint64_t phys_addr);
+uint16_t pmm_frame_refcount_get(uint64_t phys_addr);
+
 #endif /* MEMORY_PMM_H */

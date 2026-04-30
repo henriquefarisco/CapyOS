@@ -97,7 +97,7 @@ int test_hello_program_run(void) {
     g_exit_calls = 0;
     g_other_syscalls = 0;
 
-    int rc = hello_main();
+    int rc = hello_main(0);
 
     TEST("main returned 0 (crt0 forwards as SYS_EXIT code)");
     if (rc == 0) PASS();

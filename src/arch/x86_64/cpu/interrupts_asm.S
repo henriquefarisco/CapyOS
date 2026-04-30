@@ -73,6 +73,35 @@ x64_exception_common:
     add rsp, 16
     iretq
 
+# void x64_user_first_dispatch(void) (M4 phase 8f.4)
+#
+# One-way trampoline used when context_switch lands on a fresh user
+# task for the very first time. The task's kernel stack must already
+# have been seeded by user_task_arm_for_first_dispatch() with the
+# exact byte layout that x64_exception_common would have left behind
+# AFTER `PUSH_REGS` plus `vector` plus `error_code` plus the IRET
+# frame (RIP, CS, RFLAGS, RSP, SS).
+#
+# When context_switch jumps here, RSP already points at the bottom
+# of that synthesized frame (matching the post-PUSH_REGS state).
+# The trampoline therefore mirrors the tail of x64_exception_common
+# starting at the POP_REGS sequence.
+#
+# Result: the CPU pops 15 GP regs + skips vector/error_code +
+# iretqs into ring 3 with the user RIP/RSP/CS/SS/RFLAGS the builder
+# wrote into the IRET slots. From the user task's point of view it
+# is indistinguishable from "I was preempted just before main()
+# started running, and now the scheduler restored me".
+
+.global x64_user_first_dispatch
+.type x64_user_first_dispatch, @function
+x64_user_first_dispatch:
+    POP_REGS
+    add rsp, 16
+    iretq
+
+.size x64_user_first_dispatch, .-x64_user_first_dispatch
+
 VECTOR_NOERR 0
 VECTOR_NOERR 1
 VECTOR_NOERR 2
