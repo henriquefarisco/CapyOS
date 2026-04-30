@@ -1,5 +1,8 @@
 #include "internal/system_info_internal.h"
 
+#include "kernel/process_iter.h"
+#include "kernel/task_iter.h"
+
 static void perf_print_u64(uint64_t value) {
     char buf[24];
     char tmp[24];
@@ -164,5 +167,79 @@ int cmd_perf_mem(struct shell_context *ctx, int argc, char **argv) {
     shell_print(" (");
     perf_print_u64((uint64_t)kheap_size());
     shell_print(" bytes)\n");
+    return 0;
+}
+
+int cmd_perf_task(struct shell_context *ctx, int argc, char **argv) {
+    struct task_iter tit;
+    struct task_stats tstats;
+    struct process_iter pit;
+    struct process_stats pstats;
+    int ok;
+    uint32_t task_total = 0u;
+    uint32_t proc_total = 0u;
+
+    (void)ctx;
+    if (shell_help_requested(argc, argv)) {
+        shell_print(
+            "Usage: perf-task\n"
+            "Lists active kernel tasks and processes with state, priority,\n"
+            "CPU time and memory hints. CPU time and RSS show 0 until\n"
+            "M4 phase 7 wires per-task accounting; treat them as placeholders.\n");
+        return 0;
+    }
+
+    shell_print("Task performance:\n");
+    shell_print("  Tasks:\n");
+    shell_print("    PID  PPID STATE     PRI     CPU_NS  NAME\n");
+    for (ok = task_iter_first(&tit, &tstats); ok;
+         ok = task_iter_next(&tit, &tstats)) {
+        shell_print("    ");
+        shell_print_number(tstats.pid);
+        shell_print(" ");
+        shell_print_number(tstats.ppid);
+        shell_print(" ");
+        shell_print(task_state_label(tstats.state));
+        shell_print(" ");
+        shell_print(task_priority_label(tstats.priority));
+        shell_print(" ");
+        perf_print_u64(tstats.cpu_time_ns);
+        shell_print(" ");
+        shell_print(tstats.name[0] ? tstats.name : "(unnamed)");
+        shell_newline();
+        task_total++;
+    }
+    if (task_total == 0u) {
+        shell_print("    (no active tasks)\n");
+    }
+    shell_print("  task_total=");
+    shell_print_number(task_total);
+    shell_newline();
+
+    shell_print("  Processes:\n");
+    shell_print("    PID  PPID STATE    UID  RSS_PG  NAME\n");
+    for (ok = process_iter_first(&pit, &pstats); ok;
+         ok = process_iter_next(&pit, &pstats)) {
+        shell_print("    ");
+        shell_print_number(pstats.pid);
+        shell_print(" ");
+        shell_print_number(pstats.ppid);
+        shell_print(" ");
+        shell_print(process_state_label(pstats.state));
+        shell_print(" ");
+        shell_print_number(pstats.uid);
+        shell_print(" ");
+        perf_print_u64(pstats.rss_pages);
+        shell_print(" ");
+        shell_print(pstats.name[0] ? pstats.name : "(unnamed)");
+        shell_newline();
+        proc_total++;
+    }
+    if (proc_total == 0u) {
+        shell_print("    (no active processes)\n");
+    }
+    shell_print("  process_total=");
+    shell_print_number(proc_total);
+    shell_newline();
     return 0;
 }

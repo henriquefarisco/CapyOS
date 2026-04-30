@@ -294,6 +294,7 @@ static int test_html_viewer_strict_transition_escalates(void) {
                        "permissive mode accepts invalid transition");
 
   /* Strict mode: same invalid transition is escalated to FAILED. */
+  klog_reset();
   html_viewer_state_strict_mode_set(1);
   fails += expect_true(html_viewer_state_strict_mode_enabled() == 1,
                        "strict mode reports as enabled");
@@ -306,6 +307,12 @@ static int test_html_viewer_strict_transition_escalates(void) {
                        "strict mode publishes a stable reason");
   fails += expect_true(strcmp(app->last_stage, "violation-stage") == 0,
                        "strict mode preserves the violating stage label");
+  /* M6.2: strict mode escalation must emit a stable [audit] event so log-
+   * mining tools can correlate browser security events with [auth] / [priv]
+   * / [update] streams. */
+  fails += expect_true(strstr(klog_serialize(),
+                              "[audit] [browser] strict-mode violation") != NULL,
+                       "strict mode must emit an [audit]-tagged klog event");
 
   /* A valid transition still goes through under strict mode. */
   app->nav_state = HTML_VIEWER_NAV_IDLE;

@@ -2,7 +2,7 @@
 #include "internal/config_internal.h"
 
 #if defined(__x86_64__)
-#include "drivers/serial/com1.h"
+#include "drivers/serial/serial_com1.h"
 #endif
 
 static void wizard_serial_write(const char *text) {

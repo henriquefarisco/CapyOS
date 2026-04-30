@@ -63,6 +63,22 @@ struct elf_load_result {
 int elf_validate(const uint8_t *data, size_t size);
 int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
              struct elf_load_result *result);
+
+/* High-level helper that loads an ELF image already resident in
+ * memory into `proc`. After the segments are mapped, allocates a
+ * 16-page user stack at VMM_USER_STACK and writes the entry point
+ * into `proc->main_thread->context.rip` (RSP -> stack_top - 8).
+ *
+ * Returns 0 on success, < 0 on any failure (invalid ELF, OOM,
+ * missing main_thread). The caller is responsible for choosing
+ * when to call `process_enter_user_mode(proc)`.
+ *
+ * `data` and `size` describe the ELF image as a contiguous byte
+ * range; the embedded-hello path (M4 phase 5c) feeds this from a
+ * `.rodata` blob produced by objcopy. */
+int elf_load_into_process(struct process *proc, const uint8_t *data,
+                          size_t size);
+
 int elf_load_from_file(struct process *proc, const char *path);
 
 #endif /* KERNEL_ELF_LOADER_H */

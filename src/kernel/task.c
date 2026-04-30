@@ -138,7 +138,14 @@ void task_exit(int code) {
     current_task->state = TASK_STATE_ZOMBIE;
   }
   task_yield();
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+  /* In host unit tests this path is unreachable in covered scenarios but
+   * still must compile on the host arch (potentially non-x86). The
+   * production x86_64 kernel keeps the busy hlt loop below. */
+  for (;;) { /* unreachable in tests */ }
+#else
   for (;;) __asm__ volatile("hlt");
+#endif
 }
 
 void task_yield(void) {

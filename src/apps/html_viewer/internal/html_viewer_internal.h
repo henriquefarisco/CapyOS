@@ -255,6 +255,29 @@ void hv_parse_budget_mark_exhausted(struct html_viewer_app *app,
 void hv_parse_app_set(struct html_viewer_app *app);
 struct html_viewer_app *hv_parse_app_get(void);
 
+/* Navigation-level op_budget integration (M5.5 deep adoption).
+ *
+ * `hv_nav_budget_reset` is called from html_viewer_begin_navigation and
+ * arms the per-app op_budget with a generous total (sum of all per-phase
+ * caps) and a stable label "html_viewer_nav".
+ *
+ * `hv_nav_budget_blocked` is the canonical check used by long inner loops
+ * (parse, render, fetch, redirect chains). It returns 1 when either:
+ *   - an external actor called op_budget_cancel (Esc-cancel, supervisor), or
+ *   - any per-phase budget has already exhausted and propagated.
+ * Returning 1 stops further work cooperatively without forcing a state
+ * transition.
+ *
+ * `hv_nav_budget_cancel` is the public abort knob; it is called by
+ * html_viewer_cancel_navigation and may be called by external code via
+ * the navigation_id (cancellation does NOT free the app). */
+void hv_nav_budget_reset(struct html_viewer_app *app);
+int hv_nav_budget_blocked(const struct html_viewer_app *app);
+void hv_nav_budget_cancel(struct html_viewer_app *app, const char *reason);
+void hv_nav_budget_propagate_exhaust(struct html_viewer_app *app,
+                                     const char *reason);
+const char *hv_nav_budget_reason(const struct html_viewer_app *app);
+
 void html_viewer_load_text_document(struct html_viewer_app *app,
                                     const char *title, const char *text,
                                     size_t len, uint32_t color);

@@ -226,7 +226,6 @@ static EFI_STATUS kernel_acquire_load_pages(EFI_SYSTEM_TABLE *st,
                                             UINTN pages,
                                             EFI_PHYSICAL_ADDRESS *load_base) {
   EFI_STATUS stt;
-  EFI_PHYSICAL_ADDRESS reloc_base = 0xFFFFFFFFULL;
 
   if (!st || !st->BootServices || !load_base || pages == 0) {
     return EFI_INVALID_PARAMETER;
@@ -251,18 +250,8 @@ static EFI_STATUS kernel_acquire_load_pages(EFI_SYSTEM_TABLE *st,
   }
 
   Print(L"[UEFI] AllocatePages(kernel@0x%lx) falhou: %r\r\n", link_base, stt);
-
-  stt = uefi_call_wrapper(st->BootServices->AllocatePages, 4, AllocateMaxAddress,
-                          EfiLoaderCode, pages, &reloc_base);
-  if (EFI_ERROR(stt)) {
-    Print(L"[UEFI] FATAL: fallback relocado do kernel falhou: %r\r\n", stt);
-    return stt;
-  }
-
-  *load_base = reloc_base;
-  Print(L"[UEFI] Aviso: kernel carregado fora do link-base em 0x%lx\r\n",
-        reloc_base);
-  return EFI_SUCCESS;
+  Print(L"[UEFI] FATAL: kernel ELF64 nao pode ser relocado; abortando\r\n");
+  return stt;
 }
 
 static void kernel_release_load_pages(EFI_SYSTEM_TABLE *st,

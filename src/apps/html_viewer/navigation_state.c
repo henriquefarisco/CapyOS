@@ -1,8 +1,6 @@
 #include "internal/html_viewer_internal.h"
 
-#ifndef UNIT_TEST
 #include "kernel/log/klog.h"
-#endif
 
 const char *html_viewer_state_name(enum html_viewer_nav_state state) {
   switch (state) {
@@ -332,9 +330,7 @@ void html_viewer_set_state(struct html_viewer_app *app,
   int suspicious = (from != state &&
                     !html_viewer_state_transition_allowed(from, state));
   if (suspicious) {
-#ifndef UNIT_TEST
     klog(KLOG_WARN, "[browser] suspicious state transition");
-#endif
     if (g_html_viewer_strict_mode) {
       /* Hard escalation: route the transition to FAILED so the rest of the
        * pipeline observes a coherent navigation outcome instead of a state
@@ -345,6 +341,11 @@ void html_viewer_set_state(struct html_viewer_app *app,
               "Suspicious browser state transition (strict mode).");
       app->nav_state = HTML_VIEWER_NAV_FAILED;
       app->loading = 0;
+      /* Audit event: strict mode just escalated a violation. Logged with
+       * a stable [audit] prefix so log-mining tools can grep for security-
+       * relevant browser events alongside [auth], [priv], [update]. */
+      klog(KLOG_WARN,
+           "[audit] [browser] strict-mode violation -> nav=FAILED");
       if (g_isolation_ops && g_isolation_ops->heartbeat) {
         g_isolation_ops->heartbeat(app->active_navigation_id,
                                    HTML_VIEWER_NAV_FAILED);
@@ -399,6 +400,7 @@ void html_viewer_begin_navigation(struct html_viewer_app *app, const char *url) 
   hv_resource_budget_reset(app);
   hv_render_budget_reset(app);
   hv_parse_budget_reset(app);
+  hv_nav_budget_reset(app);
   app->last_error_reason[0] = '\0';
   kstrcpy(app->last_stage, sizeof(app->last_stage), "loading");
   if (url && url[0]) {
@@ -418,6 +420,11 @@ int html_viewer_navigation_is_current(const struct html_viewer_app *app,
 void html_viewer_cancel_navigation(struct html_viewer_app *app,
                                    const char *reason) {
   if (!app) return;
+  /* Trip the navigation-level cooperative budget BEFORE bumping
+   * active_navigation_id. Any inner loop still running for the old
+   * navigation observes op_budget_is_blocked() == 1 and bails out
+   * cleanly on its next take(). */
+  hv_nav_budget_cancel(app, reason);
   html_viewer_background_cancel();
   app->active_navigation_id = ++app->navigation_id;
   html_viewer_set_error_context(app, "cancelled",

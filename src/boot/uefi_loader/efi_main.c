@@ -150,6 +150,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     fb.height = gop->Mode->Info->VerticalResolution;
     fb.pitch = gop->Mode->Info->PixelsPerScanLine * 4;
     fb.bpp = 32; // GOP usually 32 bpp in BGRA
+    Print(L"[UEFI] GOP fb base=0x%lx size=%u %ux%u pitch=%u bpp=%u\r\n",
+          (UINT64)fb.base, (UINT32)fb.size, fb.width, fb.height, fb.pitch,
+          fb.bpp);
+  } else {
+    Print(L"[UEFI] AVISO: GOP indisponivel; kernel sem framebuffer.\r\n");
   }
 
   EFI_BLOCK_IO_PROTOCOL *runtime_disk = NULL;
@@ -158,30 +163,41 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   EFI_BLOCK_IO_PROTOCOL *runtime_disk_raw = NULL;
   UINT64 runtime_data_lba_raw = 0;
   UINT64 runtime_data_count_raw = 0;
+  UINT32 runtime_block_size = 0;
+  UINT32 runtime_media_id = 0;
+  UINT64 runtime_last_lba = 0;
+  UINT32 runtime_media_id_raw = 0;
+  UINT64 runtime_last_lba_raw = 0;
   EFI_STATUS runtime_st =
       choose_runtime_disk_with_data(image, systab, &runtime_disk,
                                     &runtime_data_lba, &runtime_data_count,
                                     &runtime_disk_raw, &runtime_data_lba_raw,
                                     &runtime_data_count_raw);
   if (!EFI_ERROR(runtime_st) && runtime_disk && runtime_disk->Media) {
+    runtime_block_size = runtime_disk->Media->BlockSize;
+    runtime_media_id = runtime_disk->Media->MediaId;
+    runtime_last_lba = (UINT64)runtime_disk->Media->LastBlock;
     Print(L"[UEFI] Runtime disk detectado: block=%u last_lba=%lu data=%lu+%lu\r\n",
-          runtime_disk->Media->BlockSize,
-          (UINT64)runtime_disk->Media->LastBlock, runtime_data_lba,
+          runtime_block_size, runtime_last_lba, runtime_data_lba,
           runtime_data_count);
     if (runtime_disk_raw && runtime_disk_raw->Media) {
+      runtime_media_id_raw = runtime_disk_raw->Media->MediaId;
+      runtime_last_lba_raw = (UINT64)runtime_disk_raw->Media->LastBlock;
       Print(L"[UEFI] Runtime raw fallback: block=%u last_lba=%lu data=%lu+%lu\r\n",
-            runtime_disk_raw->Media->BlockSize,
-            (UINT64)runtime_disk_raw->Media->LastBlock, runtime_data_lba_raw,
-            runtime_data_count_raw);
+            runtime_disk_raw->Media->BlockSize, runtime_last_lba_raw,
+            runtime_data_lba_raw, runtime_data_count_raw);
     }
   } else {
     Print(L"[UEFI] Runtime disk nao detectado (fallback RAM).\r\n");
   }
+  Print(L"[UEFI] Preparando handoff/runtime...\r\n");
 
   // Alocar handoff e memory map abaixo de 1GiB (compatÃƒÂ­vel com identity map do
   // kernel atual)
   log_file_t logf = {0};
-  EFI_STATUS logst = log_open(image, systab, &logf);
+  EFI_STATUS logst;
+  Print(L"[UEFI] Abrindo log de boot...\r\n");
+  logst = log_open(image, systab, &logf);
   if (EFI_ERROR(logst)) {
     Print(L"[UEFI] log_open falhou: %r\r\n", logst);
   } else {
@@ -238,6 +254,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     // EFI_INVALID_PARAMETER.
     log_close(&logf);
   }
+  Print(L"[UEFI] Log de boot finalizado; alocando handoff...\r\n");
 
   EFI_PHYSICAL_ADDRESS max_low = 0x3FFFFFFF;
   struct boot_handoff *handoff = NULL;
@@ -339,21 +356,29 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
 
   UINTN map_sz = 0, map_key = 0, desc_sz = 0;
   UINT32 desc_ver = 0;
+  Print(L"[UEFI] Handoff alocado; capturando memory map...\r\n");
+  dbgcon_putc('s');
   st = uefi_call_wrapper(systab->BootServices->GetMemoryMap, 5, &map_sz, NULL,
                          &map_key, &desc_sz, &desc_ver);
-  if (st != EFI_BUFFER_TOO_SMALL) {
+  if (st != EFI_BUFFER_TOO_SMALL || desc_sz == 0) {
     Print(L"[UEFI] GetMemoryMap falhou: %r\r\n", st);
     log_close(&logf);
     return st;
   }
+  dbgcon_putc('t');
+  Print(L"[UEFI] Memory map sizing OK: size=%lu desc=%lu\r\n",
+        (UINT64)map_sz, (UINT64)desc_sz);
 
   VOID *map = NULL;
   EFI_PHYSICAL_ADDRESS map_addr = 0;
   UINTN pages = 0;
-  for (UINTN attempt = 0; attempt < 8; attempt++) {
-    UINTN req = map_sz + desc_sz * 8;
+  UINTN map_capacity = 0;
+  BOOLEAN exited_boot_services = FALSE;
+  for (UINTN attempt = 0; attempt < 8 && !exited_boot_services; attempt++) {
+    UINTN req = map_sz + desc_sz * 64 + 0x4000;
     pages = (req + 0xFFF) >> 12;
     map_addr = 0x3FFFFFFF;
+    dbgcon_putc('m');
     st = uefi_call_wrapper(systab->BootServices->AllocatePages, 4,
                            AllocateMaxAddress, EfiLoaderData, pages, &map_addr);
     if (EFI_ERROR(st)) {
@@ -362,57 +387,74 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       return st;
     }
     map = (VOID *)(UINTN)map_addr;
-
-    st = uefi_call_wrapper(systab->BootServices->GetMemoryMap, 5, &map_sz, map,
-                           &map_key, &desc_sz, &desc_ver);
-    if (st == EFI_BUFFER_TOO_SMALL) {
-      uefi_call_wrapper(systab->BootServices->FreePages, 2, map_addr, pages);
-      continue;
-    }
-    if (EFI_ERROR(st)) {
-      Print(L"[UEFI] GetMemoryMap(2) falhou: %r\r\n", st);
-      log_close(&logf);
-      return st;
+    map_capacity = pages << 12;
+    dbgcon_putc('n');
+    Print(L"[UEFI] Memory map buffer reservado addr=0x%lx pages=%lu cap=%lu\r\n",
+          (UINT64)map_addr, (UINT64)pages, (UINT64)map_capacity);
+    if (attempt == 0) {
+      Print(L"[UEFI] Iniciando ExitBootServices (silencio ate o kernel)...\r\n");
     }
 
-    // Importante: nÃƒÂ£o chame mais nada que possa alocar/IO entre GetMemoryMap e
-    // ExitBootServices.
-
-    st = uefi_call_wrapper(systab->BootServices->ExitBootServices, 2, image,
-                           map_key);
-    if (!EFI_ERROR(st)) {
-      break;
-    }
-
-    // map_key ficou invÃƒÂ¡lido (firmware mudou o memory map). Libera o buffer e
-    // tenta de novo.
-    uefi_call_wrapper(systab->BootServices->FreePages, 2, map_addr, pages);
-    map = NULL;
-    map_addr = 0;
-    pages = 0;
-
-    if (st == EFI_INVALID_PARAMETER) {
-      // Recalcula tamanho do memory map e tenta novamente.
-      map_sz = 0;
-      EFI_STATUS stsz =
-          uefi_call_wrapper(systab->BootServices->GetMemoryMap, 5, &map_sz,
-                            NULL, &map_key, &desc_sz, &desc_ver);
-      if (stsz != EFI_BUFFER_TOO_SMALL) {
-        Print(L"[UEFI] GetMemoryMap(retry-size) falhou: %r\r\n", stsz);
-        return stsz;
+    for (UINTN key_attempt = 0; key_attempt < 8; key_attempt++) {
+      UINTN got = map_capacity;
+      dbgcon_putc('g');
+      st = uefi_call_wrapper(systab->BootServices->GetMemoryMap, 5, &got, map,
+                             &map_key, &desc_sz, &desc_ver);
+      dbgcon_putc('G');
+      if (st == EFI_BUFFER_TOO_SMALL) {
+        dbgcon_putc('b');
+        map_sz = got;
+        break;
       }
-      continue;
+      if (EFI_ERROR(st)) {
+        // GetMemoryMap nao deveria invalidar nada por si so; aqui ainda e
+        // seguro chamar Print para diagnostico.
+        Print(L"[UEFI] GetMemoryMap(2) falhou: %r\r\n", st);
+        log_close(&logf);
+        return st;
+      }
+      map_sz = got;
+
+      /* Janela critica: NENHUM Print/IO/alloc entre o GetMemoryMap final
+       * (acima) e o ExitBootServices (abaixo). Qualquer chamada aqui
+       * pode invalidar map_key e fazer o EBS travar/abortar. */
+
+      dbgcon_putc('x');
+      st = uefi_call_wrapper(systab->BootServices->ExitBootServices, 2, image,
+                             map_key);
+      dbgcon_putc('X');
+      if (!EFI_ERROR(st)) {
+        dbgcon_putc('y');
+        exited_boot_services = TRUE;
+        break;
+      }
+      dbgcon_putc('e');
+
+      if (st != EFI_INVALID_PARAMETER) {
+        /* O EBS falhou de forma nao recuperavel. Nao chame Print aqui:
+         * o memory map foi invalidado pelo proprio EBS e Print pode
+         * tocar estruturas internas que ja nao sao seguras. Apenas
+         * sinalize via debugcon e mantenha o sistema parado. */
+        dbgcon_putc('!');
+        dbgcon_putc('E');
+        dbgcon_putc('B');
+        dbgcon_putc('S');
+        uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
+        for (;;) {
+          uefi_call_wrapper(systab->BootServices->Stall, 1, 1000 * 1000);
+        }
+      }
     }
 
-    Print(L"[UEFI] ExitBootServices falhou: %r\r\n", st);
-    // NÃƒÂ£o retorne ao firmware (isso vira PXE/boot fail confuso no Hyper-V).
-    // Mantenha a tela.
-    uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
-    for (;;) {
-      uefi_call_wrapper(systab->BootServices->Stall, 1, 1000 * 1000);
+    if (!exited_boot_services) {
+      uefi_call_wrapper(systab->BootServices->FreePages, 2, map_addr, pages);
+      map = NULL;
+      map_addr = 0;
+      pages = 0;
+      map_capacity = 0;
     }
   }
-  if (EFI_ERROR(st)) {
+  if (!exited_boot_services) {
     Print(L"[UEFI] ExitBootServices falhou (tentativas excedidas): %r\r\n", st);
     uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
     for (;;) {
@@ -430,16 +472,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->efi_map_key = (UINT64)map_key;
   handoff->runtime_flags = 0;
   handoff->efi_block_io = 0;
-  handoff->efi_disk_last_lba = 0;
-  handoff->data_lba_start = 0;
-  handoff->data_lba_count = 0;
-  handoff->efi_block_size = 0;
-  handoff->efi_media_id = 0;
+  handoff->efi_disk_last_lba = runtime_last_lba;
+  handoff->data_lba_start = runtime_data_lba;
+  handoff->data_lba_count = runtime_data_count;
+  handoff->efi_block_size = runtime_block_size;
+  handoff->efi_media_id = runtime_media_id;
   handoff->efi_block_io_raw = 0;
-  handoff->efi_disk_last_lba_raw = 0;
-  handoff->data_lba_start_raw = 0;
-  handoff->data_lba_count_raw = 0;
-  handoff->efi_media_id_raw = 0;
+  handoff->efi_disk_last_lba_raw = runtime_last_lba_raw;
+  handoff->data_lba_start_raw = runtime_data_lba_raw;
+  handoff->data_lba_count_raw = runtime_data_count_raw;
+  handoff->efi_media_id_raw = runtime_media_id_raw;
+  dbgcon_putc('h');
 
   dbgcon_putc('J');
   __asm__ __volatile__(

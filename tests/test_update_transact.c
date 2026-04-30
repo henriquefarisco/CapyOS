@@ -104,6 +104,20 @@ static void arm_staged_update(const char *version) {
              "staged_manifest=/system/update/staged.ini\n");
 }
 
+static void arm_staged_update_with_sha256(const char *version,
+                                          const char *sha256_hex) {
+    char manifest[320];
+    snprintf(manifest, sizeof(manifest),
+             "available_version=%s\nchannel=stable\nbranch=main\n"
+             "source=github:henriquefarisco/CapyOS\n"
+             "payload_sha256=%s\n", version, sha256_hex);
+    set_file(UA_CACHE_PATH, manifest);
+    set_file(UA_STAGE_PATH, manifest);
+    set_file(UA_STATE_PATH,
+             "pending_activation=1\n"
+             "staged_manifest=/system/update/staged.ini\n");
+}
+
 static int test_apply_boot_slot_requires_stage(void) {
     int fails = 0;
     setup();
@@ -188,6 +202,110 @@ static int test_check_rollback_no_op_when_healthy(void) {
     return fails;
 }
 
+/* M6.4 payload sha256 verification ------------------------------------ */
+
+#define UA_GOOD_SHA256 \
+    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+#define UA_OTHER_SHA256 \
+    "0011223344556677889900112233445566778899001122334455667788990011"
+
+static int test_apply_verified_legacy_path_no_digest(void) {
+    /* When the manifest does NOT declare payload_sha256, the verified
+     * variant must behave exactly like the legacy apply call. */
+    int fails = 0;
+    setup();
+    arm_staged_update("2.0.0");
+
+    fails += expect_true(
+        update_agent_staged_requires_payload_verification() == 0,
+        "manifest without payload_sha256 reports no verification required");
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(NULL) == 0,
+        "verified apply with NULL digest succeeds when manifest is silent");
+    return fails;
+}
+
+static int test_apply_verified_matching_digest(void) {
+    int fails = 0;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+
+    fails += expect_true(
+        update_agent_staged_requires_payload_verification() == 1,
+        "manifest with payload_sha256 reports verification required");
+
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
+        "verified apply with matching digest succeeds");
+
+    /* Case-insensitive comparison: same digest with upper-case hex must also
+     * match so manifests in either case are accepted. */
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(
+            "ABCDEF0123456789ABCDEF0123456789"
+            "ABCDEF0123456789ABCDEF0123456789") == 0,
+        "verified apply is case-insensitive on hex digest");
+    return fails;
+}
+
+static int test_apply_verified_mismatched_digest_refuses(void) {
+    int fails = 0;
+    struct system_update_status status;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(UA_OTHER_SHA256) == -31,
+        "verified apply refuses mismatched digest with -31");
+
+    update_agent_status_get(&status);
+    fails += expect_true(
+        strstr(status.summary, "payload sha256 mismatch") != NULL,
+        "mismatch must surface a stable summary");
+    fails += expect_true(status.last_result == -31,
+                         "last_result reflects the mismatch refusal");
+    return fails;
+}
+
+static int test_apply_verified_missing_digest_refuses(void) {
+    int fails = 0;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(NULL) == -30,
+        "verified apply with NULL digest refuses with -30");
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified("") == -30,
+        "verified apply with empty digest refuses with -30");
+    return fails;
+}
+
+static int test_apply_verified_malformed_digest_refuses(void) {
+    int fails = 0;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+
+    /* Too short. */
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified("abc") == -32,
+        "verified apply refuses short digest with -32");
+    /* Right length but not hex. */
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(
+            "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+"
+            "0123456789ABCDEF") == -32,
+        "verified apply refuses non-hex chars with -32");
+    /* Right length, valid hex, but extra trailing data. */
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(
+            UA_GOOD_SHA256 "extra") == -32,
+        "verified apply refuses overlong digest with -32");
+    return fails;
+}
+
 int run_update_transact_tests(void) {
     int fails = 0;
     fails += test_apply_boot_slot_requires_stage();
@@ -195,6 +313,11 @@ int run_update_transact_tests(void) {
     fails += test_confirm_health_clears_rollback();
     fails += test_check_rollback_triggers_rollback();
     fails += test_check_rollback_no_op_when_healthy();
+    fails += test_apply_verified_legacy_path_no_digest();
+    fails += test_apply_verified_matching_digest();
+    fails += test_apply_verified_mismatched_digest_refuses();
+    fails += test_apply_verified_missing_digest_refuses();
+    fails += test_apply_verified_malformed_digest_refuses();
     if (fails == 0) {
         printf("[tests] update_transact OK\n");
     }

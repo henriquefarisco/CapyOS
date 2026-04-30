@@ -5,8 +5,8 @@
 </p>
 
 Ultima atualizacao: 2026-04-29
-Versao de referencia: `0.8.0-alpha.3`
-Consolidacao atual de `develop`: plano de robustez em execucao com DHCP automatico no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP, smoke x64 persistente, journal CAPYFS autenticado por volume, primitiva `op_budget`, API de privilegios centralizada, pacing do buffer cache e estado formal do navegador com modo estrito.
+Versao de referencia: `0.8.0-alpha.4`
+Consolidacao atual de `develop`: plano de robustez em execucao com DHCP automatico no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP, smoke x64 persistente, journal CAPYFS autenticado por volume com round-trip sintetico, primitiva `op_budget` adotada pelo navegador, API de privilegios centralizada, pacing do buffer cache, estado formal do navegador com modo estrito, eventos de auditoria estruturados `[audit]` e verificacao SHA-256 de payload no `update_agent`.
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -65,11 +65,11 @@ Observacao importante:
 - indice principal: `docs/README.md`
 - indice de planos: `docs/plans/README.md`
 - arquitetura atual: `docs/architecture/system-overview.md`
-- plano-mestre do sistema: `docs/plans/system-master-plan.md`
-- plano-mestre de consolidacao atual: `docs/plans/capyos-master-improvement-plan.md`
-- plano de execucao atual: `docs/plans/system-execution-plan.md`
-- roadmap tecnico por dominio: `docs/plans/system-roadmap.md`
-- hardening de plataforma: `docs/plans/platform-hardening-plan.md`
+- plano-mestre do sistema: `docs/plans/active/system-master-plan.md`
+- plano-mestre de consolidacao atual: `docs/plans/active/capyos-master-improvement-plan.md`
+- plano de execucao atual: `docs/plans/active/system-execution-plan.md`
+- roadmap tecnico por dominio: `docs/plans/active/system-roadmap.md`
+- hardening de plataforma: `docs/plans/historical/platform-hardening-plan.md`
 - validacao de boot/login/CLI: `docs/testing/boot-and-cli-validation.md`
 - referencia de comandos: `docs/reference/cli-reference.md`
 - guia Hyper-V historico/nao suportado: `docs/setup/hyper-v.md`
@@ -177,15 +177,15 @@ acompanhar a evolucao visual do sistema por release alpha.
 
 ### Boot e login
 
-![Login do sistema](docs/screenshots/0.8.0-alpha.3/login-system.png)
+![Login do sistema](docs/screenshots/0.8.0-alpha.4/login-system.png)
 
-![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.3/bootstage1-iso.png)
+![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.4/bootstage1-iso.png)
 
 ### Desktop, navegador e apps
 
-![Desktop com navegador](docs/screenshots/0.8.0-alpha.3/desktop-browser1.png)
+![Desktop com navegador](docs/screenshots/0.8.0-alpha.4/desktop-browser1.png)
 
-![Desktop com apps](docs/screenshots/0.8.0-alpha.3/desktop-apps.png)
+![Desktop com apps](docs/screenshots/0.8.0-alpha.4/desktop-apps.png)
 
 ## Estado atual por dominio
 
@@ -318,9 +318,9 @@ make inspect-disk IMG=build/disk-gpt.img
 ## Roadmap tecnico (macro)
 
 A evolucao detalhada esta em:
-- `docs/plans/mvp-implementation-plan.md`
-- `docs/plans/system-roadmap.md`
-- `docs/plans/system-master-plan.md`
+- `docs/plans/historical/mvp-implementation-plan.md`
+- `docs/plans/active/system-roadmap.md`
+- `docs/plans/active/system-master-plan.md`
 
 Eixos principais:
 - CAPYFS: journal, recuperacao, fsck, escalabilidade

@@ -2,6 +2,7 @@
 #define APPS_HTML_VIEWER_H
 
 #include "gui/compositor.h"
+#include "util/op_budget.h"
 #include <stdint.h>
 
 #define HTML_MAX_NODES 512
@@ -198,6 +199,14 @@ struct html_viewer_app {
   enum html_viewer_nav_state nav_state;
   char last_stage[32];
   char last_error_reason[192];
+  /* Navigation-level cooperative budget. All per-phase budgets (parse,
+   * render, external resource) consult this and forward exhaustion via
+   * op_budget_exhaust(). External actors (Esc-cancel, supervisor) can
+   * call op_budget_cancel() on it to abort the navigation cleanly: inner
+   * loops that consult op_budget_is_blocked() drop out without forcing a
+   * crash. This is the single source of truth for "is the current
+   * navigation still alive?". */
+  struct op_budget nav_op_budget;
 };
 
 void html_viewer_open(void);

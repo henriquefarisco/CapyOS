@@ -42,6 +42,7 @@ static int test_html_viewer_state_machine_helpers(void);
 static int test_html_viewer_isolation_hooks(void);
 static int test_html_viewer_strict_transition_escalates(void);
 static int test_html_viewer_parse_budget_logs_failure(void);
+static int test_html_viewer_nav_budget_cancellation_aborts_phases(void);
 static char g_last_http_host[192];
 static char g_last_http_path[768];
 static uint16_t g_last_http_port = 0;

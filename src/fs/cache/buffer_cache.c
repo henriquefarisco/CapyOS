@@ -15,7 +15,13 @@ static int g_last_error_code = 0;
 static struct buffer_cache_stats g_buffer_cache_stats;
 
 static inline void dbg_putc(char ch) {
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+    /* Host unit tests do not have port 0xE9; the debug write is a
+     * no-op so the trace path can still be exercised. */
+    (void)ch;
+#else
     __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+#endif
 }
 
 static void dbg_puts(const char *s) {

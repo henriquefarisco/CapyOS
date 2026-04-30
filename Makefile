@@ -47,6 +47,13 @@ else
   $(warning Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
 CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
+# EXTRA_CFLAGS64 is appended last so callers can flip build-time
+# feature flags without editing CFLAGS64 in place. Examples:
+#   make all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
+# Combine with `make clean` first, since the per-source .d files
+# do not track preprocessor macros and would otherwise reuse
+# stale objects compiled without the new flag.
+CFLAGS64  += $(EXTRA_CFLAGS64)
 DEPFLAGS64 := -MMD -MP
 LDFLAGS64 := -nostdlib
 
@@ -86,6 +93,10 @@ LINKER64_SCRIPT = $(SRC_DIR)/arch/x86_64/linker64.ld
 CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/boot/entry64.o \
 	$(BUILD)/x86_64/arch/x86_64/interrupts.o \
+	$(BUILD)/x86_64/arch/x86_64/fault_classify.o \
+	$(BUILD)/x86_64/arch/x86_64/process_user_mode.o \
+	$(BUILD)/x86_64/arch/x86_64/cpu/cpu_local.o \
+	$(BUILD)/x86_64/arch/x86_64/cpu/user_mode_entry.o \
 	$(BUILD)/x86_64/arch/x86_64/cpu/interrupts_asm.o \
 	$(BUILD)/x86_64/arch/x86_64/input_runtime/prelude_ports.o \
 	$(BUILD)/x86_64/arch/x86_64/input_runtime/keyboard_decode_probe.o \
@@ -133,12 +144,14 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/config/first_boot/storage_users.o \
 	$(BUILD)/x86_64/config/first_boot/program.o \
 	$(BUILD)/x86_64/services/update_agent.o \
+	$(BUILD)/x86_64/services/update_agent_transact.o \
 	$(BUILD)/x86_64/auth/user.o \
 	$(BUILD)/x86_64/auth/user_prefs.o \
 	$(BUILD)/x86_64/kernel/log/klog.o \
 	$(BUILD)/x86_64/kernel/log/klog_persist.o \
 	$(BUILD)/x86_64/services/service_boot_policy.o \
 	$(BUILD)/x86_64/services/service_manager.o \
+	$(BUILD)/x86_64/services/service_runner.o \
 	$(BUILD)/x86_64/auth/session.o \
 	$(BUILD)/x86_64/auth/user_home.o \
 	$(BUILD)/x86_64/core/work_queue.o \
@@ -248,14 +261,20 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/cpu/context_switch.o \
 	$(BUILD)/x86_64/arch/x86_64/syscall/syscall_entry.o \
 	$(BUILD)/x86_64/kernel/task.o \
+	$(BUILD)/x86_64/kernel/task_iter.o \
 	$(BUILD)/x86_64/kernel/scheduler.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
 	$(BUILD)/x86_64/kernel/worker.o \
 	$(BUILD)/x86_64/kernel/syscall.o \
 	$(BUILD)/x86_64/kernel/elf_loader.o \
+	$(BUILD)/x86_64/kernel/embedded_hello.o \
+	$(BUILD)/x86_64/kernel/user_init.o \
 	$(BUILD)/x86_64/kernel/process.o \
+	$(BUILD)/x86_64/kernel/process_iter.o \
+	$(HELLO_BLOB_OBJ) \
 	$(BUILD)/x86_64/memory/pmm.o \
 	$(BUILD)/x86_64/memory/vmm.o \
+	$(BUILD)/x86_64/memory/vmm_regions.o \
 	$(BUILD)/x86_64/fs/journal/journal.o \
 	$(BUILD)/x86_64/fs/fsck/fsck.o \
 	$(BUILD)/x86_64/net/services/socket.o \
@@ -293,7 +312,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
-	$(BUILD)/x86_64/drivers/serial/com1.o \
+	$(BUILD)/x86_64/drivers/serial/serial_com1.o \
 	$(BUILD)/x86_64/gui/desktop/taskbar.o \
 	$(BUILD)/x86_64/security/sha512.o \
 	$(BUILD)/x86_64/gui/desktop/desktop.o \
@@ -364,6 +383,96 @@ $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
+# ── Userland (capylibc) build rules ─────────────────────────────────
+# capylibc's asm sources live under userland/. We reuse the kernel
+# toolchain (CC64) and a subset of CFLAGS64 because the static
+# library has the same freestanding requirements as the kernel: no
+# stdlib, no PIE, x86_64 SysV ABI. M4 phase 5a only assembles the
+# files (proving they parse and link); phase 5b will archive them
+# into libcapylibc.a and link a real user binary.
+USERLAND_DIR = userland
+# Workspace quirk: some sandboxed checkouts can read existing build/
+# subdirectories but cannot create new ones (SMB / network mounts).
+# CAPYLIBC_BUILD_DIR is overridable so the developer can redirect
+# the artifacts elsewhere, e.g.
+#   make capylibc CAPYLIBC_BUILD_DIR=/tmp/capyos_capylibc
+CAPYLIBC_BUILD_DIR ?= $(BUILD)/userland
+
+# User-space C flags: drop -mno-red-zone (user code can use the red
+# zone; SYSCALL itself does not clobber it) and add the userland
+# include path so user binaries can `#include <capylibc/capylibc.h>`.
+USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
+                  -fno-asynchronous-unwind-tables -fno-unwind-tables \
+                  -fcf-protection=none -fno-pic -fno-pie -fno-plt \
+                  -fno-omit-frame-pointer -fno-strict-aliasing \
+                  -fno-stack-protector \
+                  -Iinclude -Iuserland/include
+
+$(CAPYLIBC_BUILD_DIR)/%.o: $(USERLAND_DIR)/%.S
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
+# Phase 5f: EXTRA_USERLAND_CFLAGS lets a smoke target inject extra
+# preprocessor flags (e.g. `-DCAPYOS_HELLO_FAULT`) without editing
+# USERLAND_CFLAGS in place. Mirrors the EXTRA_CFLAGS64 contract used
+# by the kernel rules. The default is empty so production builds are
+# unaffected.
+EXTRA_USERLAND_CFLAGS ?=
+
+$(CAPYLIBC_BUILD_DIR)/%.o: $(USERLAND_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+CAPYLIBC_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc/crt0.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc/syscall_stubs.o
+
+.PHONY: capylibc
+capylibc: $(CAPYLIBC_OBJS)
+	@echo "[ok] capylibc objects assembled: $(CAPYLIBC_OBJS)"
+
+# ── User binary: hello (M4 phase 5b) ────────────────────────────────
+# The first CapyOS user binary. Statically linked at the default
+# x86_64 base address (0x400000), entry symbol `_start` from crt0.
+# Phase 5c (this file) wraps the linked ELF into a kernel-linkable
+# `.rodata` blob via objcopy; phase 5d will call
+# `process_enter_user_mode` on it during boot.
+HELLO_ELF = $(CAPYLIBC_BUILD_DIR)/bin/hello/hello.elf
+HELLO_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/hello/main.o \
+	$(CAPYLIBC_OBJS)
+
+$(HELLO_ELF): $(HELLO_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(HELLO_OBJS)
+
+.PHONY: hello-elf
+hello-elf: $(HELLO_ELF)
+	@echo "[ok] user binary linked: $(HELLO_ELF)"
+
+# Wrap the static ELF into an x86_64 ELF object the kernel linker
+# can consume. objcopy with `-I binary -O elf64-x86-64` generates
+# the magic symbols `_binary_hello_elf_start/_end/_size`; the
+# `--rename-section` step moves the bytes into `.rodata` so the
+# kernel image keeps the user code in read-only memory and so the
+# section attributes match the kernel's other constant data. The
+# objcopy input file MUST be named `hello.elf` (lowercase, no path
+# components in the symbol stem) because the symbol stem is derived
+# from the input basename verbatim. `cd` into the directory before
+# running objcopy so the symbol prefix stays `_binary_hello_elf_`.
+HELLO_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/hello/hello_elf_blob.o
+
+$(HELLO_BLOB_OBJ): $(HELLO_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: hello-blob
+hello-blob: $(HELLO_BLOB_OBJ)
+	@echo "[ok] hello blob ready for kernel link: $(HELLO_BLOB_OBJ)"
 
 $(BUILD)/x86_64/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
@@ -489,9 +598,9 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_html_viewer.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_html_viewer.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/fs/capyfs/capyfs_check.c src/fs/capyfs/capyfs_journal_integration.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
@@ -517,10 +626,24 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/navigation_budget.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer/html_tree_helpers.c src/apps/html_viewer/ui_shell.c src/apps/html_viewer/render_primitives.c src/apps/html_viewer/render_tree.c src/apps/html_viewer/html_parser.c src/apps/html_viewer/app_entry_async.c src/apps/html_viewer/resource_loading.c src/apps/html_viewer/public_api.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
+	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/services/update_agent_transact.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/navigation_budget.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer/html_tree_helpers.c src/apps/html_viewer/ui_shell.c src/apps/html_viewer/render_primitives.c src/apps/html_viewer/render_tree.c src/apps/html_viewer/html_parser.c src/apps/html_viewer/app_entry_async.c src/apps/html_viewer/resource_loading.c src/apps/html_viewer/public_api.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
                src/util/kstring.c src/fs/journal/journal.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
+               tests/test_task_iter.c src/kernel/task_iter.c \
+               tests/test_task_stats.c \
+               tests/test_process_iter.c src/kernel/process.c src/kernel/process_iter.c tests/stub_vmm.c src/memory/vmm_regions.c \
+               tests/test_process_destroy.c \
+               tests/test_vmm_anon_regions.c \
+               tests/test_service_runner.c src/services/service_runner.c \
+               tests/test_context_switch.c \
+               tests/test_syscall_msr.c \
+               tests/test_fault_classify.c src/arch/x86_64/fault_classify.c \
+               tests/test_cpu_local.c src/arch/x86_64/cpu/cpu_local.c \
+               tests/test_enter_user_mode.c src/arch/x86_64/process_user_mode.c \
+               tests/test_capylibc_abi.c \
+               tests/test_hello_program.c \
+               tests/test_user_init.c src/kernel/user_init.c \
                tests/test_dns_cache.c src/net/services/dns_cache.c \
                tests/test_boot_slot.c src/boot/boot_slot.c \
                tests/test_op_budget.c src/util/op_budget.c \
@@ -608,6 +731,40 @@ smoke-x64-cli-nvme: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia) com NVMe..."
 	python3 tools/scripts/smoke_x64_cli.py --storage-bus nvme --log build/ci/smoke_x64_cli_nvme.log --disk build/ci/smoke_x64_cli_nvme.img $(SMOKE_X64_CLI_NVME_ARGS)
 
+# M4 phase 5e: end-to-end Ring 3 smoke. Rebuilds the kernel with
+# `-DCAPYOS_BOOT_RUN_HELLO` so kernel_main spawns the embedded
+# `hello` user binary right after syscall_init; the smoke script
+# parses the debug-console log for the success markers.
+#
+# `make clean` is forced because the per-source .d files do not
+# track preprocessor macros, so a previous build without the flag
+# would otherwise reuse stale objects and the `#ifdef` block in
+# kernel_main.o would never be re-emitted.
+smoke-x64-hello-user:
+	@echo "Executando smoke test x64 (hello user binary)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_hello_user.py $(SMOKE_X64_HELLO_USER_ARGS)
+
+# M4 phase 5f: end-to-end smoke for phase 4's fault-kill path.
+# Builds `hello` with `-DCAPYOS_HELLO_FAULT` so the user binary
+# emits a "before-fault" marker and then deliberately dereferences
+# NULL. The kernel must NOT panic; instead the fault classifier must
+# route through the kill path and `process_exit(128+14)`.
+#
+# `make clean` is forced for the same reason as `smoke-x64-hello-user`:
+# the per-source `.d` files do not track preprocessor macros.
+smoke-x64-hello-segfault:
+	@echo "Executando smoke test x64 (hello segfault / phase 4 kill path)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FAULT'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_hello_segfault.py $(SMOKE_X64_HELLO_SEGFAULT_ARGS)
+
 smoke-x64-iso: all64 iso-uefi manifest64
 	@echo "Executando smoke test da ISO oficial (instalacao + reboot + persistencia)..."
 	python3 tools/scripts/smoke_x64_iso_install.py $(SMOKE_X64_ISO_ARGS)
@@ -638,6 +795,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-iso inspect-disk
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-iso inspect-disk capylibc hello-elf hello-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

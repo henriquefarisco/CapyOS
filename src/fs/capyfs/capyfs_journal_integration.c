@@ -161,18 +161,21 @@ int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start,
         /* Journal not formatted yet — first mount after upgrade. Format it. */
         if (derived_key_len > 0) {
             klog(KLOG_INFO,
-                 "[capyfs-journal] Formatting authenticated journal region.");
+                 "[capyfs-journal] auth=on format=first-mount "
+                 "key=derived-from-super");
             rc = journal_format_authenticated(&slot->jrnl, dev, journal_start,
                                               CAPYFS_JOURNAL_BLOCKS,
                                               derived_key, derived_key_len);
         } else {
-            klog(KLOG_INFO, "[capyfs-journal] Formatting journal region.");
+            klog(KLOG_INFO,
+                 "[capyfs-journal] auth=off format=first-mount key=none");
             rc = journal_format(&slot->jrnl, dev, journal_start,
                                 CAPYFS_JOURNAL_BLOCKS);
         }
         for (uint32_t i = 0; i < sizeof(derived_key); i++) derived_key[i] = 0;
         if (rc != 0) {
-            klog(KLOG_WARN, "[capyfs-journal] Journal format failed.");
+            klog(KLOG_WARN,
+                 "[capyfs-journal] format=failed; FS continues without journal");
             slot->active = 0;
             return 0; /* non-fatal: FS works without journal */
         }
@@ -182,14 +185,27 @@ int capyfs_journal_mount_hook(struct block_device *dev, uint32_t data_start,
 
     /* Existing journal opened. If it is authenticated, install the per-volume
      * key derived from the superblock so replay can verify the HMAC tags. */
-    if (journal_is_authenticated(&slot->jrnl) || slot->jrnl.sb.version >= 2) {
+    int journal_is_auth = journal_is_authenticated(&slot->jrnl) ||
+                          slot->jrnl.sb.version >= 2;
+    if (journal_is_auth) {
         if (derived_key_len == 0) {
             klog(KLOG_WARN,
-                 "[capyfs-journal] Authenticated journal but no root secret "
-                 "or superblock available; replay will be refused.");
+                 "[capyfs-journal] auth=on key=missing replay=refused");
         } else {
-            (void)journal_set_hmac_key(&slot->jrnl, derived_key, derived_key_len);
+            int set_rc = journal_set_hmac_key(&slot->jrnl, derived_key,
+                                              derived_key_len);
+            if (set_rc == 0) {
+                klog(KLOG_INFO,
+                     "[capyfs-journal] auth=on key=derived-from-super "
+                     "replay=enabled");
+            } else {
+                klog(KLOG_WARN,
+                     "[capyfs-journal] auth=on key=set-failed "
+                     "replay=refused");
+            }
         }
+    } else {
+        klog(KLOG_INFO, "[capyfs-journal] auth=off legacy-v1=on");
     }
     for (uint32_t i = 0; i < sizeof(derived_key); i++) derived_key[i] = 0;
 
@@ -269,4 +285,15 @@ void capyfs_journal_stats(struct block_device *dev, uint32_t *used,
         return;
     }
     journal_stats(&slot->jrnl, used, free_count);
+}
+
+void capyfs_journal_release_slot(struct block_device *dev) {
+    if (!dev) return;
+    for (int i = 0; i < CAPYFS_JOURNAL_MAX_MOUNTS; i++) {
+        if (g_journal_slots[i].active && g_journal_slots[i].dev == dev) {
+            g_journal_slots[i].active = 0;
+            g_journal_slots[i].dev = NULL;
+            return;
+        }
+    }
 }

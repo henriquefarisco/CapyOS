@@ -90,6 +90,61 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
   return 0;
 }
 
+int elf_load_into_process(struct process *proc, const uint8_t *data,
+                          size_t size) {
+  if (!proc || !data) return -1;
+  if (!proc->address_space) return -1;
+
+  struct elf_load_result result;
+  int r = elf_load(proc->address_space, data, size, &result);
+  if (r != 0 || !result.success) return -1;
+
+  proc->brk = result.brk;
+  proc->heap_start = result.brk;
+
+  /* Eagerly map the top 16 pages of the user stack so the very
+   * first user-mode reference to RSP just works without going
+   * through the page-fault path. This preserves the phase 5e/5f
+   * smoke behaviour bit-for-bit. */
+  uint64_t stack_phys = pmm_alloc_pages(16);
+  if (!stack_phys) return -1;
+  uint64_t stack_base = VMM_USER_STACK - 16 * VMM_PAGE_SIZE;
+  vmm_map_range(proc->address_space, stack_base, stack_phys, 16,
+                VMM_PAGE_USER | VMM_PAGE_WRITE);
+  proc->stack_top = VMM_USER_STACK;
+
+  /* Phase 7b: register the next 240 pages BELOW the eager mapping as
+   * an anonymous demand-paged region. A user that grows its stack
+   * past the initial 16 pages will fault on the first byte of the
+   * 17th page; arch_fault_classify returns ARCH_FAULT_RECOVERABLE
+   * for the user #PF P=0; vmm_handle_page_fault finds this region,
+   * allocates+zeros a fresh frame, and maps it. The user resumes
+   * without observing the fault. Total stack budget is 256 pages
+   * (1 MiB), which matches the per-process default expectation
+   * documented elsewhere in the tree. The eager region above and
+   * this expansion region do not overlap; the registration is
+   * therefore guaranteed to succeed under normal kmalloc pressure.
+   *
+   * Errors are deliberately swallowed: if registration fails, the
+   * process simply does not get demand growth (the top 16 pages
+   * still work eagerly). This keeps the boot path resilient under
+   * pathological memory pressure. */
+  const size_t STACK_EXPANSION_PAGES = 240;
+  uint64_t stack_expand_top = stack_base;
+  uint64_t stack_expand_base = stack_expand_top -
+      (uint64_t)STACK_EXPANSION_PAGES * VMM_PAGE_SIZE;
+  (void)vmm_register_anon_region(proc->address_space, stack_expand_base,
+                                 STACK_EXPANSION_PAGES,
+                                 VMM_PAGE_USER | VMM_PAGE_WRITE);
+
+  if (proc->main_thread) {
+    proc->main_thread->context.rip = result.entry_point;
+    proc->main_thread->context.rsp = proc->stack_top - 8;
+  }
+
+  return 0;
+}
+
 int elf_load_from_file(struct process *proc, const char *path) {
   if (!proc || !path) return -1;
 
@@ -112,26 +167,7 @@ int elf_load_from_file(struct process *proc, const char *path) {
   vfs_close(f);
   if (rd < 0 || (size_t)rd != fsize) { kfree(buf); return -1; }
 
-  struct elf_load_result result;
-  int r = elf_load(proc->address_space, buf, fsize, &result);
+  int r = elf_load_into_process(proc, buf, fsize);
   kfree(buf);
-
-  if (r != 0 || !result.success) return -1;
-
-  proc->brk = result.brk;
-  proc->heap_start = result.brk;
-
-  uint64_t stack_phys = pmm_alloc_pages(16);
-  if (!stack_phys) return -1;
-  uint64_t stack_base = VMM_USER_STACK - 16 * VMM_PAGE_SIZE;
-  vmm_map_range(proc->address_space, stack_base, stack_phys, 16,
-                VMM_PAGE_USER | VMM_PAGE_WRITE);
-  proc->stack_top = VMM_USER_STACK;
-
-  if (proc->main_thread) {
-    proc->main_thread->context.rip = result.entry_point;
-    proc->main_thread->context.rsp = proc->stack_top - 8;
-  }
-
-  return 0;
+  return r;
 }

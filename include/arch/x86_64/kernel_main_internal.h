@@ -69,6 +69,7 @@ typedef struct {
   uint32_t width;
   uint32_t height;
   uint32_t stride;
+  uint32_t size_bytes;
   uint32_t origin_y;
   uint32_t cols;
   uint32_t rows;

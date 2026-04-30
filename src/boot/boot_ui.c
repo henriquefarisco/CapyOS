@@ -22,6 +22,7 @@
 /* Cached I/O and layout computed at boot_ui_init(). */
 static struct boot_ui_io g_io;
 static int g_ui_ready = 0;
+static int g_splash_active = 0;
 
 static struct {
   uint32_t icon_x, icon_y;
@@ -31,10 +32,6 @@ static struct {
   uint32_t percent_y;
   uint32_t status_y;
 } g_layout;
-
-static inline void boot_ui_dbg_putc(char ch) {
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-}
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -134,11 +131,10 @@ void boot_ui_splash_begin(void) {
   uint32_t bar_w, bar_h;
   uint32_t total_h;
 
-  boot_ui_dbg_putc('a');
-
   if (!g_ui_ready) {
     return;
   }
+  g_splash_active = 1;
 
   /* Icon scale — same logic as the original ui_boot_splash(). */
   scale = (g_io.screen_h / 4u) / CAPYOS_ICON_H;
@@ -198,25 +194,20 @@ void boot_ui_splash_begin(void) {
 
   /* Draw initial splash: background + icon + empty bar. */
   g_io.fill_rect(0, 0, g_io.screen_w, g_io.screen_h, g_io.splash_bg);
-  boot_ui_dbg_putc('b');
   g_io.draw_icon(g_layout.icon_x, g_layout.icon_y, g_layout.icon_scale,
                  g_io.splash_icon);
-  boot_ui_dbg_putc('c');
   g_io.fill_rect(g_layout.bar_x, g_layout.bar_y, g_layout.bar_w,
                  g_layout.bar_h, g_io.splash_bar_border);
-  boot_ui_dbg_putc('d');
   g_io.fill_rect(g_layout.inner_x, g_layout.inner_y, g_layout.inner_w,
                  g_layout.inner_h, g_io.splash_bar_bg);
-  boot_ui_dbg_putc('e');
   draw_progress_percent(0, 100u);
-  boot_ui_dbg_putc('f');
 }
 
 __attribute__((optimize("O0")))
 void boot_ui_splash_advance(uint32_t stage, uint32_t total) {
   uint32_t fill_w;
 
-  if (!g_ui_ready || total == 0) {
+  if (!g_ui_ready || !g_splash_active || total == 0) {
     return;
   }
 
@@ -237,7 +228,7 @@ void boot_ui_splash_advance(uint32_t stage, uint32_t total) {
 
 __attribute__((optimize("O0")))
 void boot_ui_splash_set_status(const char *text) {
-  if (!g_ui_ready) {
+  if (!g_ui_ready || !g_splash_active) {
     return;
   }
   clear_text_line(g_layout.status_y);
@@ -246,10 +237,11 @@ void boot_ui_splash_set_status(const char *text) {
 
 __attribute__((optimize("O0")))
 void boot_ui_splash_end(void) {
-  if (!g_ui_ready) {
+  if (!g_ui_ready || !g_splash_active) {
     return;
   }
   g_io.fill_rect(0, 0, g_io.screen_w, g_io.screen_h, g_io.console_bg);
+  g_splash_active = 0;
 }
 
 int boot_ui_show_warnings(const struct boot_warnings *w,

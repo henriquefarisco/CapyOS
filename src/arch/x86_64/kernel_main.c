@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "arch/x86_64/cpu_local.h"
 #include "arch/x86_64/kernel_main_internal.h"
 #include "arch/x86_64/hyperv_runtime_coordinator.h"
 #include "arch/x86_64/input_runtime.h"
@@ -40,7 +41,7 @@
 #include "drivers/input/keyboard_layout.h"
 #include "drivers/nvme.h"
 #include "drivers/acpi/acpi.h"
-#include "drivers/serial/com1.h"
+#include "drivers/serial/serial_com1.h"
 #include "drivers/timer/pit.h"
 #include "kernel/log/klog.h"
 #include "kernel/log/klog_persist.h"
@@ -57,6 +58,8 @@
 #include "kernel/scheduler.h"
 #include "kernel/syscall.h"
 #include "kernel/process.h"
+#include "kernel/user_init.h"
+#include "memory/pmm.h"
 #include "memory/vmm.h"
 #include "memory/kmem.h"
 #include "net/dns_cache.h"
@@ -66,6 +69,22 @@
 #include "drivers/rtc/rtc.h"
 #include "drivers/gpu/gpu_core.h"
 #include "drivers/usb/usb_core.h"
+
+extern int kmem_debug_header_ok(void);
+extern uintptr_t kmem_debug_free_list_addr(void);
+extern uintptr_t kmem_debug_kheap_addr(void);
+extern uint8_t kmem_debug_header_magic(void);
+extern uint8_t kmem_debug_header_is_free(void);
+extern uint8_t __kernel_image_start[];
+extern uint8_t __kernel_image_end[];
+
+/* Per-CPU syscall kernel stack (M4 phase 3.5). Used as the kernel
+ * stack pointer that the syscall path loads from
+ * `%gs:CPU_LOCAL_KERNEL_RSP_OFFSET`. Sized at 16 KiB which matches
+ * the per-task kernel_stack_size; phase 8 will replace this static
+ * with a per-task stack swapped in by the scheduler. */
+static uint8_t g_syscall_kernel_stack[16 * 1024]
+    __attribute__((aligned(16)));
 
 /* ── globals owned by this TU ────────────────────────────────────────── */
 
@@ -90,6 +109,83 @@ static void dbg_hex64(uint64_t v) {
   for (int i = 60; i >= 0; i -= 4) {
     uint8_t nib = (v >> i) & 0xF;
     dbgcon_putc((uint8_t)(nib < 10 ? ('0' + nib) : ('A' + (nib - 10))));
+  }
+}
+
+static void dbg_hex8(uint8_t v) {
+  uint8_t hi = (uint8_t)((v >> 4) & 0xFu);
+  uint8_t lo = (uint8_t)(v & 0xFu);
+  dbgcon_putc((uint8_t)(hi < 10 ? ('0' + hi) : ('A' + (hi - 10))));
+  dbgcon_putc((uint8_t)(lo < 10 ? ('0' + lo) : ('A' + (lo - 10))));
+}
+
+static uint64_t read_rsp_local(void) {
+  uint64_t value;
+  __asm__ volatile("mov %%rsp, %0" : "=r"(value));
+  return value;
+}
+
+static void kmem_boot_debug_dump(uint8_t tag) {
+  dbgcon_putc(tag);
+  dbgcon_putc('s');
+  dbg_hex64(read_rsp_local());
+  dbgcon_putc('f');
+  dbg_hex64(kmem_debug_free_list_addr());
+  dbgcon_putc('h');
+  dbg_hex64(kmem_debug_kheap_addr());
+  dbgcon_putc('i');
+  dbg_hex8(kmem_debug_header_is_free());
+  dbgcon_putc('m');
+  dbg_hex8(kmem_debug_header_magic());
+}
+
+static void dbgcon_write(const char *s) {
+  if (!s) {
+    return;
+  }
+  while (*s) {
+    dbgcon_putc((uint8_t)*s++);
+  }
+}
+
+struct efi_memory_descriptor64 {
+  uint32_t type;
+  uint32_t pad;
+  uint64_t physical_start;
+  uint64_t virtual_start;
+  uint64_t number_of_pages;
+  uint64_t attribute;
+};
+
+static void pmm_init_from_handoff(const struct boot_handoff *h) {
+  enum { EFI_CONVENTIONAL_MEMORY = 7 };
+  struct pmm_region regions[PMM_MAX_REGIONS];
+  size_t count = 0;
+
+  if (!h || !h->memmap || h->memmap_desc_size < sizeof(struct efi_memory_descriptor64) ||
+      !h->memmap_entries) {
+    return;
+  }
+
+  const uint8_t *map = (const uint8_t *)(uintptr_t)h->memmap;
+  for (uint32_t i = 0; i < h->memmap_entries && count < PMM_MAX_REGIONS; i++) {
+    const struct efi_memory_descriptor64 *desc =
+        (const struct efi_memory_descriptor64 *)(const void *)
+            (map + (uint64_t)i * h->memmap_desc_size);
+    if (desc->type != EFI_CONVENTIONAL_MEMORY || desc->number_of_pages == 0) {
+      continue;
+    }
+    regions[count].base = desc->physical_start;
+    regions[count].length = desc->number_of_pages * PMM_PAGE_SIZE;
+    regions[count].type = 1;
+    count++;
+  }
+
+  if (count > 0) {
+    pmm_init(regions, count);
+    pmm_reserve_range((uint64_t)(uintptr_t)__kernel_image_start,
+                      (uint64_t)((uintptr_t)__kernel_image_end -
+                                 (uintptr_t)__kernel_image_start));
   }
 }
 
@@ -136,11 +232,38 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       cpu_relax();
   }
 
-  /* Initialise the framebuffer console from handoff data */
-  g_con.fb = (uint32_t *)(uintptr_t)h->fb.base;
+  /* Initialise the framebuffer console from handoff data.
+   * The kernel keeps the firmware's PML4 (vmm_init adopts CR3 verbatim),
+   * so any physical address the firmware identity-mapped is reachable
+   * here -- including high-memory GOP framebuffers (Hyper-V/VMware
+   * place them around 0x80000000-0xFC000000). A simple non-NULL,
+   * non-overflow range check is therefore the correct guard. */
+  g_con.fb = range_ok(h->fb.base, h->fb.size)
+                 ? (uint32_t *)(uintptr_t)h->fb.base
+                 : NULL;
   g_con.width = h->fb.width;
   g_con.height = h->fb.height;
   g_con.stride = h->fb.pitch / 4;
+  g_con.size_bytes = h->fb.size;
+  if (g_con.stride == 0 || g_con.width == 0 || g_con.height == 0) {
+    dbgcon_putc('F');
+    for (;;)
+      cpu_relax();
+  }
+  if (g_con.width > g_con.stride) {
+    g_con.width = g_con.stride;
+  }
+  if (h->fb.pitch > 0 && h->fb.size > 0) {
+    uint32_t max_rows = h->fb.size / h->fb.pitch;
+    if (max_rows < g_con.height) {
+      g_con.height = max_rows;
+    }
+  }
+  if (g_con.height == 0) {
+    dbgcon_putc('F');
+    for (;;)
+      cpu_relax();
+  }
   g_con.bg = 0x00102030;
   g_con.fg = 0x00F0F0F0;
   g_con.origin_y = 0;
@@ -186,6 +309,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('T');
 
   /* --- Boot splash with live progress bar -------------------------------- */
+  int boot_splash_enabled = handoff_splash_enabled();
+#ifdef CAPYOS_BOOT_RUN_HELLO
+  boot_splash_enabled = 0;
+#endif
   {
     struct boot_ui_io bui;
     bui.screen_w = g_con.width;
@@ -204,9 +331,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     boot_ui_init(&bui);
   }
   dbgcon_putc('U');
-  fbcon_set_visual_muted(1);
-  dbgcon_putc('M');
-  boot_ui_splash_begin();
+  fbcon_set_visual_muted(boot_splash_enabled);
+  if (boot_splash_enabled) {
+    boot_ui_splash_begin();
+  }
   dbgcon_putc('S');
 
   struct boot_warnings g_boot_warnings;
@@ -225,7 +353,37 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   kcon_init();
   dbgcon_putc('A');
   kinit();
+  kmem_boot_debug_dump('I');
   dbgcon_putc('B');
+#ifdef CAPYOS_BOOT_RUN_HELLO
+  task_system_init();
+  pmm_init_from_handoff(h);
+  vmm_init();
+  kinit();
+  kmem_boot_debug_dump('X');
+  dbgcon_putc(kmem_debug_header_ok() ? 'a' : 'A');
+  process_system_init();
+  dbgcon_putc('y');
+  dbgcon_putc(kmem_debug_header_ok() ? 'b' : 'B');
+  cpu_local_init((uint64_t)(uintptr_t)
+                     (g_syscall_kernel_stack +
+                      sizeof(g_syscall_kernel_stack)));
+  dbgcon_putc('z');
+  dbgcon_putc(kmem_debug_header_ok() ? 'c' : 'C');
+  syscall_init();
+  dbgcon_putc('q');
+  dbgcon_putc(kmem_debug_header_ok() ? 'd' : 'D');
+  dbgcon_putc('w');
+  {
+    int hello_rc = kernel_boot_run_embedded_hello();
+    dbgcon_putc('E');
+    if (hello_rc < 0) {
+      dbgcon_putc('-');
+      hello_rc = -hello_rc;
+    }
+    dbgcon_putc((uint8_t)('0' + (hello_rc % 10)));
+  }
+#endif
   service_manager_init();
   dbgcon_putc('C');
   work_queue_init();
@@ -255,7 +413,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('K');
   (void)work_queue_disable(SYSTEM_WORK_RECOVERY_SNAPSHOT);
   dbgcon_putc('L');
+#ifndef CAPYOS_BOOT_RUN_HELLO
   (void)service_manager_target_apply(g_boot_policy_decision.bootstrap_target);
+#endif
   dbgcon_putc('2');
 
   /* Stage 3/8: Timers */
@@ -276,14 +436,52 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     smp_detect_cpus(h->rsdp);
   }
   dbgcon_putc('k');
+  pmm_init_from_handoff(h);
   vmm_init();
   dbgcon_putc('l');
   klog(KLOG_INFO, "[vmm] Virtual memory manager initialized.");
   process_system_init();
   dbgcon_putc('m');
-  if (!handoff_boot_services_active()) {
+  if (!handoff_boot_services_active()
+#ifdef CAPYOS_BOOT_RUN_HELLO
+      || 1
+#endif
+  ) {
+    dbgcon_putc('u');
+    cpu_local_init((uint64_t)(uintptr_t)
+                       (g_syscall_kernel_stack +
+                        sizeof(g_syscall_kernel_stack)));
+    klog(KLOG_INFO,
+         "[cpu_local] Per-CPU area armed; IA32_GS_BASE = &cpu_local.");
     syscall_init();
+    dbgcon_putc('v');
     klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
+#ifdef CAPYOS_BOOT_RUN_HELLO
+    /* M4 phase 5d: when the build defines CAPYOS_BOOT_RUN_HELLO,
+     * spawn the embedded `hello` user binary and drop into Ring 3.
+     * `kernel_boot_run_embedded_hello` is __attribute__((noreturn))
+     * on the success path (it iretq's into user space); a return
+     * means the spawn failed and we fall through to the regular
+     * boot. Default builds skip this block so the kernel shell
+     * stays reachable. The QEMU smoke for phase 5d defines the
+     * macro on the cross-compiler command line. */
+    dbgcon_write("[user_init] CAPYOS_BOOT_RUN_HELLO defined; spawning hello.\n");
+    dbgcon_putc('w');
+    klog(KLOG_INFO,
+         "[user_init] CAPYOS_BOOT_RUN_HELLO defined; spawning hello.");
+    {
+      int hello_rc = kernel_boot_run_embedded_hello();
+      dbgcon_putc('E');
+      if (hello_rc < 0) {
+        dbgcon_putc('-');
+        hello_rc = -hello_rc;
+      }
+      dbgcon_putc((uint8_t)('0' + (hello_rc % 10)));
+      klog(KLOG_WARN,
+           "[user_init] hello spawn returned without entering Ring 3.");
+      (void)hello_rc;
+    }
+#endif
   }
   dbgcon_putc('n');
   auth_policy_init();

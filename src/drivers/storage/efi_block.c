@@ -5,7 +5,11 @@
 #include "memory/kmem.h"
 
 static inline void dbg_putc(char ch) {
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+  (void)ch;
+#else
   __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
+#endif
 }
 
 static void dbg_puts(const char *s) {

@@ -242,12 +242,24 @@ struct vmbus_keyboard *vmbus_get_keyboard(void);
 static inline void wrmsr(uint32_t msr, uint64_t value) {
   uint32_t lo = (uint32_t)value;
   uint32_t hi = (uint32_t)(value >> 32);
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+  /* No MSR on host; tests that exercise this code path use mocks. */
+  (void)msr; (void)lo; (void)hi;
+#else
   __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
+#endif
 }
 
 static inline uint64_t rdmsr(uint32_t msr) {
   uint32_t lo, hi;
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+  /* No MSR on host; tests that exercise this code path use mocks. */
+  (void)msr;
+  lo = 0;
+  hi = 0;
+#else
   __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+#endif
   return ((uint64_t)hi << 32) | lo;
 }
 

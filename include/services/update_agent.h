@@ -11,6 +11,9 @@
 #define UPDATE_AGENT_PATH_MAX 96u
 #define UPDATE_AGENT_REMOTE_MAX 160u
 #define UPDATE_AGENT_SUMMARY_MAX 80u
+/* SHA-256 hex digest = 64 ASCII chars + NUL. */
+#define UPDATE_AGENT_SHA256_HEX_LEN 64u
+#define UPDATE_AGENT_SHA256_HEX_MAX (UPDATE_AGENT_SHA256_HEX_LEN + 1u)
 
 struct system_update_status {
   uint8_t configured;
@@ -30,6 +33,10 @@ struct system_update_status {
   char staged_version[UPDATE_AGENT_VERSION_MAX];
   char published_at[24];
   char summary[UPDATE_AGENT_SUMMARY_MAX];
+  /* Lower-case hex sha256 of the staged payload, taken verbatim from the
+   * manifest (`payload_sha256=...`). Empty string when the manifest does
+   * not declare a hash. Used by update_agent_apply_boot_slot_verified(). */
+  char staged_payload_sha256[UPDATE_AGENT_SHA256_HEX_MAX];
 };
 
 typedef int (*update_agent_read_file_fn)(const char *path, char *buffer,
@@ -54,5 +61,27 @@ void update_agent_status_get(struct system_update_status *out);
 int update_agent_apply_boot_slot(void);
 int update_agent_confirm_health(void);
 int update_agent_check_rollback(void);
+
+/* Apply the staged boot slot only if the supplied payload SHA-256 hex
+ * digest matches the value declared by the staged manifest's
+ * `payload_sha256=` field.
+ *
+ * Returns:
+ *   0          on success (slot staged + activated)
+ *  -30         payload digest declared but caller passed NULL or empty
+ *  -31         payload digest mismatch (refused; logged as [audit] [update])
+ *  -32         payload digest declared but invalid length (must be 64 hex)
+ *   <0         underlying update_agent_apply_boot_slot() error
+ *
+ * If the staged manifest does NOT declare `payload_sha256` (legacy path),
+ * the call falls back to update_agent_apply_boot_slot() unchanged so that
+ * existing tests and call sites keep working. */
+int update_agent_apply_boot_slot_verified(const char *actual_sha256_hex);
+
+/* Returns 1 if the currently staged manifest declared a payload sha256
+ * digest, 0 otherwise. Useful for callers that want to refuse to call
+ * update_agent_apply_boot_slot() without verification when a digest is
+ * present. */
+int update_agent_staged_requires_payload_verification(void);
 
 #endif /* CORE_UPDATE_AGENT_H */

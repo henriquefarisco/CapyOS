@@ -56,5 +56,6 @@ int cmd_perf_boot(struct shell_context *ctx, int argc, char **argv);
 int cmd_perf_net(struct shell_context *ctx, int argc, char **argv);
 int cmd_perf_fs(struct shell_context *ctx, int argc, char **argv);
 int cmd_perf_mem(struct shell_context *ctx, int argc, char **argv);
+int cmd_perf_task(struct shell_context *ctx, int argc, char **argv);
 
 #endif

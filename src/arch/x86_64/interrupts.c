@@ -1,6 +1,9 @@
+#include "arch/x86_64/fault_classify.h"
 #include "arch/x86_64/framebuffer_console.h"
 #include "arch/x86_64/interrupts.h"
 #include "arch/x86_64/panic.h"
+#include "kernel/process.h"
+#include "memory/vmm.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,7 +70,18 @@ extern void *x64_exception_stub_table[32];
 extern void *x64_irq_stub_table[16];
 extern void x64_unhandled_vector_stub(void);
 
-static struct x64_gdt_entry g_gdt[3];
+/* GDT layout (mirrors include/arch/x86_64/syscall_msr.h):
+ *   0 (0x00) null
+ *   1 (0x08) kernel code  - DPL 0
+ *   2 (0x10) kernel data  - DPL 0
+ *   3 (0x18) user data    - DPL 3 (RPL=3 -> 0x1B), required by SYSRET
+ *   4 (0x20) user code    - DPL 3 (RPL=3 -> 0x23), required by SYSRET
+ *
+ * The user-mode descriptors are mandatory for SYSRET to land cleanly
+ * in Ring 3; without them the CPU faults with #GP on SYSRET regardless
+ * of what STAR contains. tests/test_syscall_msr.c locks both the
+ * selector ordering and the DPL bits in the access bytes. */
+static struct x64_gdt_entry g_gdt[5];
 static struct x64_descriptor_ptr g_gdtr;
 static struct x64_idt_entry g_idt[IDT_ENTRIES];
 static struct x64_descriptor_ptr g_idtr;
@@ -185,21 +199,11 @@ static void x64_gdt_set(int index, uint32_t base, uint32_t limit,
 }
 
 static void x64_load_gdt(const struct x64_descriptor_ptr *gdtr) {
-  __asm__ volatile("lgdt (%0)\n\t"
-                   "movw $" "0x10" ", %%ax\n\t"
-                   "movw %%ax, %%ds\n\t"
-                   "movw %%ax, %%es\n\t"
-                   "movw %%ax, %%ss\n\t"
-                   "movw %%ax, %%fs\n\t"
-                   "movw %%ax, %%gs\n\t"
-                   "pushq $" "0x08" "\n\t"
-                   "leaq 1f(%%rip), %%rax\n\t"
-                   "pushq %%rax\n\t"
-                   "lretq\n\t"
-                   "1:\n\t"
-                   :
-                   : "r"(gdtr)
-                   : "rax", "memory");
+  /* Long-mode segment caches already carry the selectors installed by the
+   * loader. Loading the larger kernel GDT is enough for later SYSRET/user
+   * selectors; rewriting DS/ES/SS or doing an early far return here regressed
+   * OVMF/QEMU boot before the native exception path was fully armed. */
+  __asm__ volatile("lgdt (%0)" : : "r"(gdtr) : "memory");
 }
 
 static void x64_idt_set_gate(uint8_t vector, void (*handler)(void),
@@ -219,6 +223,8 @@ __attribute__((optimize("O0"))) void gdt_init(void) {
   x64_gdt_set(0, 0, 0, 0, 0);
   x64_gdt_set(1, 0, 0, 0x9Au, 0x20u);
   x64_gdt_set(2, 0, 0, 0x92u, 0x00u);
+  x64_gdt_set(3, 0, 0, 0xF2u, 0x00u);
+  x64_gdt_set(4, 0, 0, 0xFAu, 0x20u);
 
   g_gdtr.limit = (uint16_t)(sizeof(g_gdt) - 1u);
   g_gdtr.base = (uint64_t)(uintptr_t)&g_gdt[0];
@@ -375,6 +381,64 @@ x64_exception_dispatch(struct x64_exception_frame *frame) {
     }
     pic_send_eoi(vector);
     return;
+  }
+
+  /* Phase 4 fault isolation: a CPU exception (vector 0..31) from user
+   * mode must kill the offending process and let the scheduler keep
+   * going, instead of panicking the whole kernel. The classifier in
+   * arch/x86_64/fault_classify.c is a pure function that owns this
+   * decision and is locked by tests/test_fault_classify.c.
+   *
+   * Today the kill path is only taken once a real user process has
+   * been launched (M4 phase 3.5 + 5). Until then `process_current()`
+   * is NULL and we fall through to the existing panic path so kernel
+   * bugs remain immediately visible. */
+  if (frame && vector < 32u) {
+    struct arch_fault_info finfo = {
+        .vector = vector,
+        .error_code = frame->error_code,
+        .cs = frame->cs,
+        .rip = frame->rip,
+        .cr2 = (vector == 14u) ? read_cr2_local() : 0u,
+    };
+    enum arch_fault_action action = arch_fault_classify(&finfo);
+
+    /* Phase 7a: a recoverable fault (today only user-mode #PF on a
+     * not-present page) is delegated to the VMM. If
+     * `vmm_handle_page_fault` resolves the fault we IRET back into
+     * user space and the instruction re-runs. If the VMM refuses
+     * (returns non-zero) we fall through to the existing kill path
+     * so the offending process is contained. */
+    if (action == ARCH_FAULT_RECOVERABLE &&
+        process_current() != NULL) {
+      if (vmm_handle_page_fault(finfo.cr2, finfo.error_code) == 0) {
+        return;
+      }
+      diag_write("\n[x64] vmm_handle_page_fault refused recovery; "
+                 "escalating to KILL_PROCESS\n");
+      action = ARCH_FAULT_KILL_PROCESS;
+    }
+
+    if (action == ARCH_FAULT_KILL_PROCESS &&
+        process_current() != NULL) {
+      diag_write("\n[x64] User-mode fault, killing offending process\n");
+      diag_write("[x64] Type: ");
+      diag_write(g_exception_names[vector]);
+      diag_putc('\n');
+      diag_label_hex64("[x64] vector=0x", vector);
+      diag_label_hex64("[x64] err=0x", finfo.error_code);
+      diag_label_hex64("[x64] cs=0x", finfo.cs);
+      diag_label_hex64("[x64] rip=0x", finfo.rip);
+      if (vector == 14u) {
+        diag_label_hex64("[x64] cr2=0x", finfo.cr2);
+      }
+      /* POSIX-style exit code: high byte indicates death by signal,
+       * low byte carries the vector. process_exit() is noreturn and
+       * reschedules. */
+      process_exit(128 + (int)vector);
+      /* Unreachable; defensive halt below if process_exit ever returns
+       * (e.g. test environments). */
+    }
   }
 
   report_fault(frame);

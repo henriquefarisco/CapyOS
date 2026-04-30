@@ -4,6 +4,11 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.4+20260429.md`
+  - adocao profunda do `op_budget` no navegador, eventos `[audit]`
+    estruturados (browser strict + capyfs journal auth + update payload),
+    verificacao SHA-256 do payload no `update_agent`, round-trip sintetico
+    de dirty-shutdown e split do `update_agent` em `update_agent_transact.c`
 - `capyos-0.8.0-alpha.3+20260429.md`
   - fechamento do ciclo de robustez M5/M6/M8 com journal CAPYFS autenticado
     por volume, primitiva `op_budget` reutilizavel, API de privilegios

@@ -49,6 +49,7 @@ Contexto operacional atual:
 | `perf-net` | `perf-net` | Exibe contadores de rede, DHCP, ARP/TCP e estatisticas do cache DNS. |
 | `perf-fs` | `perf-fs` | Exibe ocupacao e contadores do buffer cache de filesystem: validos, sujos, pinned, hits, misses, evictions, writebacks e erros. |
 | `perf-mem` | `perf-mem` | Exibe uso atual do heap do kernel em KiB e bytes. |
+| `perf-task` | `perf-task` | Lista as tasks do kernel e os processos ativos via os iteradores publicos `task_iter`/`process_iter`, mostrando PID, estado, prioridade, UID/GID e nome em snapshots seguros (sem expor a tabela privada). Base para o aba Tasks/Processes do task manager e para a telemetria CPU%/RSS planejada na M4 fase 7. |
 | `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo canal, branch, manifesto local, URL remota, versao staged e ativacao pendente. |
 | `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-import-manifest`, `update-stage`, `update-arm`, `update-clear` e `update-channel` em `/var/log/update-history.log`. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |

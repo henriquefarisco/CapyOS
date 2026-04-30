@@ -117,7 +117,7 @@ int cmd_recovery_network(struct shell_context *ctx, int argc, char **argv) {
 #endif
 }
 
-static struct shell_command g_system_info_commands[21];
+static struct shell_command g_system_info_commands[22];
 static int g_system_info_commands_initialized = 0;
 
 static void init_system_info_commands(void) {
@@ -166,13 +166,15 @@ static void init_system_info_commands(void) {
     g_system_info_commands[19].handler = cmd_perf_fs;
     g_system_info_commands[20].name = "perf-mem";
     g_system_info_commands[20].handler = cmd_perf_mem;
+    g_system_info_commands[21].name = "perf-task";
+    g_system_info_commands[21].handler = cmd_perf_task;
     g_system_info_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_info(size_t *count) {
     init_system_info_commands();
     if (count) {
-        *count = 21;
+        *count = 22;
     }
     return g_system_info_commands;
 }

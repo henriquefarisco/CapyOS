@@ -36,4 +36,11 @@ int capyfs_journal_active(struct block_device *dev);
 void capyfs_journal_stats(struct block_device *dev, uint32_t *used,
                            uint32_t *free_count);
 
+/* Release the per-mount journal slot bound to `dev`. Intended for graceful
+ * unmount paths and for tests that exercise multiple synthetic devices: the
+ * slot table has a fixed capacity and once a slot is allocated it stays
+ * bound to the original `dev` pointer until released. Calling on an
+ * unknown device is a no-op. */
+void capyfs_journal_release_slot(struct block_device *dev);
+
 #endif /* FS_CAPYFS_JOURNAL_INTEGRATION_H */

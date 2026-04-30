@@ -149,6 +149,135 @@ static int test_dirty_shutdown_causes_wal_replay(void) {
     return fails;
 }
 
+/* M7.2 — synthetic dirty-shutdown round-trip.
+ *
+ * Validates that after a simulated power loss, replay restores ONLY the
+ * committed transactions to the on-disk image, leaves uncommitted work
+ * out, and re-mounting after replay reports a clean journal again.
+ *
+ * Layout of the in-memory device:
+ *   - blocks 0..7    : header padding (unused for this test)
+ *   - blocks 8..39   : journal region (32 blocks, JRNL_START)
+ *   - blocks 40..63  : data area (DATA_START..)
+ *
+ * Steps:
+ *   1. format the journal
+ *   2. write a "pristine" pattern to data block 50, 51 directly via the
+ *      backend so we know the baseline
+ *   3. begin TX1, log a payload for block 50, COMMIT
+ *   4. begin TX2, log a payload for block 51, COMMIT
+ *   5. begin TX3, log a payload for block 52, ABORT (simulates uncommitted
+ *      work that survived to the journal but never reached commit)
+ *   6. simulate dirty shutdown: do NOT apply the committed records to the
+ *      data area, do NOT checkpoint
+ *   7. mount_hook re-opens, observes needs_replay, and runs replay
+ *   8. verify: data blocks 50, 51 now hold the committed payloads; data
+ *      block 52 still has the pristine pattern (not applied)
+ *   9. mount_hook a second time: needs_replay must now be 0 and cause
+ *      must report NONE so a clean shutdown is recognized.
+ */
+static int test_dirty_shutdown_roundtrip_replays_only_committed(void) {
+    struct mem_backend mem;
+    struct block_device dev;
+    struct journal j;
+    struct journal_transaction txn;
+    uint8_t pristine[JCAUSE_BLOCK_SIZE];
+    uint8_t commit_a[JCAUSE_BLOCK_SIZE];
+    uint8_t commit_b[JCAUSE_BLOCK_SIZE];
+    uint8_t aborted_payload[JCAUSE_BLOCK_SIZE];
+    uint8_t observed[JCAUSE_BLOCK_SIZE];
+    int fails = 0;
+
+    mem.block_size  = JCAUSE_BLOCK_SIZE;
+    mem.block_count = JCAUSE_BLOCK_COUNT;
+    mem.data = (uint8_t *)calloc(JCAUSE_BLOCK_COUNT, JCAUSE_BLOCK_SIZE);
+    dev.name = "mem-roundtrip"; dev.block_size = JCAUSE_BLOCK_SIZE;
+    dev.block_count = JCAUSE_BLOCK_COUNT; dev.ctx = &mem; dev.ops = &g_mem_ops;
+
+    /* Pristine pattern + two distinct payloads. */
+    memset(pristine, 0xA5u, sizeof(pristine));
+    memset(commit_a, 0x11u, sizeof(commit_a));
+    memset(commit_b, 0x22u, sizeof(commit_b));
+    memset(aborted_payload, 0x33u, sizeof(aborted_payload));
+
+    /* Step 1 + 2: format journal and seed the data area with the pristine
+     * pattern via the raw backend. */
+    fails += expect_true(journal_format(&j, &dev, JRNL_START, 32u) == 0,
+                         "journal_format pre-step");
+    fails += expect_true(mem_write(&mem, 50u, pristine) == 0, "seed blk 50");
+    fails += expect_true(mem_write(&mem, 51u, pristine) == 0, "seed blk 51");
+    fails += expect_true(mem_write(&mem, 52u, pristine) == 0, "seed blk 52");
+
+    /* Step 3: TX1 commits a write for block 50. */
+    fails += expect_true(journal_begin(&j, &txn) == 0, "tx1 begin");
+    fails += expect_true(journal_log_block(&txn, 50u, commit_a, 0u,
+                                           JCAUSE_BLOCK_SIZE) == 0,
+                         "tx1 log");
+    fails += expect_true(journal_commit(&txn) == 0, "tx1 commit");
+
+    /* Step 4: TX2 commits a write for block 51. */
+    fails += expect_true(journal_begin(&j, &txn) == 0, "tx2 begin");
+    fails += expect_true(journal_log_block(&txn, 51u, commit_b, 0u,
+                                           JCAUSE_BLOCK_SIZE) == 0,
+                         "tx2 log");
+    fails += expect_true(journal_commit(&txn) == 0, "tx2 commit");
+
+    /* Step 5: TX3 logs work for block 52 but ABORTS — simulates a
+     * transaction that never reached commit before power was lost. */
+    fails += expect_true(journal_begin(&j, &txn) == 0, "tx3 begin");
+    fails += expect_true(journal_log_block(&txn, 52u, aborted_payload, 0u,
+                                           JCAUSE_BLOCK_SIZE) == 0,
+                         "tx3 log");
+    fails += expect_true(journal_abort(&txn) == 0, "tx3 abort");
+
+    /* Step 6: simulate dirty shutdown. We do NOT call journal_checkpoint
+     * and we do NOT manually apply the committed payloads to the data
+     * area. From the device's point of view, blocks 50/51/52 still hold
+     * the pristine pattern, but the journal contains durable commits. */
+    fails += expect_true(mem_read(&mem, 50u, observed) == 0, "pre-replay read 50");
+    fails += expect_true(memcmp(observed, pristine, JCAUSE_BLOCK_SIZE) == 0,
+                         "blk 50 still pristine before replay");
+    fails += expect_true(mem_read(&mem, 51u, observed) == 0, "pre-replay read 51");
+    fails += expect_true(memcmp(observed, pristine, JCAUSE_BLOCK_SIZE) == 0,
+                         "blk 51 still pristine before replay");
+
+    /* Step 7: mount hook on the same backing store performs replay. */
+    fails += expect_true(
+        capyfs_journal_mount_hook(&dev, DATA_START, NULL, 0) == 0,
+        "mount_hook after dirty shutdown succeeds");
+    fails += expect_true(
+        capyfs_journal_last_recovery_cause() == CAPYFS_JOURNAL_RECOVERY_WAL_REPLAY,
+        "recovery cause must be WAL_REPLAY");
+
+    /* Step 8: blocks 50 and 51 must now hold the committed payloads.
+     * Block 52 must still be pristine because TX3 was aborted. */
+    fails += expect_true(mem_read(&mem, 50u, observed) == 0, "post-replay read 50");
+    fails += expect_true(memcmp(observed, commit_a, JCAUSE_BLOCK_SIZE) == 0,
+                         "blk 50 must hold committed payload after replay");
+    fails += expect_true(mem_read(&mem, 51u, observed) == 0, "post-replay read 51");
+    fails += expect_true(memcmp(observed, commit_b, JCAUSE_BLOCK_SIZE) == 0,
+                         "blk 51 must hold committed payload after replay");
+    fails += expect_true(mem_read(&mem, 52u, observed) == 0, "post-replay read 52");
+    fails += expect_true(memcmp(observed, pristine, JCAUSE_BLOCK_SIZE) == 0,
+                         "blk 52 must remain pristine (TX3 aborted)");
+
+    /* Step 9: a second mount_hook on the same device must observe a clean
+     * journal and report NONE — the prior replay published a checkpoint. */
+    fails += expect_true(
+        capyfs_journal_mount_hook(&dev, DATA_START, NULL, 0) == 0,
+        "second mount_hook must succeed");
+    fails += expect_true(
+        capyfs_journal_last_recovery_cause() == CAPYFS_JOURNAL_RECOVERY_NONE,
+        "second mount must report cause NONE");
+
+    /* Release the slot so subsequent tests can still allocate. The slot
+     * table has CAPYFS_JOURNAL_MAX_MOUNTS=4 entries and there is no
+     * automatic cleanup at process scope. */
+    capyfs_journal_release_slot(&dev);
+    free(mem.data);
+    return fails;
+}
+
 static int test_root_secret_install_clear(void) {
     int fails = 0;
     static const uint8_t SECRET[] = {
@@ -229,6 +358,7 @@ int run_capyfs_journal_cause_tests(void) {
     fails += test_unformatted_causes_format();
     fails += test_clean_mount_cause_none();
     fails += test_dirty_shutdown_causes_wal_replay();
+    fails += test_dirty_shutdown_roundtrip_replays_only_committed();
     fails += test_root_secret_install_clear();
     fails += test_authenticated_mount_with_super();
     if (fails == 0) {

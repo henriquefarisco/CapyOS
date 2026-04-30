@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 #include "arch/x86_64/kernel_main_internal.h"
-#include "drivers/serial/com1.h"
+#include "drivers/serial/serial_com1.h"
 #include "gui/font8x8.h"
 #include "kernel/log/klog.h"
 #include "arch/x86_64/kernel_platform_runtime.h"
@@ -21,6 +21,16 @@
 fbcon_t g_con;
 int g_serial_mirror = 0;
 int g_com1_ready = 0;
+
+static int fbcon_range_ok(uint64_t addr, uint64_t size) {
+  if (addr == 0 || size == 0) {
+    return 0;
+  }
+  if (addr + size < addr) {
+    return 0;
+  }
+  return addr + size <= 0x40000000ULL;
+}
 
 /* ── visual muting (redirects output to klog while splash is active) ── */
 
@@ -33,10 +43,27 @@ static uint32_t g_fbcon_muted_len = 0;
 void fbcon_init(const struct boot_handoff *h) {
   if (!h)
     return;
-  g_con.fb = (uint32_t *)(uintptr_t)h->fb.base;
+  g_con.fb = fbcon_range_ok(h->fb.base, h->fb.size)
+                 ? (uint32_t *)(uintptr_t)h->fb.base
+                 : NULL;
   g_con.width = h->fb.width;
   g_con.height = h->fb.height;
   g_con.stride = h->fb.pitch / 4u;
+  g_con.size_bytes = h->fb.size;
+  if (g_con.stride == 0) {
+    g_con.width = 0;
+    g_con.height = 0;
+    return;
+  }
+  if (g_con.width > g_con.stride) {
+    g_con.width = g_con.stride;
+  }
+  if (h->fb.pitch > 0 && h->fb.size > 0) {
+    uint32_t max_rows = h->fb.size / h->fb.pitch;
+    if (max_rows < g_con.height) {
+      g_con.height = max_rows;
+    }
+  }
   g_con.origin_y = 0;
   g_con.cols = g_con.width / CELL_W;
   g_con.rows = g_con.height / CELL_H;
@@ -102,12 +129,25 @@ void fbcon_fill_rect_px(uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
                         uint32_t color) {
   if (!g_con.fb)
     return;
+  if (g_con.stride == 0)
+    return;
   if (x0 >= g_con.width || y0 >= g_con.height)
     return;
   if (x0 + w > g_con.width)
     w = g_con.width - x0;
   if (y0 + h > g_con.height)
     h = g_con.height - y0;
+  if (g_con.size_bytes > 0) {
+    uint64_t max_pixels = (uint64_t)g_con.size_bytes / sizeof(uint32_t);
+    uint64_t row_start = (uint64_t)y0 * g_con.stride + x0;
+    if (row_start >= max_pixels || (uint64_t)w > max_pixels - row_start) {
+      return;
+    }
+    uint64_t max_rows = ((max_pixels - row_start - w) / g_con.stride) + 1u;
+    if (max_rows < h) {
+      h = (uint32_t)max_rows;
+    }
+  }
   for (uint32_t y = 0; y < h; y++) {
     uint32_t *row = g_con.fb + (y0 + y) * g_con.stride;
     for (uint32_t x = 0; x < w; x++) {

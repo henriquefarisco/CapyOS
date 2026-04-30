@@ -6,11 +6,14 @@ meta:
   description: "Canalizacao oficial de versoes do CapyOS na trilha UEFI/GPT x86_64"
 channels:
   alpha:
-    current: 0.8.0-alpha.3
-    extended: 0.8.0-alpha.3+20260429
+    current: 0.8.0-alpha.4
+    extended: 0.8.0-alpha.4+20260429
     stability: experimental
-    summary: "Robustez alpha amplia journal autenticado por volume, primitiva op_budget, API de privilegios centralizada, pacing do buffer cache e estado formal do navegador"
+    summary: "Robustez alpha aprofunda op_budget no navegador, eventos de auditoria estruturados [audit], verificacao SHA-256 de payload no update agent, round-trip sintetico de dirty-shutdown e split do update_agent em transact/core"
     history:
+      - version: 0.8.0-alpha.4+20260429
+        date: 2026-04-29
+        summary: "Adocao profunda do op_budget no navegador, eventos [audit] estruturados, verificacao SHA-256 do payload no apply do update agent, round-trip sintetico do journal e split do update_agent em update_agent_transact.c"
       - version: 0.8.0-alpha.3+20260429
         date: 2026-04-29
         summary: "Fecha o ciclo de robustez M5/M6/M8 com journal CAPYFS HMAC por volume, op_budget reutilizavel, privilege API, pacing do buffer cache, parse-budget no browser e modo estrito de transicoes"

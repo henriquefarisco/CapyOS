@@ -9,6 +9,7 @@ SECTIONS
        4M e seguro: acima do BIOS-compat (~1MB) e fora das janelas
        internas do firmware VMware. Verificado em sessao anterior. */
     . = 4M;
+    PROVIDE(__kernel_image_start = .);
 
     .text : ALIGN(4K) {
         *(.text)
@@ -44,4 +45,6 @@ SECTIONS
         KEEP(*(.bootstrap_stack))
         KEEP(*(.bootstrap_stack.*))
     }
+    . = ALIGN(4K);
+    PROVIDE(__kernel_image_end = .);
 }

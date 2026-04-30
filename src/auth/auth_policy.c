@@ -24,8 +24,16 @@ static void ap_strcpy(char *d, const char *s, size_t max) {
 
 static uint64_t ap_ticks(void) {
   uint32_t lo, hi;
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+  /* Host unit tests need only a monotonically increasing counter
+   * for relative ordering in lockout windows. */
+  static uint64_t fake_ticks = 0;
+  (void)lo; (void)hi;
+  return ++fake_ticks;
+#else
   __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
   return ((uint64_t)hi << 32) | lo;
+#endif
 }
 
 void auth_policy_init(void) {

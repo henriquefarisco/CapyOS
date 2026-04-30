@@ -220,6 +220,67 @@ static int test_html_viewer_parse_budget_logs_failure(void) {
                               "[browser] parse node budget exhausted") != NULL,
                        "parse-budget exhaustion should reach klog");
 
+  /* When the parse budget exhausts it must propagate to the
+   * navigation-level op_budget so the unified cancel/abort signal sees
+   * the navigation as no longer alive. */
+  fails += expect_true(hv_nav_budget_blocked(app) == 1,
+                       "parse exhaustion must propagate to nav_op_budget");
+
+  if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
+  return fails;
+}
+
+static int test_html_viewer_nav_budget_cancellation_aborts_phases(void) {
+  /* M5.5 deep adoption: external cancellation must propagate through the
+   * navigation-level op_budget to ALL per-phase budgets so the parser, the
+   * external fetcher, and the renderer all bail out cooperatively without
+   * each one re-implementing its own cancellation flag. */
+  struct html_viewer_app *app = NULL;
+  int fails = 0;
+
+  memset(&g_test_window, 0, sizeof(g_test_window));
+  klog_reset();
+  html_viewer_open();
+  app = (struct html_viewer_app *)g_test_window.user_data;
+  fails += expect_true(app != NULL, "browser should open for nav-budget test");
+  if (!app) return fails;
+
+  /* Arm a fresh navigation so the nav_op_budget is in OK state. */
+  html_viewer_begin_navigation(app, "http://example.test/");
+  fails += expect_true(hv_nav_budget_blocked(app) == 0,
+                       "fresh navigation must not be blocked");
+  fails += expect_true(hv_resource_budget_take(app, "css") == 1,
+                       "resource budget admits work in OK state");
+  fails += expect_true(hv_render_budget_take(app, "paint") == 1,
+                       "render budget admits work in OK state");
+  fails += expect_true(hv_parse_budget_take(app, "parse") == 1,
+                       "parse budget admits work in OK state");
+
+  /* Simulate Esc-cancel from the input layer by calling the canonical
+   * cancellation entry point. It must trip the nav_op_budget. */
+  html_viewer_cancel_navigation(app, "test-cancel");
+  fails += expect_true(hv_nav_budget_blocked(app) == 1,
+                       "cancel_navigation must trip nav_op_budget");
+
+  /* All three per-phase budgets must now refuse new work cooperatively. */
+  fails += expect_true(hv_resource_budget_take(app, "css") == 0,
+                       "resource budget refuses after cancel");
+  fails += expect_true(hv_render_budget_take(app, "paint") == 0,
+                       "render budget refuses after cancel");
+  fails += expect_true(hv_parse_budget_take(app, "parse") == 0,
+                       "parse budget refuses after cancel");
+
+  /* The cancel reason must be observable for diagnostics. */
+  fails += expect_true(strstr(hv_nav_budget_reason(app), "test-cancel") != NULL,
+                       "nav_op_budget reason must surface the cancel reason");
+
+  /* A new navigation re-arms the budget cleanly. */
+  html_viewer_begin_navigation(app, "http://example.test/next");
+  fails += expect_true(hv_nav_budget_blocked(app) == 0,
+                       "begin_navigation re-arms nav_op_budget");
+  fails += expect_true(hv_parse_budget_take(app, "parse") == 1,
+                       "parse budget admits again on fresh navigation");
+
   if (g_test_window.on_close) g_test_window.on_close(&g_test_window);
   return fails;
 }

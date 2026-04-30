@@ -32,6 +32,17 @@ static struct header *free_list = NULL;
 static int kmem_oom_warning = 0;
 static int g_kmem_initialized = 0;
 
+static void kmem_dbgcon_putc(uint8_t c) {
+  __asm__ volatile("outb %0, $0xE9" : : "a"(c));
+}
+
+static void kmem_dbgcon_hex8(uint8_t v) {
+  uint8_t hi = (uint8_t)((v >> 4) & 0xFu);
+  uint8_t lo = (uint8_t)(v & 0xFu);
+  kmem_dbgcon_putc((uint8_t)(hi < 10 ? ('0' + hi) : ('A' + (hi - 10))));
+  kmem_dbgcon_putc((uint8_t)(lo < 10 ? ('0' + lo) : ('A' + (lo - 10))));
+}
+
 static void memzero_internal(void *ptr, size_t len) {
   volatile uint8_t *p = (volatile uint8_t *)ptr;
   while (len--) {
@@ -45,16 +56,23 @@ void kinit(void) {
   free_list->next = NULL;
   free_list->is_free = 1;
   free_list->magic = HEADER_MAGIC;
+  if (free_list->magic == HEADER_MAGIC) {
+    kmem_dbgcon_putc('Y');
+  } else {
+    kmem_dbgcon_putc('N');
+    kmem_dbgcon_hex8(free_list->magic);
+  }
   kmem_oom_warning = 0;
   g_kmem_initialized = 1;
-  K_INFO("kmem", "Heap initialized (free-list allocator)");
 }
 
 void *kalloc(size_t size) {
   if (size == 0)
     return NULL;
-  if (!g_kmem_initialized)
+  if (!g_kmem_initialized) {
+    kmem_dbgcon_putc('U');
     return NULL;
+  }
 
   /* Align size */
   size_t aligned_size = (size + (ALIGN - 1)) & ~(ALIGN - 1);
@@ -63,6 +81,8 @@ void *kalloc(size_t size) {
 
   while (curr) {
     if (curr->magic != HEADER_MAGIC) {
+      kmem_dbgcon_putc('C');
+      kmem_dbgcon_hex8(curr->magic);
       K_ERROR("kmem", "Heap corruption detected!");
       return NULL;
     }
@@ -94,6 +114,7 @@ void *kalloc(size_t size) {
   }
 
   if (!kmem_oom_warning) {
+    kmem_dbgcon_putc('O');
     kmem_oom_warning = 1;
     K_ERROR("kmem", "Out of memory!");
   }
@@ -145,6 +166,35 @@ size_t kheap_used(void) {
 }
 
 size_t kheap_size(void) { return KHEAP_SIZE; }
+
+uintptr_t kmem_debug_free_list_addr(void) {
+  return (uintptr_t)free_list;
+}
+
+uintptr_t kmem_debug_kheap_addr(void) {
+  return (uintptr_t)kheap;
+}
+
+uint8_t kmem_debug_header_magic(void) {
+  if (!free_list) return 0;
+  return ((volatile struct header *)free_list)->magic;
+}
+
+uint8_t kmem_debug_header_is_free(void) {
+  if (!free_list) return 0;
+  return ((volatile struct header *)free_list)->is_free;
+}
+
+int kmem_debug_header_ok(void) {
+  if (!free_list) return 0;
+  uint8_t magic = ((volatile struct header *)free_list)->magic;
+  if (magic != HEADER_MAGIC) {
+    kmem_dbgcon_putc('m');
+    kmem_dbgcon_hex8(magic);
+    return 0;
+  }
+  return 1;
+}
 
 /* Allocate memory with specific alignment (for DMA/XHCI) */
 void *kmalloc_aligned(uint64_t size, uint64_t alignment) {

@@ -18,6 +18,7 @@
 #include "net/stack.h"
 #include "services/service_boot_policy.h"
 #include "services/service_manager.h"
+#include "services/service_runner.h"
 #include "services/update_agent.h"
 #include "core/work_queue.h"
 #include "auth/user.h"
@@ -295,10 +296,14 @@ void kernel_schedule_background_boot_work(int shell_runtime_ready) {
 
 void kernel_service_poll(void) {
   uint64_t now_ticks = pit_ticks();
+  /* M4 phase 1: route through the service-runner so the same step()
+   * counter is updated whether we are still cooperative (this path)
+   * or already preemptive (phase 8 will dispatch the runner task body
+   * directly). The runner step itself drives both service_manager and
+   * work_queue polls, so behaviour is preserved bit-for-bit. */
+  service_runner_init();
   __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'{'), "Nd"((uint16_t)0xE9));
-  (void)service_manager_poll_due(now_ticks);
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'|'), "Nd"((uint16_t)0xE9));
-  (void)work_queue_poll_due(now_ticks);
+  (void)service_runner_step(now_ticks);
   __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'}'), "Nd"((uint16_t)0xE9));
 }
 

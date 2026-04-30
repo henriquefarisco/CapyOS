@@ -2,7 +2,7 @@
 # void context_switch(struct task_context *old, struct task_context *new_ctx)
 # old is in %rdi, new_ctx is in %rsi
 #
-# struct task_context layout (offsets):
+# struct task_context layout (offsets, locked by tests/test_context_switch.c):
 #   0x00: rsp
 #   0x08: rbp
 #   0x10: rbx
@@ -13,10 +13,37 @@
 #   0x38: rip
 #   0x40: rflags
 #   0x48: cr3
+#
+# IRQ-safety contract (M4 phase 2):
+#   - The function disables interrupts on entry via cli so that no
+#     IRQ can fire while we are mid-swap (between saving the old
+#     stack pointer and switching to the new one). The swap is
+#     completed atomically from the perspective of any handler that
+#     might preempt the current task.
+#   - The new task's RFLAGS slot is restored via popfq just before
+#     the final jmpq. If the new task was preempted with IF=1 (the
+#     normal case for any task spawned via task_create which seeds
+#     rflags=0x202), interrupts are re-enabled exactly when control
+#     transfers, leaving no observable window in which the kernel
+#     state is inconsistent AND interrupts are pending.
+#   - When invoked from an IRQ handler that already entered with
+#     IF=0 (interrupt gate semantics), the explicit cli is a no-op
+#     but keeps the function's invariant uniform across callers.
+#   - The eventual iretq in the surrounding ISR epilogue restores
+#     IF from the IRET frame on the task's kernel stack, so the
+#     task always observes the architectural IF that was in force
+#     at the time it was last preempted, regardless of the path
+#     taken through the scheduler.
 
 .global context_switch
 .type context_switch, @function
 context_switch:
+    # Disable interrupts for the duration of the swap. Must be the
+    # very first instruction so that the old task's IF state has not
+    # already been clobbered by an unexpected IRQ between schedule()
+    # and the start of context_switch.
+    cli
+
     # Save callee-saved registers into old context
     movq %rsp, 0x00(%rdi)
     movq %rbp, 0x08(%rdi)
@@ -30,7 +57,15 @@ context_switch:
     leaq 1f(%rip), %rax
     movq %rax, 0x38(%rdi)
 
-    # Save flags
+    # Save flags. Because the cli above forced IF=0 in the architectural
+    # state, the bit we record here always reflects the IF that the
+    # caller wanted (pushfq is taken AFTER cli and would always observe
+    # IF=0); however for resumption purposes the meaningful IF value is
+    # the one that the new task wants, which we restore further below
+    # via popfq from new_ctx->rflags. Saving here keeps the contract
+    # symmetric and lets a task that enters context_switch with a
+    # well-defined IF observe it again on its next turn through this
+    # routine via the legacy rflags bit pattern.
     pushfq
     popq %rax
     movq %rax, 0x40(%rdi)

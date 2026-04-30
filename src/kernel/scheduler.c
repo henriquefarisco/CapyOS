@@ -32,7 +32,14 @@ void scheduler_init(enum scheduler_policy policy) {
 static void idle_entry(void *arg) {
   (void)arg;
   for (;;) {
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+    /* Host build cannot emit `hlt`. The idle entry is never called by
+     * unit tests; this break stops the otherwise infinite loop should
+     * a misuse ever invoke it. */
+    break;
+#else
     __asm__ volatile("hlt");
+#endif
   }
 }
 
@@ -208,6 +215,13 @@ void scheduler_start(void) {
   }
 
   for (;;) {
+#if defined(UNIT_TEST) || !defined(__x86_64__)
+    /* Host build cannot emit `hlt`. scheduler_start is declared noreturn
+     * and is never called by unit tests; a plain infinite loop preserves
+     * the noreturn contract without requiring an x86 instruction. */
+    ;
+#else
     __asm__ volatile("hlt");
+#endif
   }
 }

@@ -20,7 +20,7 @@ Base: robustez da trilha `UEFI/GPT/x86_64`
 
 ## Robustez e release
 
-- `docs/plans/capyos-robustness-master-plan.md` passa a ser a fonte viva de
+- `docs/plans/active/capyos-robustness-master-plan.md` passa a ser a fonte viva de
   acompanhamento do plano M0-M8
 - `make release-check` executa testes, auditoria de layout, auditoria de
   versao, baseline self-test de boot, build `TOOLCHAIN64=elf`, ISO UEFI e

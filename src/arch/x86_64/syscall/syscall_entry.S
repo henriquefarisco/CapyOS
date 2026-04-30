@@ -4,45 +4,48 @@
 #   RDI, RSI, RDX, R10, R8, R9 = arguments
 #   RCX = saved RIP (by CPU)
 #   R11 = saved RFLAGS (by CPU)
+#
+# All MSR addresses, STAR layout and segment selectors are sourced from
+# the canonical header so a single edit is enough to keep the C side
+# (syscall_init -> syscall_init_msr) and the asm side (syscall_entry)
+# in lock-step. tests/test_syscall_msr.c fails the build if the values
+# below ever diverge from architectural reality.
+
+#include "arch/x86_64/cpu_local.h"
+#include "arch/x86_64/syscall_msr.h"
 
 .global syscall_entry
 .global syscall_init_msr
 
-# MSR addresses
-.set MSR_EFER,   0xC0000080
-.set MSR_STAR,   0xC0000081
-.set MSR_LSTAR,  0xC0000082
-.set MSR_SFMASK, 0xC0000084
-.set EFER_SCE,   0x01
-
-# Kernel CS=0x08, Kernel SS=0x10, User CS=0x1B, User SS=0x23
-# STAR: bits 47:32 = kernel CS, bits 63:48 = user CS base (minus 16)
-.set STAR_VALUE_LOW,  0x00000000
-.set STAR_VALUE_HIGH, 0x00100008
+# Kernel selectors:  GDT_KERNEL_CS_SELECTOR = 0x08, GDT_KERNEL_DS_SELECTOR = 0x10
+# User selectors via SYSRET (STAR[63:48] = SYSCALL_STAR_USER_BASE = 0x10):
+#   user SS (RPL=3) = base + 0x08 = 0x18 -> 0x1B
+#   user CS (RPL=3) = base + 0x10 = 0x20 -> 0x23
+# (The previous comment in this file had user CS and user SS swapped.)
 
 syscall_init_msr:
     # Enable SCE (System Call Extensions) in EFER
-    movl $MSR_EFER, %ecx
+    movl $IA32_EFER_MSR, %ecx
     rdmsr
-    orl $EFER_SCE, %eax
+    orl $EFER_SCE_BIT, %eax
     wrmsr
 
     # Set STAR: kernel segments and user segments
-    movl $MSR_STAR, %ecx
-    movl $STAR_VALUE_LOW, %eax
-    movl $STAR_VALUE_HIGH, %edx
+    movl $IA32_STAR_MSR, %ecx
+    movl $SYSCALL_STAR_LOW, %eax
+    movl $SYSCALL_STAR_HIGH, %edx
     wrmsr
 
     # Set LSTAR: syscall entry point
-    movl $MSR_LSTAR, %ecx
+    movl $IA32_LSTAR_MSR, %ecx
     leaq syscall_entry(%rip), %rax
     movq %rax, %rdx
     shrq $32, %rdx
     wrmsr
 
     # Set SFMASK: clear IF and DF on syscall entry
-    movl $MSR_SFMASK, %ecx
-    movl $0x0600, %eax   # IF=0x200, DF=0x400
+    movl $IA32_FMASK_MSR, %ecx
+    movl $SYSCALL_SFMASK_VALUE, %eax
     xorl %edx, %edx
     wrmsr
 
@@ -54,15 +57,21 @@ syscall_entry:
     #   RCX = user RIP, R11 = user RFLAGS
     #   RSP = user RSP (must switch to kernel stack)
 
-    # Save user RSP and switch to kernel stack
-    # For now, use a per-CPU kernel stack area
-    movq %rsp, %gs:0x08       # Save user RSP to per-CPU area
-    movq %gs:0x00, %rsp       # Load kernel RSP from per-CPU area
+    # Save user RSP and switch to kernel stack via the per-CPU area
+    # mapped by IA32_GS_BASE (see cpu_local_init in
+    # src/arch/x86_64/cpu/cpu_local.c). Offsets come from the
+    # header at include/arch/x86_64/cpu_local.h and are locked
+    # by tests/test_cpu_local.c.
+    # NOTE: do NOT start a comment line with `#<space>include` --
+    # the C preprocessor (which runs on .S files before GAS)
+    # treats it as a malformed `#include` directive.
+    movq %rsp, %gs:CPU_LOCAL_USER_RSP_SCRATCH_OFFSET
+    movq %gs:CPU_LOCAL_KERNEL_RSP_OFFSET, %rsp
 
     # Build syscall_frame on kernel stack
     pushq %r11                 # rflags
     pushq %rcx                 # rip (return address)
-    pushq %gs:0x08             # user rsp
+    pushq %gs:CPU_LOCAL_USER_RSP_SCRATCH_OFFSET   # user rsp
     pushq %r11                 # r11 (saved rflags duplicate)
     pushq %rcx                 # rcx (saved rip duplicate)
     pushq %r9

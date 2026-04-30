@@ -100,6 +100,7 @@ void service_manager_reset(void) {
 }
 
 void service_manager_bootstrap_defaults(void) {
+  local_zero(g_service_polls, sizeof(g_service_polls));
   seed_service(SYSTEM_SERVICE_LOGGER, "logger", 1,
                SYSTEM_SERVICE_STARTUP_BOOT, SYSTEM_SERVICE_STATE_STARTING,
                "boot ring buffer only");

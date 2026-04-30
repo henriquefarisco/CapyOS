@@ -24,6 +24,7 @@ struct update_manifest_view {
   char branch[UPDATE_AGENT_BRANCH_MAX];
   char source[UPDATE_AGENT_SOURCE_MAX];
   char published_at[24];
+  char payload_sha256[UPDATE_AGENT_SHA256_HEX_MAX];
 };
 
 struct update_state_view {
@@ -31,7 +32,7 @@ struct update_state_view {
   char staged_manifest_path[UPDATE_AGENT_PATH_MAX];
 };
 
-static struct system_update_status g_update_status;
+struct system_update_status update_agent_g_status;
 static update_agent_read_file_fn g_update_reader = NULL;
 static update_agent_write_file_fn g_update_writer = NULL;
 static update_agent_remove_file_fn g_update_remover = NULL;
@@ -44,7 +45,7 @@ static void local_zero(void *ptr, size_t len) {
   }
 }
 
-static void local_copy(char *dst, size_t dst_size, const char *src) {
+void update_agent_local_copy(char *dst, size_t dst_size, const char *src) {
   size_t i = 0;
   if (!dst || dst_size == 0u) {
     return;
@@ -228,29 +229,29 @@ static update_agent_remove_file_fn active_remover(void) {
 }
 
 static void update_agent_seed_defaults(const char *current_version) {
-  local_zero(&g_update_status, sizeof(g_update_status));
-  g_update_status.configured = 1u;
-  g_update_status.catalog_present = 0u;
-  g_update_status.update_available = 0u;
-  g_update_status.stage_ready = 0u;
-  g_update_status.pending_activation = 0u;
-  g_update_status.last_result = 1;
-  local_copy(g_update_status.channel, sizeof(g_update_status.channel),
+  local_zero(&update_agent_g_status, sizeof(update_agent_g_status));
+  update_agent_g_status.configured = 1u;
+  update_agent_g_status.catalog_present = 0u;
+  update_agent_g_status.update_available = 0u;
+  update_agent_g_status.stage_ready = 0u;
+  update_agent_g_status.pending_activation = 0u;
+  update_agent_g_status.last_result = 1;
+  update_agent_local_copy(update_agent_g_status.channel, sizeof(update_agent_g_status.channel),
              UPDATE_AGENT_DEFAULT_CHANNEL);
-  local_copy(g_update_status.branch, sizeof(g_update_status.branch),
+  update_agent_local_copy(update_agent_g_status.branch, sizeof(update_agent_g_status.branch),
              UPDATE_AGENT_DEFAULT_BRANCH);
-  local_copy(g_update_status.source, sizeof(g_update_status.source),
+  update_agent_local_copy(update_agent_g_status.source, sizeof(update_agent_g_status.source),
              UPDATE_AGENT_DEFAULT_SOURCE);
-  local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
+  update_agent_local_copy(update_agent_g_status.manifest_path, sizeof(update_agent_g_status.manifest_path),
              UPDATE_AGENT_DEFAULT_MANIFEST_PATH);
-  g_update_status.remote_manifest_url[0] = '\0';
-  local_copy(g_update_status.staged_manifest_path,
-             sizeof(g_update_status.staged_manifest_path),
+  update_agent_g_status.remote_manifest_url[0] = '\0';
+  update_agent_local_copy(update_agent_g_status.staged_manifest_path,
+             sizeof(update_agent_g_status.staged_manifest_path),
              UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
-  local_copy(g_update_status.current_version,
-             sizeof(g_update_status.current_version),
+  update_agent_local_copy(update_agent_g_status.current_version,
+             sizeof(update_agent_g_status.current_version),
              current_version ? current_version : "unknown");
-  local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
              "catalog cache not checked");
 }
 
@@ -266,12 +267,12 @@ static void state_view_reset(struct update_state_view *view) {
     return;
   }
   local_zero(view, sizeof(*view));
-  local_copy(view->staged_manifest_path, sizeof(view->staged_manifest_path),
+  update_agent_local_copy(view->staged_manifest_path, sizeof(view->staged_manifest_path),
              UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
 }
 
 void update_agent_reset(void) {
-  local_zero(&g_update_status, sizeof(g_update_status));
+  local_zero(&update_agent_g_status, sizeof(update_agent_g_status));
   g_update_reader = NULL;
   g_update_writer = NULL;
   g_update_remover = NULL;
@@ -281,8 +282,8 @@ void update_agent_reset(void) {
 void update_agent_init(const char *current_version) {
   if (g_update_ready) {
     if (current_version && current_version[0]) {
-      local_copy(g_update_status.current_version,
-                 sizeof(g_update_status.current_version), current_version);
+      update_agent_local_copy(update_agent_g_status.current_version,
+                 sizeof(update_agent_g_status.current_version), current_version);
     }
     return;
   }
@@ -304,19 +305,19 @@ void update_agent_set_remover(update_agent_remove_file_fn remover) {
 
 static void parse_repo_line(const char *key, const char *value) {
   if (local_equal(key, "channel")) {
-    local_copy(g_update_status.channel, sizeof(g_update_status.channel), value);
-    local_copy(g_update_status.branch, sizeof(g_update_status.branch),
+    update_agent_local_copy(update_agent_g_status.channel, sizeof(update_agent_g_status.channel), value);
+    update_agent_local_copy(update_agent_g_status.branch, sizeof(update_agent_g_status.branch),
                branch_for_channel(value));
   } else if (local_equal(key, "branch")) {
-    local_copy(g_update_status.branch, sizeof(g_update_status.branch), value);
+    update_agent_local_copy(update_agent_g_status.branch, sizeof(update_agent_g_status.branch), value);
   } else if (local_equal(key, "source")) {
-    local_copy(g_update_status.source, sizeof(g_update_status.source), value);
+    update_agent_local_copy(update_agent_g_status.source, sizeof(update_agent_g_status.source), value);
   } else if (local_equal(key, "manifest")) {
-    local_copy(g_update_status.manifest_path, sizeof(g_update_status.manifest_path),
+    update_agent_local_copy(update_agent_g_status.manifest_path, sizeof(update_agent_g_status.manifest_path),
                value);
   } else if (local_equal(key, "remote_manifest")) {
-    local_copy(g_update_status.remote_manifest_url,
-               sizeof(g_update_status.remote_manifest_url), value);
+    update_agent_local_copy(update_agent_g_status.remote_manifest_url,
+               sizeof(update_agent_g_status.remote_manifest_url), value);
   }
 }
 
@@ -326,15 +327,17 @@ static void parse_manifest_line(const char *key, const char *value,
     return;
   }
   if (local_equal(key, "available_version")) {
-    local_copy(view->version, sizeof(view->version), value);
+    update_agent_local_copy(view->version, sizeof(view->version), value);
   } else if (local_equal(key, "channel")) {
-    local_copy(view->channel, sizeof(view->channel), value);
+    update_agent_local_copy(view->channel, sizeof(view->channel), value);
   } else if (local_equal(key, "branch")) {
-    local_copy(view->branch, sizeof(view->branch), value);
+    update_agent_local_copy(view->branch, sizeof(view->branch), value);
   } else if (local_equal(key, "source")) {
-    local_copy(view->source, sizeof(view->source), value);
+    update_agent_local_copy(view->source, sizeof(view->source), value);
   } else if (local_equal(key, "published_at")) {
-    local_copy(view->published_at, sizeof(view->published_at), value);
+    update_agent_local_copy(view->published_at, sizeof(view->published_at), value);
+  } else if (local_equal(key, "payload_sha256")) {
+    update_agent_local_copy(view->payload_sha256, sizeof(view->payload_sha256), value);
   }
 }
 
@@ -346,7 +349,7 @@ static void parse_state_line(const char *key, const char *value,
   if (local_equal(key, "pending_activation")) {
     view->pending_activation = parse_bool_value(value) ? 1u : 0u;
   } else if (local_equal(key, "staged_manifest")) {
-    local_copy(view->staged_manifest_path, sizeof(view->staged_manifest_path),
+    update_agent_local_copy(view->staged_manifest_path, sizeof(view->staged_manifest_path),
                value);
   }
 }
@@ -403,8 +406,8 @@ static void prepare_repository_status(void) {
   update_agent_read_file_fn reader = active_reader();
 
   update_agent_init(NULL);
-  local_copy(current_version, sizeof(current_version),
-             g_update_status.current_version[0] ? g_update_status.current_version
+  update_agent_local_copy(current_version, sizeof(current_version),
+             update_agent_g_status.current_version[0] ? update_agent_g_status.current_version
                                                 : "unknown");
   update_agent_seed_defaults(current_version);
 
@@ -412,14 +415,14 @@ static void prepare_repository_status(void) {
       read_len > 0u) {
     parse_buffer(buffer, read_len, 0, NULL);
   }
-  if (!g_update_status.branch[0]) {
-    local_copy(g_update_status.branch, sizeof(g_update_status.branch),
-               branch_for_channel(g_update_status.channel));
+  if (!update_agent_g_status.branch[0]) {
+    update_agent_local_copy(update_agent_g_status.branch, sizeof(update_agent_g_status.branch),
+               branch_for_channel(update_agent_g_status.channel));
   }
-  if (!g_update_status.remote_manifest_url[0]) {
-    build_remote_manifest_url(g_update_status.source, g_update_status.branch,
-                              g_update_status.remote_manifest_url,
-                              sizeof(g_update_status.remote_manifest_url));
+  if (!update_agent_g_status.remote_manifest_url[0]) {
+    build_remote_manifest_url(update_agent_g_status.source, update_agent_g_status.branch,
+                              update_agent_g_status.remote_manifest_url,
+                              sizeof(update_agent_g_status.remote_manifest_url));
   }
 }
 
@@ -517,108 +520,112 @@ int update_agent_poll(void) {
   manifest_view_reset(&staged_manifest);
   state_view_reset(&state_view);
 
-  g_update_status.catalog_present = 0u;
-  g_update_status.update_available = 0u;
-  g_update_status.stage_ready = 0u;
-  g_update_status.pending_activation = 0u;
-  g_update_status.last_result = 0;
-  g_update_status.available_version[0] = '\0';
-  g_update_status.staged_version[0] = '\0';
-  g_update_status.published_at[0] = '\0';
-  local_copy(g_update_status.staged_manifest_path,
-             sizeof(g_update_status.staged_manifest_path),
+  update_agent_g_status.catalog_present = 0u;
+  update_agent_g_status.update_available = 0u;
+  update_agent_g_status.stage_ready = 0u;
+  update_agent_g_status.pending_activation = 0u;
+  update_agent_g_status.last_result = 0;
+  update_agent_g_status.available_version[0] = '\0';
+  update_agent_g_status.staged_version[0] = '\0';
+  update_agent_g_status.staged_payload_sha256[0] = '\0';
+  update_agent_g_status.published_at[0] = '\0';
+  update_agent_local_copy(update_agent_g_status.staged_manifest_path,
+             sizeof(update_agent_g_status.staged_manifest_path),
              UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
 
   state_rc = read_state_view(&state_view);
   if (state_rc == 0) {
-    g_update_status.pending_activation = state_view.pending_activation;
-    local_copy(g_update_status.staged_manifest_path,
-               sizeof(g_update_status.staged_manifest_path),
+    update_agent_g_status.pending_activation = state_view.pending_activation;
+    update_agent_local_copy(update_agent_g_status.staged_manifest_path,
+               sizeof(update_agent_g_status.staged_manifest_path),
                state_view.staged_manifest_path);
   }
 
   manifest_rc =
-      read_manifest_view(g_update_status.manifest_path, &available_manifest);
+      read_manifest_view(update_agent_g_status.manifest_path, &available_manifest);
   if (manifest_rc == 0) {
-    g_update_status.catalog_present = 1u;
-    local_copy(g_update_status.available_version,
-               sizeof(g_update_status.available_version),
+    update_agent_g_status.catalog_present = 1u;
+    update_agent_local_copy(update_agent_g_status.available_version,
+               sizeof(update_agent_g_status.available_version),
                available_manifest.version);
-    local_copy(g_update_status.published_at, sizeof(g_update_status.published_at),
+    update_agent_local_copy(update_agent_g_status.published_at, sizeof(update_agent_g_status.published_at),
                available_manifest.published_at);
     manifest_channel_mismatch =
         available_manifest.channel[0] &&
-        !local_equal(available_manifest.channel, g_update_status.channel);
+        !local_equal(available_manifest.channel, update_agent_g_status.channel);
     manifest_branch_mismatch =
         available_manifest.branch[0] &&
-        !local_equal(available_manifest.branch, g_update_status.branch);
+        !local_equal(available_manifest.branch, update_agent_g_status.branch);
     manifest_source_mismatch =
         available_manifest.source[0] &&
-        !local_equal(available_manifest.source, g_update_status.source);
-    if (!local_equal(g_update_status.available_version,
-                     g_update_status.current_version)) {
-      g_update_status.update_available = 1u;
+        !local_equal(available_manifest.source, update_agent_g_status.source);
+    if (!local_equal(update_agent_g_status.available_version,
+                     update_agent_g_status.current_version)) {
+      update_agent_g_status.update_available = 1u;
     }
   }
 
-  staged_rc = read_manifest_view(g_update_status.staged_manifest_path, &staged_manifest);
+  staged_rc = read_manifest_view(update_agent_g_status.staged_manifest_path, &staged_manifest);
   if (staged_rc == 0) {
-    g_update_status.stage_ready = 1u;
-    local_copy(g_update_status.staged_version,
-               sizeof(g_update_status.staged_version), staged_manifest.version);
+    update_agent_g_status.stage_ready = 1u;
+    update_agent_local_copy(update_agent_g_status.staged_version,
+               sizeof(update_agent_g_status.staged_version), staged_manifest.version);
+    update_agent_local_copy(update_agent_g_status.staged_payload_sha256,
+               sizeof(update_agent_g_status.staged_payload_sha256),
+               staged_manifest.payload_sha256);
     staged_channel_mismatch =
         staged_manifest.channel[0] &&
-        !local_equal(staged_manifest.channel, g_update_status.channel);
+        !local_equal(staged_manifest.channel, update_agent_g_status.channel);
     staged_branch_mismatch =
         staged_manifest.branch[0] &&
-        !local_equal(staged_manifest.branch, g_update_status.branch);
+        !local_equal(staged_manifest.branch, update_agent_g_status.branch);
     staged_source_mismatch =
         staged_manifest.source[0] &&
-        !local_equal(staged_manifest.source, g_update_status.source);
+        !local_equal(staged_manifest.source, update_agent_g_status.source);
   }
 
   if (manifest_channel_mismatch || manifest_branch_mismatch ||
       manifest_source_mismatch) {
     rc = -13;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "catalog cache does not match selected update repository");
   } else if (staged_channel_mismatch || staged_branch_mismatch ||
              staged_source_mismatch) {
     rc = -14;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "staged update does not match selected update repository");
   } else if (manifest_rc == -2) {
     rc = -2;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "catalog cache invalid");
   } else if (staged_rc == -2) {
     rc = -3;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "staged update invalid");
-  } else if (g_update_status.pending_activation && !g_update_status.stage_ready) {
+  } else if (update_agent_g_status.pending_activation && !update_agent_g_status.stage_ready) {
     rc = -4;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "activation pending without staged update");
-  } else if (g_update_status.pending_activation && g_update_status.stage_ready) {
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  } else if (update_agent_g_status.pending_activation && update_agent_g_status.stage_ready) {
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "staged update armed for activation");
-  } else if (g_update_status.stage_ready) {
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  } else if (update_agent_g_status.stage_ready) {
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "staged update ready");
-  } else if (!g_update_status.catalog_present) {
-    g_update_status.last_result = 1;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  } else if (!update_agent_g_status.catalog_present) {
+    update_agent_g_status.last_result = 1;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "catalog cache missing");
     return 0;
-  } else if (g_update_status.update_available) {
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  } else if (update_agent_g_status.update_available) {
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "update available in local catalog");
   } else {
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "system already matches cached catalog");
   }
 
-  g_update_status.last_result = rc;
+  update_agent_g_status.last_result = rc;
   return rc;
 }
 
@@ -632,8 +639,8 @@ int update_agent_import_manifest_path(const char *path) {
 
   if (!path || !path[0]) {
     update_agent_init(NULL);
-    g_update_status.last_result = -15;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_g_status.last_result = -15;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "manifest path not provided");
     return -15;
   }
@@ -642,39 +649,39 @@ int update_agent_import_manifest_path(const char *path) {
   manifest_view_reset(&import_manifest);
 
   if (!writer) {
-    g_update_status.last_result = -16;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_g_status.last_result = -16;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "update cache writer unavailable");
     return -16;
   }
   if (reader(path, buffer, sizeof(buffer), &read_len) != 0 || read_len == 0u) {
-    g_update_status.last_result = -17;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_g_status.last_result = -17;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "failed to read imported manifest");
     return -17;
   }
   parse_buffer(buffer, read_len, 1, &import_manifest);
   if (!import_manifest.version[0]) {
-    g_update_status.last_result = -18;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_g_status.last_result = -18;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "imported manifest invalid");
     return -18;
   }
   if ((import_manifest.channel[0] &&
-       !local_equal(import_manifest.channel, g_update_status.channel)) ||
+       !local_equal(import_manifest.channel, update_agent_g_status.channel)) ||
       (import_manifest.branch[0] &&
-       !local_equal(import_manifest.branch, g_update_status.branch)) ||
+       !local_equal(import_manifest.branch, update_agent_g_status.branch)) ||
       (import_manifest.source[0] &&
-       !local_equal(import_manifest.source, g_update_status.source))) {
-    g_update_status.last_result = -19;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+       !local_equal(import_manifest.source, update_agent_g_status.source))) {
+    update_agent_g_status.last_result = -19;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "imported manifest does not match selected update repository");
     klog(KLOG_WARN, "[update] Manifest import rejected: repository mismatch.");
     return -19;
   }
-  if (writer(g_update_status.manifest_path, buffer) != 0) {
-    g_update_status.last_result = -21;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  if (writer(update_agent_g_status.manifest_path, buffer) != 0) {
+    update_agent_g_status.last_result = -21;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "failed to persist imported manifest");
     klog(KLOG_WARN, "[update] Failed to persist imported manifest.");
     return -21;
@@ -684,9 +691,9 @@ int update_agent_import_manifest_path(const char *path) {
   if (rc < 0) {
     return rc;
   }
-  local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
              "manifest imported into local catalog");
-  g_update_status.last_result = 0;
+  update_agent_g_status.last_result = 0;
   klog(KLOG_INFO, "[update] Manifest imported into local catalog.");
   return 0;
 }
@@ -701,29 +708,29 @@ int update_agent_stage_latest(void) {
   if (rc < 0) {
     return rc;
   }
-  if (!g_update_status.catalog_present || !g_update_status.update_available) {
-    g_update_status.last_result = -5;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  if (!update_agent_g_status.catalog_present || !update_agent_g_status.update_available) {
+    update_agent_g_status.last_result = -5;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "no cached update available to stage");
     return -5;
   }
   if (!writer) {
-    g_update_status.last_result = -6;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_g_status.last_result = -6;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "update staging writer unavailable");
     return -6;
   }
-  if (reader(g_update_status.manifest_path, buffer, sizeof(buffer), &read_len) != 0 ||
+  if (reader(update_agent_g_status.manifest_path, buffer, sizeof(buffer), &read_len) != 0 ||
       read_len == 0u) {
-    g_update_status.last_result = -7;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    update_agent_g_status.last_result = -7;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "failed to read cached manifest for staging");
     return -7;
   }
-  if (writer(g_update_status.staged_manifest_path, buffer) != 0 ||
-      write_state_file(0, g_update_status.staged_manifest_path) != 0) {
-    g_update_status.last_result = -9;
-    local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  if (writer(update_agent_g_status.staged_manifest_path, buffer) != 0 ||
+      write_state_file(0, update_agent_g_status.staged_manifest_path) != 0) {
+    update_agent_g_status.last_result = -9;
+    update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                "failed to persist staged update");
     klog(KLOG_WARN, "[update] Failed to persist staged update.");
     return -9;
@@ -737,8 +744,8 @@ int update_agent_clear_stage(void) {
 
   update_agent_init(NULL);
   if (remover) {
-    (void)remover(g_update_status.staged_manifest_path[0]
-                      ? g_update_status.staged_manifest_path
+    (void)remover(update_agent_g_status.staged_manifest_path[0]
+                      ? update_agent_g_status.staged_manifest_path
                       : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
     (void)remover(UPDATE_AGENT_STATE_PATH);
   }
@@ -753,24 +760,24 @@ int update_agent_set_pending_activation(int enabled) {
     return rc;
   }
   if (enabled) {
-    if (!g_update_status.stage_ready) {
-      g_update_status.last_result = -10;
-      local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    if (!update_agent_g_status.stage_ready) {
+      update_agent_g_status.last_result = -10;
+      update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                  "no staged update available to arm");
       return -10;
     }
-    if (write_state_file(1, g_update_status.staged_manifest_path) != 0) {
-      g_update_status.last_result = -11;
-      local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+    if (write_state_file(1, update_agent_g_status.staged_manifest_path) != 0) {
+      update_agent_g_status.last_result = -11;
+      update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                  "failed to arm staged update");
       klog(KLOG_WARN, "[update] Failed to arm staged update.");
       return -11;
     }
     klog(KLOG_INFO, "[update] Update armed for activation.");
-  } else if (g_update_status.stage_ready) {
-    if (write_state_file(0, g_update_status.staged_manifest_path) != 0) {
-      g_update_status.last_result = -12;
-      local_copy(g_update_status.summary, sizeof(g_update_status.summary),
+  } else if (update_agent_g_status.stage_ready) {
+    if (write_state_file(0, update_agent_g_status.staged_manifest_path) != 0) {
+      update_agent_g_status.last_result = -12;
+      update_agent_local_copy(update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
                  "failed to disarm staged update");
       klog(KLOG_WARN, "[update] Failed to disarm staged update.");
       return -12;
@@ -790,63 +797,12 @@ void update_agent_status_get(struct system_update_status *out) {
   if (!out) {
     return;
   }
-  *out = g_update_status;
+  *out = update_agent_g_status;
 }
 
-int update_agent_apply_boot_slot(void) {
-  struct boot_slot s0;
-  uint32_t next_slot;
-
-  if (update_agent_poll() < 0) return -1;
-  if (!g_update_status.stage_ready || !g_update_status.pending_activation) {
-    return -2;
-  }
-  if (!g_update_status.staged_version[0]) {
-    return -3;
-  }
-
-  /* Pick the slot that is NOT currently ACTIVE. */
-  if (boot_slot_get(0, &s0) == 0 && s0.state == BOOT_SLOT_ACTIVE) {
-    next_slot = 1u;
-  } else {
-    next_slot = 0u;
-  }
-
-  if (boot_slot_stage(next_slot, g_update_status.staged_version, 0u) != 0) {
-    klog(KLOG_ERROR, "[update] Failed to stage boot slot for activation.");
-    return -4;
-  }
-  if (boot_slot_activate(next_slot) != 0) {
-    klog(KLOG_ERROR, "[update] Failed to activate boot slot.");
-    return -5;
-  }
-
-  klog(KLOG_INFO, "[update] Boot slot armed for transactional update.");
-  return 0;
-}
-
-int update_agent_confirm_health(void) {
-  if (boot_slot_confirm_health() != 0) {
-    klog(KLOG_WARN, "[update] Boot slot health confirm failed.");
-    return -1;
-  }
-  if (g_update_status.pending_activation) {
-    update_agent_set_pending_activation(0);
-  }
-  klog(KLOG_INFO, "[update] Boot health confirmed; update committed.");
-  return 0;
-}
-
-int update_agent_check_rollback(void) {
-  if (!boot_slot_needs_rollback()) {
-    return 0;
-  }
-  klog(KLOG_WARN, "[update] Unhealthy boot detected; initiating rollback.");
-  if (boot_slot_rollback() != 0) {
-    klog(KLOG_ERROR, "[update] Boot slot rollback failed.");
-    return -1;
-  }
-  update_agent_clear_stage();
-  klog(KLOG_INFO, "[update] Rollback complete; staged update cleared.");
-  return 1;
-}
+/* The boot-slot integration (apply, confirm health, rollback) and the
+ * M6.4 payload sha256 verification path live in
+ * src/services/update_agent_transact.c. They share the runtime status
+ * and string helper through src/services/internal/update_agent_internal.h
+ * so this file remains under the project monolith threshold while still
+ * presenting a single coherent state machine to callers. */

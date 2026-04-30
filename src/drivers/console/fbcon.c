@@ -2,7 +2,7 @@
  * Extracted from kernel_main.c. Renders 8x8 scaled bitmap text on the
  * UEFI GOP framebuffer with serial mirroring and visual-mute support. */
 #include "drivers/console/fbcon.h"
-#include "drivers/serial/com1.h"
+#include "drivers/serial/serial_com1.h"
 #include "gui/font8x8.h"
 #include "kernel/log/klog.h"
 

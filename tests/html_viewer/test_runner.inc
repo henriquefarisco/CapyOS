@@ -19,6 +19,7 @@ int run_html_viewer_tests(void) {
   fails += test_html_viewer_external_resource_budget_logs_failure();
   fails += test_html_viewer_render_budget_logs_failure();
   fails += test_html_viewer_parse_budget_logs_failure();
+  fails += test_html_viewer_nav_budget_cancellation_aborts_phases();
   fails += test_html_viewer_about_metrics_pages();
   fails += test_html_viewer_discards_stale_response();
   fails += test_html_viewer_safe_mode_on_large_document();
