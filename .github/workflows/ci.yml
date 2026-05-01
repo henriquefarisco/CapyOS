@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (super-linter)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Super-Linter
+        uses: github/super-linter@v7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: main
+          VALIDATE_ALL_CODEBASE: false
+          VALIDATE_CLANG_FORMAT: true
+          VALIDATE_YAML: true
+          VALIDATE_JSON: true
+          VALIDATE_MARKDOWN: true
+          FILTER_REGEX_EXCLUDE: "(^docs/plans/historical/|^docs/releases/)"
+
+  release-gates:
+    name: Release gates (host toolchain)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install CI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso
+
+      - name: Cache build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            build
+            out
+            .cache
+          key: ${{ runner.os }}-release-${{ hashFiles('Makefile', '**/*.mk', 'tools/scripts/**/*.py', 'VERSION.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-release-
+
+      - name: Check dependencies
+        run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+
+      - name: Run CI gates (host toolchain)
+        run: |
+          make test
+          make layout-audit
+          make version-audit
+          make boot-perf-baseline-selftest
+          make all64 TOOLCHAIN64=host
+          make iso-uefi TOOLCHAIN64=host
+          make release-checksums TOOLCHAIN64=host
+          make verify-release-checksums TOOLCHAIN64=host
+
+      - name: Upload build/test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gates-${{ github.run_id }}
+          path: |
+            build
+            out
+            *.log
+          if-no-files-found: ignore
