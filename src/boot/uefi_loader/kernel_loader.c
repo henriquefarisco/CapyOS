@@ -29,7 +29,7 @@ static EFI_STATUS kernel_read_from_memory(void *ctx, UINT64 offset, VOID *buf,
 }
 
 EFI_STATUS kernel_read_from_blocks(void *ctx, UINT64 offset, VOID *buf,
-                                          UINTN size) {
+                                   UINTN size) {
   struct kernel_block_reader *reader = (struct kernel_block_reader *)ctx;
   UINT8 *dst = (UINT8 *)buf;
 
@@ -68,7 +68,7 @@ EFI_STATUS kernel_read_from_blocks(void *ctx, UINT64 offset, VOID *buf,
 }
 
 EFI_STATUS kernel_read_from_file(void *ctx, UINT64 offset, VOID *buf,
-                                        UINTN size) {
+                                 UINTN size) {
   struct kernel_file_reader *reader = (struct kernel_file_reader *)ctx;
   UINTN request = size;
   EFI_STATUS st;
@@ -116,7 +116,8 @@ static EFI_STATUS kernel_plan_from_headers(const Elf64_Ehdr *eh,
     return EFI_UNSUPPORTED;
   }
   if (eh->e_phoff > kernel_size ||
-      (UINT64)eh->e_phnum > ((kernel_size - eh->e_phoff) / sizeof(Elf64_Phdr))) {
+      (UINT64)eh->e_phnum >
+          ((kernel_size - eh->e_phoff) / sizeof(Elf64_Phdr))) {
     Print(L"[UEFI] ELF com program headers fora do arquivo\r\n");
     return EFI_LOAD_ERROR;
   }
@@ -208,7 +209,8 @@ static EFI_STATUS kernel_acquire_load_pages(EFI_SYSTEM_TABLE *st,
     if (pages <= g_kernel_reserved_pages) {
       return EFI_SUCCESS;
     }
-    Print(L"[UEFI] Reserva antecipada do kernel insuficiente: base=0x%lx pages=%lu need=%lu; tentando alocacao exata\r\n",
+    Print(L"[UEFI] Reserva antecipada do kernel insuficiente: base=0x%lx "
+          L"pages=%lu need=%lu; tentando alocacao exata\r\n",
           g_kernel_reserved_base, (UINT64)g_kernel_reserved_pages,
           (UINT64)pages);
     kernel_release_fixed_window(st);
@@ -240,9 +242,9 @@ static void kernel_release_load_pages(EFI_SYSTEM_TABLE *st,
 }
 
 EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
-                                          kernel_read_fn_t reader, void *ctx,
-                                          UINT64 kernel_size,
-                                          EFI_PHYSICAL_ADDRESS *entry_out) {
+                                   kernel_read_fn_t reader, void *ctx,
+                                   UINT64 kernel_size,
+                                   EFI_PHYSICAL_ADDRESS *entry_out) {
   Elf64_Ehdr eh;
   Elf64_Phdr phdrs[KERNEL_MAX_PHDRS];
   struct kernel_load_plan plan;
@@ -266,8 +268,8 @@ EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
     return kernel_plan_from_headers(&eh, phdrs, kernel_size, &plan);
   }
 
-  read_st = reader(ctx, eh.e_phoff, phdrs,
-                   (UINTN)eh.e_phnum * sizeof(Elf64_Phdr));
+  read_st =
+      reader(ctx, eh.e_phoff, phdrs, (UINTN)eh.e_phnum * sizeof(Elf64_Phdr));
   if (EFI_ERROR(read_st)) {
     Print(L"[UEFI] Falha ao ler program headers do kernel: %r\r\n", read_st);
     return read_st;
@@ -295,11 +297,10 @@ EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
     }
     EFI_PHYSICAL_ADDRESS dst_pa = load_base + (ph->p_paddr - plan.link_base);
     Print(L"[UEFI] Copiando seg %u dst=0x%lx fsz=0x%lx msz=0x%lx\r\n",
-          (UINT32)i, (UINT64)dst_pa, (UINT64)ph->p_filesz,
-          (UINT64)ph->p_memsz);
+          (UINT32)i, (UINT64)dst_pa, (UINT64)ph->p_filesz, (UINT64)ph->p_memsz);
     if (ph->p_filesz != 0) {
-      read_st = reader(ctx, ph->p_offset, (VOID *)(UINTN)dst_pa,
-                       (UINTN)ph->p_filesz);
+      read_st =
+          reader(ctx, ph->p_offset, (VOID *)(UINTN)dst_pa, (UINTN)ph->p_filesz);
       if (EFI_ERROR(read_st)) {
         Print(L"[UEFI] Falha ao carregar segmento %u do kernel: %r\r\n",
               (UINT32)i, read_st);
@@ -314,9 +315,9 @@ EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
   return EFI_SUCCESS;
 }
 
-EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
-                                          VOID *kernel_buf, UINTN kernel_size,
-                                          EFI_PHYSICAL_ADDRESS *entry_out) {
+EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
+                                   UINTN kernel_size,
+                                   EFI_PHYSICAL_ADDRESS *entry_out) {
   if (kernel_size < sizeof(Elf64_Ehdr)) {
     Print(L"[UEFI] kernel muito pequeno\r\n");
     return EFI_LOAD_ERROR;
@@ -402,4 +403,3 @@ EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st,
   Print(L"[UEFI] Kernel carregado @ 0x%lx\r\n", (UINT64)*entry_out);
   return EFI_SUCCESS;
 }
-
