@@ -1,16 +1,19 @@
 meta:
-  generated: 2026-04-29
+  generated: 2026-05-01
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
   description: "Canalizacao oficial de versoes do CapyOS na trilha UEFI/GPT x86_64"
 channels:
   alpha:
-    current: 0.8.0-alpha.4
-    extended: 0.8.0-alpha.4+20260429
+    current: 0.8.0-alpha.5
+    extended: 0.8.0-alpha.5+20260501
     stability: experimental
-    summary: "Robustez alpha aprofunda op_budget no navegador, eventos de auditoria estruturados [audit], verificacao SHA-256 de payload no update agent, round-trip sintetico de dirty-shutdown e split do update_agent em transact/core"
+    summary: "M5 userland completo (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash), polish de UX (clear context-aware, task manager auto-refresh + Kill, browser parser yield + timeout 30s) e consolidacao dos planos de roteiro em um unico master plan linear F1-F10"
     history:
+      - version: 0.8.0-alpha.5+20260501
+        date: 2026-05-01
+        summary: "M5 userland (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash multi-processo), W1 TTY clear context-aware, W2 task manager auto-refresh + Kill button funcional, W3 browser parser yield cooperativo + timeout duro 30s + per-frame async drain, e consolidacao de 9 planos paralelos em docs/plans/active/capyos-master-plan.md (plano linear unico F1-F10)"
       - version: 0.8.0-alpha.4+20260429
         date: 2026-04-29
         summary: "Adocao profunda do op_budget no navegador, eventos [audit] estruturados, verificacao SHA-256 do payload no apply do update agent, round-trip sintetico do journal e split do update_agent em update_agent_transact.c"

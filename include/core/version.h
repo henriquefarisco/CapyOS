@@ -7,13 +7,13 @@
 #define CAPYOS_VERSION_PATCH        0
 
 #define CAPYOS_VERSION_CHANNEL      "alpha"
-#define CAPYOS_VERSION_PRERELEASE   "alpha.4"
-#define CAPYOS_VERSION_EXTENDED     "0.8.0-alpha.4"
-#define CAPYOS_VERSION_FULL         "0.8.0-alpha.4+20260429"
+#define CAPYOS_VERSION_PRERELEASE   "alpha.5"
+#define CAPYOS_VERSION_EXTENDED     "0.8.0-alpha.5"
+#define CAPYOS_VERSION_FULL         "0.8.0-alpha.5+20260501"
 #define CAPYOS_FEATURE_HYPERV_RUNTIME "hvrt-20260328a"
 #define CAPYOS_FEATURE_NETWORK_DIAG   "netdiag-20260328a"
 
-#define CAPYOS_VERSION_ALPHA        "0.8.0-alpha.4"
+#define CAPYOS_VERSION_ALPHA        "0.8.0-alpha.5"
 #define CAPYOS_VERSION_BETA         "0.6.2-beta.3"
 #define CAPYOS_VERSION_STABLE       "0.5.4"
 

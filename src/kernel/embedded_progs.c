@@ -30,6 +30,8 @@ static const uint8_t *g_test_exectarget_data = (const uint8_t *)0;
 static size_t g_test_exectarget_size = 0;
 static const uint8_t *g_test_capysh_data = (const uint8_t *)0;
 static size_t g_test_capysh_size = 0;
+static const uint8_t *g_test_capybrowser_data = (const uint8_t *)0;
+static size_t g_test_capybrowser_size = 0;
 
 void embedded_progs_test_set_hello(const uint8_t *data, size_t size) {
     g_test_hello_data = data;
@@ -46,17 +48,26 @@ void embedded_progs_test_set_capysh(const uint8_t *data, size_t size) {
     g_test_capysh_size = size;
 }
 
+void embedded_progs_test_set_capybrowser(const uint8_t *data, size_t size) {
+    g_test_capybrowser_data = data;
+    g_test_capybrowser_size = size;
+}
+
 static const void *hello_data_local(void) { return g_test_hello_data; }
 static size_t hello_size_local(void) { return g_test_hello_size; }
 static const void *exectarget_data(void) { return g_test_exectarget_data; }
 static size_t exectarget_size(void) { return g_test_exectarget_size; }
 static const void *capysh_data(void) { return g_test_capysh_data; }
 static size_t capysh_size(void) { return g_test_capysh_size; }
+static const void *capybrowser_data(void) { return g_test_capybrowser_data; }
+static size_t capybrowser_size(void) { return g_test_capybrowser_size; }
 #else
 extern const uint8_t _binary_exectarget_elf_start[];
 extern const uint8_t _binary_exectarget_elf_end[];
 extern const uint8_t _binary_capysh_elf_start[];
 extern const uint8_t _binary_capysh_elf_end[];
+extern const uint8_t _binary_capybrowser_elf_start[];
+extern const uint8_t _binary_capybrowser_elf_end[];
 
 static const void *hello_data_local(void) { return embedded_hello_data(); }
 static size_t hello_size_local(void) { return embedded_hello_size(); }
@@ -94,6 +105,23 @@ static size_t capysh_size(void) {
                      : "=r"(end));
     return (size_t)(end - start);
 }
+
+static const void *capybrowser_data(void) {
+    const uint8_t *start;
+    __asm__ volatile("lea _binary_capybrowser_elf_start(%%rip), %0"
+                     : "=r"(start));
+    return (const void *)start;
+}
+
+static size_t capybrowser_size(void) {
+    const uint8_t *start;
+    const uint8_t *end;
+    __asm__ volatile("lea _binary_capybrowser_elf_start(%%rip), %0"
+                     : "=r"(start));
+    __asm__ volatile("lea _binary_capybrowser_elf_end(%%rip), %0"
+                     : "=r"(end));
+    return (size_t)(end - start);
+}
 #endif
 
 static int prog_path_eq(const char *a, const char *b) {
@@ -123,6 +151,11 @@ int embedded_progs_lookup(const char *path,
     if (prog_path_eq(path, "/bin/capysh")) {
         *out_data = (const uint8_t *)capysh_data();
         *out_size = capysh_size();
+        return 0;
+    }
+    if (prog_path_eq(path, "/bin/capybrowser")) {
+        *out_data = (const uint8_t *)capybrowser_data();
+        *out_size = capybrowser_size();
         return 0;
     }
     return -1;

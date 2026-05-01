@@ -64,6 +64,7 @@
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
+#include "kernel/browser_smoke.h"
 #include "memory/pmm.h"
 #include "memory/vmm.h"
 #include "memory/kmem.h"
@@ -560,6 +561,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
      * body); the rest of kernel_main below is intentionally
      * unreachable for the demo build. */
     capyos_preemptive_demo_run();
+#ifdef CAPYOS_BOOT_RUN_BROWSER_SMOKE
+    kernel_boot_run_browser_smoke(); /* F3.3e: noreturn */
+#endif
   }
   dbgcon_putc('3');
 

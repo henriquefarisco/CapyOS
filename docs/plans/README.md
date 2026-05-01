@@ -1,12 +1,11 @@
 # Indice De Planos CapyOS
 
-Este indice classifica os planos em vigor para evitar fontes de verdade
-paralelas. Quando um plano novo substituir um antigo, atualize esta tabela e o
-[`active/capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md).
+> **Atualizado em 2026-05-01** — todos os planos antigos foram consolidados em
+> [`active/capyos-master-plan.md`](active/capyos-master-plan.md). A pasta
+> `active/` agora contem **um unico plano linear** (F1-F10 + roadmap macro).
 
-> **Visao executiva:** [`STATUS.md`](STATUS.md) consolida todas as pendencias
-> dos planos vigentes, percentual de conclusao por marco/fase e o grafo de
-> dependencias entre fases.
+> **Visao executiva:** [`STATUS.md`](STATUS.md) consolida pendencias e
+> percentual por fase.
 
 ## Estrutura de pastas
 
@@ -28,29 +27,41 @@ Estados aceitos neste indice:
 
 ## Planos ativos (`active/`)
 
-| Documento | Papel atual | Fonte preferida / observacao |
-|---|---|---|
-| [`capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md) | Plano vivo principal de robustez, status e evidencias | Fonte primaria para M0-M8 |
-| [`m5-userland-progress.md`](active/m5-userland-progress.md) | M5 userland pos-M4 (fork/exec/wait/pipe + capysh + isolamento) | ~95%, branch `feature/m5-development` aguardando CI dos 6 smokes |
-| [`post-m5-ux-followups.md`](active/post-m5-ux-followups.md) | Itens de UX/estabilidade reportados manualmente: TTY (`clear`), task manager, browser responsiveness | Workstreams W1-W3, executar pos-merge de M5 |
-| [`system-master-plan.md`](active/system-master-plan.md) | Visao macro de evolucao do sistema | Usar junto do plano de robustez |
-| [`system-roadmap.md`](active/system-roadmap.md) | Roadmap tecnico por dominio | Alinhar status no plano de robustez |
-| [`system-execution-plan.md`](active/system-execution-plan.md) | Sequencia operacional do ciclo atual | Validar contra gates atuais antes de executar |
-| [`capyos-master-improvement-plan.md`](active/capyos-master-improvement-plan.md) | Consolidacao tecnica recente da trilha x64 | Complementa o plano de robustez |
-| [`browser-status-roadmap.md`](active/browser-status-roadmap.md) | Roadmap especifico do browser | Fonte de detalhes para M8 |
-| [`source-organization-roadmap.md`](active/source-organization-roadmap.md) | Reducao de monolitos e organizacao de codigo | Fonte de detalhes para M3 |
+| Documento | Papel atual |
+|---|---|
+| [`capyos-master-plan.md`](active/capyos-master-plan.md) | **Fonte de verdade unica.** Estado consolidado (M0-M8 + M4 final + M5 userland + W1-W3) e plano linear F1-F10. |
 
 ## Planos historicos (`historical/`)
 
-| Documento | Conclusao | Substituido por / observacao |
-|---|---|---|
-| [`m4-finalization-progress.md`](historical/m4-finalization-progress.md) | M4.1-M4.5 entregues 2026-04-30 (31/31 sub-fases) | Notas tecnicas de execucao do M4 (CoW, scheduler preemptivo, TSS/RSP0, ring-3 preemption); referido pelo "Update 2026-04-30" do plano de robustez |
-| [`platform-hardening-plan.md`](historical/platform-hardening-plan.md) | Marcos A/B/C/D concluidos na trilha Hyper-V/QEMU | Trilha oficial agora e VMware+UEFI+E1000; detalhes de M1/M6 rastreados no plano de robustez |
-| [`mvp-implementation-plan.md`](historical/mvp-implementation-plan.md) | Plano operacional do MVP encerrado | Conferir com o plano de robustez antes de retomar tarefas |
-| [`architecture-restructure-and-improvements.md`](historical/architecture-restructure-and-improvements.md) | Ideias de reorganizacao arquitetural | Preferir `active/source-organization-roadmap.md` e `architecture/source-layout.md` |
-| [`improvement-audit.md`](historical/improvement-audit.md) | Auditoria de melhorias ja consumidas pelos planos vivos | Migrar itens remanescentes para o plano de robustez |
-| [`refactor-plan.md`](historical/refactor-plan.md) | Plano de refatoracao da migracao x64 concluida | Preferir `active/source-organization-roadmap.md` |
-| [`system-delivery-roadmap.md`](historical/system-delivery-roadmap.md) | Roadmap de entrega anterior | Preferir `active/system-execution-plan.md` e o plano de robustez |
+Documentos abaixo foram **consolidados em `capyos-master-plan.md`** em
+2026-05-01 e ficam aqui apenas para rastreabilidade. Nao orientam decisao
+tecnica nova.
+
+### Consolidados em 2026-05-01
+
+| Documento | Conteudo migrado para |
+|---|---|
+| [`capyos-robustness-master-plan.md`](historical/capyos-robustness-master-plan.md) | §2.1 (M0-M8 entregue) + §4 (F1-F10) |
+| [`m5-userland-progress.md`](historical/m5-userland-progress.md) | §2.1 (M5-userland) + F1 |
+| [`post-m5-ux-followups.md`](historical/post-m5-ux-followups.md) | §2.1 (W1-W3) |
+| [`system-master-plan.md`](historical/system-master-plan.md) | §3 (principios) + §4 (F4-F10) + §5 (roadmap pos) |
+| [`system-roadmap.md`](historical/system-roadmap.md) | §4 + §7 (clean code) |
+| [`system-execution-plan.md`](historical/system-execution-plan.md) | §4 (etapas A-G distribuidas) |
+| [`capyos-master-improvement-plan.md`](historical/capyos-master-improvement-plan.md) | §2.1 (fases CONCLUIDO) + §4 (F6 GUI) |
+| [`browser-status-roadmap.md`](historical/browser-status-roadmap.md) | §2.1 (M8 entregue) + F3 (M8.2) + F9 (M8.6) |
+| [`source-organization-roadmap.md`](historical/source-organization-roadmap.md) | §7 (regras vivas) |
+
+### Anteriores
+
+| Documento | Observacao |
+|---|---|
+| [`m4-finalization-progress.md`](historical/m4-finalization-progress.md) | M4.1-M4.5 entregues 2026-04-30 (31/31 sub-fases). Referencia tecnica de execucao do M4 (CoW, scheduler, TSS/RSP0, ring-3 preemption). |
+| [`platform-hardening-plan.md`](historical/platform-hardening-plan.md) | Marcos A/B/C/D concluidos. Trilha oficial agora e VMware+UEFI+E1000. |
+| [`mvp-implementation-plan.md`](historical/mvp-implementation-plan.md) | Plano operacional do MVP encerrado. |
+| [`architecture-restructure-and-improvements.md`](historical/architecture-restructure-and-improvements.md) | Substituido por `architecture/source-layout.md` + §7 do master plan. |
+| [`improvement-audit.md`](historical/improvement-audit.md) | Itens consumidos pelos planos vivos. |
+| [`refactor-plan.md`](historical/refactor-plan.md) | Substituido por `architecture/source-layout.md` + §7. |
+| [`system-delivery-roadmap.md`](historical/system-delivery-roadmap.md) | Substituido pelo plano linear. |
 
 ## Planos experimentais (`experimental/`)
 
@@ -61,10 +72,13 @@ Estados aceitos neste indice:
 
 ## Regras de manutencao
 
-- planos em `active/` podem orientar implementacao;
-- planos em `historical/` e `experimental/` precisam ser reconciliados com a
-  trilha oficial `VMware + UEFI + E1000` antes de virar tarefa;
-- planos `Substituido` nao devem receber novas tarefas;
-- ao mover um plano entre pastas, atualizar tambem [`STATUS.md`](STATUS.md) e o
-  campo de evidencia/proximo passo do item correspondente em
-  [`active/capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md).
+1. **Um unico plano em `active/`**. Se for inevitavel criar outro, ele deve
+   referenciar o master como pai e ir para `historical/` ou virar uma fase
+   no master ao fim.
+2. Nenhuma promocao para `Implementado`/✅ sem evidencia (teste, smoke,
+   release note ou commit citado).
+3. Mover doc entre pastas exige atualizar tambem [`STATUS.md`](STATUS.md) e
+   este indice.
+4. Plataforma oficial: `VMware + UEFI + E1000`. Hyper-V/QEMU sao laboratorio.
+5. Planos `historical/`/`experimental/` nao orientam implementacao nova
+   sozinhos.

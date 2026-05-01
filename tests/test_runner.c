@@ -73,6 +73,11 @@ int test_boot_slot_run(void);
 int run_op_budget_tests(void);
 int run_privilege_tests(void);
 int run_buffer_cache_pacing_tests(void);
+int test_browser_ipc_run(void);
+int test_browser_watchdog_run(void);
+int test_browser_chrome_run(void);
+int test_browser_chrome_runtime_run(void);
+int test_browser_e2e_run(void);
 
 int main(void) {
     int failures = 0;
@@ -149,6 +154,11 @@ int main(void) {
     failures += run_op_budget_tests();
     failures += run_privilege_tests();
     failures += run_buffer_cache_pacing_tests();
+    failures += test_browser_ipc_run();
+    failures += test_browser_watchdog_run();
+    failures += test_browser_chrome_run();
+    failures += test_browser_chrome_runtime_run();
+    failures += test_browser_e2e_run();
 
     if (failures == 0) {
         printf("Todos os testes passaram.\n");

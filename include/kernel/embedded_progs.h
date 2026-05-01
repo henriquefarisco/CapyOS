@@ -16,8 +16,10 @@
  *
  * Currently registered:
  *
- *   "/bin/hello"      -> userland/bin/hello/hello.elf
- *   "/bin/exectarget" -> userland/bin/exectarget/exectarget.elf
+ *   "/bin/hello"        -> userland/bin/hello/hello.elf
+ *   "/bin/exectarget"   -> userland/bin/exectarget/exectarget.elf
+ *   "/bin/capysh"       -> userland/bin/capysh/capysh.elf
+ *   "/bin/capybrowser"  -> userland/bin/capybrowser/capybrowser.elf  (F3.3b)
  *
  * Adding a binary:
  *

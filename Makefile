@@ -280,6 +280,7 @@ CAPYOS64_OBJS = \
 	$(HELLO_BLOB_OBJ) \
 	$(EXECTARGET_BLOB_OBJ) \
 	$(CAPYSH_BLOB_OBJ) \
+	$(CAPYBROWSER_BLOB_OBJ) \
 	$(BUILD)/x86_64/memory/pmm.o \
 	$(BUILD)/x86_64/memory/pmm_refcount.o \
 	$(BUILD)/x86_64/memory/vmm.o \
@@ -319,6 +320,12 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/auth/privilege.o \
 	$(BUILD)/x86_64/kernel/pipe.o \
 	$(BUILD)/x86_64/kernel/stdin_buf.o \
+	$(BUILD)/x86_64/kernel/browser_engine_spawn.o \
+	$(BUILD)/x86_64/kernel/browser_smoke.o \
+	$(BUILD)/x86_64/apps/browser_ipc/codec.o \
+	$(BUILD)/x86_64/apps/browser_chrome/watchdog.o \
+	$(BUILD)/x86_64/apps/browser_chrome/chrome.o \
+	$(BUILD)/x86_64/apps/browser_chrome/runtime.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
@@ -545,6 +552,44 @@ $(CAPYSH_BLOB_OBJ): $(CAPYSH_ELF)
 capysh-blob: $(CAPYSH_BLOB_OBJ)
 	@echo "[ok] capysh blob ready for kernel link: $(CAPYSH_BLOB_OBJ)"
 
+# F3.3b: browser engine binary (ring 3). Reads request frames from
+# fd 0 and writes events to fd 1 using the IPC protocol defined in
+# include/apps/browser_ipc.h. Reuses src/apps/browser_ipc/codec.c
+# verbatim (the codec depends only on <stdint.h> and is intentionally
+# free of kernel/libc symbols).
+CAPYBROWSER_IPC_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/codec.o
+
+$(CAPYBROWSER_IPC_OBJ): src/apps/browser_ipc/codec.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+CAPYBROWSER_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser.elf
+CAPYBROWSER_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/capybrowser/main.o \
+	$(CAPYBROWSER_IPC_OBJ) \
+	$(CAPYLIBC_OBJS)
+
+$(CAPYBROWSER_ELF): $(CAPYBROWSER_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYBROWSER_OBJS)
+
+.PHONY: capybrowser-elf
+capybrowser-elf: $(CAPYBROWSER_ELF)
+	@echo "[ok] user binary linked: $(CAPYBROWSER_ELF)"
+
+CAPYBROWSER_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser_elf_blob.o
+
+$(CAPYBROWSER_BLOB_OBJ): $(CAPYBROWSER_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: capybrowser-blob
+capybrowser-blob: $(CAPYBROWSER_BLOB_OBJ)
+	@echo "[ok] capybrowser blob ready for kernel link: $(CAPYBROWSER_BLOB_OBJ)"
+
 $(BUILD)/x86_64/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
@@ -726,7 +771,12 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_boot_slot.c src/boot/boot_slot.c \
                tests/test_op_budget.c src/util/op_budget.c \
                tests/test_privilege.c src/auth/privilege.c \
-               tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c
+               tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
+               tests/test_browser_ipc.c src/apps/browser_ipc/codec.c \
+               tests/test_browser_watchdog.c src/apps/browser_chrome/watchdog.c \
+               tests/test_browser_chrome.c src/apps/browser_chrome/chrome.c \
+               tests/test_browser_chrome_runtime.c src/apps/browser_chrome/runtime.c \
+               tests/test_browser_e2e.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools
@@ -1049,6 +1099,29 @@ smoke-x64-capysh:
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_capysh.py $(SMOKE_X64_CAPYSH_ARGS)
+
+# F3.3e: end-to-end browser-isolation smoke. Builds the kernel
+# with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_BROWSER_SMOKE`
+# so kernel_main calls `kernel_boot_run_browser_smoke()` after the
+# preemptive scheduler is armed. The boot CPU enters `hlt` while
+# two scheduler-managed tasks run concurrently:
+#
+#   - the kernel `browser-poller` task drives the chrome/runtime
+#     stack: NAVIGATE -> drain events -> PING -> PONG -> SHUTDOWN;
+#   - the ring-3 capybrowser engine consumes commands from fd 0,
+#     emits the canonical event sequence on fd 1.
+#
+# Both communicate via two kernel pipes set up by
+# `browser_engine_spawn`. The harness validates 9 deterministic
+# debugcon markers covering spawn, navigation, frame delivery,
+# watchdog ping/pong, and graceful shutdown.
+smoke-x64-browser-spawn:
+	@echo "Executando smoke test x64 (browser spawn ponta-a-ponta)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_BROWSER_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_browser_spawn.py $(SMOKE_X64_BROWSER_SPAWN_ARGS)
 
 # M4 phase 9: aggregate target that runs the FULL preemptive
 # scheduler smoke matrix end-to-end. Exists so CI can invoke a

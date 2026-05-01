@@ -4,9 +4,9 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-04-29
-Versao de referencia: `0.8.0-alpha.4`
-Consolidacao atual de `develop`: plano de robustez em execucao com DHCP automatico no boot, gates de release endurecidos, metricas de performance, cache DNS/HTTP, smoke x64 persistente, journal CAPYFS autenticado por volume com round-trip sintetico, primitiva `op_budget` adotada pelo navegador, API de privilegios centralizada, pacing do buffer cache, estado formal do navegador com modo estrito, eventos de auditoria estruturados `[audit]` e verificacao SHA-256 de payload no `update_agent`.
+Ultima atualizacao: 2026-05-01
+Versao de referencia: `0.8.0-alpha.5`
+Consolidacao atual de `develop`: M5 userland completo (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash multi-processo) sobre a base de robustez ja entregue (DHCP automatico, gates endurecidos, metricas de performance, cache DNS/HTTP, journal CAPYFS autenticado, op_budget no navegador, API de privilegios, eventos de auditoria estruturados `[audit]`, SHA-256 de payload de update). Polish UX pos-M5: `clear` context-aware no terminal do desktop, task manager com auto-refresh e botao Kill funcional, browser com parser yield cooperativo e timeout duro de 30s. Roadmap consolidado em [`docs/plans/active/capyos-master-plan.md`](docs/plans/active/capyos-master-plan.md) (F1-F10 linear).
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
 - boot proprio `UEFI/GPT/x86_64`
@@ -177,15 +177,15 @@ acompanhar a evolucao visual do sistema por release alpha.
 
 ### Boot e login
 
-![Login do sistema](docs/screenshots/0.8.0-alpha.4/login-system.png)
+![Login do sistema](docs/screenshots/0.8.0-alpha.5/login-system.png)
 
-![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.4/bootstage1-iso.png)
+![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.5/bootstage1-iso.png)
 
 ### Desktop, navegador e apps
 
-![Desktop com navegador](docs/screenshots/0.8.0-alpha.4/desktop-browser1.png)
+![Desktop com navegador](docs/screenshots/0.8.0-alpha.5/desktop-browser1.png)
 
-![Desktop com apps](docs/screenshots/0.8.0-alpha.4/desktop-apps.png)
+![Desktop com apps](docs/screenshots/0.8.0-alpha.5/desktop-apps.png)
 
 ## Estado atual por dominio
 

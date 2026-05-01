@@ -29,6 +29,8 @@ extern void embedded_progs_test_set_hello(const uint8_t *data,
                                           size_t size);
 extern void embedded_progs_test_set_exectarget(const uint8_t *data,
                                                size_t size);
+extern void embedded_progs_test_set_capybrowser(const uint8_t *data,
+                                                size_t size);
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -45,11 +47,15 @@ static int tests_passed = 0;
 static const uint8_t k_hello_blob[] = {0x7F, 'E', 'L', 'F', 0xAA};
 static const uint8_t k_exectarget_blob[] = {0x7F, 'E', 'L', 'F', 0xBB,
                                             0xCC, 0xDD};
+static const uint8_t k_capybrowser_blob[] = {0x7F, 'E', 'L', 'F',
+                                             0xEE, 0xFF, 0x11};
 
 static void install_test_blobs(void) {
     embedded_progs_test_set_hello(k_hello_blob, sizeof(k_hello_blob));
     embedded_progs_test_set_exectarget(k_exectarget_blob,
                                        sizeof(k_exectarget_blob));
+    embedded_progs_test_set_capybrowser(k_capybrowser_blob,
+                                        sizeof(k_capybrowser_blob));
 }
 
 static void test_hit_hello(void) {
@@ -146,12 +152,35 @@ static void test_path_matching_exact(void) {
     else FAIL("empty path accepted");
 }
 
+static void test_hit_capybrowser(void) {
+    install_test_blobs();
+    const uint8_t *data = NULL;
+    size_t size = 0;
+    int rc = embedded_progs_lookup("/bin/capybrowser", &data, &size);
+
+    TEST("/bin/capybrowser: lookup returns 0");
+    if (rc == 0) PASS(); else FAIL("non-zero rc");
+
+    TEST("/bin/capybrowser: data pointer matches capybrowser blob");
+    if (data == k_capybrowser_blob) PASS();
+    else FAIL("data pointer drift");
+
+    TEST("/bin/capybrowser: size matches capybrowser blob length");
+    if (size == sizeof(k_capybrowser_blob)) PASS();
+    else FAIL("size mismatch");
+
+    TEST("/bin/capybrowser: distinct from /bin/hello and /bin/exectarget");
+    if (data != k_hello_blob && data != k_exectarget_blob) PASS();
+    else FAIL("capybrowser collides with another blob");
+}
+
 int test_embedded_progs_run(void) {
     printf("[test_embedded_progs]\n");
     tests_run = 0;
     tests_passed = 0;
     test_hit_hello();
     test_hit_exectarget();
+    test_hit_capybrowser();
     test_miss_unknown_path();
     test_null_inputs();
     test_path_matching_exact();
