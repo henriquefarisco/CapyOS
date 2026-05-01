@@ -96,3 +96,16 @@ void x64_user_first_dispatch(void) {
     /* Intentionally empty: host tests inspect t->context.rip ==
      * &x64_user_first_dispatch but never invoke the trampoline. */
 }
+
+/* M5 phase B.3: process_exec_replace calls vmm_switch_address_space
+ * to reload CR3 onto the new AS before destroying the old. The host
+ * build has no CR3 to write; record the most recent switch target
+ * so a future test can assert the call happened in order, and
+ * silently no-op otherwise. */
+const struct vmm_address_space *g_stub_vmm_last_switch = NULL;
+unsigned g_stub_vmm_switch_calls = 0;
+
+void vmm_switch_address_space(struct vmm_address_space *as) {
+    g_stub_vmm_last_switch = as;
+    g_stub_vmm_switch_calls++;
+}

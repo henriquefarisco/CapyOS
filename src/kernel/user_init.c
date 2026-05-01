@@ -21,6 +21,7 @@
 #include "kernel/process.h"
 #include "kernel/elf_loader.h"
 #include "kernel/embedded_hello.h"
+#include "kernel/embedded_progs.h"
 #include "kernel/scheduler.h"
 #include "kernel/task.h"
 #include "kernel/user_task_init.h"
@@ -143,5 +144,30 @@ int kernel_boot_run_two_busy_users(void) {
    * to pb on quantum exhaustion, context_switch will land on
    * x64_user_first_dispatch which iretqs into pb at rank=1. */
   process_enter_user_mode(pa);
+  return -1;
+}
+
+/* M5 phase E.5: boot directly into the embedded capysh interactive
+ * shell. Same control-flow shape as `kernel_boot_run_embedded_hello`
+ * but resolves the binary through the embedded_progs registry
+ * instead of the legacy `embedded_hello_data` accessor. */
+int kernel_boot_run_capysh(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  if (embedded_progs_lookup("/bin/capysh", &data, &size) != 0) {
+    return KERNEL_SPAWN_BAD_ELF;
+  }
+  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+
+  struct process *p = process_create("capysh", 0, 0);
+  if (!p) return KERNEL_SPAWN_NO_PROCESS;
+
+  if (elf_load_into_process(p, data, size) != 0) {
+    process_destroy(p);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+
+  /* `process_enter_user_mode` is noreturn on success. */
+  process_enter_user_mode(p);
   return -1;
 }

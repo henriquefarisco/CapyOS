@@ -31,6 +31,8 @@ Estados aceitos neste indice:
 | Documento | Papel atual | Fonte preferida / observacao |
 |---|---|---|
 | [`capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md) | Plano vivo principal de robustez, status e evidencias | Fonte primaria para M0-M8 |
+| [`m5-userland-progress.md`](active/m5-userland-progress.md) | M5 userland pos-M4 (fork/exec/wait/pipe + capysh + isolamento) | ~95%, branch `feature/m5-development` aguardando CI dos 6 smokes |
+| [`post-m5-ux-followups.md`](active/post-m5-ux-followups.md) | Itens de UX/estabilidade reportados manualmente: TTY (`clear`), task manager, browser responsiveness | Workstreams W1-W3, executar pos-merge de M5 |
 | [`system-master-plan.md`](active/system-master-plan.md) | Visao macro de evolucao do sistema | Usar junto do plano de robustez |
 | [`system-roadmap.md`](active/system-roadmap.md) | Roadmap tecnico por dominio | Alinhar status no plano de robustez |
 | [`system-execution-plan.md`](active/system-execution-plan.md) | Sequencia operacional do ciclo atual | Validar contra gates atuais antes de executar |

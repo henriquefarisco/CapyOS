@@ -39,6 +39,7 @@
  */
 
 #include "kernel/user_task_init.h"
+#include "kernel/syscall.h"
 #include "kernel/task.h"
 
 #include <stddef.h>
@@ -117,5 +118,19 @@ void user_task_arm_for_first_dispatch(struct task *t, uint64_t user_rip,
      * zero so the existing test_user_task_init contract (15 zeroed
      * PUSH_REGS slots) still holds. */
     user_task_arm_for_first_dispatch_with_rax(t, user_rip, user_rsp,
+                                              0u);
+}
+
+/* M5 phase A.2: thin wrapper around the with_rax builder, sourcing
+ * user RIP/RSP from the parent's captured syscall frame and forcing
+ * the child's initial RAX to 0. The parent's `frame->rip` already
+ * points one instruction past `syscall` (CPU stored it in RCX, the
+ * entry stub mirrored it into the frame's `rip` slot). */
+void user_task_arm_for_fork(struct task *child,
+                            const struct syscall_frame *parent_frame) {
+    if (!child || !parent_frame) return;
+    user_task_arm_for_first_dispatch_with_rax(child,
+                                              parent_frame->rip,
+                                              parent_frame->rsp,
                                               0u);
 }

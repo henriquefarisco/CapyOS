@@ -1,13 +1,15 @@
 # CapyOS — Status Centralizado dos Planos
 
 **Data de referência:** 2026-04-30
-**Versão atual:** `0.8.0-alpha.4+20260429`
+**Versão atual:** `0.8.0-alpha.4+20260429` (alpha.5 aguarda validação CI dos smokes M5)
 **Plataforma oficial:** `VMware + UEFI + E1000`
 
 Este documento é o **resumo executivo** dos planos vivos. Para detalhes técnicos
 e evidências, consultar:
 
 - [`active/capyos-robustness-master-plan.md`](active/capyos-robustness-master-plan.md) — fonte primária M0–M8
+- [`active/m5-userland-progress.md`](active/m5-userland-progress.md) — marco pós-M4: fork/exec/wait/IPC/shell + isolamento de crash (~95%, branch `feature/m5-development`, aguardando CI dos 6 smokes)
+- [`active/post-m5-ux-followups.md`](active/post-m5-ux-followups.md) — itens reportados manualmente (browser congela, task manager incompleto, `clear` ausente). Mapeados em W1–W3 para execução pós-merge de M5
 - [`historical/m4-finalization-progress.md`](historical/m4-finalization-progress.md) — detalhamento das fases M4 (0–11), arquivado em 2026-04-30 após 31/31 fases concluídas
 - [`active/system-master-plan.md`](active/system-master-plan.md) — visão macro do produto
 - [`active/system-execution-plan.md`](active/system-execution-plan.md) — sequência operacional
@@ -84,8 +86,51 @@ A coluna **Conclusão (%)** é uma estimativa pragmática:
 
 | ID | Item | Status | % | Depende de | Bloqueador |
 |---|---|---|---|---|---|
-| M8.2 | Isolamento por processo + watchdog | 🔴 Não iniciado | 0% | M4 (processos reais + kill seguro) | M4 Phase 8 |
+| M8.2 | Isolamento por processo + watchdog | � Desbloqueado por M5 | 0% | M4 + M5 (processos userland reais + kill seguro) | aguarda kickoff (M5 fechado destravou) |
 | M8.6 | JavaScript robusto e sandboxed | 🔴 Não iniciado | 0% | M8.2 + budgets | Pós-isolamento |
+
+---
+
+## M5 Userland — Fases (de [`active/m5-userland-progress.md`](active/m5-userland-progress.md))
+
+> Este "M5" é o **marco userland pós-M4**, distinto da coluna "M5
+> Performance" do master plan (que está 100%). Fica nesta seção
+> separada até promover ao master plan na release `0.8.0-alpha.5`.
+
+| Fase | Descrição | Status | Evidência | Smoke |
+|---|---|---|---|---|
+| A | SYS_FORK + CoW userland | ✅ DONE | `user_task_arm_for_fork`, `sys_fork`, `capy_fork`; +7 host tests builder | `smoke-x64-fork-cow` (aguarda CI) |
+| B | SYS_EXEC + embedded_progs registry | ✅ DONE | `process_exec_replace`, `sys_exec`, `capy_exec`; +16 host tests | `smoke-x64-exec` (aguarda CI) |
+| C | wait()/exit() síncronos | ✅ DONE | `sys_exit`→`process_exit`, `sys_wait`, `capy_wait` | `smoke-x64-fork-wait` (aguarda CI) |
+| D | SYS_PIPE + IPC mínimo | ✅ DONE | `sys_pipe`, FD pipe-aware r/w/close, fork inheritance; +12 host tests | `smoke-x64-pipe` (aguarda CI) |
+| F | Isolamento de crash multi-processo | ✅ DONE | dispatcher kill-path (M4 phase 4+5f); fork+segfault smoke | `smoke-x64-fork-crash` (aguarda CI) |
+| E | Shell interativo `capysh` ring 3 | ✅ DONE | stdin_buf (256B SPSC ring), SYS_READ fd 0 blocking, keyboard dual-feed, `userland/bin/capysh/main.c` (banner/prompt/builtins), embedded blob, `CAPYOS_BOOT_RUN_CAPYSH`; +19 host tests | `smoke-x64-capysh` (HMP sendkey injection, aguarda CI) |
+| G | Docs + release | 🟡 Parcial (60%) | G.1–G.3 prontos (este STATUS.md, m5-progress, post-m5-ux-followups) | G.4 release notes + tag, G.5 master plan promote — aguardam CI verde |
+
+**Progresso M5 userland:** 41/43 sub-fases (~95%). 84 novos host
+asserts (frame builder + embedded_progs + pipe + stdin_buf). Sem
+warnings de `make layout-audit`. Branch `feature/m5-development`
+pronta para push manual ao GitHub.
+
+**Caminho crítico:** validação CI dos 6 smokes → release notes →
+tag `0.8.0-alpha.5` → merge → mover doc para `historical/`.
+
+---
+
+## Backlog pós-M5 — UX/Estabilidade (de [`active/post-m5-ux-followups.md`](active/post-m5-ux-followups.md))
+
+Reportados manualmente durante validação da branch
+`feature/m5-development` (2026-04-30). **Não são** parte de M5;
+mapeados aqui para execução após merge.
+
+| ID | Workstream | Sintoma | Escopo | Prioridade | Bloqueia |
+|---|---|---|---|---|---|
+| W1 | TTY polish | `clear`/`cls` não limpa tela; builtins ausentes em ambos shells | pequeno (~1 sessão) | alta | — |
+| W2 | Task manager + service registry | Apps lançados pós-boot e serviços não aparecem no widget | médio (2–3 sessões) | média | — |
+| W3 | Browser/html_viewer responsiveness | Carregamento congela desktop; sites pesados travam o sistema | grande (multi-sessão) | alta | M8.2 stretch (W3.4: mover html_viewer para processo userland) |
+
+**Sugestão de ordem:** W1 → W2 → W3. W1 e W2 podem entrar como
+hotfixes na release pós-M5 sem esperar a próxima rodada de planos.
 
 ---
 
@@ -162,12 +207,20 @@ real) está em estado **Implementado**. A tabela do master plan
 
 A ordem de prioridade para destravar a maior quantidade de marcos:
 
-1. **M4 Phase 8** (flip preemptivo + smoke QEMU) — destrava M4.1–M4.5 e M8.2.
-2. **M4 Phase 9** — integra smokes existentes ao `release-check`.
-3. **M2 smoke VMware+E1000** — destrava M2.1–M2.5 e M6.4 (parte do gate VMware).
-4. **M6.4 assinatura ponta-a-ponta** — checksums + smoke VMware+E1000.
-5. **M4 Phase 10/11** — promoções no master plan + cleanup.
-6. **Registrar hotfixes 2026-04-30** em M0.1 e M3.5 (doc only).
+1. **M5 userland CI** — push da branch `feature/m5-development`,
+   rodar 6 smokes (`fork-cow`, `exec`, `fork-wait`, `pipe`,
+   `fork-crash`, `capysh`); destrava release `0.8.0-alpha.5` e M8.2.
+2. **M5 G.4/G.5** — release notes + tag + promoção no master plan.
+3. **W1 (TTY polish)** — quick win: builtin `clear` em ambos shells.
+   Pode entrar como hotfix da própria release alpha.5.
+4. **W2 (Task manager)** — religar widget ao `process_iter` /
+   `service_manager_iter`; refresh periódico.
+5. **M2 smoke VMware+E1000** — destrava M2.1–M2.5 e M6.4 (parte do gate VMware).
+6. **M6.4 assinatura ponta-a-ponta** — checksums + smoke VMware+E1000.
+7. **W3 (browser responsiveness)** — `op_budget` no parser HTML/CSS,
+   timeout duro, fetch async; depois (opcional) mover html_viewer
+   para processo userland (M8.2 stretch).
+8. **Registrar hotfixes 2026-04-30** em M0.1 e M3.5 (doc only).
 
 ## Critérios de aceite da release α (do master plan)
 
@@ -190,7 +243,9 @@ A ordem de prioridade para destravar a maior quantidade de marcos:
 Atualize sempre que:
 
 - Um item do master plan mudar de status (`Parcial` → `Implementado`, etc.).
-- Uma fase do M4 finalization concluir.
+- Uma fase do M4 finalization, M5 userland ou de qualquer plano em
+  `active/` concluir.
+- Um workstream de `post-m5-ux-followups.md` (W1/W2/W3) avançar.
 - Um hotfix relevante for aplicado (registrar em "Itens fora dos planos formais"
   e abrir entrada correspondente no master plan se aplicável).
 

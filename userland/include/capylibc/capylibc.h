@@ -35,6 +35,53 @@ void capy_exit(int status) __attribute__((noreturn));
 int capy_getpid(void);
 int capy_getppid(void);
 
+/* M5 phase A.4: split the calling process into two via SYS_FORK.
+ *
+ * Returns the child's PID (>0) in the parent and 0 in the child.
+ * Returns -1 on failure (no process slot, OOM, kernel-thread caller).
+ *
+ * The child inherits a CoW clone of the parent's address space (M4
+ * phase 7c): both branches share writable pages as RO+COW until the
+ * next write triggers a page fault that materialises a private copy.
+ * Both branches resume at the instruction immediately after the call
+ * to `capy_fork` with identical callee-saved register state; only
+ * RAX (the return value) differs. */
+int capy_fork(void);
+
+/* M5 phase B.5: replace the calling process's address space with
+ * the image resolved from `path` against the in-kernel embedded
+ * binaries registry, then jump to its entry point.
+ *
+ * Returns -1 on failure (NULL path, registry miss, ELF validation
+ * failure, OOM). Does NOT return on success: the kernel rewrites
+ * the SYSCALL return frame so sysret lands at the new image's
+ * `_start` with a fresh user RSP. From the C calling convention's
+ * point of view the stub is `noreturn` on the success branch, but
+ * we deliberately don't tag it as such so failure can still return
+ * a value the caller can branch on.
+ *
+ * `argv` is reserved for a future phase (argv-on-stack packing);
+ * pass NULL today. */
+int capy_exec(const char *path, const char **argv);
+
+/* M5 phase C.3: block until the child process `pid` exits; write
+ * its exit code through `status` (NULL = ignore) and return the
+ * reaped pid. Returns -1 if `pid` does not name a valid process
+ * slot or there is no current process. The caller must be the
+ * parent of `pid`; cross-tree wait is intentionally not modelled. */
+int capy_wait(unsigned int pid, int *status);
+
+/* M5 phase D: create a unidirectional kernel pipe. On success
+ * `fds[0]` receives the read end and `fds[1]` the write end, both
+ * inheritable across `capy_fork`. Returns 0 on success, -1 on
+ * failure (NULL fds, kernel pipe table full, FD table full).
+ *
+ * Read semantics on `fds[0]`: blocks until at least 1 byte is
+ * available; returns 0 on EOF (write end closed and buffer drained).
+ * Write semantics on `fds[1]`: blocks until at least 1 byte fits;
+ * returns -1 on broken pipe (read end closed). */
+int capy_pipe(int fds[2]);
+
 /* I/O. The kernel currently honours fd 0 (stdin) / 1 (stdout) / 2
  * (stderr) as the only valid file descriptors for a fresh user
  * process; anything else returns -1 until the VFS is wired up to

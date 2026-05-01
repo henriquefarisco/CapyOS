@@ -20,6 +20,7 @@
 #include <stdlib.h>
 
 #include "kernel/task.h"
+#include "kernel/syscall.h"
 #include "kernel/user_task_init.h"
 
 extern void x64_user_first_dispatch(void);
@@ -254,6 +255,87 @@ static void test_base_api_writes_zero_into_rax_slot(void) {
     free(stack);
 }
 
+/* M5 phase A.5: fork-frame builder tests.
+ *
+ * `user_task_arm_for_fork(child, parent_frame)` is a thin wrapper
+ * over the with_rax builder that sources user RIP/RSP from the
+ * parent's kernel-side `struct syscall_frame` and pins RAX=0 so the
+ * child sees the canonical "child branch" return value of fork().
+ * These tests lock the wiring without depending on any asm path. */
+
+static void fork_arm_fresh(struct task *t, uint8_t *stack,
+                           const struct syscall_frame *parent) {
+    for (size_t i = 0; i < sizeof(*t); ++i) ((uint8_t *)t)[i] = 0;
+    for (size_t i = 0; i < KSTACK_SIZE; ++i) stack[i] = 0;
+    t->kernel_stack = stack;
+    t->kernel_stack_size = KSTACK_SIZE;
+    user_task_arm_for_fork(t, parent);
+}
+
+static void test_fork_frame_inherits_parent_rip_rsp(void) {
+    struct task t;
+    uint8_t *stack = (uint8_t *)malloc(KSTACK_SIZE);
+    struct syscall_frame parent = {0};
+    parent.rip = 0x0000400ABCDULL;
+    parent.rsp = 0x00007FFFFEED1000ULL;
+    parent.r11 = 0x202;
+    parent.rcx = parent.rip;
+
+    fork_arm_fresh(&t, stack, &parent);
+    const uint64_t *p = (const uint64_t *)(uintptr_t)t.context.rsp;
+
+    TEST("fork frame: inherits parent RIP into IRET slot");
+    if (p[17] == parent.rip) PASS();
+    else FAIL("RIP slot did not match parent->rip");
+
+    TEST("fork frame: inherits parent RSP into IRET slot");
+    if (p[20] == parent.rsp) PASS();
+    else FAIL("RSP slot did not match parent->rsp");
+
+    TEST("fork frame: child RAX slot pinned to 0 (fork() == 0 in child)");
+    if (p[14] == 0u) PASS();
+    else FAIL("RAX slot should be 0 in the child");
+
+    TEST("fork frame: non-RAX PUSH_REGS slots are zero");
+    int ok = 1;
+    for (int i = 0; i < 14; ++i) {
+        if (p[i] != 0u) { ok = 0; break; }
+    }
+    if (ok) PASS();
+    else FAIL("non-RAX PUSH_REGS slot leaked non-zero");
+
+    TEST("fork frame: trampoline pointer stored in t.context.rip");
+    if (t.context.rip == (uint64_t)(uintptr_t)x64_user_first_dispatch) PASS();
+    else FAIL("context.rip not pointing at trampoline");
+
+    free(stack);
+}
+
+static void test_fork_arm_null_inputs_are_safe(void) {
+    struct task t;
+    uint8_t *stack = (uint8_t *)malloc(KSTACK_SIZE);
+    struct syscall_frame parent = {0};
+    parent.rip = 0xAAAA;
+    parent.rsp = 0xBBBB;
+
+    /* NULL task: no crash, no writes. */
+    user_task_arm_for_fork(NULL, &parent);
+    TEST("fork builder: NULL task is a no-op");
+    PASS();
+
+    /* NULL parent_frame: no crash, no writes. */
+    for (size_t i = 0; i < sizeof(t); ++i) ((uint8_t *)&t)[i] = 0;
+    for (size_t i = 0; i < KSTACK_SIZE; ++i) stack[i] = 0;
+    t.kernel_stack = stack;
+    t.kernel_stack_size = KSTACK_SIZE;
+    user_task_arm_for_fork(&t, NULL);
+    TEST("fork builder: NULL parent frame is a no-op");
+    if (t.context.rip == 0u && t.context.rsp == 0u) PASS();
+    else FAIL("builder mutated context with NULL parent frame");
+
+    free(stack);
+}
+
 int test_user_task_init_run(void) {
     printf("[test_user_task_init]\n");
     tests_run = 0;
@@ -265,6 +347,8 @@ int test_user_task_init_run(void) {
     test_too_small_stack_is_safe();
     test_with_rax_writes_rank_into_rax_slot();
     test_base_api_writes_zero_into_rax_slot();
+    test_fork_frame_inherits_parent_rip_rsp();
+    test_fork_arm_null_inputs_are_safe();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;
 }

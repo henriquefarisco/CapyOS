@@ -276,7 +276,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/user_task_init.o \
 	$(BUILD)/x86_64/kernel/process.o \
 	$(BUILD)/x86_64/kernel/process_iter.o \
+	$(BUILD)/x86_64/kernel/embedded_progs.o \
 	$(HELLO_BLOB_OBJ) \
+	$(EXECTARGET_BLOB_OBJ) \
+	$(CAPYSH_BLOB_OBJ) \
 	$(BUILD)/x86_64/memory/pmm.o \
 	$(BUILD)/x86_64/memory/pmm_refcount.o \
 	$(BUILD)/x86_64/memory/vmm.o \
@@ -315,6 +318,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/auth/auth_policy.o \
 	$(BUILD)/x86_64/auth/privilege.o \
 	$(BUILD)/x86_64/kernel/pipe.o \
+	$(BUILD)/x86_64/kernel/stdin_buf.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
@@ -480,6 +484,66 @@ $(HELLO_BLOB_OBJ): $(HELLO_ELF)
 .PHONY: hello-blob
 hello-blob: $(HELLO_BLOB_OBJ)
 	@echo "[ok] hello blob ready for kernel link: $(HELLO_BLOB_OBJ)"
+
+# M5 phase B.1/B.2: second canonical user binary that exists only
+# to be the target of an exec(). It writes "[exec-ok]\n" once and
+# exits. Mirrors the hello rules verbatim except for the basename:
+# the objcopy input file MUST be `exectarget.elf` so the magic
+# symbols come out as `_binary_exectarget_elf_start/_end/_size`.
+EXECTARGET_ELF = $(CAPYLIBC_BUILD_DIR)/bin/exectarget/exectarget.elf
+EXECTARGET_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/exectarget/main.o \
+	$(CAPYLIBC_OBJS)
+
+$(EXECTARGET_ELF): $(EXECTARGET_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(EXECTARGET_OBJS)
+
+.PHONY: exectarget-elf
+exectarget-elf: $(EXECTARGET_ELF)
+	@echo "[ok] user binary linked: $(EXECTARGET_ELF)"
+
+EXECTARGET_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/exectarget/exectarget_elf_blob.o
+
+$(EXECTARGET_BLOB_OBJ): $(EXECTARGET_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: exectarget-blob
+exectarget-blob: $(EXECTARGET_BLOB_OBJ)
+	@echo "[ok] exectarget blob ready for kernel link: $(EXECTARGET_BLOB_OBJ)"
+
+# M5 phase E.5: third canonical user binary, the interactive shell.
+# Same template as exectarget; embeds /bin/capysh.elf into the kernel
+# image as a third blob discovered through embedded_progs_lookup.
+CAPYSH_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capysh/capysh.elf
+CAPYSH_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/capysh/main.o \
+	$(CAPYLIBC_OBJS)
+
+$(CAPYSH_ELF): $(CAPYSH_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYSH_OBJS)
+
+.PHONY: capysh-elf
+capysh-elf: $(CAPYSH_ELF)
+	@echo "[ok] user binary linked: $(CAPYSH_ELF)"
+
+CAPYSH_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capysh/capysh_elf_blob.o
+
+$(CAPYSH_BLOB_OBJ): $(CAPYSH_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: capysh-blob
+capysh-blob: $(CAPYSH_BLOB_OBJ)
+	@echo "[ok] capysh blob ready for kernel link: $(CAPYSH_BLOB_OBJ)"
 
 $(BUILD)/x86_64/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
@@ -655,6 +719,9 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_capylibc_abi.c \
                tests/test_hello_program.c \
                tests/test_user_init.c src/kernel/user_init.c \
+               tests/test_embedded_progs.c src/kernel/embedded_progs.c \
+               tests/test_pipe.c src/kernel/pipe.c \
+               tests/test_stdin_buf.c src/kernel/stdin_buf.c \
                tests/test_dns_cache.c src/net/services/dns_cache.c \
                tests/test_boot_slot.c src/boot/boot_slot.c \
                tests/test_op_budget.c src/util/op_budget.c \
@@ -855,6 +922,134 @@ smoke-x64-preemptive-user-2task:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_preemptive_user_2task.py $(SMOKE_X64_PREEMPTIVE_USER_2TASK_ARGS)
 
+# M5 phase A.7: SYS_FORK + CoW end-to-end smoke.
+# Builds the kernel with `-DCAPYOS_PREEMPTIVE_SCHEDULER
+# -DCAPYOS_BOOT_RUN_HELLO` and userland `hello` with
+# `-DCAPYOS_HELLO_FORK`. The hello binary calls `capy_fork()` once
+# and both branches loop forever emitting distinct markers via
+# SYS_WRITE. The smoke asserts BOTH `[fork-parent]` AND
+# `[fork-child]` markers appear at least N times in the debugcon
+# log -- the canonical end-to-end proof that:
+#
+#   1. SYS_FORK returns +PID in the parent and 0 in the child.
+#   2. The kernel arms the child task via the synthetic IRET frame
+#      builder so it iretqs into ring 3 at the parent's saved RIP/RSP.
+#   3. CoW page faults from BOTH branches are handled correctly
+#      (each writes to its own stack page after fork).
+#   4. The scheduler keeps both tasks runnable under preemption.
+#
+# `make clean` is forced for the same reason as the preemptive
+# smokes: per-source .d files do not track preprocessor macros.
+smoke-x64-fork-cow:
+	@echo "Executando smoke test x64 (SYS_FORK + CoW)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FORK'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_fork_cow.py $(SMOKE_X64_FORK_COW_ARGS)
+
+# M5 phase B.7: SYS_EXEC end-to-end smoke. Builds the kernel with
+# `-DCAPYOS_BOOT_RUN_HELLO` and userland `hello` with
+# `-DCAPYOS_HELLO_EXEC`. The hello binary writes [before-exec],
+# then calls capy_exec("/bin/exectarget"); the kernel resolves the
+# path against embedded_progs, replaces the AS, and lands sysret
+# at exectarget's _start, which writes [exec-ok] and exits.
+#
+# Validates end-to-end:
+#   1. embedded_progs_lookup correctly maps "/bin/exectarget" to
+#      the second embedded blob.
+#   2. process_exec_replace builds the new AS, loads the new ELF,
+#      and reloads CR3.
+#   3. sys_exec rewrites the syscall return frame so sysret jumps
+#      to the new entry point with a fresh user RSP.
+#   4. The new program runs in ring 3 against the new AS without
+#      reusing any state from hello.
+smoke-x64-exec:
+	@echo "Executando smoke test x64 (SYS_EXEC)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_EXEC'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_exec.py $(SMOKE_X64_EXEC_ARGS)
+
+# M5 phase C.5: SYS_FORK + SYS_WAIT + SYS_EXIT smoke. Builds the
+# kernel with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO`
+# and userland `hello` with `-DCAPYOS_HELLO_FORKWAIT`. The hello
+# binary forks once; the child writes [child-running] and
+# capy_exit(42); the parent capy_wait()s and writes [parent-reaped]
+# (status==42) or [parent-bad-status] otherwise.
+#
+# Validates end-to-end:
+#   1. SYS_EXIT routes through process_exit and flips the child to
+#      PROC_STATE_ZOMBIE (otherwise the parent's wait would spin).
+#   2. process_wait correctly walks process_by_pid + busy-yield +
+#      reads exit_code + reaps the slot.
+#   3. The child's exit code propagates byte-perfect through
+#      task_exit -> process_exit -> child->exit_code -> *status.
+smoke-x64-fork-wait:
+	@echo "Executando smoke test x64 (SYS_FORK + SYS_WAIT)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FORKWAIT'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_fork_wait.py $(SMOKE_X64_FORK_WAIT_ARGS)
+
+# M5 phase D: SYS_PIPE + fork inheritance smoke. Builds the kernel
+# with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO` and
+# userland `hello` with `-DCAPYOS_HELLO_PIPE`. The hello binary
+# pipes "ping" from child to parent and writes [pipe-ok] on
+# successful round-trip.
+smoke-x64-pipe:
+	@echo "Executando smoke test x64 (SYS_PIPE + fork)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_PIPE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_pipe.py $(SMOKE_X64_PIPE_ARGS)
+
+# M5 phase F: multi-process fault isolation smoke. Builds the kernel
+# with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO` and
+# userland `hello` with `-DCAPYOS_HELLO_FORK_CRASH`. Hello forks; the
+# child segfaults via NULL deref; the parent's wait() returns the
+# 128+vector exit code and emits [parent-saw-crash]. The kernel
+# MUST NOT panic.
+smoke-x64-fork-crash:
+	@echo "Executando smoke test x64 (fork + crash isolation)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FORK_CRASH'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_fork_crash.py $(SMOKE_X64_FORK_CRASH_ARGS)
+
+# M5 phase E.6: capysh interactive shell smoke. Builds the kernel
+# with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO
+# -DCAPYOS_BOOT_RUN_CAPYSH`. The kernel boots straight into capysh
+# (the embedded /bin/capysh binary). The harness drives QEMU's HMP
+# monitor via a unix socket to type a script (`help`, `pid`,
+# `exectarget`, `exit`) and validates the corresponding markers
+# show up on the debug console.
+#
+# Validates end-to-end:
+#   1. stdin_buf surfaces keyboard bytes to user space.
+#   2. SYS_READ fd 0 blocks correctly until input arrives.
+#   3. capysh's parser dispatches builtins (help / pid / exectarget /
+#      exit) without falling through to "unknown".
+#   4. The `exectarget` builtin completes a fork+exec+wait round-trip
+#      with the embedded /bin/exectarget binary (proves A+B+C still
+#      compose correctly under the shell).
+smoke-x64-capysh:
+	@echo "Executando smoke test x64 (capysh shell)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO -DCAPYOS_BOOT_RUN_CAPYSH'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_capysh.py $(SMOKE_X64_CAPYSH_ARGS)
+
 # M4 phase 9: aggregate target that runs the FULL preemptive
 # scheduler smoke matrix end-to-end. Exists so CI can invoke a
 # single Make target instead of listing every smoke individually,
@@ -905,6 +1100,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-iso inspect-disk capylibc hello-elf hello-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

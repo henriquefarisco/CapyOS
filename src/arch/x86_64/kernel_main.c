@@ -61,6 +61,8 @@
 #include "kernel/scheduler.h"
 #include "kernel/syscall.h"
 #include "kernel/process.h"
+#include "kernel/pipe.h"
+#include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
 #include "memory/pmm.h"
 #include "memory/vmm.h"
@@ -366,6 +368,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   kmem_boot_debug_dump('X');
   dbgcon_putc(kmem_debug_header_ok() ? 'a' : 'A');
   process_system_init();
+  pipe_system_init();
+  stdin_buf_init();
   dbgcon_putc('y');
   dbgcon_putc(kmem_debug_header_ok() ? 'b' : 'B');
   cpu_local_init((uint64_t)(uintptr_t)
@@ -384,7 +388,13 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc(kmem_debug_header_ok() ? 'd' : 'D');
   dbgcon_putc('w');
   {
+#if defined(CAPYOS_BOOT_RUN_CAPYSH)
+    int hello_rc = kernel_boot_run_capysh();
+#elif defined(CAPYOS_BOOT_RUN_TWO_BUSY)
+    int hello_rc = kernel_boot_run_two_busy_users();
+#else
     int hello_rc = kernel_boot_run_embedded_hello();
+#endif
     dbgcon_putc('E');
     if (hello_rc < 0) {
       dbgcon_putc('-');
@@ -450,6 +460,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('l');
   klog(KLOG_INFO, "[vmm] Virtual memory manager initialized.");
   process_system_init();
+  pipe_system_init();
+  stdin_buf_init();
   dbgcon_putc('m');
   if (!handoff_boot_services_active()
 #ifdef CAPYOS_BOOT_RUN_HELLO
@@ -490,7 +502,14 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     klog(KLOG_INFO,
          "[user_init] CAPYOS_BOOT_RUN_HELLO defined; spawning hello.");
     {
-#ifdef CAPYOS_BOOT_RUN_TWO_BUSY
+#if defined(CAPYOS_BOOT_RUN_CAPYSH)
+      /* M5 phase E.5: boot directly into the embedded interactive
+       * shell `/bin/capysh`. Resolves through the embedded_progs
+       * registry so any future shell binary picked up by the
+       * registry takes over without further kernel changes. */
+      dbgcon_write("[user_init] CAPYOS_BOOT_RUN_CAPYSH defined; spawning capysh.\n");
+      int hello_rc = kernel_boot_run_capysh();
+#elif defined(CAPYOS_BOOT_RUN_TWO_BUSY)
       /* M4 phase 8f.5: spawn TWO user processes that run the BUSY
        * arm of hello with rank=0/1 so each emits a distinct marker
        * ([busyU0] / [busyU1]). The smoke verifies BOTH appear,

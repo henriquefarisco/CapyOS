@@ -1,5 +1,6 @@
 #include "kernel/process.h"
 #include "kernel/task.h"
+#include "kernel/elf_loader.h"
 #include "memory/vmm.h"
 #include "memory/kmem.h"
 #include <stddef.h>
@@ -149,6 +150,18 @@ struct process *process_fork(struct process *parent) {
   child->brk = parent->brk;
   child->heap_start = parent->heap_start;
   child->stack_top = parent->stack_top;
+
+  /* M5 phase D: inherit the parent's open file descriptors so any
+   * pipe ends opened pre-fork are observable from BOTH branches.
+   * For pipe FDs this means both processes hold a handle to the
+   * same kernel pipe (private_data carries the pipe id); kernel
+   * pipe_close_read/_write are NOT refcounted today, so a smoke
+   * that closes either end in only ONE branch will affect the
+   * other -- the canonical fork+pipe smoke (M5 phase D) avoids
+   * the issue by leaving both ends open until process exit. */
+  for (int i = 0; i < PROCESS_FD_MAX; i++) {
+    child->fds[i] = parent->fds[i];
+  }
   return child;
 }
 
@@ -157,6 +170,49 @@ int process_exec(struct process *proc, const char *path, const char **argv) {
   if (!proc || !path) return -1;
   extern int elf_load_from_file(struct process *proc, const char *path);
   return elf_load_from_file(proc, path);
+}
+
+/* M5 phase B.3: full AS replacement. See header for contract. */
+int process_exec_replace(struct process *proc, const uint8_t *data,
+                         size_t size) {
+  if (!proc || !data || !proc->main_thread) return -1;
+  if (elf_validate(data, size) != 0) return -1;
+
+  struct vmm_address_space *old_as = proc->address_space;
+  struct vmm_address_space *new_as = vmm_create_address_space();
+  if (!new_as) return -1;
+
+  /* Swap in NEW AS so elf_load_into_process maps into it and
+   * primes proc->main_thread->context.rip/rsp accordingly. */
+  proc->address_space = new_as;
+
+  if (elf_load_into_process(proc, data, size) != 0) {
+    /* Rollback: keep the old AS as the live one, free the
+     * half-built new AS (frees its private frames; the old AS's
+     * frames retain their refcounts because nothing CoW-shared was
+     * ever published into new_as). */
+    proc->address_space = old_as;
+    vmm_destroy_address_space(new_as);
+    return -1;
+  }
+
+  /* Reset per-process bookkeeping that the new image owns. argv
+   * packing for SYS_EXEC is deferred to a later phase; for now the
+   * fresh user stack is empty (RSP-8 sentinel from elf_loader) and
+   * the entry point will see RAX=0 (set by sys_exec just before
+   * sysret), so capylibc's crt0 forwards 0 -> rdi -> main(0). */
+  proc->exit_code = 0;
+
+  /* Activate the new AS on this CPU before tearing the old one
+   * down. Order matters: while CR3 still points at old_as, the
+   * destroy walks page tables via the kernel HHDM (not user-half
+   * mappings) and frees user frames. The kernel half is shared
+   * across all ASes so this is safe, but switching first is the
+   * defensive path for future refactors that might add per-AS
+   * kernel-half state. */
+  vmm_switch_address_space(new_as);
+  if (old_as) vmm_destroy_address_space(old_as);
+  return 0;
 }
 
 void process_exit(int code) {

@@ -55,4 +55,25 @@ void user_task_arm_for_first_dispatch_with_rax(struct task *t,
                                                uint64_t user_rsp,
                                                uint64_t initial_rax);
 
+/* M5 phase A.2: arm a child task created by `process_fork` so that
+ * when the scheduler first lands on it, control resumes in ring 3 at
+ * the parent's syscall return point with `rax = 0` (the canonical
+ * "child branch" of fork()) and the parent's user RSP/RFLAGS.
+ *
+ * The `parent_frame` argument is the kernel-side `struct syscall_frame`
+ * captured by `syscall_entry.S` for the parent's SYS_FORK call; the
+ * child inherits `frame->rip` (return address past `syscall`) and
+ * `frame->rsp` (user stack pointer). Caller-saved GPRs other than RAX
+ * are left at zero in the synthesized frame; capylibc's `capy_fork`
+ * stub is responsible for spilling/restoring callee-saved regs via
+ * the user stack so both branches of fork resume with consistent
+ * register state once the child's CoW pages diverge from the parent.
+ *
+ * No-op if either argument is NULL or the child's kernel stack is
+ * too small to host the synthetic frame (same guard as the base
+ * builder). Pure C, host-testable. */
+struct syscall_frame;
+void user_task_arm_for_fork(struct task *child,
+                            const struct syscall_frame *parent_frame);
+
 #endif /* KERNEL_USER_TASK_INIT_H */

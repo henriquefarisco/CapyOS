@@ -10,7 +10,29 @@
 #include "drivers/input/keyboard.h"
 #include "drivers/input/keyboard_compose.h"
 #include "drivers/input/keyboard_layout.h"
+#include "kernel/stdin_buf.h"
 #include "security/csprng.h"
+
+/* M5 phase E.3: dual-feed for user-space stdin.
+ *
+ * The keyboard IRQ historically fed only the kernel-side TTY
+ * (`tty_handle_char`), which drives the in-kernel capyshell. With
+ * a real userland shell (capysh) running in ring 3, we ALSO need
+ * to surface decoded characters through `stdin_buf` so SYS_READ
+ * on fd 0 has something to consume.
+ *
+ * Both consumers see every byte simultaneously. This is intentional
+ * for now -- the kernel TTY is responsible for echo + line editing
+ * on the framebuffer, and capysh consumes the same stream from its
+ * own perspective. There is no "controlling terminal" arbitration
+ * yet; that is deferred to a future M6 ttydisc rework. */
+static inline void user_stdin_publish(char c) {
+    /* Drop is silent on overflow; the stdin_buf API tracks the
+     * dropped byte counter for diagnostics. The kernel TTY echo
+     * still happens regardless, so the user sees what they typed
+     * even if capysh briefly fell behind. */
+    stdin_buf_push(c);
+}
 
 static const struct keyboard_layout *g_layouts[2];
 static int g_layouts_initialized = 0;
@@ -175,10 +197,12 @@ static void keyboard_irq(void) {
   /* Backspace / Enter */
   if (sc == 0x0E) {
     tty_handle_backspace();
+    user_stdin_publish('\b');
     return;
   }
   if (sc == 0x1C) {
     tty_handle_enter();
+    user_stdin_publish('\n');
     return;
   }
 
@@ -226,8 +250,10 @@ static void keyboard_irq(void) {
   }
 
   tty_handle_char(ch);
+  user_stdin_publish(ch);
   if (pending) {
     tty_handle_char(pending);
+    user_stdin_publish(pending);
   }
 }
 

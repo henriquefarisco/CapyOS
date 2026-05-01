@@ -69,4 +69,18 @@ int kernel_boot_run_embedded_hello(void);
  * entered for the first task and the scheduler takes over. */
 int kernel_boot_run_two_busy_users(void);
 
+/* M5 phase E.5: spawn the embedded `/bin/capysh` interactive shell
+ * as the boot init process and drop into ring 3.
+ *
+ * Behaviour mirrors `kernel_boot_run_embedded_hello`: validates the
+ * blob, builds a fresh process named "capysh", loads the ELF into
+ * its address space, then `process_enter_user_mode`s into it. The
+ * function returns only on failure; on success it is `noreturn`.
+ *
+ * Resolution path: looks `/bin/capysh` up against the
+ * embedded_progs registry rather than calling
+ * `embedded_hello_data()` directly, so the same code path picks up
+ * any future shell binary swapped into the registry. */
+int kernel_boot_run_capysh(void);
+
 #endif /* KERNEL_USER_INIT_H */

@@ -76,6 +76,36 @@ void process_system_init(void);
 struct process *process_create(const char *name, uint32_t uid, uint32_t gid);
 struct process *process_fork(struct process *parent);
 int process_exec(struct process *proc, const char *path, const char **argv);
+
+/* M5 phase B.3: replace `proc`'s entire address space with a fresh
+ * one loaded from `(data, size)` (an in-memory ELF image, e.g. one
+ * resolved via `embedded_progs_lookup`).
+ *
+ * Steps:
+ *   1. Validate the ELF header (returns -1 on bad magic / wrong arch).
+ *   2. Allocate a brand-new `struct vmm_address_space`.
+ *   3. Map the new ELF's PT_LOAD segments and a fresh user stack
+ *      into the new AS, priming `proc->main_thread->context.rip`
+ *      and `.rsp` to the new entry point and stack top.
+ *   4. Activate the new AS on the calling CPU (`vmm_switch_address_space`)
+ *      so the syscall return path's sysret runs with the new CR3.
+ *   5. Destroy the old AS (decrements per-frame refcounts; CoW-shared
+ *      pages survive in the parent's AS, exclusive pages are freed).
+ *
+ * On any failure before step 4 the function rolls back: `proc`'s
+ * AS pointer is restored to the original, the half-built new AS is
+ * destroyed, and the function returns -1. On step-4 success the
+ * old AS is unconditionally destroyed; the caller MUST NOT rely on
+ * the prior AS pointer afterwards.
+ *
+ * Caller invariants:
+ *   - `proc` must be the calling kernel context's current process
+ *     (i.e. `proc == process_current()`); otherwise CR3 reload will
+ *     break the calling task.
+ *   - `proc->main_thread` must exist; the loader writes RIP/RSP
+ *     into its `context`. */
+int process_exec_replace(struct process *proc, const uint8_t *data,
+                         size_t size);
 void process_exit(int code) __attribute__((noreturn));
 int process_wait(uint32_t pid, int *status);
 struct process *process_current(void);
