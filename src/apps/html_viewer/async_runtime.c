@@ -184,11 +184,72 @@ void html_viewer_poll_background(struct html_viewer_app *app) {
                                           body_len);
   }
 }
+
+/* Post-M5 W3: per-frame tick. See header docstring on
+ * `html_viewer_tick` for the full contract.
+ *
+ * Implementation notes:
+ *
+ * - `g_viewer_open` gates the work to keep the closed-window cost
+ *   to a single load + branch. Apps that never open the viewer
+ *   pay nothing per frame.
+ * - The deadline check fires only while a navigation is "in
+ *   flight" (LOADING / REDIRECTING / RENDERING). READY / FAILED /
+ *   CANCELLED / IDLE are terminal so re-cancelling them would be
+ *   wasteful and could overwrite a useful diagnostic reason.
+ * - We compare ticks via subtraction (now - started) instead of
+ *   `now > started + budget` to be wraparound-safe. With a 100 Hz
+ *   tick the 64-bit counter wraps after ~5.8 billion years, so
+ *   this is mostly a defensive habit.
+ * - On timeout the call to `hv_nav_budget_cancel` flips the
+ *   navigation-level op_budget to CANCELLED. The next time the
+ *   parser hits its yield-every-N-iter check, or the worker
+ *   probes the budget, the work cooperatively unwinds. The user
+ *   sees the viewer transition to CANCELLED with stage="timeout"
+ *   on the next frame. */
+extern uint64_t apic_timer_ticks(void);
+
+void html_viewer_tick(void) {
+  if (!g_viewer_open) return;
+  /* (1) Drain any ready async result so the user sees fetched
+   * pages without having to interact (mouse/keyboard would also
+   * trigger this via the event handlers; tick covers the
+   * idle-spectator case). */
+  html_viewer_poll_background(&g_viewer);
+
+  /* (2) Hard deadline. Skip if no navigation is recorded yet
+   * (cold boot, or all-internal about: pages that never set the
+   * timestamp). */
+  if (g_viewer.nav_started_ticks == 0) return;
+  enum html_viewer_nav_state s = g_viewer.nav_state;
+  int in_flight = (s == HTML_VIEWER_NAV_LOADING ||
+                   s == HTML_VIEWER_NAV_REDIRECTING ||
+                   s == HTML_VIEWER_NAV_RENDERING);
+  if (!in_flight) return;
+  uint64_t now = apic_timer_ticks();
+  uint64_t elapsed = now - g_viewer.nav_started_ticks;
+  if (elapsed >= HTML_VIEWER_NAV_TIMEOUT_TICKS) {
+    /* `_cancel` is idempotent: if the parser already cancelled for
+     * another reason it keeps the original diagnostic. We update
+     * `last_stage` so the user-visible error context says
+     * "timeout" rather than the previous in-flight stage. */
+    html_viewer_set_error_context(&g_viewer, "timeout",
+                                  "Navigation deadline exceeded.");
+    hv_nav_budget_cancel(&g_viewer, "timeout");
+  }
+}
 #else
 void html_viewer_background_cancel(void) {}
 
 void html_viewer_poll_background(struct html_viewer_app *app) {
   (void)app;
+}
+
+void html_viewer_tick(void) {
+  /* UNIT_TEST build: no async runtime, no APIC tick source. The
+   * unit tests exercise the parser/budget logic directly and do
+   * not need a per-frame tick; this stub keeps the public ABI
+   * stable so callers can include the header unconditionally. */
 }
 
 int html_viewer_queue_async_request(struct html_viewer_app *app,

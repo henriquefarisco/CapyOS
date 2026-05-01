@@ -40,10 +40,15 @@ static const char k_newline[]     = "\n";
 static const char k_help_text[] =
     "help               list builtins\n"
     "echo <args...>     write args back to stdout\n"
+    "clear              clear the screen (ANSI CSI 2J + cursor home)\n"
     "pid                print my pid\n"
     "ppid               print my parent pid\n"
     "exectarget         fork+exec /bin/exectarget then wait\n"
     "exit               exit the shell\n";
+/* Post-M5 W1: ANSI CSI sequence for clear-screen + cursor home.
+ * `\x1b[2J` clears the entire display, `\x1b[H` moves the cursor
+ * to row 1 col 1. Works on every conforming terminal/emulator. */
+static const char k_clear_seq[] = "\x1b[2J\x1b[H";
 static const char k_exec_path[]      = "/bin/exectarget";
 static const char k_fork_fail_marker[] = "[capysh] fork failed\n";
 static const char k_exec_fail_marker[] = "[capysh] exec failed\n";
@@ -114,6 +119,10 @@ static int dispatch_line(const char *line, int len) {
     }
     if (line_word_eq(line, word_start, word_end, "help")) {
         write_cstr(k_help_text);
+        return 0;
+    }
+    if (line_word_eq(line, word_start, word_end, "clear")) {
+        write_cstr(k_clear_seq);
         return 0;
     }
     if (line_word_eq(line, word_start, word_end, "echo")) {

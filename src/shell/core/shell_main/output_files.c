@@ -175,6 +175,22 @@ void shell_set_output_callbacks(shell_output_write_fn write_cb,
     g_shell_output_putc = putc_cb;
 }
 
+void shell_set_clear_callback(shell_output_clear_fn clear_cb)
+{
+    g_shell_output_clear = clear_cb;
+}
+
+void shell_clear_screen(void)
+{
+    if (g_shell_output_clear) {
+        g_shell_output_clear();
+        return;
+    }
+    /* Post-M5 W1: no widget-aware sink installed (CLI or early
+     * boot path); fall back to framebuffer console clear. */
+    vga_clear();
+}
+
 int shell_copy_stream(struct file *src, struct file *dst)
 {
     if (!src || !dst) {

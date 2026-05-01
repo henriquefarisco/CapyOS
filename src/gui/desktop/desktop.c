@@ -32,6 +32,15 @@ static void desktop_shell_putc(char ch) {
   if (g_shell_output_term) terminal_write_char(g_shell_output_term, ch);
 }
 
+/* Post-M5 W1: clear hook paired with desktop_shell_write/putc.
+ * Routes the shell's mess builtin to the active terminal widget
+ * instead of the framebuffer console hidden behind the GUI. */
+static void desktop_shell_clear(void) {
+  if (g_shell_output_term) {
+    terminal_clear(g_shell_output_term);
+  }
+}
+
 static void desktop_terminal_paint(struct gui_window *win) {
   if (!win || !win->user_data) return;
   terminal_paint((struct terminal *)win->user_data);
@@ -241,11 +250,13 @@ static void desktop_terminal_command(struct terminal *term, const char *data,
   extern int kernel_desktop_dispatch_shell_command(char *line);
   g_shell_output_term = term;
   shell_set_output_callbacks(desktop_shell_write, desktop_shell_putc);
+  shell_set_clear_callback(desktop_shell_clear);
   if (!kernel_desktop_dispatch_shell_command(line)) {
     terminal_write_string(term, "[erro] comando desconhecido\n");
     terminal_write_string(term, "Use help-any para listar comandos.\n");
   }
   shell_set_output_callbacks(NULL, NULL);
+  shell_set_clear_callback(NULL);
   g_shell_output_term = NULL;
   terminal_write_string(term, "$ ");
 }
@@ -453,6 +464,20 @@ int desktop_run_frame(struct desktop_session *ds) {
     if (taskbar_update_clock(&ds->taskbar, clock_buf)) work_done = 1;
   }
 
+  /* Post-M5 W2: Task Manager auto-refresh tick. Cheap when the
+   * window is closed (single load + branch); when open it
+   * invalidates ~every TASK_MANAGER_AUTO_REFRESH_FRAMES frames so
+   * apps started after the window opened (and processes that
+   * exited) reflect in the row list within ~0.5s on real hw. */
+  task_manager_tick();
+
+  /* Post-M5 W3: html_viewer per-frame tick. Drains async fetch
+   * results (so users do not have to interact for a fetched page
+   * to appear) and enforces HTML_VIEWER_NAV_TIMEOUT_TICKS so a
+   * heavy or stuck site cannot keep the browser in LOADING
+   * forever. No-op when the viewer is closed. */
+  html_viewer_tick();
+
   compositor_render();
 
   {
@@ -479,5 +504,6 @@ void desktop_shutdown(struct desktop_session *ds) {
   g_shell_output_term = NULL;
   g_menu_desktop = NULL;
   shell_set_output_callbacks(NULL, NULL);
+  shell_set_clear_callback(NULL);
   ds->active = 0;
 }

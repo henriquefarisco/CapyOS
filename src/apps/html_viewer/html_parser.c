@@ -1,5 +1,18 @@
 #include "internal/html_viewer_internal.h"
 
+#ifndef UNIT_TEST
+#include "kernel/task.h"
+#endif
+
+/* Post-M5 W3: how often the parser yields the CPU and re-checks the
+ * navigation-level cancel/exhaust flag. The hot loop ran for the
+ * full document on every navigation, so under the cooperative
+ * scheduler a large page could keep the desktop unresponsive for
+ * several seconds. 1024 iterations is small enough to keep the
+ * compositor frame budget healthy yet large enough that the
+ * yield/budget-check overhead stays well under 1% of parse time. */
+#define HTML_PARSE_YIELD_EVERY 1024u
+
 int html_parse(const char *html, size_t len, struct html_document *doc) {
   /* All large buffers are static: CapyOS is single-threaded, html_parse is
    * never re-entrant, and the combined frame (~3 KB) was overflowing the stack. */
@@ -9,11 +22,36 @@ int html_parse(const char *html, size_t len, struct html_document *doc) {
   int list_ordered = 0;
   int list_num = 1;
   size_t pos = 0;
+  /* Post-M5 W3: cooperative yield counter. */
+  unsigned int yield_counter = 0;
   if (!html || !doc) return -1;
   kmemzero(doc, sizeof(*doc));
   current_form_action[0] = '\0';
   current_picture_source[0] = '\0';
   while (pos < len && doc->node_count < HTML_MAX_NODES) {
+    /* Post-M5 W3: cooperative cancellation + yield point.
+     *
+     * Every HTML_PARSE_YIELD_EVERY iterations we (a) ask the
+     * navigation-level op_budget whether the user / supervisor
+     * cancelled or any per-phase budget tripped, and (b) call
+     * task_yield() so the desktop compositor and other tasks get
+     * a chance to run while a large document is being parsed.
+     *
+     * Without this, parsing a 1 MB document on the cooperative
+     * scheduler would block every other task for the full parse
+     * because the parser never voluntarily releases the CPU.
+     * That is the bug behind the "browser freezes the desktop"
+     * report and the long-tail "site too heavy -> system stuck"
+     * symptom. */
+    if ((++yield_counter % HTML_PARSE_YIELD_EVERY) == 0u) {
+      struct html_viewer_app *parse_app = hv_parse_app_get();
+      if (parse_app && hv_nav_budget_blocked(parse_app)) {
+        break;
+      }
+#ifndef UNIT_TEST
+      task_yield();
+#endif
+    }
     if (hv_is_space(html[pos])) {
       pos++;
       continue;

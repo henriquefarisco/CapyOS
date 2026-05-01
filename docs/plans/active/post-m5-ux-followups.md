@@ -159,12 +159,44 @@ derruba o sistema.
 
 | Workstream | Escopo | Status | Prioridade | Bloqueia |
 |---|---|---|---|---|
-| W1 — TTY polish | pequeno (~1 sessão) | 🔴 Não iniciado | alta (UX óbvio, fácil) | — |
-| W2 — Task manager | médio (~2–3 sessões) | 🔴 Não iniciado | média | — |
-| W3 — Browser responsiveness | grande (multi-sessão) | 🔴 Não iniciado | alta (regressão visível) | M8.2 desbloqueia o stretch (W3.4) |
+| W1 — TTY polish | pequeno (~1 sessão) | ✅ DONE 2026-04-30 | alta | — |
+| W2 — Task manager | médio (~2–3 sessões) | ✅ DONE 2026-04-30 | média | — |
+| W3 — Browser responsiveness (core) | grande (multi-sessão) | ✅ DONE 2026-04-30 (parser yield + timeout + per-frame tick); W3.4 stretch (mover html_viewer p/ processo userland) deferido | alta | M8.2 desbloqueia W3.4 |
 
-**Sugestão de ordem:** W1 → W2 → W3. W1 e W2 podem inclusive
-entrar como hotfixes na release pós-M5 (`0.8.0-alpha.5+`).
+### Entregas
+
+**W1 — TTY polish:**
+- `include/shell/core.h` — adiciona `shell_output_clear_fn`, `shell_set_clear_callback`, `shell_clear_screen` (callback context-aware).
+- `src/shell/core/shell_main/output_files.c` — implementa `shell_clear_screen` (callback se instalada, fallback `vga_clear`).
+- `src/shell/core/shell_main/context_commands.c` + `internal/shell_main_internal.h` — variável global `g_shell_output_clear`.
+- `src/shell/commands/session.c` — `cmd_mess` agora chama `shell_clear_screen()` em vez de `vga_clear()` direto, então funciona dentro do desktop terminal widget.
+- `src/gui/desktop/desktop.c` — `desktop_shell_clear()` instalado como callback paired com `desktop_shell_write/putc`; reset no close + ao final do dispatch.
+- `userland/bin/capysh/main.c` — builtin `clear` adicionado em capysh ring 3 emitindo ANSI CSI `\x1b[2J\x1b[H`.
+
+**W2 — Task manager:**
+- `include/apps/task_manager.h` — declara `task_manager_tick(void)` e `task_manager_kill_selected(...)`.
+- `src/apps/task_manager.c`:
+  - `task_manager_tick()` — invocado por frame; a cada `TASK_MANAGER_AUTO_REFRESH_FRAMES` (30 frames ≈ 0.5s) invalida a janela para repaint.
+  - `task_manager_kill_selected()` — mapeia row→pid via iter, chama `process_kill(pid, SIGKILL=9)`.
+  - Footer button agora rotula "Kill" para tasks/processes e "Restart" para services; cinza quando nenhuma row selecionada.
+  - Mouse handler dispatcha kill ou restart conforme view.
+  - Helper interno `task_manager_pid_for_selected` resolve seleção via `task_iter` / `process_iter`.
+- `src/gui/desktop/desktop.c` — `task_manager_tick()` chamado dentro de `desktop_run_frame`.
+
+**W3 — Browser responsiveness:**
+- `src/apps/html_viewer/html_parser.c` — yield cooperativo no laço principal de `html_parse`: a cada `HTML_PARSE_YIELD_EVERY = 1024` iterações, checa `hv_nav_budget_blocked()` e chama `task_yield()`. Quebra automaticamente se o budget do nav estourou (timeout / Esc / supervisor cancel).
+- `include/apps/html_viewer.h`:
+  - Adiciona campo `nav_started_ticks` em `struct html_viewer_app`.
+  - Define `HTML_VIEWER_NAV_TIMEOUT_TICKS = 3000` (≈ 30s @ 100Hz).
+  - Declara `html_viewer_tick(void)`.
+- `src/apps/html_viewer/navigation_state.c` — `html_viewer_begin_navigation` agora carimba `apic_timer_ticks()` em `nav_started_ticks` (zero em UNIT_TEST).
+- `src/apps/html_viewer/async_runtime.c` — implementa `html_viewer_tick(void)`:
+  - Drena resultados async via `html_viewer_poll_background` (sem precisar interação do usuário).
+  - Aplica deadline duro: se `now - started >= TIMEOUT`, chama `hv_nav_budget_cancel("timeout")`. Idempotente, marca stage="timeout".
+  - Stub no UNIT_TEST.
+- `src/gui/desktop/desktop.c` — `html_viewer_tick()` chamado dentro de `desktop_run_frame`.
+
+**W3.4 (stretch, deferido):** mover `html_viewer` para um processo userland separado via `fork+exec` (M5 desbloqueado), comunicação com desktop via pipe. Passa para o roadmap de M8.2 — não é crítico agora porque o yield + timeout já elimina o symptom "sistema congela ao abrir link / em sites pesados".
 
 ---
 

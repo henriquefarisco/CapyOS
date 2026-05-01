@@ -5,6 +5,7 @@ static size_t g_command_set_count = 0;
 static int g_command_sets_initialized = 0;
 shell_output_write_fn g_shell_output_write = NULL;
 shell_output_putc_fn g_shell_output_putc = NULL;
+shell_output_clear_fn g_shell_output_clear = NULL;
 void shell_hotkey_help_docs(void)
 {
     tty_inject_line("help-docs", 1);

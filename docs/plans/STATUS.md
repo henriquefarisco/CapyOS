@@ -123,14 +123,13 @@ Reportados manualmente durante validação da branch
 `feature/m5-development` (2026-04-30). **Não são** parte de M5;
 mapeados aqui para execução após merge.
 
-| ID | Workstream | Sintoma | Escopo | Prioridade | Bloqueia |
-|---|---|---|---|---|---|
-| W1 | TTY polish | `clear`/`cls` não limpa tela; builtins ausentes em ambos shells | pequeno (~1 sessão) | alta | — |
-| W2 | Task manager + service registry | Apps lançados pós-boot e serviços não aparecem no widget | médio (2–3 sessões) | média | — |
-| W3 | Browser/html_viewer responsiveness | Carregamento congela desktop; sites pesados travam o sistema | grande (multi-sessão) | alta | M8.2 stretch (W3.4: mover html_viewer para processo userland) |
+| ID | Workstream | Sintoma | Status | Bloqueia |
+|---|---|---|---|---|
+| W1 | TTY polish | `mess` (clear) não limpava tela dentro do desktop terminal | ✅ DONE 2026-04-30 — `shell_clear_screen` agora rota via callback context-aware (terminal widget ou fbcon); `clear` adicionado em capysh ring 3 | — |
+| W2 | Task manager + service registry | Apps lançados pós-boot não apareciam; services nunca refrescavam | ✅ DONE 2026-04-30 — `task_manager_tick()` chamado por frame de `desktop_run_frame` invalida o widget a cada ~0.5s; botão Kill funcional via `process_kill(pid, 9)` | — |
+| W3 | Browser/html_viewer responsiveness | Carregamento congelava desktop; sites pesados travavam o sistema | ✅ DONE 2026-04-30 (core) — yield cooperativo no `html_parse` (cada 1024 iter), timeout duro de 30s via `html_viewer_tick`, drain async sem precisar interação. W3.4 (mover html_viewer para processo userland) deferido p/ M8.2 | M8.2 stretch desbloqueado por M5 |
 
-**Sugestão de ordem:** W1 → W2 → W3. W1 e W2 podem entrar como
-hotfixes na release pós-M5 sem esperar a próxima rodada de planos.
+**Validação:** `make test` 7/7 + op_budget + privilege + buffer_cache_pacing OK; `make layout-audit` sem warnings; `clang -fsyntax-only` limpo nos arquivos kernel-side editados (task_manager.c, desktop.c, async_runtime.c, html_parser.c, navigation_state.c, output_files.c).
 
 ---
 
@@ -207,20 +206,23 @@ real) está em estado **Implementado**. A tabela do master plan
 
 A ordem de prioridade para destravar a maior quantidade de marcos:
 
-1. **M5 userland CI** — push da branch `feature/m5-development`,
-   rodar 6 smokes (`fork-cow`, `exec`, `fork-wait`, `pipe`,
-   `fork-crash`, `capysh`); destrava release `0.8.0-alpha.5` e M8.2.
+1. **M5 userland CI** — push da branch (já feito) + branch
+   `feature/dev-bugfixes` (atual W1+W2+W3); rodar 6 smokes
+   (`fork-cow`, `exec`, `fork-wait`, `pipe`, `fork-crash`,
+   `capysh`); destrava release `0.8.0-alpha.5` e M8.2.
 2. **M5 G.4/G.5** — release notes + tag + promoção no master plan.
-3. **W1 (TTY polish)** — quick win: builtin `clear` em ambos shells.
-   Pode entrar como hotfix da própria release alpha.5.
-4. **W2 (Task manager)** — religar widget ao `process_iter` /
-   `service_manager_iter`; refresh periódico.
-5. **M2 smoke VMware+E1000** — destrava M2.1–M2.5 e M6.4 (parte do gate VMware).
-6. **M6.4 assinatura ponta-a-ponta** — checksums + smoke VMware+E1000.
-7. **W3 (browser responsiveness)** — `op_budget` no parser HTML/CSS,
-   timeout duro, fetch async; depois (opcional) mover html_viewer
-   para processo userland (M8.2 stretch).
-8. **Registrar hotfixes 2026-04-30** em M0.1 e M3.5 (doc only).
+3. **M2 smoke VMware+E1000** — destrava M2.1–M2.5 e M6.4 (parte
+   do gate VMware).
+4. **M6.4 assinatura ponta-a-ponta** — checksums + smoke
+   VMware+E1000.
+5. **W3.4 (stretch)** — mover `html_viewer` para processo
+   userland separado via fork+exec (M5 desbloqueou). Casa com
+   M8.2.
+6. **Registrar hotfixes 2026-04-30** em M0.1 e M3.5 (doc only).
+
+**Já concluído nesta rodada:** W1 (clear context-aware),
+W2 (task manager auto-refresh + Kill button), W3 core
+(parser yield + timeout 30s + per-frame async drain).
 
 ## Critérios de aceite da release α (do master plan)
 

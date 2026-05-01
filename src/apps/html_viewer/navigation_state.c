@@ -2,6 +2,14 @@
 
 #include "kernel/log/klog.h"
 
+#ifndef UNIT_TEST
+/* Post-M5 W3: forward decl avoids pulling the full APIC header into
+ * a unit-test build. The host tests stub `apic_timer_ticks` to 0 via
+ * the test harness, so the navigation timestamp logic still
+ * exercises but never trips a deadline in tests. */
+extern uint64_t apic_timer_ticks(void);
+#endif
+
 const char *html_viewer_state_name(enum html_viewer_nav_state state) {
   switch (state) {
   case HTML_VIEWER_NAV_IDLE:
@@ -401,6 +409,16 @@ void html_viewer_begin_navigation(struct html_viewer_app *app, const char *url) 
   hv_render_budget_reset(app);
   hv_parse_budget_reset(app);
   hv_nav_budget_reset(app);
+  /* Post-M5 W3: stamp the navigation start so `html_viewer_tick`
+   * can enforce HTML_VIEWER_NAV_TIMEOUT_TICKS. In unit tests
+   * apic_timer_ticks is unavailable; leave the field at 0 there
+   * (no deadline ever trips, which is what the existing tests
+   * expect). */
+#ifndef UNIT_TEST
+  app->nav_started_ticks = apic_timer_ticks();
+#else
+  app->nav_started_ticks = 0;
+#endif
   app->last_error_reason[0] = '\0';
   kstrcpy(app->last_stage, sizeof(app->last_stage), "loading");
   if (url && url[0]) {

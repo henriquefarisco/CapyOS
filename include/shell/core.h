@@ -34,6 +34,16 @@ struct shell_command_set {
 
 typedef void (*shell_output_write_fn)(const char *text);
 typedef void (*shell_output_putc_fn)(char ch);
+/* Post-M5 W1: clear-screen callback. When the shell runs inside
+ * the desktop terminal widget, `shell_print/_putc` are routed to
+ * the widget via `shell_output_write_fn/putc_fn` but the canonical
+ * `mess` clear-screen builtin still calls `vga_clear()` / fbcon,
+ * which targets the framebuffer console hidden behind the GUI's
+ * own backbuffer. Result: `mess` appears to do nothing in desktop
+ * mode. This callback lets the desktop install a clear hook
+ * paired with its write/putc hooks so `cmd_mess` clears the
+ * terminal widget directly. NULL means "fall back to vga_clear()". */
+typedef void (*shell_output_clear_fn)(void);
 
 void shell_context_init(struct shell_context *ctx,
                         struct session_context *session,
@@ -59,6 +69,13 @@ void shell_paginate_content(const char *content);
 void shell_print_number(uint32_t value);
 void shell_set_output_callbacks(shell_output_write_fn write_cb,
                                 shell_output_putc_fn putc_cb);
+/* Install (or reset, if NULL) the clear-screen callback used by
+ * the `mess` builtin. Keep paired with `shell_set_output_callbacks`:
+ * desktop installs both on terminal open, clears both on close. */
+void shell_set_clear_callback(shell_output_clear_fn clear_cb);
+/* Internal: invoked by `cmd_mess` to clear the active output sink.
+ * Honours the registered clear callback; falls back to `vga_clear`. */
+void shell_clear_screen(void);
 
 /* String helpers */
 int shell_string_equal(const char *a, const char *b);

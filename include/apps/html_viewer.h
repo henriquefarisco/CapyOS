@@ -207,12 +207,47 @@ struct html_viewer_app {
    * crash. This is the single source of truth for "is the current
    * navigation still alive?". */
   struct op_budget nav_op_budget;
+  /* Post-M5 W3: hard deadline support. `nav_started_ticks` is the
+   * `apic_timer_ticks()` value captured when the active navigation
+   * began (set by `html_viewer_begin_navigation`). 0 means no
+   * navigation is in flight. `html_viewer_tick` (called per
+   * desktop frame) compares now-vs-start against
+   * `HTML_VIEWER_NAV_TIMEOUT_TICKS`; on overflow it cancels the
+   * navigation via `hv_nav_budget_cancel("timeout")` so the
+   * cooperative yield in `html_parse` and the per-phase budgets
+   * drop out cleanly. Without this, a heavy site that the
+   * cooperative scheduler would technically eventually finish
+   * could still keep the user waiting indefinitely; a hard
+   * timeout converts that into a graceful failure with a stage
+   * label of "timeout". */
+  uint64_t nav_started_ticks;
 };
+
+/* Post-M5 W3: navigation timeout in APIC ticks (100 Hz). 30 seconds
+ * matches typical browser network timeouts and is generous enough
+ * for very large pages on the slowest hardware while still bounding
+ * the worst-case "browser hangs forever" failure mode. */
+#define HTML_VIEWER_NAV_TIMEOUT_TICKS 3000ull
 
 void html_viewer_open(void);
 int html_parse(const char *html, size_t len, struct html_document *doc);
 void html_viewer_navigate(struct html_viewer_app *app, const char *url);
 void html_viewer_paint(struct html_viewer_app *app);
 void html_viewer_scroll(struct html_viewer_app *app, int delta);
+
+/* Post-M5 W3: per-frame tick. Must be called once per
+ * `desktop_run_frame`. Two responsibilities:
+ *   (1) Drain any ready async navigation result via
+ *       `html_viewer_poll_background` so users do not have to
+ *       click/scroll/type to surface a fetched page.
+ *   (2) Enforce `HTML_VIEWER_NAV_TIMEOUT_TICKS` against the
+ *       active navigation's start timestamp. If the deadline is
+ *       reached, cancel the navigation cooperatively. The parser
+ *       yield, the per-phase budgets, and the worker poll all
+ *       observe the cancel within one yield window.
+ *
+ * No-op when the viewer window is not open. Safe to call before
+ * the viewer has ever been instantiated. */
+void html_viewer_tick(void);
 
 #endif

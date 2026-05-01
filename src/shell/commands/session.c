@@ -2,7 +2,6 @@
 #include "shell/core.h"
 
 #include "lang/localization.h"
-#include "drivers/video/vga.h"
 
 static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
@@ -14,7 +13,7 @@ static int cmd_mess(struct shell_context *ctx, int argc, char **argv) {
             "Uso: mess\nLimpia la pantalla del terminal.\n"));
         return 0;
     }
-    vga_clear();
+    shell_clear_screen();
     return 0;
 }
 

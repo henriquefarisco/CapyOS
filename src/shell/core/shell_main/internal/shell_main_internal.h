@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 extern shell_output_write_fn g_shell_output_write;
+extern shell_output_clear_fn g_shell_output_clear;
 extern shell_output_putc_fn g_shell_output_putc;
 
 void shell_hotkey_help_docs(void);
