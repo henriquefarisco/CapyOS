@@ -91,7 +91,7 @@ jobs:
           echo "iso_path=$ISO_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload ISO and validation artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capyos-release-gates-${{ github.run_id }}
           path: |
@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload smoke logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capyos-qemu-smoke-${{ github.run_id }}
           path: |
