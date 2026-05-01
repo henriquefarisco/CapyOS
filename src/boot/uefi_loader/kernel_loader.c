@@ -1,33 +1,5 @@
 #include "internal/uefi_loader_internal.h"
 
-typedef EFI_STATUS (*kernel_read_fn_t)(void *ctx, UINT64 offset, VOID *buf,
-                                       UINTN size);
-
-struct kernel_buffer_reader {
-  const UINT8 *base;
-  UINT64 size;
-};
-
-struct kernel_block_reader {
-  EFI_BLOCK_IO_PROTOCOL *bio;
-  UINT64 base_lba;
-  UINT32 block_size;
-  UINT64 size;
-};
-
-struct kernel_file_reader {
-  EFI_FILE_HANDLE file;
-  UINT64 size;
-};
-
-struct kernel_load_plan {
-  EFI_PHYSICAL_ADDRESS link_base;
-  EFI_PHYSICAL_ADDRESS link_end;
-  UINT64 entry;
-  UINTN span;
-  UINTN pages;
-};
-
 static void kernel_copy_bytes(VOID *dst, const VOID *src, UINTN len) {
   UINT8 *d = (UINT8 *)dst;
   const UINT8 *s = (const UINT8 *)src;
