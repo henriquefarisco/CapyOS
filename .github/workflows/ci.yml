@@ -5,13 +5,18 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   lint:
-    name: Lint (Super-Linter)
+    name: Lint (super-linter)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -19,6 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Super-Linter
         uses: github/super-linter@v7
@@ -30,9 +37,10 @@ jobs:
           VALIDATE_YAML: true
           VALIDATE_JSON: true
           VALIDATE_MARKDOWN: true
+          FILTER_REGEX_EXCLUDE: "(^docs/plans/historical/|^docs/releases/)"
 
-  build-and-test:
-    name: Build and host tests
+  release-gates:
+    name: Release gates
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,24 +60,21 @@ jobs:
             build
             out
             .cache
-          key: ${{ runner.os }}-build-${{ hashFiles('Makefile', '**/*.mk', 'tools/scripts/check_deps.py') }}
+          key: ${{ runner.os }}-release-${{ hashFiles('Makefile', '**/*.mk', 'tools/scripts/**/*.py', 'VERSION.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-build-
+            ${{ runner.os }}-release-
 
       - name: Check dependencies
         run: python3 tools/scripts/check_deps.py
 
-      - name: Build (x64)
-        run: make all64
+      - name: Run release-check
+        run: make release-check
 
-      - name: Run host tests
-        run: make test
-
-      - name: Upload test and build artifacts
+      - name: Upload build/test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-artifacts-${{ github.run_id }}
+          name: release-gates-${{ github.run_id }}
           path: |
             build
             out
