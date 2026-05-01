@@ -1,0 +1,90 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_github_release:
+        description: "Publish artifact to GitHub Release"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-iso:
+    name: Build ISO artifact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install release dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-x86-64-linux-gnu \
+            build-essential \
+            gcc-x86-64-linux-gnu \
+            gnu-efi \
+            make \
+            xorriso
+
+      - name: Verify dependencies
+        run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+
+      - name: Validate build and produce ISO
+        run: |
+          make test
+          make layout-audit
+          make version-audit
+          make all64 TOOLCHAIN64=host
+          make iso-uefi TOOLCHAIN64=host
+          make verify-release-checksums TOOLCHAIN64=host
+
+      - name: Resolve ISO path
+        id: iso
+        shell: bash
+        run: |
+          ISO_PATH="$(cat build/CapyOS-Installer-UEFI.last-built.txt)"
+          if [ ! -f "$ISO_PATH" ]; then
+            echo "ISO path not found: $ISO_PATH"
+            exit 1
+          fi
+          echo "iso_path=$ISO_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload ISO and checksums as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: capyos-iso-${{ github.run_id }}
+          path: |
+            ${{ steps.iso.outputs.iso_path }}
+            build/release-artifacts.sha256
+            build/CapyOS-Installer-UEFI.last-built.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.iso.outputs.iso_path }}
+            build/release-artifacts.sha256
+          generate_release_notes: true

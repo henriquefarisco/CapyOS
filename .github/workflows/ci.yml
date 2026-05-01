@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Super-Linter
+        uses: github/super-linter@v7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: main
+          VALIDATE_ALL_CODEBASE: false
+          VALIDATE_CLANG_FORMAT: true
+          VALIDATE_YAML: true
+          VALIDATE_JSON: true
+          VALIDATE_MARKDOWN: true
+          FILTER_REGEX_EXCLUDE: "(^docs/plans/historical/|^docs/releases/)"
+
+  release-gates:
+    name: Release gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-x86-64-linux-gnu \
+            build-essential \
+            gcc-x86-64-linux-gnu \
+            gnu-efi \
+            make \
+            xorriso
+
+      - name: Check dependencies
+        run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+
+      - name: Run host and release gates
+        run: |
+          make test
+          make layout-audit
+          make version-audit
+          make boot-perf-baseline-selftest
+          make all64 TOOLCHAIN64=host
+          make iso-uefi TOOLCHAIN64=host
+          make verify-release-checksums TOOLCHAIN64=host
+
+      - name: Resolve ISO path
+        id: iso
+        shell: bash
+        run: |
+          ISO_PATH="$(cat build/CapyOS-Installer-UEFI.last-built.txt)"
+          if [ ! -f "$ISO_PATH" ]; then
+            echo "ISO path not found: $ISO_PATH"
+            exit 1
+          fi
+          echo "iso_path=$ISO_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload ISO and validation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: capyos-release-gates-${{ github.run_id }}
+          path: |
+            ${{ steps.iso.outputs.iso_path }}
+            build/release-artifacts.sha256
+            build/CapyOS-Installer-UEFI.last-built.txt
+          if-no-files-found: error
+
+  qemu-smoke:
+    name: QEMU ISO smoke
+    runs-on: ubuntu-latest
+    needs: release-gates
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-x86-64-linux-gnu \
+            build-essential \
+            gcc-x86-64-linux-gnu \
+            gnu-efi \
+            make \
+            ovmf \
+            qemu-system-x86 \
+            xorriso
+
+      - name: Check dependencies
+        run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+
+      - name: Run ISO install smoke
+        run: make smoke-x64-iso TOOLCHAIN64=host
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capyos-qemu-smoke-${{ github.run_id }}
+          path: |
+            build/ci
+            build/*.log
+          if-no-files-found: ignore

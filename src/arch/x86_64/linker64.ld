@@ -4,11 +4,11 @@ ENTRY(_start)
 
 SECTIONS
 {
-    /* Carregar em 4M (0x400000): VMware UEFI reserva paginas internas
-       em 16M+ (gera firmware exception na escrita) e tambem em 256M+.
-       4M e seguro: acima do BIOS-compat (~1MB) e fora das janelas
-       internas do firmware VMware. Verificado em sessao anterior. */
-    . = 4M;
+    /* Carregar em 64M: a imagem em memoria inclui uma .bss grande
+       (heap estatico + caches) e precisa de uma janela contigua de
+       dezenas de MiB. Em QEMU/OVMF, a janela baixa iniciando em 4M
+       pode cruzar regioes ocupadas pelo firmware no boot pelo disco. */
+    . = 64M;
     PROVIDE(__kernel_image_start = .);
 
     .text : ALIGN(4K) {
