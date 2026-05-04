@@ -54,11 +54,11 @@
 
 ## Progresso global
 
-`[████░░░░░░] 34%` *(F1 85% + F3 99% + F4 20% de 10 fases)*
+`[████░░░░░░] 35%` *(F1 95% + F3 99% + F4 20% de 10 fases)*
 
 | Fase | Tema | Progresso | Status | Depende de |
 |---|---|---|---|---|
-| **F1** | Release `0.8.0-alpha.6` (M5 + W1/W2/W3 + F3 browser) | `[█████████░] 90%` | 🟡 bump local validado; aguarda push/CI + tag | — |
+| **F1** | Release `0.8.0-alpha.6` (M5 + W1/W2/W3 + F3 browser) | `[█████████░] 95%` | 🟡 bump local validado; snapshot publicado em `main`/`develop`; falta tag | — |
 | **F2** | DHCP smoke VMware+E1000 + assinatura Ed25519 | `[█░░░░░░░░░] 10%` | 🔴 código existe; aguarda harness VMware | F1 |
 | **F3** | Browser em processo userland + watchdog (M8.2 + W3.4) | `[█████████▉] 99%` | 🟡 Etapas 1+2 + 3 a/b/c/d/e (+ polish/polish++) + 4 a/b ✅; Etapa 3 d refinement (colspan + auto-fit) + 3 c refinement (textarea) + Etapa 5 rate limiter ✅ 2026-05-03; falta Etapa 3 a fetch/decode real + f + Etapa 5 (resto) + smoke visual QEMU | F1 |
 | **F4** | Sockets userland + TLS (`libcapy-net` + `libcapy-tls`) | `[██░░░░░░░░] 20%` | 🟡 Etapa 4 a+b ✅ via bridge kernel-side (F3.3g); c/d (userland libs) pendentes | F1 (paralelo com F3) |
@@ -78,9 +78,10 @@
 Lista condensada dos próximos incrementos, agrupados por fase. Detalhe
 técnico (entregáveis, critérios de aceite, validação) vive no master plan.
 
-### F1 — Release `0.8.0-alpha.6` (15% restante)
+### F1 — Release `0.8.0-alpha.6` (5% restante)
 
-- [ ] Push do branch `feature/dev-bugfixes` ao GitHub (decisão do operador).
+- [x] Push do snapshot da release ao GitHub em `main` e `develop`.
+- [x] CI principal verde em `main` e `develop` para o snapshot publicado.
 - [ ] CI executa 6 smokes M5 (`fork-cow`, `exec`, `fork-wait`, `pipe`, `fork-crash`, `capysh`) após o push.
 - [ ] CI executa `make release-check` com toolchain `x86_64-elf-*`.
 - [ ] Tag `0.8.0-alpha.6+20260503` após CI verde.

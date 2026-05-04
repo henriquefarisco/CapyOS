@@ -134,7 +134,7 @@ Cada fase tem o mesmo formato:
 
 ### F1 — Release `0.8.0-alpha.6` (consolidação M5 + W1/W2/W3 + F3 browser)
 
-**Status:** 🟡 Em andamento (2026-05-03) — bump local validado; falta push/CI + tag.
+**Status:** 🟡 Em andamento (2026-05-03) — bump local validado; snapshot publicado em `main`/`develop`; falta tag.
 **Criticidade:** alta — destrava M8.2 e o ciclo seguinte.
 **Depende de:** branch `feature/continue-development` (M5+W1+W2+W3 já merge no HEAD).
 **Paralelo possível com:** F2 (smoke VMware) — diferentes superfícies.
@@ -149,7 +149,7 @@ Cada fase tem o mesmo formato:
 - ✅ E1.6 — Diretório `docs/screenshots/0.8.0-alpha.6/` criado com `README.md` placeholder (PNGs aguardam captura pós-CI verde).
 - ✅ E1.8 — Master plan atualizado (este bloco).
 - ✅ Validações locais passaram: `make test`, `make layout-audit`, `make version-audit`, `make boot-perf-baseline-selftest`.
-- ⏳ E1.1 — Push do branch para o GitHub (pendente — usuário decide quando).
+- ✅ E1.1 — Snapshot publicado em `main` e `develop` (commit `afa87b4`).
 - ⏳ E1.2 — CI roda os 6 smokes M5 (pendente — depende de E1.1 + cross-toolchain `x86_64-elf-*`).
 - ⏳ E1.3 — `make release-check` em CI (host local não tem cross-compiler).
 - ⏳ E1.7 — Tag `0.8.0-alpha.6+20260503` (pendente — após E1.2 + E1.3 verdes).
