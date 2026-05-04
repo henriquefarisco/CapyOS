@@ -19,6 +19,25 @@ enum process_state {
   PROC_STATE_ZOMBIE
 };
 
+/* File-descriptor type discriminators (carried in `struct
+ * file_descriptor::type`). Centralised here in 2026-05-02 to
+ * eliminate the prior 3-way duplication between
+ * `src/kernel/syscall.c`, `src/kernel/process.c` and
+ * `src/kernel/browser_engine_spawn.c`. New FD types must be added
+ * here AND must extend the dispatch in `process_fd_free` (kernel
+ * lifecycle path) and `sys_close` (userland close path) in
+ * lockstep. */
+#define FD_TYPE_FREE 0  /* slot empty / available for alloc */
+#define FD_TYPE_VFS  1  /* private_data = struct file* (vfs.h) */
+#define FD_TYPE_PIPE 2  /* private_data = pipe id (int cast) */
+
+/* Pipe-direction flags (bitmask in `struct file_descriptor::flags`
+ * when `type == FD_TYPE_PIPE`). A single FD references exactly ONE
+ * end of the kernel pipe; chrome and engine each hold their own
+ * directional FDs to the same pipe id. */
+#define FD_PIPE_FLAG_READ  0x1u
+#define FD_PIPE_FLAG_WRITE 0x2u
+
 struct file_descriptor {
   int type;
   uint32_t flags;

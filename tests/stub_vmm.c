@@ -97,6 +97,16 @@ void x64_user_first_dispatch(void) {
      * &x64_user_first_dispatch but never invoke the trampoline. */
 }
 
+/* 2026-05-02: process_fd_free now calls vfs_close on FD_TYPE_VFS to
+ * release the underlying file. Host tests never populate that FD
+ * type (proc->fds[i].type stays 0 = FREE), so vfs_close is never
+ * actually invoked from tests. We still need a symbol for the
+ * linker; stub with a no-op that loudly logs if it ever runs. */
+struct file;
+void vfs_close(struct file *file) {
+    (void)file;
+}
+
 /* M5 phase B.3: process_exec_replace calls vmm_switch_address_space
  * to reload CR3 onto the new AS before destroying the old. The host
  * build has no CR3 to write; record the most recent switch target

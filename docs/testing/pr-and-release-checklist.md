@@ -41,8 +41,10 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
 
 ## 3. Robustez e plano vivo
 
-- [ ] Se a mudanca tocou em algum item de `docs/plans/active/capyos-robustness-master-plan.md`,
-      o status do item foi atualizado seguindo a regra:
+- [ ] Se a mudanca tocou em algum item de `docs/plans/active/capyos-master-plan.md`
+      (plano vivo unico; o antigo `capyos-robustness-master-plan.md` foi
+      consolidado em `historical/`), o status do item foi atualizado
+      seguindo a regra:
       `Ainda nao iniciado` -> `Parcial` -> `Implementado` -> `Substituido`/`Bloqueado`.
 - [ ] A coluna `Evidencia` cita arquivo/teste/log/release e a coluna
       `Proximo passo` reflete o que ainda falta.

@@ -59,6 +59,18 @@ void browser_chrome_init(struct browser_chrome *c, uint64_t now_ticks) {
     c->next_request_seq = 1u;
     c->total_events_handled = 0u;
     c->total_protocol_errors = 0u;
+    /* slice 4: zero out the log slot so callers see len=0 until
+     * the engine emits a real EVENT_LOG. */
+    c->last_log_level = 0u;
+    c->last_log_msg_len = 0u;
+    c->last_log_msg[0] = '\0';
+    /* slice 5b: no pending fetch at startup. */
+    c->pending_fetch_active = 0u;
+    c->pending_fetch_method = 0u;
+    c->pending_fetch_seq = 0u;
+    c->pending_fetch_nav_id = 0u;
+    c->pending_fetch_url[0] = '\0';
+    c->pending_fetch_url_len = 0u;
     browser_watchdog_init(&c->watchdog, now_ticks);
 }
 
@@ -239,7 +251,8 @@ static uint32_t handle_pong(struct browser_chrome *c,
     return 0u; /* watchdog cuida; nada visivel ao usuario */
 }
 
-static uint32_t handle_log(uint32_t plen, const uint8_t *payload) {
+static uint32_t handle_log(struct browser_chrome *c, uint32_t plen,
+                           const uint8_t *payload) {
     /* level u8 + msg_len u16 + msg utf8. */
     if (plen < 3u) return BROWSER_CHROME_ACTION_PROTOCOL_ERR;
     uint16_t mlen;
@@ -247,7 +260,86 @@ static uint32_t handle_log(uint32_t plen, const uint8_t *payload) {
     if (3u + (uint32_t)mlen > plen) {
         return BROWSER_CHROME_ACTION_PROTOCOL_ERR;
     }
+    /* Slice 4: stash the log message in chrome state so callers can
+     * read it on LOG_FORWARD without intercepting the IPC frame. */
+    c->last_log_level = payload[0];
+    uint32_t copy = mlen;
+    if (copy >= BROWSER_CHROME_LOG_MSG_MAX) {
+        copy = BROWSER_CHROME_LOG_MSG_MAX - 1u;
+    }
+    for (uint32_t i = 0u; i < copy; i++) {
+        c->last_log_msg[i] = (char)payload[3u + i];
+    }
+    c->last_log_msg[copy] = '\0';
+    c->last_log_msg_len = (uint16_t)copy;
     return BROWSER_CHROME_ACTION_LOG_FORWARD;
+}
+
+/* slice 5b: engine asked the chrome to fetch a URL on its behalf.
+ * The chrome doesn't resolve here -- it just stages the request
+ * and signals the runtime to drain via
+ * `browser_chrome_take_pending_fetch()`. If a previous fetch is
+ * still pending (caller didn't drain), reject as protocol error
+ * to avoid silently losing the older request. */
+static uint32_t handle_fetch_request(struct browser_chrome *c,
+                                     const uint8_t *payload, uint32_t plen) {
+    struct browser_ipc_fetch_request req;
+    int rc = browser_ipc_fetch_request_decode(payload, plen, &req);
+    if (rc != BROWSER_IPC_OK) return BROWSER_CHROME_ACTION_PROTOCOL_ERR;
+    if (c->pending_fetch_active) {
+        /* Slot busy: engine is supposed to wait for FETCH_RESPONSE
+         * before issuing the next request. Surface as protocol err
+         * so the watchdog/dispatcher can react. */
+        return BROWSER_CHROME_ACTION_PROTOCOL_ERR;
+    }
+    c->pending_fetch_seq = req.seq;
+    c->pending_fetch_nav_id = req.nav_id;
+    c->pending_fetch_method = req.method;
+    /* Copy the URL into chrome-owned storage so the borrowed pointer
+     * from the IPC payload doesn't outlive the buffer. */
+    uint16_t take = req.url_len;
+    if (take >= BROWSER_CHROME_URL_MAX) {
+        take = (uint16_t)(BROWSER_CHROME_URL_MAX - 1u);
+    }
+    for (uint16_t i = 0; i < take; ++i) {
+        c->pending_fetch_url[i] = (char)req.url[i];
+    }
+    c->pending_fetch_url[take] = '\0';
+    c->pending_fetch_url_len = take;
+    c->pending_fetch_active = 1u;
+    return BROWSER_CHROME_ACTION_FETCH_REQUESTED;
+}
+
+int browser_chrome_take_pending_fetch(struct browser_chrome *c,
+                                      struct browser_ipc_fetch_request *out) {
+    if (!c || !out) return 0;
+    if (!c->pending_fetch_active) return 0;
+    out->seq = c->pending_fetch_seq;
+    out->nav_id = c->pending_fetch_nav_id;
+    out->method = c->pending_fetch_method;
+    out->url_len = c->pending_fetch_url_len;
+    out->url = (const uint8_t *)c->pending_fetch_url;
+    c->pending_fetch_active = 0u;
+    return 1;
+}
+
+uint32_t browser_chrome_build_fetch_response_payload(
+    uint32_t seq, uint32_t nav_id, uint16_t status,
+    const uint8_t *content_type, uint16_t content_type_len,
+    const uint8_t *body, uint32_t body_len,
+    uint8_t *out_buf, uint32_t out_size) {
+    struct browser_ipc_fetch_response resp;
+    resp.seq = seq;
+    resp.nav_id = nav_id;
+    resp.status = status;
+    resp.content_type_len = content_type_len;
+    resp.content_type = content_type;
+    resp.body_len = body_len;
+    resp.body = body;
+    uint32_t written = 0u;
+    int rc = browser_ipc_fetch_response_encode(&resp, out_buf, out_size,
+                                               &written);
+    return (rc == BROWSER_IPC_OK) ? written : 0u;
 }
 
 uint32_t browser_chrome_dispatch_event(struct browser_chrome *c,
@@ -297,7 +389,10 @@ uint32_t browser_chrome_dispatch_event(struct browser_chrome *c,
             actions = handle_pong(c, payload, hdr->payload_len, now_ticks);
             break;
         case BROWSER_IPC_EVENT_LOG:
-            actions = handle_log(hdr->payload_len, payload);
+            actions = handle_log(c, hdr->payload_len, payload);
+            break;
+        case BROWSER_IPC_EVENT_FETCH_REQUEST:
+            actions = handle_fetch_request(c, payload, hdr->payload_len);
             break;
         default:
             actions = BROWSER_CHROME_ACTION_PROTOCOL_ERR;

@@ -137,6 +137,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/boot/boot_ui.o \
 	$(BUILD)/x86_64/core/kcon.o \
 	$(BUILD)/x86_64/lang/localization.o \
+	$(BUILD)/x86_64/lang/app_language.o \
 	$(BUILD)/x86_64/auth/login_runtime.o \
 	$(BUILD)/x86_64/net/bootstrap/network_bootstrap_config.o \
 	$(BUILD)/x86_64/net/bootstrap/network_bootstrap_diag.o \
@@ -310,7 +311,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/core/event.o \
 	$(BUILD)/x86_64/gui/core/font.o \
 	$(BUILD)/x86_64/gui/core/compositor.o \
+	$(BUILD)/x86_64/gui/core/compositor_theme.o \
+	$(BUILD)/x86_64/gui/core/compositor_render.o \
 	$(BUILD)/x86_64/gui/widgets/widget.o \
+	$(BUILD)/x86_64/gui/widgets/context_menu.o \
+	$(BUILD)/x86_64/gui/widgets/inline_prompt.o \
 	$(BUILD)/x86_64/gui/terminal/terminal.o \
 	$(BUILD)/x86_64/lang/capylang.o \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_journal_integration.o \
@@ -323,9 +328,12 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/browser_engine_spawn.o \
 	$(BUILD)/x86_64/kernel/browser_smoke.o \
 	$(BUILD)/x86_64/apps/browser_ipc/codec.o \
+	$(BUILD)/x86_64/apps/browser_ipc/fetch.o \
 	$(BUILD)/x86_64/apps/browser_chrome/watchdog.o \
 	$(BUILD)/x86_64/apps/browser_chrome/chrome.o \
 	$(BUILD)/x86_64/apps/browser_chrome/runtime.o \
+	$(BUILD)/x86_64/apps/browser_chrome/audit_log.o \
+	$(BUILD)/x86_64/apps/browser_chrome/fetch_resolver.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
@@ -334,32 +342,17 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/desktop/taskbar.o \
 	$(BUILD)/x86_64/security/sha512.o \
 	$(BUILD)/x86_64/gui/desktop/desktop.o \
+	$(BUILD)/x86_64/gui/desktop/desktop_icons.o \
 	$(BUILD)/x86_64/gui/desktop/desktop_runtime.o \
 	$(BUILD)/x86_64/apps/calculator.o \
 	$(BUILD)/x86_64/apps/file_manager.o \
 	$(BUILD)/x86_64/apps/text_editor.o \
 	$(BUILD)/x86_64/apps/task_manager.o \
-	$(BUILD)/x86_64/apps/html_viewer/common.o \
-	$(BUILD)/x86_64/apps/html_viewer/navigation_state.o \
-	$(BUILD)/x86_64/apps/html_viewer/navigation_budget.o \
-	$(BUILD)/x86_64/apps/html_viewer/response_classification.o \
-	$(BUILD)/x86_64/apps/html_viewer/text_url_helpers.o \
-	$(BUILD)/x86_64/apps/html_viewer/async_runtime.o \
-	$(BUILD)/x86_64/apps/html_viewer/ui_runtime.o \
-	$(BUILD)/x86_64/apps/html_viewer/ui_input.o \
-	$(BUILD)/x86_64/apps/html_viewer/ui_mouse.o \
-	$(BUILD)/x86_64/apps/html_viewer/forms_and_response.o \
-	$(BUILD)/x86_64/apps/html_viewer/html_tree_helpers.o \
-	$(BUILD)/x86_64/apps/html_viewer/ui_shell.o \
-	$(BUILD)/x86_64/apps/html_viewer/render_primitives.o \
-	$(BUILD)/x86_64/apps/html_viewer/render_tree.o \
-	$(BUILD)/x86_64/apps/html_viewer/html_parser.o \
-	$(BUILD)/x86_64/apps/html_viewer/app_entry_async.o \
-	$(BUILD)/x86_64/apps/html_viewer/resource_loading.o \
-	$(BUILD)/x86_64/apps/html_viewer/public_api.o \
-	$(BUILD)/x86_64/apps/css_parser/common.o \
-	$(BUILD)/x86_64/apps/css_parser/parse.o \
-	$(BUILD)/x86_64/apps/css_parser/apply.o \
+	$(BUILD)/x86_64/apps/browser_app/browser_app.o \
+	$(BUILD)/x86_64/apps/browser_app/homepage.o \
+	$(BUILD)/x86_64/apps/browser_app/nav.o \
+	$(BUILD)/x86_64/apps/browser_app/toolbar.o \
+	$(BUILD)/x86_64/apps/browser_app/url_edit.o \
 	$(BUILD)/x86_64/apps/settings.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
 	$(BUILD)/x86_64/gui/window/window_manager.o \
@@ -425,7 +418,7 @@ USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
                   -fcf-protection=none -fno-pic -fno-pie -fno-plt \
                   -fno-omit-frame-pointer -fno-strict-aliasing \
                   -fno-stack-protector \
-                  -Iinclude -Iuserland/include
+                  -Iinclude -Iuserland/include -Iuserland/lib/capyhtml/include
 
 $(CAPYLIBC_BUILD_DIR)/%.o: $(USERLAND_DIR)/%.S
 	@mkdir -p $(dir $@)
@@ -558,8 +551,39 @@ capysh-blob: $(CAPYSH_BLOB_OBJ)
 # verbatim (the codec depends only on <stdint.h> and is intentionally
 # free of kernel/libc symbols).
 CAPYBROWSER_IPC_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/codec.o
+CAPYBROWSER_FETCH_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/fetch.o
 
 $(CAPYBROWSER_IPC_OBJ): src/apps/browser_ipc/codec.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+$(CAPYBROWSER_FETCH_OBJ): src/apps/browser_ipc/fetch.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+# F3.3c slice 4 (preview): libcapyhtml.a is built as a single TU
+# today; once Slice 2b adds css.c / forms.c they are added here as
+# additional object files. The same USERLAND_CFLAGS apply because the
+# library is freestanding by design.
+CAPYHTML_PARSER_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/parser.o
+CAPYHTML_RENDER_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/render.o
+CAPYHTML_FONT_OBJ   = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/font.o
+CAPYHTML_RASTER_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/raster.o
+
+$(CAPYHTML_PARSER_OBJ): userland/lib/capyhtml/src/parser.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+$(CAPYHTML_RENDER_OBJ): userland/lib/capyhtml/src/render.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+# F3.3c slice 4-final: embedded 8x8 font + BGRA rasterizer.
+$(CAPYHTML_FONT_OBJ): userland/lib/capyhtml/src/font.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+$(CAPYHTML_RASTER_OBJ): userland/lib/capyhtml/src/raster.c
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 
@@ -567,6 +591,11 @@ CAPYBROWSER_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser.elf
 CAPYBROWSER_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/bin/capybrowser/main.o \
 	$(CAPYBROWSER_IPC_OBJ) \
+	$(CAPYBROWSER_FETCH_OBJ) \
+	$(CAPYHTML_PARSER_OBJ) \
+	$(CAPYHTML_RENDER_OBJ) \
+	$(CAPYHTML_FONT_OBJ) \
+	$(CAPYHTML_RASTER_OBJ) \
 	$(CAPYLIBC_OBJS)
 
 $(CAPYBROWSER_ELF): $(CAPYBROWSER_OBJS)
@@ -576,6 +605,29 @@ $(CAPYBROWSER_ELF): $(CAPYBROWSER_OBJS)
 .PHONY: capybrowser-elf
 capybrowser-elf: $(CAPYBROWSER_ELF)
 	@echo "[ok] user binary linked: $(CAPYBROWSER_ELF)"
+
+# F3.3c slice 1: prove libcapyhtml's skeleton compiles under the
+# userland cross-target without any kernel header. Clang is available
+# on every CI runner (and on macOS dev hosts where the cross gcc is
+# missing), so the syntax-check is portable. Slice 2 will replace the
+# stub TU with the real extracted parser; this rule keeps the contract
+# that "userland never accidentally re-imports a kernel header" green
+# for every PR going forward.
+CAPYHTML_DIR = userland/lib/capyhtml
+CAPYHTML_SYNTAX_CC ?= clang
+CAPYHTML_SYNTAX_FLAGS = -fsyntax-only -target x86_64-unknown-linux-gnu \
+                        -ffreestanding -nostdinc \
+                        -Iuserland/include -I$(CAPYHTML_DIR)/include \
+                        -isystem $(shell $(CAPYHTML_SYNTAX_CC) -print-resource-dir 2>/dev/null)/include
+
+.PHONY: capyhtml-userland-syntax
+capyhtml-userland-syntax:
+	@echo "[capyhtml] syntax-check userland TUs"
+	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/parser.c
+	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/render.c
+	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/font.c
+	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/raster.c
+	@echo "[ok] capyhtml userland skeleton compiles cleanly"
 
 CAPYBROWSER_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser_elf_blob.o
 
@@ -714,9 +766,9 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Iuserland/lib/capyhtml/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_html_viewer.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/fs/capyfs/capyfs_check.c src/fs/capyfs/capyfs_journal_integration.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
@@ -742,7 +794,7 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/services/update_agent_transact.c src/apps/html_viewer/common.c src/apps/html_viewer/navigation_state.c src/apps/html_viewer/navigation_budget.c src/apps/html_viewer/response_classification.c src/apps/html_viewer/text_url_helpers.c src/apps/html_viewer/async_runtime.c src/apps/html_viewer/ui_runtime.c src/apps/html_viewer/ui_input.c src/apps/html_viewer/ui_mouse.c src/apps/html_viewer/forms_and_response.c src/apps/html_viewer/html_tree_helpers.c src/apps/html_viewer/ui_shell.c src/apps/html_viewer/render_primitives.c src/apps/html_viewer/render_tree.c src/apps/html_viewer/html_parser.c src/apps/html_viewer/app_entry_async.c src/apps/html_viewer/resource_loading.c src/apps/html_viewer/public_api.c src/apps/css_parser/common.c src/apps/css_parser/parse.c src/apps/css_parser/apply.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
+	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/services/update_agent_transact.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
                src/util/kstring.c src/fs/journal/journal.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
@@ -773,10 +825,22 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_privilege.c src/auth/privilege.c \
                tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
                tests/test_browser_ipc.c src/apps/browser_ipc/codec.c \
+               tests/test_browser_ipc_fetch.c src/apps/browser_ipc/fetch.c \
                tests/test_browser_watchdog.c src/apps/browser_chrome/watchdog.c \
                tests/test_browser_chrome.c src/apps/browser_chrome/chrome.c \
-               tests/test_browser_chrome_runtime.c src/apps/browser_chrome/runtime.c \
-               tests/test_browser_e2e.c
+               tests/test_browser_chrome_fetch.c \
+               tests/test_browser_fetch_resolver.c src/apps/browser_chrome/fetch_resolver.c \
+               tests/test_browser_runtime_fetch.c \
+               tests/test_browser_chrome_runtime.c tests/test_browser_chrome_runtime_mock.c tests/test_browser_chrome_runtime_rate.c src/apps/browser_chrome/runtime.c src/apps/browser_chrome/audit_log.c \
+               tests/test_browser_chrome_audit.c \
+               tests/test_browser_e2e.c \
+               tests/test_capyhtml_parser.c userland/lib/capyhtml/src/parser.c \
+               tests/test_capyhtml_render.c userland/lib/capyhtml/src/render.c \
+               tests/test_capyhtml_raster.c userland/lib/capyhtml/src/raster.c \
+               userland/lib/capyhtml/src/font.c \
+               tests/test_browser_app_url_edit.c src/apps/browser_app/url_edit.c \
+               tests/test_syscall_pipe_priority.c src/kernel/syscall.c tests/stub_syscall_deps.c \
+               tests/test_process_current_dynamic.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

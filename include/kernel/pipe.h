@@ -4,7 +4,16 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PIPE_BUF_SIZE 4096
+/* 2026-05-02: bump 4 KiB -> 64 KiB. O EVENT_FRAME do browser
+ * (480x360 BGRA = 675 KiB) atravessa o pipe como ~170 chunks de
+ * 4 KiB, cada um requerendo ida-e-volta cooperativa entre
+ * engine e chrome. Em PIPE_BUF_SIZE=64 KiB, sao apenas ~11
+ * round-trips, reduzindo ordem de magnitude na latencia. Custo
+ * total .bss: 32 pipes * 64 KiB = 2 MiB (era 128 KiB). Aceitavel
+ * para kernel image. PIPE_MAX permanece 32 para nao colidir com
+ * o offset +256 usado em pipe_create para distinguir read/write
+ * fds (PIPE_MAX < 256 obrigatorio). */
+#define PIPE_BUF_SIZE (64u * 1024u)
 #define PIPE_MAX 32
 
 struct pipe {

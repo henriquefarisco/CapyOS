@@ -302,9 +302,7 @@ void kernel_service_poll(void) {
    * directly). The runner step itself drives both service_manager and
    * work_queue polls, so behaviour is preserved bit-for-bit. */
   service_runner_init();
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'{'), "Nd"((uint16_t)0xE9));
   (void)service_runner_step(now_ticks);
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)'}'), "Nd"((uint16_t)0xE9));
 }
 
 void x64_kernel_runtime_poll_background(void) {

@@ -1,8 +1,11 @@
 #include "apps/text_editor.h"
+#include "apps/file_manager.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
+#include "gui/context_menu.h"
 #include "drivers/input/keyboard_layout.h"
 #include "fs/vfs.h"
+#include "lang/app_language.h"
 #include "util/kstring.h"
 #include "memory/kmem.h"
 #include <stddef.h>
@@ -21,6 +24,16 @@ static void text_editor_on_close(struct gui_window *win) {
 }
 
 static void text_editor_window_paint(struct gui_window *win) {
+  if (!win || !win->user_data) return;
+  text_editor_paint((struct text_editor_app *)win->user_data);
+}
+
+/* 2026-05-02: repaint after a user resize drag (see
+ * src/apps/calculator.c for the rationale). */
+static void text_editor_window_resize(struct gui_window *win,
+                                      uint32_t w, uint32_t h) {
+  (void)w;
+  (void)h;
   if (!win || !win->user_data) return;
   text_editor_paint((struct text_editor_app *)win->user_data);
 }
@@ -52,6 +65,57 @@ static void text_editor_window_scroll(struct gui_window *win, int32_t delta) {
     app->scroll_offset = app->line_count - 1;
 }
 
+/* Etapa UX W7-ish (2026-05-03): toolbar com botoes "Save" e "Open".
+ * Save = grava o arquivo; Open = abre o file_manager para o usuario
+ * navegar e clicar num .txt (que abre nesta janela via
+ * text_editor_open). Coordenadas dos botoes em pixels:
+ *   Save:  4 .. 60   x  toolbar_y .. toolbar_y+18
+ *   Open: 64 .. 116  x  toolbar_y .. toolbar_y+18
+ * O toolbar fica no topo (acima do texto), 22 px de altura. */
+#define EDITOR_TOOLBAR_H   22
+#define EDITOR_BTN_SAVE_X   4
+#define EDITOR_BTN_SAVE_W  56
+#define EDITOR_BTN_OPEN_X  64
+#define EDITOR_BTN_OPEN_W  56
+
+static int editor_hit_save(int32_t lx, int32_t ly) {
+  return ly >= 2 && ly < 20 &&
+         lx >= EDITOR_BTN_SAVE_X &&
+         lx < EDITOR_BTN_SAVE_X + EDITOR_BTN_SAVE_W;
+}
+
+static int editor_hit_open(int32_t lx, int32_t ly) {
+  return ly >= 2 && ly < 20 &&
+         lx >= EDITOR_BTN_OPEN_X &&
+         lx < EDITOR_BTN_OPEN_X + EDITOR_BTN_OPEN_W;
+}
+
+/* Etapa F4 cursors (2026-05-03): I-beam sobre a area do texto
+ * (abaixo da toolbar). Sobre os botoes Save/Open, ARROW. */
+static enum comp_cursor_kind text_editor_on_cursor(struct gui_window *win,
+                                                    int32_t lx, int32_t ly) {
+  (void)win; (void)lx;
+  if (ly >= EDITOR_TOOLBAR_H) return COMP_CURSOR_TEXT;
+  return COMP_CURSOR_ARROW;
+}
+
+static void text_editor_window_mouse(struct gui_window *win, int32_t x,
+                                      int32_t y, uint8_t btns) {
+  if (!win || !win->user_data) return;
+  if (!(btns & 0x01)) return;
+  struct text_editor_app *app = (struct text_editor_app *)win->user_data;
+  if (editor_hit_save(x, y)) {
+    text_editor_save(app);
+    return;
+  }
+  if (editor_hit_open(x, y)) {
+    /* Open file_manager para o usuario navegar; click sobre .txt
+     * la abre nesta mesma janela do editor via text_editor_open. */
+    file_manager_open();
+    return;
+  }
+}
+
 void text_editor_open(const char *path) {
   const struct gui_theme_palette *theme = compositor_theme();
   uint8_t scale = compositor_ui_scale();
@@ -76,8 +140,12 @@ void text_editor_open(const char *path) {
   g_editor.window->user_data = &g_editor;
   g_editor.window->on_paint = text_editor_window_paint;
   g_editor.window->on_key = text_editor_window_key;
+  g_editor.window->on_mouse = text_editor_window_mouse;
   g_editor.window->on_scroll = text_editor_window_scroll;
   g_editor.window->on_close = text_editor_on_close;
+  g_editor.window->on_resize = text_editor_window_resize;
+  /* Etapa F4 cursors (2026-05-03): I-beam sobre o body. */
+  g_editor.window->on_cursor_hint = text_editor_on_cursor;
   compositor_show_window(g_editor.window->id);
   compositor_focus_window(g_editor.window->id);
   g_editor_open = 1;
@@ -215,6 +283,27 @@ void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char 
   }
 }
 
+/* Etapa UX W7-ish (2026-05-03): pinta um botao retangular com label
+ * + borda. Usado para Save/Open na toolbar do editor. */
+static void editor_paint_button(struct gui_surface *s, const struct font *f,
+                                 int32_t x, int32_t y, uint32_t w, uint32_t h,
+                                 const char *label, uint32_t bg,
+                                 uint32_t fg, uint32_t border) {
+  if (!s || !f) return;
+  for (uint32_t r = 0; r < h; r++) {
+    int32_t py = y + (int32_t)r;
+    if (py < 0 || (uint32_t)py >= s->height) continue;
+    uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)py * s->pitch);
+    for (uint32_t c = 0; c < w; c++) {
+      int32_t px = x + (int32_t)c;
+      if (px < 0 || (uint32_t)px >= s->width) continue;
+      int edge = (r == 0 || r == h - 1 || c == 0 || c == w - 1);
+      line[px] = edge ? border : bg;
+    }
+  }
+  if (label) font_draw_string(s, f, x + 6, y + 3, label, fg);
+}
+
 void text_editor_paint(struct text_editor_app *app) {
   if (!app || !app->window) return;
   struct gui_surface *s = &app->window->surface;
@@ -227,13 +316,27 @@ void text_editor_paint(struct text_editor_app *app) {
     for (uint32_t x = 0; x < s->width; x++) line[x] = theme->window_bg;
   }
 
-  /* Title bar info */
-  font_draw_string(s, f, 4, 2, app->path, theme->accent);
+  /* Etapa UX W7-ish (2026-05-03): toolbar com botoes Save/Open.
+   * Etapa F4 i18n (2026-05-03): labels traduzidos. */
+  editor_paint_button(s, f, EDITOR_BTN_SAVE_X, 2,
+                       EDITOR_BTN_SAVE_W, 18,
+                       APP_T("Salvar", "Save", "Guardar"),
+                       theme->accent, theme->accent_text,
+                       theme->window_border);
+  editor_paint_button(s, f, EDITOR_BTN_OPEN_X, 2,
+                       EDITOR_BTN_OPEN_W, 18,
+                       APP_T("Abrir", "Open", "Abrir"),
+                       theme->accent_alt, theme->accent_text,
+                       theme->window_border);
+  /* Path mostrado apos os botoes para nao colidir. */
+  font_draw_string(s, f, EDITOR_BTN_OPEN_X + EDITOR_BTN_OPEN_W + 8, 4,
+                    app->path, theme->text);
   if (app->modified)
-    font_draw_string(s, f, (int32_t)(s->width - 80), 2, "[modified]",
+    font_draw_string(s, f, (int32_t)(s->width - 80), 4,
+                     APP_T("[modificado]", "[modified]", "[modificado]"),
                      theme->accent_alt);
 
-  int32_t y = 20;
+  int32_t y = EDITOR_TOOLBAR_H;
   uint32_t gh = f->glyph_height;
   for (int i = app->scroll_offset; i < app->line_count && y + (int32_t)gh < (int32_t)s->height; i++) {
     /* Line number */

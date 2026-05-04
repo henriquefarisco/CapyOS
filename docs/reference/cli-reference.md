@@ -85,7 +85,7 @@ Contexto operacional atual:
 | `recovery-verify` | `recovery-verify [saved|core|network|full|maintenance]` | Verifica se os prerequisitos minimos para promover um alvo de recuperacao ja estao presentes, sem aplicar a mudanca. |
 | `runtime-native` | `runtime-native [show|prepare-input|prepare-storage|exit-boot-services|step]` | Exibe o gate do runtime nativo e executa passos manuais controlados do coordenador Hyper-V. O modo `show` tambem imprime `build=... feature=...`. |
 | `print-insomnia` | `print-insomnia` | Uptime desde o boot (`hh:mm:ss`). |
-| `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`) e grava em `/system/config.ini`. |
+| `config-theme` | `config-theme [list|show|<tema>]` | Alterna tema visual (`capyos`, `ocean`, `forest`, `love`, `high-contrast`) e grava em `/system/config.ini`. |
 | `config-splash` | `config-splash [show|on|off]` | Alterna a animacao de splash do boot e grava em `/system/config.ini`. |
 | `config-language` | `config-language [list|show|pt-BR|en|es]` | Alterna o idioma do usuario atual e grava no perfil do `home`. |
 | `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |
@@ -128,6 +128,8 @@ Contexto operacional atual:
 - `config-theme show` exibe o tema ativo.
 - `config-theme ocean` aplica o tema azul/ciano e salva o padrao.
 - `config-theme forest` aplica o tema verde/floresta e salva o padrao.
+- `config-theme love` aplica o tema magenta/coral moderno.
+- `config-theme high-contrast` aplica o tema preto/branco para acessibilidade.
 - `config-theme capyos` retorna ao tema padrao do sistema.
 
 ### Splash de inicializacao

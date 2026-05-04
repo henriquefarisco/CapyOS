@@ -83,6 +83,14 @@ SUCCESS_MARKERS = (
     "[browser-smoke] spawn pid=",
     "[browser-smoke] navigate-sent",
     "[browser-smoke] event NAV_STARTED",
+    # F3.3c slice 4 (preview): proves libcapyhtml is consumed from
+    # ring 3. The capybrowser engine emits an EVENT_LOG carrying
+    # "[capybrowser] parsed N nodes title=capyland" between
+    # NAV_STARTED and FRAME. The chrome dispatcher forwards LOG
+    # events through the kernel debugcon, so we can assert on the
+    # raw text. Slice 5 (real fetch) replaces the hardcoded demo
+    # page with bytes received from the network.
+    "[capybrowser] parsed",
     "[browser-smoke] event FRAME",
     "[browser-smoke] event NAV_READY",
     "[browser-smoke] event PONG",

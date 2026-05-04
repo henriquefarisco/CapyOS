@@ -1,6 +1,7 @@
 #include "gui/taskbar.h"
 #include "gui/font.h"
 #include "gui/compositor.h"
+#include "lang/app_language.h"
 #include <stddef.h>
 
 static void tb_strcpy(char *d, const char *s, size_t max) {
@@ -38,6 +39,7 @@ void taskbar_init(struct taskbar *tb, uint32_t screen_w, uint32_t screen_h) {
   tb->menu_open = 0;
   tb->menu_entry_count = 0;
   tb->menu_popup = NULL;
+  tb->hover_entry = -1;
   tb->show_clock = 1;
   tb_strcpy(tb->clock_text, "00:00:00", 16);
 
@@ -47,6 +49,7 @@ void taskbar_init(struct taskbar *tb, uint32_t screen_w, uint32_t screen_h) {
     tb->window->decorated = 0;
     tb->window->movable = 0;
     tb->window->resizable = 0;
+    tb->window->corner_radius = 0; /* taskbar fica retangular */
     tb->window->z_order = COMPOSITOR_MAX_WINDOWS + 4;
     tb->window->bg_color = theme->taskbar_bg;
     tb->window->user_data = tb;
@@ -138,7 +141,8 @@ void taskbar_paint(struct taskbar *tb) {
   int32_t x = 4;
   uint32_t menu_btn_bg = tb->menu_open ? theme->accent_alt : theme->accent;
   tb_fill_rect(s, x, 4, menu_w, TASKBAR_HEIGHT - 8, menu_btn_bg);
-  font_draw_string(s, f, x + 8, 8, "Menu", theme->accent_text);
+  font_draw_string(s, f, x + 8, 8,
+                   APP_T("Menu", "Menu", "Menu"), theme->accent_text);
   x += (int32_t)menu_w + 8;
 
   /* Window list */
@@ -195,6 +199,24 @@ static uint32_t menu_total_height(struct taskbar *tb) {
   return h;
 }
 
+/* Etapa UX W7-ish (2026-05-03): mistura "para cima" cada canal RGB
+ * por uma fracao 0..255 (255 = branco puro). Mantem hue, aumenta
+ * brilho. Util para o efeito "fade" de hover sobre uma cor de bg
+ * arbitraria sem precisar de palette extra. */
+static uint32_t tb_lighten(uint32_t color, uint8_t amount) {
+  uint32_t r = (color >> 16) & 0xFFu;
+  uint32_t g = (color >> 8) & 0xFFu;
+  uint32_t b = color & 0xFFu;
+  uint32_t a = color & 0xFF000000u;
+  r = r + ((255u - r) * amount) / 255u;
+  g = g + ((255u - g) * amount) / 255u;
+  b = b + ((255u - b) * amount) / 255u;
+  if (r > 255u) r = 255u;
+  if (g > 255u) g = 255u;
+  if (b > 255u) b = 255u;
+  return a | (r << 16) | (g << 8) | b;
+}
+
 static void menu_popup_paint(struct gui_window *win) {
   if (!win || !win->user_data) return;
   struct taskbar *tb = (struct taskbar *)win->user_data;
@@ -203,22 +225,42 @@ static void menu_popup_paint(struct gui_window *win) {
   struct gui_surface *s = &win->surface;
   if (!f) return;
 
-  /* Background */
+  /* Background. O compositor mascara os cantos arredondados;
+   * border externa eh desenhada pelo render_window_outline (corner
+   * radius habilitado via win->corner_radius). */
   tb_fill_rect(s, 0, 0, s->width, s->height, theme->window_bg);
-  /* Border */
-  tb_fill_rect(s, 0, 0, s->width, 1, theme->window_border);
-  tb_fill_rect(s, 0, (int32_t)s->height - 1, s->width, 1, theme->window_border);
-  tb_fill_rect(s, 0, 0, 1, s->height, theme->window_border);
-  tb_fill_rect(s, (int32_t)s->width - 1, 0, 1, s->height, theme->window_border);
+
+  /* Etapa UX W7-ish (2026-05-03): faixa lateral de 4 px usando
+   * accent_alt como "marcador visual" - inspirado na barra colorida
+   * do start menu do Windows 7. Largura fixa 4 px, altura cheia. */
+  tb_fill_rect(s, 0, 0, 4, s->height, theme->accent_alt);
 
   int32_t ey = 2;
   for (uint32_t i = 0; i < tb->menu_entry_count; i++) {
     uint32_t row_h = tb->menu_entries[i].is_separator ? TASKBAR_MENU_SEP_HEIGHT
                                                       : TASKBAR_MENU_ENTRY_HEIGHT;
     if (tb->menu_entries[i].is_separator) {
-      tb_fill_rect(s, 8, ey + (int32_t)(row_h / 2), s->width - 16, 1, theme->window_border);
+      tb_fill_rect(s, 12, ey + (int32_t)(row_h / 2),
+                   s->width - 24, 1, theme->window_border);
     } else {
-      font_draw_string(s, f, 12, ey + 6, tb->menu_entries[i].label, theme->text);
+      /* Etapa UX W7-ish (2026-05-03): hover highlight. A linha sob o
+       * cursor recebe um bg ligeiramente mais claro que o window_bg
+       * (efeito "brilho/fade"). Pin-test: tb->hover_entry == i. */
+      if ((int)i == tb->hover_entry) {
+        uint32_t hover_bg = tb_lighten(theme->window_bg, 40u);
+        /* Linha do hover: bg uniforme + texto em cor accent (mais
+         * destacado). Inset lateral de 4 px (borda colorida +
+         * margem). */
+        tb_fill_rect(s, 4, ey, s->width - 4, row_h, hover_bg);
+        /* Marcador horizontal no inicio da linha (3 px de
+         * accent_alt), reforca o destaque. */
+        tb_fill_rect(s, 4, ey, 4, row_h, theme->accent);
+        font_draw_string(s, f, 16, ey + 6, tb->menu_entries[i].label,
+                         theme->accent);
+      } else {
+        font_draw_string(s, f, 16, ey + 6, tb->menu_entries[i].label,
+                         theme->text);
+      }
     }
     ey += (int32_t)row_h;
   }
@@ -241,6 +283,12 @@ void taskbar_toggle_menu(struct taskbar *tb) {
         tb->menu_popup->decorated = 0;
         tb->menu_popup->movable = 0;
         tb->menu_popup->resizable = 0;
+        /* Etapa UX W7-ish (2026-05-03): cantos arredondados (raio
+         * 6 px) + border externa do tema. O compositor desenha
+         * automaticamente quando corner_radius != 0. */
+        tb->menu_popup->corner_radius = 6;
+        tb->menu_popup->border_color =
+            compositor_theme()->window_border;
         tb->menu_popup->z_order = COMPOSITOR_MAX_WINDOWS + 5;
         tb->menu_popup->bg_color = compositor_theme()->window_bg;
         tb->menu_popup->user_data = tb;
@@ -248,10 +296,12 @@ void taskbar_toggle_menu(struct taskbar *tb) {
       }
     }
     if (tb->menu_popup) {
+      tb->hover_entry = -1; /* sem hover ativo ao abrir */
       compositor_show_window(tb->menu_popup->id);
       compositor_invalidate(tb->menu_popup->id);
     }
   } else {
+    tb->hover_entry = -1;
     if (tb->menu_popup) {
       compositor_hide_window(tb->menu_popup->id);
     }
@@ -311,4 +361,40 @@ int taskbar_handle_menu_click(struct taskbar *tb, int32_t screen_x,
   }
 
   return 0;
+}
+
+/* Etapa UX W7-ish (2026-05-03): atualiza hover_entry segundo a posicao
+ * de tela do mouse. Se o mouse estiver fora do popup, hover_entry = -1.
+ * Sobre um separador, tambem -1. Convergencia com o paint: a linha
+ * destacada e exatamente a sob o cursor. Invalida a janela so quando
+ * o estado muda (evita repaint desnecessario). */
+void taskbar_handle_menu_hover(struct taskbar *tb, int32_t screen_x,
+                                int32_t screen_y) {
+  if (!tb || !tb->menu_open || !tb->menu_popup) return;
+
+  int32_t px = tb->menu_popup->frame.x;
+  int32_t py = tb->menu_popup->frame.y;
+  uint32_t pw = tb->menu_popup->frame.width;
+  uint32_t ph = tb->menu_popup->frame.height;
+
+  int new_hover = -1;
+  if (screen_x >= px && screen_x < px + (int32_t)pw &&
+      screen_y >= py && screen_y < py + (int32_t)ph) {
+    int32_t local_y = screen_y - py;
+    int32_t ey = 2;
+    for (uint32_t i = 0; i < tb->menu_entry_count; i++) {
+      uint32_t row_h = tb->menu_entries[i].is_separator
+                           ? TASKBAR_MENU_SEP_HEIGHT
+                           : TASKBAR_MENU_ENTRY_HEIGHT;
+      if (local_y >= ey && local_y < ey + (int32_t)row_h) {
+        if (!tb->menu_entries[i].is_separator) new_hover = (int)i;
+        break;
+      }
+      ey += (int32_t)row_h;
+    }
+  }
+  if (new_hover != tb->hover_entry) {
+    tb->hover_entry = new_hover;
+    if (tb->menu_popup) compositor_invalidate(tb->menu_popup->id);
+  }
 }

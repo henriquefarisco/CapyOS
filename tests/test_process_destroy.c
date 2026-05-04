@@ -43,6 +43,7 @@
 #include <string.h>
 
 #include "kernel/process.h"
+#include "kernel/pipe.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -52,6 +53,26 @@ static int tests_passed = 0;
 
 static void reset_world(void) {
     process_system_init();
+    pipe_system_init();
+}
+
+/* 2026-05-02 (Etapa 2 audit A3): helpers to install a pipe end into
+ * a process's FD slot using the centralised constants from
+ * `include/kernel/process.h`. The kernel-side hot path
+ * (`browser_engine_spawn::install_pipe_fd`, `sys_pipe`) does the same
+ * mutation; we duplicate it here only because both writers are
+ * `static` to their TUs. */
+static void install_pipe_read_fd(struct process *p, int fd, int pipe_id) {
+    p->fds[fd].type = FD_TYPE_PIPE;
+    p->fds[fd].flags = FD_PIPE_FLAG_READ;
+    p->fds[fd].private_data = (void *)(intptr_t)pipe_id;
+    p->fds[fd].offset = 0;
+}
+static void install_pipe_write_fd(struct process *p, int fd, int pipe_id) {
+    p->fds[fd].type = FD_TYPE_PIPE;
+    p->fds[fd].flags = FD_PIPE_FLAG_WRITE;
+    p->fds[fd].private_data = (void *)(intptr_t)pipe_id;
+    p->fds[fd].offset = 0;
 }
 
 static void test_null_is_noop(void) {
@@ -552,6 +573,163 @@ static void test_reap_orphans_idempotent(void) {
     else FAIL("expected 0 from second sweep");
 }
 
+/* ---- Etapa 2 audit (2026-05-02): FD release on kill ----------- */
+
+/* When a process is killed (PROC_STATE_ZOMBIE), every FD it owned
+ * must be released IMMEDIATELY, even before the slot is destroyed.
+ * Pre-fix path leaked pipe ends for parented zombies because
+ * process_destroy was the only place fd_free ran, and destroy was
+ * gated on `parent == NULL`. The visible failure mode was the Task
+ * Manager > Kill button on the browser engine: chrome runtime
+ * polled forever on a zombie's still-open response_pipe write end.
+ *
+ * We test the invariant directly:
+ *   - Create a parented process holding a pipe write end FD.
+ *   - process_kill it.
+ *   - Slot stays ZOMBIE (not orphan, parent is alive), but FD
+ *     slot is FREE and `pipe_write` to the SAME pipe id from
+ *     OUTSIDE the slot returns -1 (broken pipe; reader still
+ *     open but the slot's write-end was closed). */
+static void test_kill_releases_pipe_write_fd_on_zombie(void) {
+    reset_world();
+    int fds[2];
+    if (pipe_create(fds) != 0) {
+        TEST("setup pipe"); FAIL("pipe_create"); return;
+    }
+    int pipe_id = fds[0]; /* low pipe id; both ends share it */
+
+    struct process *parent = process_create("parent", 0, 0);
+    struct process *child  = process_create("child",  0, 0);
+    if (!parent || !child) { TEST("setup child"); FAIL("create"); return; }
+    /* Manually set parent linkage so child stays ZOMBIE on kill
+     * (mirrors what process_fork would do). */
+    child->parent = parent;
+
+    install_pipe_write_fd(child, 1, pipe_id);
+
+    int kr = process_kill(child->pid, 9);
+    TEST("kill on parented child returns 0");
+    if (kr == 0) PASS(); else FAIL("kill returned non-zero");
+
+    TEST("parented child stays ZOMBIE after kill");
+    if (child->state == PROC_STATE_ZOMBIE) PASS();
+    else FAIL("expected ZOMBIE; got something else");
+
+    TEST("kill freed the pipe write FD slot");
+    if (child->fds[1].type == FD_TYPE_FREE
+        && child->fds[1].private_data == NULL
+        && child->fds[1].flags == 0u) PASS();
+    else FAIL("FD slot still occupied");
+
+    /* External evidence: a pipe_write that was previously valid
+     * (write end open) now reflects the close. We test by trying
+     * to read from the OTHER end: with no writer remaining,
+     * pipe_read returns 0 (drained EOF). */
+    char buf[4];
+    int rd = pipe_read(pipe_id, buf, sizeof(buf));
+    TEST("pipe_read returns EOF after kill closed write end");
+    if (rd == 0) PASS();
+    else FAIL("expected EOF (0), got something else");
+}
+
+/* Symmetric case: kill a process holding the READ end and assert
+ * peer write fails with broken-pipe. Locks the OTHER half of the
+ * fix in process_fd_free's switch on `flags & FD_PIPE_FLAG_*`. */
+static void test_kill_releases_pipe_read_fd_on_orphan(void) {
+    reset_world();
+    int fds[2];
+    if (pipe_create(fds) != 0) { TEST("setup pipe"); FAIL("create"); return; }
+    int pipe_id = fds[0];
+
+    /* Orphan path -> auto-reap -> destroy -> fd_free. Ensures the
+     * fd_free dispatch is exercised even on the destroy code path,
+     * not just the kill path. */
+    struct process *p = process_create("orphan", 0, 0);
+    if (!p) { TEST("setup orphan"); FAIL("create"); return; }
+    install_pipe_read_fd(p, 0, pipe_id);
+
+    int kr = process_kill(p->pid, 9);
+    TEST("kill on orphan returns 0 and auto-reaps");
+    if (kr == 0) PASS(); else FAIL("kill non-zero");
+
+    TEST("orphan slot returned to UNUSED after auto-reap");
+    if (p->state == PROC_STATE_UNUSED) PASS();
+    else FAIL("slot still occupied");
+
+    /* Reader closed -> pipe_write returns -1 (broken pipe). */
+    int wr = pipe_write(pipe_id, "x", 1);
+    TEST("pipe_write returns -1 (broken pipe) after kill closed read end");
+    if (wr == -1) PASS();
+    else FAIL("expected -1, got non-error");
+}
+
+/* Idempotence: calling process_fd_free twice on the same slot
+ * (e.g., kill then a stray destroy) must not crash and must not
+ * double-close pipes. With the pre-fix code this was vacuously
+ * true (free was a no-op); the post-fix code path closes pipes,
+ * so we must re-verify. */
+static void test_fd_free_idempotent_on_pipe(void) {
+    reset_world();
+    int fds[2];
+    if (pipe_create(fds) != 0) { TEST("setup pipe"); FAIL("create"); return; }
+    int pipe_id = fds[0];
+
+    struct process *p = process_create("test", 0, 0);
+    if (!p) { TEST("setup proc"); FAIL("create"); return; }
+    install_pipe_write_fd(p, 1, pipe_id);
+
+    process_fd_free(p, 1);
+    process_fd_free(p, 1); /* idempotent: same slot, now FREE */
+
+    TEST("process_fd_free is idempotent on already-FREE slots");
+    if (p->fds[1].type == FD_TYPE_FREE) PASS();
+    else FAIL("type drift after double free");
+}
+
+/* Mixed FD types: a process holding both pipe + non-pipe FDs.
+ * Kill must release ALL of them in one sweep. */
+static void test_kill_releases_all_fd_slots(void) {
+    reset_world();
+    int fds_a[2], fds_b[2];
+    if (pipe_create(fds_a) != 0 || pipe_create(fds_b) != 0) {
+        TEST("setup mixed pipes"); FAIL("create"); return;
+    }
+
+    struct process *p = process_create("mixed", 0, 0);
+    if (!p) { TEST("setup proc"); FAIL("create"); return; }
+    install_pipe_read_fd (p, 0, fds_a[0]);
+    install_pipe_write_fd(p, 1, fds_a[0]);
+    install_pipe_read_fd (p, 2, fds_b[0]);
+    install_pipe_write_fd(p, 3, fds_b[0]);
+
+    (void)process_kill(p->pid, 9);
+
+    TEST("kill released every pipe FD");
+    int all_free = 1;
+    for (int i = 0; i < 4; ++i) {
+        if (p->fds[i].type != FD_TYPE_FREE) { all_free = 0; break; }
+    }
+    if (all_free) PASS(); else FAIL("at least one FD still occupied");
+
+    /* Both ends of each pipe were held by the killed process.
+     * Post-fix, BOTH `read_open` and `write_open` flip to 0 in
+     * the same kill sweep. From `pipe_read`'s POV, `!read_open`
+     * is the FIRST check and short-circuits to -1; it never
+     * gets to the EOF branch. `pipe_write` likewise checks
+     * `!write_open` then `!read_open`, both -1. Therefore the
+     * fully-closed signal is `pipe_read == -1` AND
+     * `pipe_write == -1` (no successful op). */
+    char buf[4];
+    TEST("pipe a fully closed (read -1 + write -1)");
+    if (pipe_read(fds_a[0], buf, 4) == -1
+        && pipe_write(fds_a[0], "x", 1) == -1) PASS();
+    else FAIL("pipe a state inconsistent");
+    TEST("pipe b fully closed (read -1 + write -1)");
+    if (pipe_read(fds_b[0], buf, 4) == -1
+        && pipe_write(fds_b[0], "x", 1) == -1) PASS();
+    else FAIL("pipe b state inconsistent");
+}
+
 int test_process_destroy_run(void) {
     printf("[test_process_destroy]\n");
     tests_run = 0;
@@ -581,6 +759,12 @@ int test_process_destroy_run(void) {
     test_reap_orphans_skips_parented_zombies();
     test_reap_orphans_destroys_orphan_zombies();
     test_reap_orphans_idempotent();
+
+    /* Etapa 2 audit (2026-05-02): FD release contract on kill. */
+    test_kill_releases_pipe_write_fd_on_zombie();
+    test_kill_releases_pipe_read_fd_on_orphan();
+    test_fd_free_idempotent_on_pipe();
+    test_kill_releases_all_fd_slots();
 
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;

@@ -104,6 +104,7 @@ struct fake_engine {
     int response_write_id; /* engine fd 1 = write end of engine->chrome pipe */
     uint32_t nav_id;
     uint32_t resp_seq;
+    uint32_t fetch_seq;
     int alive;
     /* Telemetria do que o engine recebeu (para verificacao em test). */
     uint32_t total_received;
@@ -111,6 +112,13 @@ struct fake_engine {
     /* Comportamento controlavel pelos testes. */
     int freeze;            /* 1 = ignora PING (simula travamento) */
     int crash_after_navigate; /* 1 = fecha pipes apos NAV_STARTED */
+    /* Slice 5d: estado da navegacao em curso. O engine real bloqueia
+     * em wait_for_fetch_response; aqui o pump e nao-bloqueante,
+     * entao guardamos os dados da nav pendente e fechamos o ciclo
+     * quando o FETCH_RESPONSE chegar. */
+    int     pending_nav;        /* 1 = aguardando FETCH_RESPONSE */
+    uint32_t pending_nav_id;
+    uint32_t pending_fetch_seq;
 };
 
 static void engine_init(struct fake_engine *e, int req_read, int resp_write) {
@@ -161,9 +169,13 @@ static int engine_try_recv(struct fake_engine *e, uint16_t *out_kind,
     return 1;
 }
 
-/* Sequencia canonica do capybrowser stub para NAVIGATE. */
-static int engine_emit_navigate_sequence(struct fake_engine *e,
-                                         const uint8_t *url, uint16_t url_len) {
+/* Slice 5d: phase 1 da navegacao -- emite NAV_STARTED + progress
+ * FETCH e em seguida o EVENT_FETCH_REQUEST, deixando a navegacao
+ * em estado "pending" ate o chrome responder com FETCH_RESPONSE.
+ * O engine real bloqueia em wait_for_fetch_response; aqui o
+ * fake_engine guarda o estado e completa em phase 2. */
+static int engine_begin_navigation(struct fake_engine *e,
+                                   const uint8_t *url, uint16_t url_len) {
     e->nav_id++;
     /* NAV_STARTED */
     uint8_t pl[6 + 1024];
@@ -177,19 +189,44 @@ static int engine_emit_navigate_sequence(struct fake_engine *e,
         e->alive = 0;
         return 0;
     }
-    /* 3× NAV_PROGRESS */
+    /* progress FETCH */
     uint8_t prog[6];
     be_put_u32(&prog[0], e->nav_id);
-    prog[4] = BROWSER_IPC_STAGE_FETCH;  prog[5] = 10;
+    prog[4] = BROWSER_IPC_STAGE_FETCH; prog[5] = 10;
     if (engine_send(e, BROWSER_IPC_EVENT_NAV_PROGRESS, prog, 6) < 0) return -1;
-    prog[4] = BROWSER_IPC_STAGE_PARSE;  prog[5] = 60;
+
+    /* EVENT_FETCH_REQUEST -- payload: seq u32 + nav_id u32 + method u8
+     * + url_len u16 + url[]. */
+    e->fetch_seq++;
+    uint8_t freq[11 + 1024];
+    be_put_u32(&freq[0], e->fetch_seq);
+    be_put_u32(&freq[4], e->nav_id);
+    freq[8] = BROWSER_IPC_FETCH_GET;
+    be_put_u16(&freq[9], url_len);
+    if (url_len > 0u && url_len <= 1024u) memcpy(&freq[11], url, url_len);
+    if (engine_send(e, BROWSER_IPC_EVENT_FETCH_REQUEST, freq,
+                    (uint32_t)(11u + url_len)) < 0) return -1;
+
+    e->pending_nav = 1;
+    e->pending_nav_id = e->nav_id;
+    e->pending_fetch_seq = e->fetch_seq;
+    return 0;
+}
+
+/* Slice 5d: phase 2 -- executada quando FETCH_RESPONSE chega.
+ * Emite progress PARSE/RENDER + EVENT_FRAME + NAV_READY. */
+static int engine_complete_navigation(struct fake_engine *e) {
+    uint32_t nav = e->pending_nav_id;
+    uint8_t prog[6];
+    be_put_u32(&prog[0], nav);
+    prog[4] = BROWSER_IPC_STAGE_PARSE; prog[5] = 60;
     if (engine_send(e, BROWSER_IPC_EVENT_NAV_PROGRESS, prog, 6) < 0) return -1;
     prog[4] = BROWSER_IPC_STAGE_RENDER; prog[5] = 90;
     if (engine_send(e, BROWSER_IPC_EVENT_NAV_PROGRESS, prog, 6) < 0) return -1;
-    /* EVENT_FRAME 4×4 BGRA azul */
+    /* EVENT_FRAME 4x4 BGRA azul */
     enum { W = 4, H = 4, STRIDE = W * 4u, PIX = STRIDE * H };
     uint8_t fbuf[12 + PIX];
-    be_put_u32(&fbuf[0], e->nav_id);
+    be_put_u32(&fbuf[0], nav);
     be_put_u16(&fbuf[4], W);
     be_put_u16(&fbuf[6], H);
     be_put_u32(&fbuf[8], STRIDE);
@@ -198,9 +235,9 @@ static int engine_emit_navigate_sequence(struct fake_engine *e,
         fbuf[12 + i + 2] = 0x1B; fbuf[12 + i + 3] = 0xFF;
     }
     if (engine_send(e, BROWSER_IPC_EVENT_FRAME, fbuf, sizeof(fbuf)) < 0) return -1;
-    /* NAV_READY */
-    uint8_t rdy[4]; be_put_u32(rdy, e->nav_id);
+    uint8_t rdy[4]; be_put_u32(rdy, nav);
     if (engine_send(e, BROWSER_IPC_EVENT_NAV_READY, rdy, 4) < 0) return -1;
+    e->pending_nav = 0;
     return 0;
 }
 
@@ -219,7 +256,19 @@ static void engine_pump(struct fake_engine *e) {
                 uint16_t url_len = (plen >= 2u)
                     ? (uint16_t)((pl[0] << 8) | pl[1]) : 0u;
                 const uint8_t *url = (plen >= 2u) ? &pl[2] : (const uint8_t *)"";
-                engine_emit_navigate_sequence(e, url, url_len);
+                engine_begin_navigation(e, url, url_len);
+                break;
+            }
+            case BROWSER_IPC_FETCH_RESPONSE: {
+                /* Slice 5d: chrome respondeu nosso fetch. Validamos
+                 * e completamos a navegacao. Em caso de status nao-OK
+                 * a navegacao seguiria com NAV_FAILED no engine real;
+                 * o fake_engine mantem o caminho feliz aqui para nao
+                 * inflar o teste, ja que o fluxo de erro e exercido
+                 * em test_browser_runtime_fetch.c. */
+                if (e->pending_nav) {
+                    (void)engine_complete_navigation(e);
+                }
                 break;
             }
             case BROWSER_IPC_PING: {
@@ -262,7 +311,12 @@ static void session_setup(struct e2e_session *s, uint64_t now) {
 }
 
 /* Drena todos eventos disponiveis no chrome ate NO_DATA. Retorna
- * mascara acumulada de acoes e quantos eventos foram consumidos. */
+ * mascara acumulada de acoes e quantos eventos foram consumidos.
+ *
+ * Slice 5d: quando o chrome sinaliza ACTION_FETCH_REQUESTED, o
+ * runtime resolve via tabela embutida e envia FETCH_RESPONSE
+ * para o engine. Sem essa chamada o fake_engine ficaria
+ * indefinidamente em pending_nav. */
 static int drain_chrome_events(struct chrome_runtime *rt, uint64_t now,
                                uint32_t *out_actions_or, int *out_count) {
     uint32_t acts_or = 0u;
@@ -274,6 +328,9 @@ static int drain_chrome_events(struct chrome_runtime *rt, uint64_t now,
         if (s == CHROME_RUNTIME_POLL_ENGINE_EOF) { count = -1; break; }
         if (s == CHROME_RUNTIME_POLL_PROTOCOL_ERR) { count = -2; break; }
         acts_or |= a;
+        if (a & BROWSER_CHROME_ACTION_FETCH_REQUESTED) {
+            (void)chrome_runtime_dispatch_pending_fetch(rt);
+        }
         ++count;
         if (count > 100) break;
     }
@@ -282,10 +339,39 @@ static int drain_chrome_events(struct chrome_runtime *rt, uint64_t now,
     return 0;
 }
 
+/* Slice 5d: alterna pump+drain ate ambos os lados ficarem ociosos.
+ * Necessario porque a navegacao agora tem duas fases (antes do
+ * fetch e depois): phase 1 emite 3 eventos e o EVENT_FETCH_REQUEST,
+ * que aciona o chrome a responder com FETCH_RESPONSE; o engine
+ * entao acorda em phase 2 e emite os 4 eventos finais. Sem este
+ * loop o caller teria que chamar pump+drain manualmente em pares. */
+static int session_run_until_idle(struct e2e_session *s, uint64_t now,
+                                  uint32_t *out_actions_or) {
+    int total = 0;
+    uint32_t acts_or = 0u;
+    for (int iter = 0; iter < 8; ++iter) {
+        uint32_t engine_recv_before = s->eng.total_received;
+        int request_pipe_count = (int)g_e2e_pipes[0].count;
+        engine_pump(&s->eng);
+        int progress = (s->eng.total_received != engine_recv_before)
+                    || ((int)g_e2e_pipes[0].count != request_pipe_count);
+
+        int count = 0;
+        uint32_t a = 0u;
+        drain_chrome_events(&s->rt, now, &a, &count);
+        if (count > 0) progress = 1;
+        if (count > 0) total += count;
+        acts_or |= a;
+        if (!progress) break;
+    }
+    if (out_actions_or) *out_actions_or = acts_or;
+    return total;
+}
+
 /* === Cenarios ========================================================== */
 
 static void scenario_happy_navigation(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
 
     int rc = chrome_runtime_send_navigate(&s.rt, "http://capyos", 13);
@@ -293,17 +379,24 @@ static void scenario_happy_navigation(void) {
     E2ECHECK(s.rt.chrome.status == BROWSER_CHROME_STATUS_LOADING,
              "happy: chrome -> LOADING apos send");
 
-    /* Pump engine: ele consome NAVIGATE e emite os 6 eventos. */
-    engine_pump(&s.eng);
-    E2ECHECK(s.eng.total_received == 1u, "happy: engine recebeu 1 request");
-    E2ECHECK(s.eng.last_kind == BROWSER_IPC_NAVIGATE,
-             "happy: ultimo recv foi NAVIGATE");
-
-    /* Drena no chrome. */
+    /* Slice 5d: a navegacao agora tem duas fases que se cruzam com
+     * uma resposta de fetch do chrome. Usamos o helper que
+     * alterna pump+drain ate ficar idle. Esperamos 7 eventos:
+     *   NAV_STARTED, NAV_PROGRESS(FETCH), EVENT_FETCH_REQUEST,
+     *   NAV_PROGRESS(PARSE), NAV_PROGRESS(RENDER),
+     *   EVENT_FRAME, NAV_READY. */
     uint32_t actions_or = 0u;
-    int count = 0;
-    drain_chrome_events(&s.rt, 0u, &actions_or, &count);
-    E2ECHECK(count == 6, "happy: 6 eventos drenados (started+3prog+frame+ready)");
+    int count = session_run_until_idle(&s, 0u, &actions_or);
+    E2ECHECK(s.eng.total_received >= 1u,
+             "happy: engine recebeu pelo menos 1 request (NAVIGATE)");
+    /* Slice 5d: o engine deve ter recebido NAVIGATE seguido de
+     * FETCH_RESPONSE (>= 2 frames de chrome→engine), e o ultimo
+     * kind processado e FETCH_RESPONSE. */
+    E2ECHECK(s.eng.total_received >= 2u,
+             "happy: engine recebeu NAVIGATE + FETCH_RESPONSE");
+    E2ECHECK(s.eng.last_kind == BROWSER_IPC_FETCH_RESPONSE,
+             "happy: ultimo recv foi FETCH_RESPONSE");
+    E2ECHECK(count == 7, "happy: 7 eventos drenados (slice 5d)");
     E2ECHECK((actions_or & BROWSER_CHROME_ACTION_REPAINT_FRAME) != 0u,
              "happy: REPAINT_FRAME presente");
     E2ECHECK((actions_or & BROWSER_CHROME_ACTION_UPDATE_STATUS) != 0u,
@@ -326,7 +419,7 @@ static void scenario_happy_navigation(void) {
 }
 
 static void scenario_watchdog_ping_pong(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
 
     /* Avanca o tempo ate o intervalo de PING; tick deve enviar. */
@@ -351,7 +444,7 @@ static void scenario_watchdog_ping_pong(void) {
 }
 
 static void scenario_watchdog_timeout_kills(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
     s.eng.freeze = 1; /* engine ignora PINGs */
 
@@ -374,7 +467,7 @@ static void scenario_watchdog_timeout_kills(void) {
 }
 
 static void scenario_cancel_drops_old_nav(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
 
     /* Navegacao 1: pump completo. */
@@ -404,7 +497,7 @@ static void scenario_cancel_drops_old_nav(void) {
 }
 
 static void scenario_engine_crash_detected(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
     s.eng.crash_after_navigate = 1;
 
@@ -421,7 +514,7 @@ static void scenario_engine_crash_detected(void) {
 }
 
 static void scenario_restart_after_kill(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
     /* Forca matar via shutdown. */
     chrome_runtime_send_shutdown(&s.rt);
@@ -447,16 +540,14 @@ static void scenario_restart_after_kill(void) {
     /* Nova navegacao deve funcionar. */
     int rc = chrome_runtime_send_navigate(&s.rt, "y", 1);
     E2ECHECK(rc == 0, "restart: navigate apos restart ok");
-    engine_pump(&s.eng);
-    int count = 0;
-    drain_chrome_events(&s.rt, 100u, &a, &count);
-    E2ECHECK(count == 6, "restart: 6 eventos pos-restart");
+    int count = session_run_until_idle(&s, 100u, &a);
+    E2ECHECK(count == 7, "restart: 7 eventos pos-restart (slice 5d)");
     E2ECHECK(s.rt.chrome.status == BROWSER_CHROME_STATUS_READY,
              "restart: READY apos nova nav");
 }
 
 static void scenario_protocol_error_on_garbage(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
     /* Injeta lixo no response pipe (sem passar pelo engine). */
     uint8_t junk[BROWSER_IPC_HEADER_SIZE] = {0xFF, 0xFF, 0xFF, 0xFF};
@@ -467,26 +558,27 @@ static void scenario_protocol_error_on_garbage(void) {
 }
 
 static void scenario_two_navigations_back_to_back(void) {
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
+    uint32_t a = 0u;
     chrome_runtime_send_navigate(&s.rt, "a", 1);
-    engine_pump(&s.eng);
-    int count = 0; uint32_t a = 0u;
-    drain_chrome_events(&s.rt, 0u, &a, &count);
+    (void)session_run_until_idle(&s, 0u, &a);
     E2ECHECK(s.rt.chrome.current_nav_id == 1u, "2nav: nav1 nav_id=1");
     E2ECHECK(s.rt.chrome.status == BROWSER_CHROME_STATUS_READY, "2nav: nav1 READY");
 
     chrome_runtime_send_navigate(&s.rt, "bb", 2);
-    engine_pump(&s.eng);
-    drain_chrome_events(&s.rt, 0u, &a, &count);
+    (void)session_run_until_idle(&s, 0u, &a);
     E2ECHECK(s.rt.chrome.current_nav_id == 2u, "2nav: nav2 nav_id=2");
     E2ECHECK(s.rt.chrome.status == BROWSER_CHROME_STATUS_READY, "2nav: nav2 READY");
-    E2ECHECK(s.rt.total_events_polled >= 12u, "2nav: ao menos 12 eventos totais");
+    /* Slice 5d: 7 eventos por nav x 2 navs = 14 esperados (mais
+     * piso de seguranca). */
+    E2ECHECK(s.rt.total_events_polled >= 14u,
+             "2nav: ao menos 14 eventos totais (slice 5d)");
 }
 
 static void scenario_pong_unsolicited_ignored(void) {
     /* PONG sem PING anterior nao deve quebrar o watchdog. */
-    struct e2e_session s;
+    static struct e2e_session s;
     session_setup(&s, 0u);
     /* Engine emite um PONG do nada. */
     uint8_t pl[4]; be_put_u32(pl, 0xDEADu);

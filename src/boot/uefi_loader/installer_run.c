@@ -231,7 +231,8 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   }
   Print(L"  [1] capyos\r\n");
   Print(L"  [2] ocean\r\n");
-  Print(L"  [3] forest\r\n\r\n");
+  Print(L"  [3] forest\r\n");
+  Print(L"  [4] love\r\n\r\n");
   if (install_language == INSTALLER_LANG_PT_BR) {
     Print(L"Tema [1]: ");
   } else if (install_language == INSTALLER_LANG_ES) {
@@ -249,6 +250,9 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
       theme_in[0] = L'f'; theme_in[1] = L'o'; theme_in[2] = L'r';
       theme_in[3] = L'e'; theme_in[4] = L's'; theme_in[5] = L't';
       theme_in[6] = 0;
+    } else if (theme_pick[0] == L'4') {
+      theme_in[0] = L'l'; theme_in[1] = L'o'; theme_in[2] = L'v';
+      theme_in[3] = L'e'; theme_in[4] = 0;
     }
   }
   Print(L"Theme: %s\r\n\r\n", theme_in);
@@ -614,4 +618,5 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
                     EFI_SUCCESS, 0, NULL);
   return EFI_SUCCESS;
 }
-
+
+

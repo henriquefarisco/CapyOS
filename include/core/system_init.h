@@ -11,6 +11,12 @@ int system_run_first_boot_setup(void);
 int system_run_first_boot_setup_with_password(const char *admin_password);
 int system_mark_first_boot_complete(void);
 
+/* Etapa F4 homepage (2026-05-03): URL maxima da homepage do browser.
+ * 256 bytes cobrem URLs reais (RFC 7230 nao define limite, mas a
+ * pratica das paginas e ~200 chars). Buffer dedicado para nao
+ * forcar bump dos demais campos. */
+#define SYSTEM_BROWSER_HOMEPAGE_MAX 256
+
 struct system_settings {
     char hostname[32];
     char theme[16];
@@ -25,6 +31,11 @@ struct system_settings {
     uint32_t ipv4_dns;
     int splash_enabled;
     int diagnostics_enabled; /* 0 = skip CLI self-tests/diagnostics (default) */
+    /* Etapa F4 homepage (2026-05-03): URL inicial do browser. Default
+     * `https://wikipedia.org` (alterado pelo usuario via Settings ou
+     * editando /system/config.ini). Vazio (== '\0') reverte ao
+     * default em runtime. */
+    char browser_homepage[SYSTEM_BROWSER_HOMEPAGE_MAX];
 };
 
 struct system_runtime_platform {

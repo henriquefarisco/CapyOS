@@ -255,7 +255,7 @@ const char *system_ui_text(const char *language, enum system_ui_text_id id) {
     case SYS_UI_HOSTNAME_DEFINED_PREFIX:
       return "   Hostname set: ";
     case SYS_UI_THEMES_AVAILABLE:
-      return "Available themes: capyos, ocean, forest.";
+      return "Available themes: capyos, ocean, forest, love.";
     case SYS_UI_THEME_PROMPT:
       return "Theme [capyos]: ";
     case SYS_UI_THEME_SELECTED_PREFIX:
@@ -339,7 +339,7 @@ const char *system_ui_text(const char *language, enum system_ui_text_id id) {
     case SYS_UI_HOSTNAME_DEFINED_PREFIX:
       return "   Hostname definido: ";
     case SYS_UI_THEMES_AVAILABLE:
-      return "Temas disponibles: capyos, ocean, forest.";
+      return "Temas disponibles: capyos, ocean, forest, love.";
     case SYS_UI_THEME_PROMPT:
       return "Tema [capyos]: ";
     case SYS_UI_THEME_SELECTED_PREFIX:
@@ -424,7 +424,7 @@ const char *system_ui_text(const char *language, enum system_ui_text_id id) {
   case SYS_UI_HOSTNAME_DEFINED_PREFIX:
     return "   Hostname definido: ";
   case SYS_UI_THEMES_AVAILABLE:
-    return "Temas disponiveis: capyos, ocean, forest.";
+    return "Temas disponiveis: capyos, ocean, forest, love.";
   case SYS_UI_THEME_PROMPT:
     return "Tema [capyos]: ";
   case SYS_UI_THEME_SELECTED_PREFIX:

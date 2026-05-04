@@ -5,6 +5,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* x86_64 PTE physical-frame mask: bits 12..51 hold the 4 KiB-aligned
+ * frame address. Bits 0..11 are flags (P/W/U/A/D/PAT/G/avl), bits
+ * 52..62 are reserved/avl/PKE, and bit 63 is NX. Using `~0xFFFULL`
+ * only cleared bits 11..0 and consequently leaked the NX bit (and
+ * any future PKE/avl bits) into the returned "physical" value. When
+ * the caller cast the result to a kernel pointer for identity-map
+ * writes (e.g. `elf_load` copying a non-executable .data segment),
+ * the high bit produced a NON-CANONICAL address which #GP'd on the
+ * very first store. The bug was masked by binaries whose only
+ * PT_LOAD was executable (NX=0) -- hello and exectarget -- and
+ * surfaced the moment capybrowser introduced a separate writable
+ * .rodata/.data segment with NX=1. */
+#define VMM_PTE_PHYS_MASK 0x000FFFFFFFFFF000ULL
+
 static void vmm_dbgcon_putc(uint8_t c) {
 #if defined(__x86_64__) && !defined(UNIT_TEST)
   __asm__ volatile("outb %0, $0xE9" : : "a"(c));
@@ -39,7 +53,7 @@ static uint64_t *get_or_create_table(uint64_t *table, uint32_t index,
     for (int i = 0; i < 4096; i++) virt[i] = 0;
     table[index] = phys | flags | VMM_PAGE_PRESENT;
   }
-  return (uint64_t *)(uintptr_t)(table[index] & ~0xFFFULL);
+  return (uint64_t *)(uintptr_t)(table[index] & VMM_PTE_PHYS_MASK);
 }
 
 void vmm_init(void) {
@@ -138,7 +152,7 @@ struct vmm_address_space *vmm_clone_address_space(
     for (int z = 0; z < 512; ++z) dst_pdpt[z] = 0;
     dst_pml4[i] = pdpt_phys | (src_pml4e & 0xFFFULL);
 
-    uint64_t *src_pdpt = (uint64_t *)(uintptr_t)(src_pml4e & ~0xFFFULL);
+    uint64_t *src_pdpt = (uint64_t *)(uintptr_t)(src_pml4e & VMM_PTE_PHYS_MASK);
     if (clone_pt_into(dst_pdpt, src_pdpt, 1) != 0) {
       vmm_destroy_address_space(dst);
       return NULL;
@@ -176,7 +190,7 @@ static int clone_pt_into(uint64_t *dst, uint64_t *src, int level) {
       for (int z = 0; z < 512; ++z) child[z] = 0;
       dst[i] = child_phys | (s & 0xFFFULL);
 
-      uint64_t *src_child = (uint64_t *)(uintptr_t)(s & ~0xFFFULL);
+      uint64_t *src_child = (uint64_t *)(uintptr_t)(s & VMM_PTE_PHYS_MASK);
       if (clone_pt_into(child, src_child, level + 1) != 0) {
         return -1;
       }
@@ -187,7 +201,7 @@ static int clone_pt_into(uint64_t *dst, uint64_t *src, int level) {
      * HUGE leaf in the PD layer is conservatively duplicated as-is
      * with no CoW flag flip; the kernel does not currently install
      * user huge pages so this branch is mostly defensive. */
-    uint64_t frame_phys = s & ~0xFFFULL;
+    uint64_t frame_phys = s & VMM_PTE_PHYS_MASK;
     pmm_frame_refcount_inc(frame_phys);
 
     if ((s & VMM_PAGE_USER) && (s & VMM_PAGE_WRITE) && !(s & VMM_PAGE_HUGE)) {
@@ -222,20 +236,20 @@ void vmm_destroy_address_space(struct vmm_address_space *as) {
   uint64_t *pml4 = as->pml4_virt;
   for (int i = 0; i < 256; i++) {
     if (!(pml4[i] & VMM_PAGE_PRESENT)) continue;
-    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[i] & ~0xFFFULL);
+    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[i] & VMM_PTE_PHYS_MASK);
     for (int j = 0; j < 512; j++) {
       if (!(pdpt[j] & VMM_PAGE_PRESENT)) continue;
-      uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[j] & ~0xFFFULL);
+      uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[j] & VMM_PTE_PHYS_MASK);
       for (int k = 0; k < 512; k++) {
         if (!(pd[k] & VMM_PAGE_PRESENT)) continue;
         if (pd[k] & VMM_PAGE_HUGE) {
           /* HUGE leaves at PD level are not refcounted today (the
            * cloner skips them; phase 7c only CoWs 4 KiB PTs). Free
            * straight to the PMM. */
-          pmm_free_page(pd[k] & ~0xFFFULL);
+          pmm_free_page(pd[k] & VMM_PTE_PHYS_MASK);
           continue;
         }
-        uint64_t *pt = (uint64_t *)(uintptr_t)(pd[k] & ~0xFFFULL);
+        uint64_t *pt = (uint64_t *)(uintptr_t)(pd[k] & VMM_PTE_PHYS_MASK);
         for (int l = 0; l < 512; l++) {
           if (pt[l] & VMM_PAGE_PRESENT) {
             /* M4 phase 7c: a frame may be shared via CoW with one or
@@ -245,7 +259,7 @@ void vmm_destroy_address_space(struct vmm_address_space *as) {
              * (single-AS user mappings, demand-paged anon pages)
              * report 0 from pmm_frame_refcount_dec and we free them
              * directly, preserving the pre-7c semantics. */
-            uint64_t leaf_phys = pt[l] & ~0xFFFULL;
+            uint64_t leaf_phys = pt[l] & VMM_PTE_PHYS_MASK;
             uint16_t pre = pmm_frame_refcount_get(leaf_phys);
             if (pre == 0u) {
               pmm_free_page(leaf_phys);
@@ -255,11 +269,11 @@ void vmm_destroy_address_space(struct vmm_address_space *as) {
             }
           }
         }
-        pmm_free_page(pd[k] & ~0xFFFULL);
+        pmm_free_page(pd[k] & VMM_PTE_PHYS_MASK);
       }
-      pmm_free_page(pdpt[j] & ~0xFFFULL);
+      pmm_free_page(pdpt[j] & VMM_PTE_PHYS_MASK);
     }
-    pmm_free_page(pml4[i] & ~0xFFFULL);
+    pmm_free_page(pml4[i] & VMM_PTE_PHYS_MASK);
   }
 
   pmm_free_page(as->pml4_phys);
@@ -331,11 +345,11 @@ int vmm_unmap_page(struct vmm_address_space *as, uint64_t virt) {
   uint32_t pt_idx   = (virt >> 12) & 0x1FF;
 
   if (!(pml4[pml4_idx] & VMM_PAGE_PRESENT)) return -1;
-  uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[pml4_idx] & ~0xFFFULL);
+  uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[pml4_idx] & VMM_PTE_PHYS_MASK);
   if (!(pdpt[pdpt_idx] & VMM_PAGE_PRESENT)) return -1;
-  uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[pdpt_idx] & ~0xFFFULL);
+  uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[pdpt_idx] & VMM_PTE_PHYS_MASK);
   if (!(pd[pd_idx] & VMM_PAGE_PRESENT)) return -1;
-  uint64_t *pt = (uint64_t *)(uintptr_t)(pd[pd_idx] & ~0xFFFULL);
+  uint64_t *pt = (uint64_t *)(uintptr_t)(pd[pd_idx] & VMM_PTE_PHYS_MASK);
 
   /* Phase 7b: read the PTE BEFORE clearing so we can decide whether
    * to decrement the per-AS RSS counter. Only user pages contribute
@@ -375,14 +389,14 @@ uint64_t vmm_virt_to_phys(struct vmm_address_space *as, uint64_t virt) {
   uint32_t pt_idx   = (virt >> 12) & 0x1FF;
 
   if (!(pml4[pml4_idx] & VMM_PAGE_PRESENT)) return 0;
-  uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[pml4_idx] & ~0xFFFULL);
+  uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[pml4_idx] & VMM_PTE_PHYS_MASK);
   if (!(pdpt[pdpt_idx] & VMM_PAGE_PRESENT)) return 0;
-  uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[pdpt_idx] & ~0xFFFULL);
+  uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[pdpt_idx] & VMM_PTE_PHYS_MASK);
   if (!(pd[pd_idx] & VMM_PAGE_PRESENT)) return 0;
-  uint64_t *pt = (uint64_t *)(uintptr_t)(pd[pd_idx] & ~0xFFFULL);
+  uint64_t *pt = (uint64_t *)(uintptr_t)(pd[pd_idx] & VMM_PTE_PHYS_MASK);
   if (!(pt[pt_idx] & VMM_PAGE_PRESENT)) return 0;
 
-  return (pt[pt_idx] & ~0xFFFULL) | (virt & 0xFFF);
+  return (pt[pt_idx] & VMM_PTE_PHYS_MASK) | (virt & 0xFFF);
 }
 
 /* Phase 7b: real demand-paging handler.
@@ -428,12 +442,12 @@ static uint64_t *vmm_walk_to_leaf(struct vmm_address_space *as,
   uint32_t pt_idx   = (virt >> 12) & 0x1FF;
 
   if (!(pml4[pml4_idx] & VMM_PAGE_PRESENT)) return NULL;
-  uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[pml4_idx] & ~0xFFFULL);
+  uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[pml4_idx] & VMM_PTE_PHYS_MASK);
   if (!(pdpt[pdpt_idx] & VMM_PAGE_PRESENT)) return NULL;
-  uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[pdpt_idx] & ~0xFFFULL);
+  uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[pdpt_idx] & VMM_PTE_PHYS_MASK);
   if (!(pd[pd_idx] & VMM_PAGE_PRESENT)) return NULL;
   if (pd[pd_idx] & VMM_PAGE_HUGE) return NULL; /* phase 7c: skip 2 MiB */
-  uint64_t *pt = (uint64_t *)(uintptr_t)(pd[pd_idx] & ~0xFFFULL);
+  uint64_t *pt = (uint64_t *)(uintptr_t)(pd[pd_idx] & VMM_PTE_PHYS_MASK);
   return &pt[pt_idx];
 }
 
@@ -455,7 +469,7 @@ static int vmm_handle_cow_fault(struct vmm_address_space *as,
   uint64_t pte = *pte_slot;
   if (!(pte & VMM_PAGE_PRESENT)) return -1;
 
-  uint64_t old_phys = pte & ~0xFFFULL;
+  uint64_t old_phys = pte & VMM_PTE_PHYS_MASK;
 
   /* Decrement BEFORE the policy decision so vmm_cow_decide observes
    * the post-dec count. Frames that were never refcounted (e.g. text

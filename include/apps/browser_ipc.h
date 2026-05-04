@@ -41,6 +41,12 @@ enum browser_ipc_kind {
     BROWSER_IPC_KEY             = 0x09,
     BROWSER_IPC_PING            = 0x0A,
     BROWSER_IPC_SHUTDOWN        = 0x0B,
+    /* F3.3c slice 5: chrome -> engine FETCH_RESPONSE.
+     * Carries the body bytes the engine asked for via
+     * EVENT_FETCH_REQUEST. Direction matches the existing
+     * "chrome -> engine command" range so the codec direction
+     * predicates keep working unchanged. */
+    BROWSER_IPC_FETCH_RESPONSE  = 0x0C,
 
     /* engine -> chrome (event/resposta) */
     BROWSER_IPC_EVENT_TITLE         = 0x81,
@@ -52,7 +58,31 @@ enum browser_ipc_kind {
     BROWSER_IPC_EVENT_FRAME         = 0x87,
     BROWSER_IPC_EVENT_CURSOR        = 0x88,
     BROWSER_IPC_EVENT_PONG          = 0x89,
-    BROWSER_IPC_EVENT_LOG           = 0x8A
+    BROWSER_IPC_EVENT_LOG           = 0x8A,
+    /* F3.3c slice 5: engine -> chrome FETCH_REQUEST. The engine
+     * has no direct kernel access; it asks the chrome to fetch
+     * `url` and forward the body via FETCH_RESPONSE. The seq is
+     * engine-assigned and pairs request/response. */
+    BROWSER_IPC_EVENT_FETCH_REQUEST = 0x8B
+};
+
+/* Status codes returned in FETCH_RESPONSE.status. The numeric
+ * values match common HTTP semantics so a future real backend can
+ * map directly without translation. Status 0 means transport-level
+ * failure (DNS, refused, timeout). */
+enum browser_ipc_fetch_status {
+    BROWSER_IPC_FETCH_TRANSPORT_ERR = 0,    /* DNS/refused/timeout/etc. */
+    BROWSER_IPC_FETCH_OK            = 200,
+    BROWSER_IPC_FETCH_NOT_FOUND     = 404,
+    BROWSER_IPC_FETCH_FORBIDDEN     = 403,
+    BROWSER_IPC_FETCH_UNAVAILABLE   = 503
+};
+
+/* HTTP-ish methods. Only GET is supported in slice 5; POST is
+ * reserved for slice 5b (forms). */
+enum browser_ipc_fetch_method {
+    BROWSER_IPC_FETCH_GET  = 0,
+    BROWSER_IPC_FETCH_POST = 1
 };
 
 /* Stages emitidos em NAV_PROGRESS */
@@ -100,6 +130,68 @@ struct browser_ipc_header {
 int browser_ipc_header_encode(const struct browser_ipc_header *hdr,
                               uint8_t *out,
                               uint32_t out_size);
+
+/* === F3.3c slice 5: fetch payload helpers ============================
+ *
+ * Engine asks the chrome to fetch a URL; chrome answers with the
+ * resolved body. The wire shapes are:
+ *
+ *   EVENT_FETCH_REQUEST (engine -> chrome) payload:
+ *     [0..3]   seq u32 BE          -- engine-assigned, paired with response
+ *     [4..7]   nav_id u32 BE       -- which navigation owns this fetch
+ *     [8]      method u8           -- enum browser_ipc_fetch_method
+ *     [9..10]  url_len u16 BE      -- length of url bytes
+ *     [11..]   url utf8            -- url_len bytes
+ *
+ *   FETCH_RESPONSE (chrome -> engine) payload:
+ *     [0..3]   seq u32 BE          -- echoes the request
+ *     [4..7]   nav_id u32 BE       -- echoes the request
+ *     [8..9]   status u16 BE       -- enum browser_ipc_fetch_status
+ *     [10..11] ctype_len u16 BE    -- length of content_type bytes
+ *     [12..15] body_len u32 BE     -- length of body bytes
+ *     [16..]   ctype utf8          -- ctype_len bytes
+ *     [..]     body bytes          -- body_len bytes
+ */
+
+struct browser_ipc_fetch_request {
+    uint32_t seq;
+    uint32_t nav_id;
+    uint8_t  method;
+    uint16_t url_len;
+    const uint8_t *url;
+};
+
+struct browser_ipc_fetch_response {
+    uint32_t seq;
+    uint32_t nav_id;
+    uint16_t status;
+    uint16_t content_type_len;
+    uint32_t body_len;
+    const uint8_t *content_type;
+    const uint8_t *body;
+};
+
+/* Encode the FETCH_REQUEST payload into `out`. Writes
+ * 11 + url_len bytes; returns BROWSER_IPC_OK or
+ * BROWSER_IPC_ERR_SHORT / BROWSER_IPC_ERR_INVAL. */
+int browser_ipc_fetch_request_encode(const struct browser_ipc_fetch_request *req,
+                                     uint8_t *out, uint32_t out_size,
+                                     uint32_t *out_written);
+
+/* Decode FETCH_REQUEST payload from `in`. Populates `*req` with
+ * fields and a borrowed url pointer into the input buffer. */
+int browser_ipc_fetch_request_decode(const uint8_t *in, uint32_t in_size,
+                                     struct browser_ipc_fetch_request *req);
+
+/* Encode FETCH_RESPONSE payload into `out`. Writes
+ * 16 + content_type_len + body_len bytes. */
+int browser_ipc_fetch_response_encode(const struct browser_ipc_fetch_response *resp,
+                                      uint8_t *out, uint32_t out_size,
+                                      uint32_t *out_written);
+
+/* Decode FETCH_RESPONSE payload from `in`. */
+int browser_ipc_fetch_response_decode(const uint8_t *in, uint32_t in_size,
+                                      struct browser_ipc_fetch_response *resp);
 
 /*
  * Decode header a partir de buffer (BE). Valida magic, kind conhecido

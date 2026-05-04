@@ -4,6 +4,10 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.6+20260503.md`
+  - etapa 2 de estabilidade pré-JS do browser ring-3: pipe kernel 64 KiB, janela 480x384,
+    engine framebuffer 480x360, kill imediato libera FDs, debugcon recebe logs do engine,
+    e a nomenclatura de planos foi consolidada em Etapa N / Seção a-e
 - `capyos-0.8.0-alpha.4+20260429.md`
   - adocao profunda do `op_budget` no navegador, eventos `[audit]`
     estruturados (browser strict + capyfs journal auth + update payload),

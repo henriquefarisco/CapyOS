@@ -24,6 +24,10 @@ struct file_manager_app {
 };
 
 void file_manager_open(void);
+/* Etapa UX W7-ish (2026-05-03): abre o file manager e navega para
+ * `path` (cria a janela se nao existir). Usado pelo desktop icons
+ * para "abrir folder" sem o caller precisar conhecer o singleton. */
+void file_manager_open_at(const char *path);
 void file_manager_navigate(struct file_manager_app *app, const char *path);
 void file_manager_paint(struct file_manager_app *app);
 void file_manager_handle_click(struct file_manager_app *app, int32_t x, int32_t y);

@@ -73,11 +73,29 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
       vmm_map_page(as, vaddr_start + p * VMM_PAGE_SIZE, phys, flags);
     }
 
+    /* 2026-05-01: copia pagina-a-pagina. As paginas fisicas alocadas
+     * acima por pmm_alloc_page() NAO sao contiguas, entao um unico
+     * vmm_virt_to_phys(p_vaddr) + memcpy(filesz) so esta correto se
+     * filesz <= 4 KiB. Para binarios maiores (capybrowser, capysh
+     * com mais codigo) o memcpy extrapola a primeira pagina fisica
+     * e corrompe RAM alheia, causando #GP/#PF longe do site original.
+     * O loop abaixo recolhe o phys de cada pagina e copia apenas
+     * o slice que cabe nela. p_offset alinhamento dentro da pagina
+     * e respeitado via `page_off`. */
     if (phdr->p_filesz > 0 && phdr->p_offset + phdr->p_filesz <= size) {
-      uint64_t dest_phys = vmm_virt_to_phys(as, phdr->p_vaddr);
-      if (dest_phys) {
-        elf_memcpy((void *)(uintptr_t)dest_phys,
-                   data + phdr->p_offset, (size_t)phdr->p_filesz);
+      uint64_t copied = 0;
+      while (copied < phdr->p_filesz) {
+        uint64_t cur_vaddr = phdr->p_vaddr + copied;
+        uint64_t page_base = cur_vaddr & ~(VMM_PAGE_SIZE - 1);
+        uint64_t page_off = cur_vaddr - page_base;
+        uint64_t page_remain = VMM_PAGE_SIZE - page_off;
+        uint64_t to_copy = phdr->p_filesz - copied;
+        if (to_copy > page_remain) to_copy = page_remain;
+        uint64_t page_phys = vmm_virt_to_phys(as, page_base);
+        if (!page_phys) break;
+        elf_memcpy((void *)(uintptr_t)(page_phys + page_off),
+                   data + phdr->p_offset + copied, (size_t)to_copy);
+        copied += to_copy;
       }
     }
 

@@ -43,6 +43,11 @@ struct taskbar {
   int menu_open;
   struct taskbar_menu_entry menu_entries[TASKBAR_MENU_MAX_ENTRIES];
   uint32_t menu_entry_count;
+  /* Etapa UX W7-ish (2026-05-03): item do menu sobre o qual o mouse
+   * esta. -1 = nenhum (ou separador). taskbar_handle_menu_hover
+   * atualiza este campo a cada mouse-move; menu_popup_paint le para
+   * realcar a linha (efeito brilho). */
+  int hover_entry;
   char clock_text[16];
   int show_clock;
 };
@@ -60,5 +65,10 @@ void taskbar_add_menu_entry(struct taskbar *tb, const char *label,
 void taskbar_add_menu_separator(struct taskbar *tb);
 int taskbar_handle_menu_click(struct taskbar *tb, int32_t screen_x,
                               int32_t screen_y);
+/* Etapa UX W7-ish (2026-05-03): atualiza o hover_entry com base na
+ * posicao screen (usada quando o mouse se move sobre o menu popup
+ * aberto). No-op se o menu nao estiver aberto. */
+void taskbar_handle_menu_hover(struct taskbar *tb, int32_t screen_x,
+                                int32_t screen_y);
 
 #endif /* GUI_TASKBAR_H */

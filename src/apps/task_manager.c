@@ -6,6 +6,8 @@
 #include "kernel/task.h"
 #include "kernel/task_iter.h"
 #include "services/service_manager.h"
+#include "lang/app_language.h"
+#include "lang/localization.h"
 #include "util/kstring.h"
 #include "memory/kmem.h"
 #include <stddef.h>
@@ -195,6 +197,16 @@ static void task_manager_window_paint(struct gui_window *win) {
   task_manager_paint((struct task_manager_app *)win->user_data);
 }
 
+/* 2026-05-02: repaint after a user resize drag (see
+ * src/apps/calculator.c for the rationale). */
+static void task_manager_window_resize(struct gui_window *win,
+                                       uint32_t w, uint32_t h) {
+  (void)w;
+  (void)h;
+  if (!win || !win->user_data) return;
+  task_manager_paint((struct task_manager_app *)win->user_data);
+}
+
 static int task_manager_row_for_y(const struct task_manager_app *app,
                                   int32_t y) {
   if (!app) return -1;
@@ -302,6 +314,7 @@ void task_manager_open(void) {
   g_tm.window->on_mouse = task_manager_window_mouse;
   g_tm.window->on_scroll = task_manager_window_scroll;
   g_tm.window->on_close = task_manager_on_close;
+  g_tm.window->on_resize = task_manager_window_resize;
   g_tm.selected = -1;
   g_tm.scroll_offset = 0;
   g_tm.view = TASK_MANAGER_VIEW_SERVICES;
@@ -331,8 +344,12 @@ static void task_manager_paint_tabs(struct task_manager_app *app,
                                     struct gui_surface *s,
                                     const struct font *f,
                                     const struct gui_theme_palette *theme) {
-  static const char *labels[TASK_MANAGER_TAB_COUNT] = {
-    "Services", "Tasks", "Processes"
+  /* Etapa F4 i18n (2026-05-03): labels do tab-strip localizados. */
+  const char *lang = app_current_language();
+  const char *labels[TASK_MANAGER_TAB_COUNT] = {
+    localization_select(lang, "Servicos", "Services", "Servicios"),
+    localization_select(lang, "Tarefas", "Tasks", "Tareas"),
+    localization_select(lang, "Processos", "Processes", "Procesos")
   };
   uint32_t third = s->width / 3u;
   if (third == 0u) return;
@@ -500,22 +517,30 @@ static void task_manager_paint_footer(struct task_manager_app *app,
   count_buf[p] = '\0';
   font_draw_string(s, f, 8, footer_y + 2, count_buf, theme->text_muted);
 
-  /* Refresh button (always available). */
+  /* Refresh button (always available).
+   * Etapa F4 i18n (2026-05-03): label localizado. */
+  const char *lang = app_current_language();
   task_manager_fill_rect(s, 80, footer_y, 76, 20, theme->accent_alt);
-  font_draw_string(s, f, 88, footer_y + 2, "Refresh", theme->text);
+  font_draw_string(s, f, 88, footer_y + 2,
+                   localization_select(lang, "Atualizar", "Refresh",
+                                        "Actualizar"),
+                   theme->text);
 
   /* Action button: label depends on the active view.
    *   - Services -> "Restart" (delegates to service_manager).
    *   - Tasks / Processes -> "Kill" (delegates to process_kill).
    * The button is greyed out when no row is selected so the user
-   * gets visual feedback that the action will no-op. */
+   * gets visual feedback that the action will no-op.
+   * Etapa F4 i18n (2026-05-03): labels Restart/Kill localizados. */
   uint32_t btn_w = 64;
   int32_t btn_x = (int32_t)(s->width - btn_w - 8);
   int action_enabled = (app->selected >= 0);
   uint32_t btn_bg = action_enabled ? 0x00CC3333u : theme->accent_alt;
   const char *btn_label = (app->view == TASK_MANAGER_VIEW_SERVICES)
-                              ? "Restart"
-                              : "Kill";
+                              ? localization_select(lang, "Reiniciar",
+                                                     "Restart", "Reiniciar")
+                              : localization_select(lang, "Matar", "Kill",
+                                                     "Matar");
   task_manager_fill_rect(s, btn_x, footer_y, btn_w, 20, btn_bg);
   font_draw_string(s, f, btn_x + 4, footer_y + 2, btn_label,
                    action_enabled ? 0x00FFFFFFu : theme->text_muted);

@@ -16,7 +16,13 @@
 #include "apps/text_editor.h"
 #include "apps/settings.h"
 #include "apps/task_manager.h"
-#include "apps/html_viewer.h"
+#include "apps/browser_app.h"
+#include "gui/context_menu.h"
+#include "gui/desktop_icons.h"
+#include "gui/inline_prompt.h"
+#include "auth/session.h"
+#include "lang/app_language.h"
+#include "arch/x86_64/apic.h"
 #include <stddef.h>
 
 static struct terminal g_desktop_terminal;
@@ -42,6 +48,18 @@ static void desktop_shell_clear(void) {
 }
 
 static void desktop_terminal_paint(struct gui_window *win) {
+  if (!win || !win->user_data) return;
+  terminal_paint((struct terminal *)win->user_data);
+}
+
+/* 2026-05-02: repaint the terminal after a user resize drag. The
+ * compositor has already cleared the new pixel buffer to bg_color;
+ * the terminal painter walks the scrollback ring and re-renders
+ * onto the surface so dropping the new dimensions in is enough. */
+static void desktop_terminal_resize(struct gui_window *win,
+                                    uint32_t w, uint32_t h) {
+  (void)w;
+  (void)h;
   if (!win || !win->user_data) return;
   terminal_paint((struct terminal *)win->user_data);
 }
@@ -152,10 +170,17 @@ static void menu_action_task_manager(void *user_data) {
   register_focused_in_taskbar("Task Manager", "Tasks");
 }
 
+/* F3.3f (2026-05-01): spawn ring-3 capybrowser + chrome runtime
+ * + a compositor window that blits `chrome.last_frame`. The
+ * whole lifecycle (spawn, initial navigate, close) lives in
+ * `browser_app`; this menu entry is the single user-visible
+ * entrypoint. */
 static void menu_action_browser(void *user_data) {
   (void)user_data;
-  html_viewer_open();
-  register_focused_in_taskbar("CapyBrowser", "Browser");
+  browser_app_open();
+  if (browser_app_is_open()) {
+    register_focused_in_taskbar("CapyBrowser", "Browser");
+  }
 }
 
 static void menu_action_logout(void *user_data) {
@@ -200,19 +225,56 @@ void desktop_init(struct desktop_session *ds, uint32_t *fb, uint32_t w,
   wm_init(&ds->wm, w, h);
   desktop_apply_theme(ds);
 
+  /* Etapa UX W7-ish (2026-05-03): wallpaper renderiza icons das
+   * pastas/arquivos do home do user (a la Desktop do W7). Para
+   * usuarios sem home definido cai pra root. Compositor recebe o
+   * paint callback; clique e right-click no espaco vazio sao
+   * roteados pra desktop_icons em desktop_handle_mouse. */
+  {
+    struct session_context *sess = session_active();
+    const struct user_record *user = sess ? session_user(sess) : NULL;
+    const char *home = (user && user->home[0]) ? user->home : "/";
+    desktop_icons_init(home, TASKBAR_HEIGHT);
+    compositor_set_desktop_callback(desktop_icons_paint);
+  }
+
   g_menu_desktop = ds;
-  taskbar_add_menu_entry(&ds->taskbar, "Terminal",   menu_action_terminal, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Files",      menu_action_file_manager, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Editor",     menu_action_text_editor, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Calculator", menu_action_calculator, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Browser",    menu_action_browser, ds);
+  /* Etapa F4 i18n (2026-05-03): nomes localizados via APP_T no
+   * idioma da sessao ativa. Note: o taskbar copia a string ao
+   * adicionar -- mudancas de idioma em runtime so afetam a UI
+   * apos relogin (re-init do desktop). */
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Terminal", "Terminal", "Terminal"),
+                         menu_action_terminal, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Arquivos", "Files", "Archivos"),
+                         menu_action_file_manager, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Editor", "Editor", "Editor"),
+                         menu_action_text_editor, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Calculadora", "Calculator", "Calculadora"),
+                         menu_action_calculator, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Navegador", "Browser", "Navegador"),
+                         menu_action_browser, ds);
   taskbar_add_menu_separator(&ds->taskbar);
-  taskbar_add_menu_entry(&ds->taskbar, "Settings",   menu_action_settings, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Tasks",      menu_action_task_manager, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Configuracoes", "Settings", "Ajustes"),
+                         menu_action_settings, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Tarefas", "Tasks", "Tareas"),
+                         menu_action_task_manager, ds);
   taskbar_add_menu_separator(&ds->taskbar);
-  taskbar_add_menu_entry(&ds->taskbar, "Logout",     menu_action_logout, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Reboot",     menu_action_reboot, ds);
-  taskbar_add_menu_entry(&ds->taskbar, "Shutdown",   menu_action_shutdown, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Sair", "Logout", "Cerrar sesion"),
+                         menu_action_logout, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Reiniciar", "Reboot", "Reiniciar"),
+                         menu_action_reboot, ds);
+  taskbar_add_menu_entry(&ds->taskbar,
+                         APP_T("Desligar", "Shutdown", "Apagar"),
+                         menu_action_shutdown, ds);
 
   mouse_set_bounds((int32_t)w, (int32_t)h);
   mouse_set_position((int32_t)(w / 2), (int32_t)(h / 2));
@@ -307,6 +369,7 @@ void desktop_open_terminal(struct desktop_session *ds) {
     win->on_key = desktop_terminal_key;
     win->on_scroll = desktop_terminal_scroll;
     win->on_close = desktop_terminal_on_close;
+    win->on_resize = desktop_terminal_resize;
     win->bg_color = compositor_theme()->terminal_bg;
     win->border_color = compositor_theme()->window_border;
     ds->active_terminal = &g_desktop_terminal;
@@ -318,6 +381,16 @@ void desktop_handle_input(struct desktop_session *ds, uint32_t keycode,
                           char ch) {
   struct gui_window *focused = NULL;
   if (!ds) return;
+
+  /* Etapa UX W7-ish (2026-05-03): inline_prompt absorve teclas
+   * antes do dispatch normal (Enter/Esc/Backspace/printable). Util
+   * para Rename/New no desktop_icons + file_manager. */
+  if (inline_prompt_is_open()) {
+    if (inline_prompt_handle_key(keycode, ch)) {
+      compositor_invalidate_all();
+      return;
+    }
+  }
 
   focused = compositor_focused_window();
   if (focused && focused->on_key) {
@@ -360,6 +433,58 @@ int desktop_handle_mouse(struct desktop_session *ds) {
         ev.mouse.buttons = mev.buttons;
         gui_event_push(&ev);
         wm_handle_mouse_move(&ds->wm, ms.x, ms.y);
+        /* Etapa UX W7-ish (2026-05-03): hover dispatch.
+         *   - Se um context_menu esta aberto, ele tem prioridade
+         *     (atualiza hover sobre o popup).
+         *   - Senao, se o menu start esta aberto, atualiza hover_entry.
+         *   - Senao, encaminha pro on_hover da janela sob o cursor.
+         * Coordenadas locais sao calculadas pela window. */
+        if (context_menu_is_open()) {
+          context_menu_handle_hover(ms.x, ms.y);
+        } else if (ds->taskbar.menu_open) {
+          taskbar_handle_menu_hover(&ds->taskbar, ms.x, ms.y);
+        } else {
+          struct gui_window *hov = compositor_window_at(ms.x, ms.y);
+          if (hov && hov->on_hover &&
+              ms.y >= hov->frame.y &&
+              ms.y < hov->frame.y + (int32_t)hov->frame.height) {
+            hov->on_hover(hov, ms.x - hov->frame.x, ms.y - hov->frame.y);
+          }
+        }
+        /* Etapa F4 cursors (2026-05-03): cursor kind dispatch
+         * baseado em hover. Prioridade:
+         *   1. Resize zone (right/bottom edge / corner) -> RESIZE_*
+         *   2. on_cursor_hint da janela (TEXT em URL bar, etc.)
+         *   3. win->loading -> LOADING (ampulheta)
+         *   4. Default ARROW.
+         * O compositor evita re-render se o kind nao mudou. */
+        {
+          struct gui_window *cwin = compositor_window_at(ms.x, ms.y);
+          enum comp_cursor_kind ck = COMP_CURSOR_ARROW;
+          if (cwin) {
+            int32_t fx0 = cwin->frame.x;
+            int32_t fy0 = cwin->frame.y;
+            int32_t fx1 = fx0 + (int32_t)cwin->frame.width;
+            int32_t fy1 = fy0 + (int32_t)cwin->frame.height;
+            int near_r = (ms.x >= fx1 - WM_RESIZE_GRIP_WIDTH && ms.x <= fx1);
+            int near_b = (ms.y >= fy1 - WM_RESIZE_GRIP_WIDTH && ms.y <= fy1);
+            int in_x = (ms.x >= fx0 && ms.x <= fx1);
+            int in_y = (ms.y >= fy0 && ms.y <= fy1);
+            if (cwin->resizable && in_x && in_y) {
+              if (near_r && near_b) ck = COMP_CURSOR_RESIZE_DIAG;
+              else if (near_r)      ck = COMP_CURSOR_RESIZE_H;
+              else if (near_b)      ck = COMP_CURSOR_RESIZE_V;
+            }
+            if (ck == COMP_CURSOR_ARROW && cwin->on_cursor_hint &&
+                ms.y >= fy0 && ms.y < fy1) {
+              ck = cwin->on_cursor_hint(cwin, ms.x - fx0, ms.y - fy0);
+            }
+            if (ck == COMP_CURSOR_ARROW && cwin->loading) {
+              ck = COMP_CURSOR_LOADING;
+            }
+          }
+          compositor_set_cursor(ck);
+        }
       }
 
       if (mev.changed & MOUSE_BUTTON_LEFT) {
@@ -372,8 +497,16 @@ int desktop_handle_mouse(struct desktop_session *ds) {
         gui_event_push(&ev);
 
         if (ev.type == GUI_EVENT_MOUSE_DOWN) {
-          /* If the menu popup is open, give it first chance at the click */
-          if (ds->taskbar.menu_open &&
+          /* Etapa UX W7-ish (2026-05-03): inline_prompt tem maior
+           * prioridade. Click fora do popup -> cancela; click
+           * dentro -> mantem (sem agir). */
+          if (inline_prompt_is_open() &&
+              inline_prompt_handle_click(ms.x, ms.y)) {
+            /* prompt fechou ou absorveu o click; nao continua. */
+          } else if (context_menu_is_open() &&
+              context_menu_handle_click(ms.x, ms.y)) {
+            /* Click consumido pelo context menu. */
+          } else if (ds->taskbar.menu_open &&
               taskbar_handle_menu_click(&ds->taskbar, ms.x, ms.y)) {
             /* Menu item was activated; event consumed */
           } else if (ms.y >= (int32_t)(ds->screen_h - TASKBAR_HEIGHT)) {
@@ -400,6 +533,21 @@ int desktop_handle_mouse(struct desktop_session *ds) {
                     ds->active_terminal->window == win) {
                   ds->active_terminal = NULL;
                 }
+              } else if (compositor_hit_minimize_button(win, ms.x, ms.y)) {
+                /* Etapa F4 minimize/maximize (2026-05-03): minimize.
+                 * Esconde a janela; o item do taskbar continua para
+                 * permitir restore (clicar no item ja chama
+                 * compositor_show_window). */
+                compositor_minimize_window(win->id);
+              } else if (compositor_hit_maximize_button(win, ms.x, ms.y)) {
+                /* Etapa F4 minimize/maximize (2026-05-03): toggle
+                 * maximize/restore. Subtrai a altura do taskbar para
+                 * o "fullscreen" nao cobrir a barra de tarefas. */
+                uint32_t avail = (ds->screen_h > TASKBAR_HEIGHT)
+                                 ? ds->screen_h - TASKBAR_HEIGHT
+                                 : ds->screen_h;
+                compositor_toggle_maximize_window(win->id, ds->screen_w,
+                                                   avail);
               } else {
                 compositor_focus_window(win->id);
                 taskbar_set_focused(&ds->taskbar, win->id);
@@ -412,10 +560,42 @@ int desktop_handle_mouse(struct desktop_session *ds) {
                   compositor_invalidate(win->id);
                 }
               }
+            } else {
+              /* Etapa UX W7-ish (2026-05-03): click no espaco vazio
+               * do desktop (sem janela e fora do taskbar) -> roteia
+               * para desktop_icons. Click sobre um icone seleciona
+               * (e abre no segundo click). */
+              desktop_icons_handle_click(ms.x, ms.y);
             }
           }
         } else {
           wm_handle_mouse_up(&ds->wm);
+        }
+      }
+
+      /* Etapa UX W7-ish (2026-05-03): right-click dispatch.
+       *   - Fecha popups abertos antes (start menu / context menu)
+       *     para que o novo right-click sempre crie um menu fresco.
+       *   - Janela sob o cursor com `on_context_menu` -> chama com
+       *     coords locais.
+       *   - Sem janela (desktop vazio) e fora do taskbar -> roteia
+       *     pra desktop_icons (Open/Rename/Delete sobre icone, ou
+       *     New File/Folder/Refresh sobre area vazia). */
+      if ((mev.changed & MOUSE_BUTTON_RIGHT) &&
+          (mev.buttons & MOUSE_BUTTON_RIGHT)) {
+        struct gui_window *rwin = NULL;
+        if (context_menu_is_open()) context_menu_close();
+        if (ds->taskbar.menu_open) {
+          taskbar_toggle_menu(&ds->taskbar);
+        }
+        rwin = compositor_window_at(ms.x, ms.y);
+        if (rwin && rwin->on_context_menu &&
+            ms.y >= rwin->frame.y &&
+            ms.y < rwin->frame.y + (int32_t)rwin->frame.height) {
+          rwin->on_context_menu(rwin, ms.x - rwin->frame.x,
+                                 ms.y - rwin->frame.y);
+        } else if (!rwin && ms.y < (int32_t)(ds->screen_h - TASKBAR_HEIGHT)) {
+          desktop_icons_handle_context(ms.x, ms.y);
         }
       }
 
@@ -471,12 +651,12 @@ int desktop_run_frame(struct desktop_session *ds) {
    * exited) reflect in the row list within ~0.5s on real hw. */
   task_manager_tick();
 
-  /* Post-M5 W3: html_viewer per-frame tick. Drains async fetch
-   * results (so users do not have to interact for a fetched page
-   * to appear) and enforces HTML_VIEWER_NAV_TIMEOUT_TICKS so a
-   * heavy or stuck site cannot keep the browser in LOADING
-   * forever. No-op when the viewer is closed. */
-  html_viewer_tick();
+  /* F3.3f: ring-3 browser per-frame tick. Drena eventos IPC do
+   * engine (NAVIGATE stages, fetch requests, frames), blita o
+   * framebuffer BGRA na superficie da janela quando chega
+   * EVENT_FRAME e dispara PING/kill do watchdog. No-op quando
+   * a janela do browser esta fechada. */
+  browser_app_tick(apic_timer_ticks());
 
   compositor_render();
 

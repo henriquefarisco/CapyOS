@@ -1,10 +1,31 @@
 # CapyOS — Master Plan único e linear
 
-**Data de referência:** 2026-05-01
-**Versão atual:** `0.8.0-alpha.4+20260429` (alpha.5 aguarda CI dos smokes M5)
+**Data de referência:** 2026-05-03
+**Versão atual:** `0.8.0-alpha.6+20260503`
 **Plataforma oficial:** `VMware + UEFI + E1000`
 **Branch ativa:** `feature/dev-bugfixes`
 **Substitui:** `capyos-robustness-master-plan.md`, `system-master-plan.md`, `system-roadmap.md`, `system-execution-plan.md`, `capyos-master-improvement-plan.md`, `browser-status-roadmap.md`, `source-organization-roadmap.md`, `m5-userland-progress.md`, `post-m5-ux-followups.md` (todos arquivados em `historical/` em 2026-05-01).
+
+---
+
+## 0. Convenção de nomenclatura única (2026-05-02)
+
+A partir desta data, **toda documentação ativa** (`docs/plans/active/*.md`,
+release notes em `docs/releases/`, e `STATUS.md`) usa o vocabulário
+abaixo de forma consistente:
+
+| Termo | Significado | Onde aparece |
+|---|---|---|
+| **Etapa N** (N = 1, 2, 3, …) | Unidade linear de trabalho com escopo finito, dependência declarada e critério de aceite verificável. Substitui `Fase F1`, `Slice 5d`, `Phase 7b`, `Sessão 3`. | Toda nova subdivisão de plano. |
+| **Seção a, b, c, d, e** | Sub-divisão dentro de uma Etapa. Letra minúscula, sequencial. Substitui `E1.1`, `E1.2`, `slice 4-final`, `M5.G.4`. | Toda nova decomposição interna de uma Etapa. |
+| **Marco** (M0…M8) | **Tag arqueológico** de blocos históricos já entregues (M0 governança, M4 processos, M5 userland, M6 segurança, M7 WAL, M8 browser kernel-side). Imutável. Apenas leitura. | Tabela de "Entregue" em §2.1 deste master plan. |
+| **F1…F10** | **Tag arqueológico** das fases originais deste master plan. Identificadores estáveis para evitar quebra de referências cruzadas, mas todo conteúdo NOVO usa Etapa N + Seção a-e. | §4 (renomeada para "Etapas linearizadas"). |
+| **Sessão** | Janela temporal de trabalho de um operador (não unidade de plano). Forma livre. Em release notes, vira "Etapa N seção L (sessão YYYY-MM-DD)". | Logs de sessão, conversation summaries. |
+
+**Regra de ouro:** Qualquer plano novo ou refactor de plano existente
+**deve** usar `Etapa N` + `Seção a/b/c…`. Identificadores legados (F3.3f,
+slice 5d, M5.G.4, etc.) podem aparecer entre crases como tag arqueológico
+mas nunca como cabeçalho de uma tarefa nova.
 
 ---
 
@@ -55,7 +76,7 @@ Regras de manutenção:
 | Origem | Item | Vira fase |
 |---|---|---|
 | M2.1–M2.5 | DHCP no smoke oficial VMware+E1000 | **F2** |
-| M5.G.4 / G.5 | Release notes + tag `0.8.0-alpha.5` + master-plan promote | **F1** |
+| M5.G.4 / G.5 | Release notes + tag `0.8.0-alpha.6` + master-plan promote | **F1** |
 | M6.4 | Assinatura ponta-a-ponta dos checksums + smoke VMware | **F2** (acopla) |
 | M8.2 + W3.4 | Browser em processo userland isolado + watchdog | **F3** |
 | Sistema | Stack sockets userland + TLS p/ apps | **F4** |
@@ -111,31 +132,31 @@ Cada fase tem o mesmo formato:
 
 ---
 
-### F1 — Release `0.8.0-alpha.5` (consolidação M5 + W1/W2/W3)
+### F1 — Release `0.8.0-alpha.6` (consolidação M5 + W1/W2/W3 + F3 browser)
 
-**Status:** 🟡 Em andamento (2026-05-01) — bump local concluído; falta CI + tag.
+**Status:** 🟡 Em andamento (2026-05-03) — bump local validado; falta push/CI + tag.
 **Criticidade:** alta — destrava M8.2 e o ciclo seguinte.
 **Depende de:** branch `feature/continue-development` (M5+W1+W2+W3 já merge no HEAD).
 **Paralelo possível com:** F2 (smoke VMware) — diferentes superfícies.
 **Risco:** baixo — código já entregue, falta apenas validação CI + bookkeeping de release.
 **Esforço:** 1 sessão.
-**Branch sugerida:** `release/0.8.0-alpha.5`.
+**Branch sugerida:** `release/0.8.0-alpha.6`.
 
 #### Progresso 2026-05-01
 
-- ✅ E1.4 — `VERSION.yaml`, `include/core/version.h` e `README.md` bumped para `0.8.0-alpha.5+20260501`.
-- ✅ E1.5 — Release note `docs/releases/capyos-0.8.0-alpha.5+20260501.md` escrita.
-- ✅ E1.6 — Diretório `docs/screenshots/0.8.0-alpha.5/` criado com `README.md` placeholder (PNGs aguardam captura pós-CI verde).
+- ✅ E1.4 — `VERSION.yaml`, `include/core/version.h` e `README.md` bumped para `0.8.0-alpha.6+20260503`.
+- ✅ E1.5 — Release note `docs/releases/capyos-0.8.0-alpha.6+20260503.md` escrita.
+- ✅ E1.6 — Diretório `docs/screenshots/0.8.0-alpha.6/` criado com `README.md` placeholder (PNGs aguardam captura pós-CI verde).
 - ✅ E1.8 — Master plan atualizado (este bloco).
 - ✅ Validações locais passaram: `make test`, `make layout-audit`, `make version-audit`, `make boot-perf-baseline-selftest`.
 - ⏳ E1.1 — Push do branch para o GitHub (pendente — usuário decide quando).
 - ⏳ E1.2 — CI roda os 6 smokes M5 (pendente — depende de E1.1 + cross-toolchain `x86_64-elf-*`).
 - ⏳ E1.3 — `make release-check` em CI (host local não tem cross-compiler).
-- ⏳ E1.7 — Tag `0.8.0-alpha.5+20260501` (pendente — após E1.2 + E1.3 verdes).
+- ⏳ E1.7 — Tag `0.8.0-alpha.6+20260503` (pendente — após E1.2 + E1.3 verdes).
 
 #### Objetivo
 
-Fechar o release alpha.5 consolidando:
+Fechar o release alpha.6 consolidando:
 
 - M5 userland (fork/exec/wait/pipe + capysh + isolamento de crash) — já 95%.
 - W1+W2+W3 UX (clear, task manager, browser responsiveness) — já 100%.
@@ -146,10 +167,10 @@ Fechar o release alpha.5 consolidando:
 - **E1.1** — Push de `feature/dev-bugfixes` ao GitHub, abertura de PR contra `develop`.
 - **E1.2** — CI executa **6 smokes M5**: `fork-cow`, `exec`, `fork-wait`, `pipe`, `fork-crash`, `capysh`. Todos verdes.
 - **E1.3** — CI executa **release-check**: `make test`, `make layout-audit`, `make version-audit`, `make boot-perf-baseline-selftest`, `make all64 TOOLCHAIN64=elf`, `make iso-uefi TOOLCHAIN64=elf`, `make release-checksums`, `make verify-release-checksums`.
-- **E1.4** — Bump em `VERSION.yaml`, `include/core/version.h`, `README.md` para `0.8.0-alpha.5+<YYYYMMDD>`.
-- **E1.5** — Release notes em `docs/releases/capyos-0.8.0-alpha.5+<date>.md` cobrindo: SYS_FORK/EXEC/WAIT/PIPE, capysh ring 3, isolamento de crash, W1/W2/W3, parser yield + timeout do browser.
-- **E1.6** — Screenshots `docs/screenshots/0.8.0-alpha.5/` (capysh prompt, task manager Kill button, browser carregando com cancel).
-- **E1.7** — Tag `0.8.0-alpha.5+<date>`.
+- **E1.4** — Bump em `VERSION.yaml`, `include/core/version.h`, `README.md` para `0.8.0-alpha.6+<YYYYMMDD>`.
+- **E1.5** — Release notes em `docs/releases/capyos-0.8.0-alpha.6+<date>.md` cobrindo: SYS_FORK/EXEC/WAIT/PIPE, capysh ring 3, isolamento de crash, W1/W2/W3, parser yield + timeout do browser.
+- **E1.6** — Screenshots `docs/screenshots/0.8.0-alpha.6/` (capysh prompt, task manager Kill button, browser carregando com cancel).
+- **E1.7** — Tag `0.8.0-alpha.6+<date>`.
 - **E1.8** — Atualização deste master plan: F1 → ✅, M8.2 entra em F3.
 
 #### Critérios de aceite
@@ -160,7 +181,7 @@ Fechar o release alpha.5 consolidando:
 - [ ] `make version-audit` valida `VERSION.yaml` ↔ headers ↔ README ↔ screenshots ↔ release note.
 - [ ] Release note publicado em `docs/releases/`.
 - [ ] Tag git criada e pushed.
-- [ ] STATUS.md atualizado com `0.8.0-alpha.5+<date>`.
+- [ ] STATUS.md atualizado com `0.8.0-alpha.6+<date>`.
 
 #### Como será feito
 
@@ -189,7 +210,7 @@ make version-audit
 
 #### Saída esperada
 
-`0.8.0-alpha.5` publicado. M4.1–M4.5 oficialmente "Implementado". M8.2 (browser isolado) entra como F3.
+`0.8.0-alpha.6` publicado. M4.1–M4.5 oficialmente "Implementado". M8.2 (browser isolado) entra como F3.
 
 ---
 
@@ -261,104 +282,298 @@ M2 fecha; M6.4 fecha. Todos os 9 critérios de aceite da release α passam.
 
 ### F3 — Browser em processo userland isolado + watchdog (M8.2 + W3.4)
 
-**Status:** 🟡 Em andamento — F3.3a concluída (2026-05-01).
-**Criticidade:** alta — fecha o sintoma "navegador derruba o sistema" definitivamente.
-**Depende de:** F1 (M5 mergeado), porque usa `fork+exec+pipe` reais.
-**Paralelo possível com:** F2 (testes vs. infra), F4 (sockets userland — pode evoluir junto).
-**Risco:** alto — primeiro app real em ring 3 com IPC bidirecional bidirecional ao desktop.
-**Esforço:** 4–6 sessões.
-**Branch sugerida:** `feature/f3-browser-isolation`.
+**Status:** 🟡 **99%** — ver [`historical/f3-browser-delivered.md`](../historical/f3-browser-delivered.md)
+para detalhe completo das entregas (F3.3a..F3.3h + Etapas 1/2/3 b+e
++ b-polish + b-polish++ + 3a placeholder + 3c forms MVP+polish+textarea+select +
+3d tables MVP+colspan + Etapa 4 a+b + Etapa 5 rate limiter+URL policy+bytes obs+audit log,
+total **~1389 asserts host** novos de F3 + integracao com a suite base).
 
-#### Progresso
+**Entregas consolidadas** (nao voltam como tarefa):
 
-- ✅ **F3.3a — Protocolo IPC** (2026-05-01):
-  - `docs/architecture/browser-ipc.md` — especificação completa (header BE, 11 kinds de request, 10 kinds de event, fluxos canônicos, watchdog, restrições de segurança, versionamento).
-  - `include/apps/browser_ipc.h` — header binário compartilhado kernel/userland (magic `0xCB1B`, 21 kinds, struct header de 12 bytes, API de codec/validação).
-  - `src/apps/browser_ipc/codec.c` — encode/decode big-endian + validação de kind/payload_len + classificação request/event.
-  - `tests/test_browser_ipc.c` — 162 asserts (round-trip de 21 kinds, layout BE byte-a-byte, rejeição de magic/kind/payload/buffer/NULL, classificação, min_payload).
-- ✅ **F3.3b — Stub `capybrowser` ring 3** (2026-05-01):
-  - `userland/bin/capybrowser/main.c` — engine ring 3 que faz IPC ponta-a-ponta sobre fd 0/1: NAVIGATE → NAV_STARTED + 3× NAV_PROGRESS (fetch/parse/render) + EVENT_FRAME (16×16 BGRA solido) + NAV_READY; PING → PONG; CANCEL → NAV_CANCELLED; SHUTDOWN → exit; outros kinds drenam payload silenciosamente.
-  - `Makefile` — regras `CAPYBROWSER_ELF/OBJS/BLOB_OBJ` espelhando o pattern hello/exectarget/capysh; `src/apps/browser_ipc/codec.c` recompilado como objeto userland (USERLAND_CFLAGS) e linkado no engine.
-  - `src/kernel/embedded_progs.c` — `/bin/capybrowser` registrado; setter de teste `embedded_progs_test_set_capybrowser`.
-  - `include/kernel/embedded_progs.h` — documentação atualizada com `/bin/capybrowser` e `/bin/capysh`.
-  - `tests/test_embedded_progs.c` — +4 asserts cobrindo lookup do capybrowser e distinção dos demais blobs.
-  - `make test` ainda 100% verde (166 asserts no test_browser_ipc + test_embedded_progs); `make layout-audit` sem warnings; `clang -fsyntax-only` limpo no main.c e codec.c.
-  - Build do ELF do binário pendente de cross-toolchain (`x86_64-elf-gcc/ld`) — validável em CI via `make capybrowser-elf`.
-- ⏳ **F3.3c** — migração do `html_viewer` para userland (parser HTML/CSS, image decoders, fetch HTTP).
-- ✅ **F3.3d — Chrome scaffolding + watchdog (camada lógica)** (2026-05-01):
-  - ✅ `include/apps/browser_watchdog.h` + `src/apps/browser_chrome/watchdog.c` — máquina de estado pura (PING/PONG/timeout/restart) totalmente desacoplada de syscalls; tempo injetado pelo caller.
-  - ✅ `tests/test_browser_watchdog.c` — 49 asserts cobrindo init, intervalo de PING, PONG matching/wrong-nonce/sem-ping, tick antes/depois de timeout, kill após `MAX_MISSED_PONGS`, restart limpo, alloc_nonce monotônico com wrap, PONG quebrando streak, KILL bloqueando PONG tardio, args NULL.
-  - ✅ Política configurável via constantes (`PING_INTERVAL=5s`, `PONG_TIMEOUT=1s`, `MAX_MISSED_PONGS=2`).
-  - ✅ `include/apps/browser_chrome.h` + `src/apps/browser_chrome/chrome.c` — estado do chrome (status/nav_id/url/title/erro/last_frame/watchdog) + `browser_chrome_dispatch_event()` que consome eventos IPC já decodificados e devolve bitmask de ações (`REPAINT_FRAME`/`UPDATE_TITLE`/`UPDATE_STATUS`/`LOG_FORWARD`/`PROTOCOL_ERR`); helpers de geração de payload `NAVIGATE` e bookkeeping de seq monotônico com wrap.
-  - ✅ `tests/test_browser_chrome.c` — 66 asserts cobrindo init, NAVIGATE-sent, dispatch de TITLE/NAV_STARTED/PROGRESS/READY/FAILED/CANCELLED/FRAME/PONG/LOG, validação de stride/total/stale-nav-id, rejeição de kind de request como evento, payload curto, args NULL, bookkeeping de telemetria.
-  - ✅ Stale frame detection: dispatcher descarta NAV_PROGRESS/READY/FAILED/CANCELLED/FRAME com `nav_id != current_nav_id` (sem ação retornada).
-  - ✅ PONG roteado automaticamente para `c->watchdog`.
-  - ✅ `include/apps/browser_chrome_runtime.h` + `src/apps/browser_chrome/runtime.c` — orquestração entre dispatcher e pipes do kernel: send_navigate/cancel/shutdown/ping com encode automático e bookkeeping no chrome+watchdog; poll_event que lê header+payload, valida, despacha e devolve mascara de ações + status (NO_DATA / EVENT_HANDLED / ENGINE_EOF / PROTOCOL_ERR); tick que avança watchdog, dispara PING quando devido e sinaliza kill ao caller; record_restart que troca pipes/pid e limpa frame antigo. Pipe ops injetáveis via `chrome_runtime_set_pipe_ops()` para teste host (em produção apontam para `pipe_write`/`pipe_read` do kernel).
-  - ✅ `tests/test_browser_chrome_runtime.c` — 61 asserts cobrindo init com pid 0/válido, send_navigate escrevendo header BE no pipe, send com engine morto/broken-pipe, poll com NO_DATA/EOF/EVENT_HANDLED/PROTOCOL_ERR, PONG roteado para watchdog, tick disparando PING no intervalo, tick retornando kill após `MAX_MISSED_PONGS`, tick retornando -1 em broken pipe, record_restart limpando frame, payload grande demais rejeitado, sem pipe ops fail-safe, FRAME 2x2 com pixels validados, drenagem sequencial de múltiplos eventos.
-  - ✅ `include/kernel/browser_engine_spawn.h` + `src/kernel/browser_engine_spawn.c` — helper kernel-side `browser_engine_spawn(out)` que (1) resolve `/bin/capybrowser` em `embedded_progs`, (2) valida ELF, (3) cria 2 pipes, (4) cria processo via `process_create`, (5) carrega ELF via `elf_load_into_process`, (6) instala fds 0 (read end do request_pipe) e 1 (write end do response_pipe) na tabela do engine, (7) devolve `(request_pipe_id, response_pipe_id, engine_pid, engine_proc, engine_main_thread)` ao caller (que decide quando fazer `scheduler_add`). Cleanup completo em qualquer caminho de falha (5 códigos de erro). Linkado em `CAPYOS64_OBJS`; compilação validada via `clang -fsyntax-only -Iinclude` (limpo).
-  - ✅ `tests/test_browser_e2e.c` — **47 asserts** de integração end-to-end exercitando o stack inteiro (codec + dispatcher + watchdog + runtime) com pipes mockados e um "fake engine" que espelha exatamente o `userland/bin/capybrowser/main.c`. Cenários: navegação feliz (NAVIGATE → 6 eventos → READY → SHUTDOWN → EOF), watchdog PING/PONG, watchdog timeout até kill request, cancel durante navegação, crash do engine após NAV_STARTED, restart com `record_restart` limpando frame antigo, lixo no pipe gerando PROTOCOL_ERR, duas navegações back-to-back, PONG não solicitado tolerado.
-  - ⏳ Widget compositor real (URL bar, blit de `last_frame.pixels` no framebuffer) — entregue em F3.3c+widget (depende de F3.3c trazer pixels reais via parser HTML).
-  - ⏳ Restart UI no compositor (mensagem "Browser reiniciado") — entregue em F3.3c+widget.
-- 🟡 **F3.3e — Smoke kernel-side `smoke-x64-browser-spawn`** (2026-05-01, scaffolding completo):
-  - ✅ `include/kernel/browser_smoke.h` + `src/kernel/browser_smoke.c` — `kernel_boot_run_browser_smoke()` (noreturn) que spawna o engine via `browser_engine_spawn`, conecta `pipe_write`/`pipe_read` à runtime, arma o engine main_thread via `user_task_arm_for_first_dispatch`, cria a kernel task `browser-poller` e adiciona ambas ao scheduler. O poller envia NAVIGATE → drena eventos → após READY envia PING → após PONG envia SHUTDOWN → detecta EOF → `[browser-smoke] OK`. Boot CPU bloqueia em `hlt`; APIC tick (preemptive) intercala poller (ring 0) e engine (ring 3).
-  - ✅ `src/arch/x86_64/kernel_main.c` — gating `#ifdef CAPYOS_BOOT_RUN_BROWSER_SMOKE` chama o helper (1 linha) após o preemptive scheduler armado.
-  - ✅ `Makefile` — target `smoke-x64-browser-spawn` que faz `clean` + `all64` com `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_BROWSER_SMOKE` + `iso-uefi` + `manifest64` + dispara o harness.
-  - ✅ `tools/scripts/smoke_x64_browser_spawn.py` — harness QEMU/UEFI espelhado em `smoke_x64_hello_user.py`. Valida 9 markers determinísticos no debugcon (`spawn pid=`, `navigate-sent`, `event NAV_STARTED`, `event FRAME`, `event NAV_READY`, `event PONG`, `shutdown-sent`, `engine-eof`, `OK`) com timeout 45s; rejeita em `panic` ou `[browser-smoke] FAIL`.
-  - ✅ Validação local: `clang -fsyntax-only -target x86_64-unknown-linux-gnu` limpo em `browser_smoke.c`; `make test` 100% verde; `make layout-audit` sem warnings; `python3 -m py_compile` no harness sem erros.
-  - ⏳ Execução real depende de cross-toolchain `x86_64-elf-*` (não disponível no host macOS atual). CI com toolchain executa o alvo fim-a-fim; sucesso fecha F3.3e.
-  - ⏳ Smokes adicionais `smoke-x64-browser-isolation` (kill manual + restart) e `smoke-x64-browser-watchdog` (engine congelado → kill por timeout) — entregues em F3.3c.
+- Protocolo IPC binario (F3.3a), stub ring-3 + embedded_progs (F3.3b).
+- Chrome scaffolding logico (F3.3d) — watchdog, dispatcher, runtime,
+  spawn helper, e2e integration.
+- Migracao `html_viewer` → `libcapyhtml` userland (F3.3c), slices 1..6.
+- Desktop wiring + URL bar editavel (F3.3f), respawn anti-storm,
+  13+ markers debugcon.
+- **Etapa 2** — estabilidade pre-JS (7 secoes: process_kill fecha FDs,
+  deteccao defensiva de morte, FB 480×360, pipe 64 KiB, LOG forward).
+- **Etapa 3 b+e** — click→navigate com hit-test + scroll vertical.
+- **Etapa 3 b-polish** — EVENT_TITLE, history BACK/FORWARD com ring
+  32×1024, hotkeys F5/F6/F7.
+- **Etapa 3 b-polish++** — pagina de erro HTML nativa (`<h1>+3×<p>`)
+  em 4 caminhos de falha, sanitizacao `<`/`>`, scroll/BACK preservam
+  contexto.
+- **Etapa 3 seção a (placeholder MVP)** — parser reconhece `<img>` como
+  void tag (top-level e inline dentro de blocks); extrai `src` → node
+  `href`, `alt` → node `text`. Layout emite `CMD_IMAGE` com dims
+  default 100×80 (clampadas por viewport) + margens 4/4. Raster
+  desenha placeholder: fill MUTED + borda 1px LINK + marcador 3×3 no
+  canto + alt text centralizado (se couber). `+33 asserts host` (7
+  parser + 16 render + 10 raster).
+- **Etapa 3 seção c (forms MVP)** — parser: `<form action>` empurra
+  TAG_FORM com action no `href`; `<input type/name/value/placeholder>`
+  empurra TAG_INPUT com `name` em campo proprio + `text=value` +
+  `bold=subtype` (text/submit/password; hidden silenciosamente
+  descartado). Layout emite `CMD_INPUT` carregando subtype em
+  `reserved[0]` e `node_idx` empacotado em `reserved[1..2]` para o
+  engine localizar o node sem re-walk. Raster desenha caixa estilizada
+  por subtipo (text=fundo MUTED, submit=fundo LINK, password=mascara
+  glifos com `*`). Engine: `g_focused_input_idx` rastreia foco;
+  `hit_test_doc` retorna kind (link/input_text/input_submit);
+  `run_click` dispatcha NAVIGATE/foco/submit; `run_key` recebe
+  `BROWSER_IPC_KEY` (codigo + mods 5 B BE) e roteia caracteres
+  printable, BS, TAB (next input), Enter (submit); `run_submit`
+  constroi query string `?k1=v1&k2=v2`. Chrome runtime:
+  `chrome_runtime_send_key` novo. Browser_app: `focus_target`
+  URLBAR vs PAGE; CLICK no frame vira PAGE, CLICK na URL bar vira
+  URLBAR; Esc desfoca em PAGE antes de fechar; F5/F6/F7 sempre rodam.
+  `+50 asserts host` (7 parser + 16 render + 10 raster + 4 chrome
+  runtime + 13 ipc).
+- **Etapa 3 seção c polish (forms refinements)** — bit
+  `CAPYHTML_INPUT_FLAG_FOCUSED` no nibble alto de `reserved[0]`
+  (subtype mascara low nibble); engine pos-processa cmd list
+  setando esse bit no input cujo `node_idx == g_focused_input_idx`;
+  raster usa HEADING color em borda 2 px e desenha caret 1×GLYPH_H
+  apos os chars. Encoding RFC 3986: `build_form_query` reescrita
+  com `form_query_is_unreserved` + `form_query_emit_pct` (saida
+  `%XX` uppercase para qualquer byte fora de `[A-Za-z0-9-._~]`,
+  espaco vira `+`). Click fora de input limpa foco e re-emite
+  frame para descomissionar a borda. `+8 asserts host`
+  (5 raster: focus-border, no-ring-when-unfocused, caret, no-caret-on-submit, subtype-mask-isolates-flag).
+- **Etapa 3 seção d (tables MVP)** — parser reconhece `<table>`/
+  `<tr>`/`<td>`/`<th>` (TH com bold=1). Layout: state machine
+  com `table_col_count` derivado de TDs/THs da primeira TR;
+  `cell_w = avail_w / cols` (com fallback se < TABLE_MIN_CELL_W);
+  cada TD/TH emite `CMD_CELL` (kind=6) em `(col_index*cell_w,
+  row_y)`; TR avanca y para a proxima linha. Defesas: tabela vazia
+  emite 0 cells, excess cells em uma linha sao dropados, tabela
+  aninhada fecha a anterior. Raster: `draw_cell_cmd` pinta borda
+  1 px LINK em todo perimetro + bg MUTED para TH; texto em
+  HEADING/TEXT color via `color_role`. `+41 asserts host`
+  (11 parser + 22 render + 8 raster).
+- **Etapa 3 seção d refinement (colspan + auto-fit)** — `colspan`
+  atributo armazenado em `node->reserved[0]` (clamp 1..255); render
+  soma colspans para derivar col_count e emite `CMD_CELL` com
+  `w = colspan * cell_w`, avancando col_index por colspan. Auto-fit
+  em viewport estreito: `cell_w` clampa para `TABLE_MIN_CELL_W`
+  (cells overflow tolerated, raster put_pixel clipa) ao inves de
+  dropar a tabela inteira. `+22 asserts` (7 parser: colspan parsed,
+  default 0, oversize→255, zero→1, th colspan; 15 render: colspan
+  layout, abut, clamp-to-remaining, narrow viewport).
+- **Etapa 3 seção c refinement (textarea)** — parser detecta
+  `<textarea name="X">body</textarea>` e empurra como TAG_INPUT
+  com subtype TEXTAREA (4). Render emite CMD_INPUT com
+  `INPUT_TEXTAREA_W=280, INPUT_TEXTAREA_H=72`. Raster posiciona
+  texto no topo (padding 6 px) ao inves de centro vertical (que
+  fica esquisito em altura grande). `+13 asserts` (4 parser: subtype,
+  body capture, name, empty case; 6 render: cmd shape, h>=64;
+  3 raster implicit via cell tests reuse).
+- **Etapa 3 seção c refinement (select)** — parser detecta
+  `<select name="X">` (subtype SELECT=5) e cada `<option value="V">L</option>`
+  vira um TAG_OPTION sibling (`name=value, text=label`). O primeiro
+  option label e copiado para o text do select como valor default.
+  Sem `value`, o label vira o value. Render reusa as dimensoes do
+  text input. Raster desenha um marcador "▼" 5 px na direita em
+  HEADING color (caret e padding na esquerda preservados). `+13
+  asserts` (6 parser: subtype, name, default, count, value+label,
+  fallback; 5 render: cmd kind, subtype, default text, action; 2
+  raster: marker presente, marker isolado).
+- **Etapa 5 hardening (rate limit + URL policy + bytes obs +
+  audit log)** — chrome_runtime ganha:
+    1. **Rate limiter incoming**: contadores `incoming_in_window` +
+       `total_incoming_drops`, novo status `POLL_RATE_LIMITED`,
+       `chrome_runtime_poll_event` recusa quando excede
+       `CHROME_RUNTIME_INCOMING_RATE_MAX = 64/tick`;
+       `chrome_runtime_tick` reseta. browser_app trata RATE_LIMITED
+       como break do loop.
+    2. **URL whitelist policy (opt-in)**: novo setter
+       `chrome_runtime_set_url_policy(fn)`. Quando instalado,
+       `chrome_runtime_send_navigate` chama o callback antes de
+       escrever no pipe; deny incrementa `total_url_blocked` e
+       retorna -1 sem tocar o I/O.
+    3. **Bytes observability**: contador `total_event_bytes_received`
+       (u64) acumulado de header+payload de cada evento admitido,
+       util para detectar engine vazando memoria via spam.
+    4. **Audit log subsystem**: modulo dedicado
+       `src/apps/browser_chrome/audit_log.{c,h}` com ring buffer de
+       32 entradas (categoria + code + seq monotonico). Categorias:
+       NAV, RATE_DROP, POLICY_DENY, ENGINE_EOF, PROTOCOL, FETCH.
+       API: `capyc_audit_init/record/count/visible/at`. Hooks em
+       `chrome_runtime_send_navigate` (NAV / POLICY_DENY),
+       `chrome_runtime_poll_event` (RATE_DROP / ENGINE_EOF /
+       PROTOCOL), `chrome_runtime_dispatch_pending_fetch` (FETCH).
+       Ring envolve para sobrescrever entrada mais antiga em O(1);
+       sem alocacao dinamica. 4 testes unitarios diretos do ring +
+       3 de integracao com runtime; total **+45 asserts** distribuidos
+       em `test_browser_chrome_runtime_rate.c` (3 audit + 3 rate +
+       3 policy + 1 bytes), `test_browser_chrome_audit.c` (4 testes:
+       init zera, record em ordem, wraparound, null safety).
+- **Etapa 4 a+b** — HTTP/HTTPS reais via bridge kernel-side
+  (`net/http.h` + BearSSL TLS 1.2), URL auto-prefix `http://`.
 
-A migração do parser HTML/CSS para userland (F3.3c) continua sendo o próximo passo bloqueante. Quando entregue, o capybrowser passa a renderizar pixels reais a partir do parse, o widget compositor pode blittar `last_frame.pixels` em uma janela real, e os smokes específicos de isolamento/watchdog podem ser exercitados com cenários representativos.
+**Criticidade:** alta. **Depende de:** F1 (M5 mergeado). **Paralelo
+possivel com:** F2, F4. **Branch sugerida:** `feature/f3-browser-isolation`.
 
-#### Objetivo
+#### Restante para fechar F3 a 100%
 
-Mover `html_viewer` para um processo userland separado. Compositor mantém apenas o "frame" da janela (chrome). Renderização, parse, fetch ocorrem em ring 3. IPC via pipes M5. Watchdog mata e reinicia o processo se exceder budget de tempo/memória.
+Cada item abaixo e um incremento independente; nao ha dependencia
+sequencial forte entre eles (pode ser qualquer ordem).
 
-#### Entregáveis
+##### Etapa 3 seção a — Imagens inline (MVP placeholder ✅; fetch/decode pendente)
 
-- **E3.1** — `userland/bin/capybrowser/main.c` — binário ring 3 que recebe URL via stdin (pipe), emite frames de surface RGBA via stdout (pipe). Inicialmente: stub que renderiza retângulo colorido como "loading".
-- **E3.2** — Protocolo IPC `docs/architecture/browser-ipc.md`: comandos (`navigate`, `cancel`, `back`, `forward`, `scroll`), eventos (`title`, `frame`, `cursor`, `error`).
-- **E3.3** — `src/apps/browser_chrome/` — janela do compositor que embute o processo browser, lê o pipe de surface e blita no widget. URL bar, botões nav, ícone de status.
-- **E3.4** — Migração incremental do `html_viewer` atual para o binário userland. Parser HTML/CSS, image decoders, resource budgets, op_budget — tudo recompila como blob userland.
-- **E3.5** — Watchdog: `src/apps/browser_chrome/watchdog.c` mede heartbeat (`navigation_id` reportado via pipe). Sem heartbeat por 10s → `process_kill(pid, SIGKILL=9)` + restart automático com mensagem "Browser reiniciado por travamento".
-- **E3.6** — Crash recovery: se browser sair com status != 0, chrome mostra erro + botão "Recarregar".
-- **E3.7** — Smoke `smoke-x64-browser-isolation`: lança chrome, mata o processo browser via `process_kill`, valida que chrome detecta e reinicia.
-- **E3.8** — Smoke `smoke-x64-browser-watchdog`: força loop infinito no parser (env var `CAPYBROWSER_FREEZE`), valida que watchdog mata em ≤ 10s.
+**Progresso 2026-05-03:** parser/render/raster agora suportam `<img>`
+com placeholder visivel (ver "Entregas consolidadas" acima). Pagina
+com `<img>` renderiza sem swallow de nodes vizinhos; o retangulo
+indicativo serve de affordance visual ate a decode real chegar.
 
-#### Critérios de aceite
+**Gap remanescente:** placeholder nao baixa nem decodifica a imagem
+real. Para fechar 100% da seção, falta o pipeline de fetch+decode.
 
-- [ ] Crash do browser não derruba desktop nem outros apps.
-- [ ] Watchdog reinicia browser travado em ≤ 10s.
-- [ ] Compositor permanece responsivo durante carregamento de página de 10MB.
-- [ ] `task_manager` lista o processo `capybrowser` separadamente do desktop e permite `Kill`.
-- [ ] M8.2 promovido para ✅.
-- [ ] Browser mantém todas as features atuais (HTTP, redirects, CSS, imagens, cookies, history, bookmarks, find-in-page).
+**Entregaveis:**
 
-#### Como será feito
+- Parser: ~~IMG node~~ ✅; opcional: parsear `width`/`height` attrs
+  para sobreescrever dims default 100×80.
+- Render: ~~CMD_IMAGE emitido~~ ✅.
+- Raster: ~~placeholder visivel~~ ✅; upgrade: substituir fill por
+  pixels BGRA decodificados quando disponiveis.
+- **Engine**: adicionar `BROWSER_IPC_EVENT_IMAGE_REQUEST` (url, img_id)
+  e `BROWSER_IPC_IMAGE_RESPONSE` (img_id, width, height, pixels BGRA).
+  Engine emite REQUEST apos parse; armazena pixels em cache
+  `.bss` indexado por URL hash; raster blitta do cache em vez do
+  placeholder quando disponivel.
+- **Chrome**: reaproveitar `png_loader.c`/`jpeg_loader.c` no
+  runtime para decode; cache `.bss` 1-2 MiB para evitar re-fetch.
+- Alternativa *simpler*: chrome compoe sobre o frame do engine no
+  compositor (requer saber as coordenadas das IMAGEs; engine pode
+  incluir uma tabela `img_rects[]` no EVENT_FRAME extra-payload).
 
-1. **Fase 3a** (1 sessão): definir protocolo IPC. Estruturas em `include/apps/browser_ipc.h` compartilhado entre kernel/userland.
-2. **Fase 3b** (1 sessão): stub ring 3 que recebe URL e emite frame estático.
-3. **Fase 3c** (2 sessões): migração do `html_viewer` para userland. Maior cuidado: image decoders (PNG/JPEG via tinf/...) precisam compilar como blob userland (sem incluir kernel headers).
-4. **Fase 3d** (1 sessão): watchdog + restart + crash UI.
-5. **Fase 3e** (1 sessão): smokes + estabilização.
+**Criterios de aceite (remanescentes):**
 
-#### Validação
+- `<img src="http://.../image.png">` em pagina real renderiza
+  pixels decodificados (PNG/JPEG) no lugar do placeholder.
+- Falha de decode mantem o placeholder com alt text.
+- Largura/altura vem de atributos HTML quando presentes.
+- Cache evita re-fetch na mesma navegacao (F5/scroll/navigate-back).
 
-```bash
-make smoke-x64-browser-isolation
-make smoke-x64-browser-watchdog
-make test                            # cobertura de host suite continua verde
-make layout-audit                    # nenhum monolito reintroduzido
-```
+##### Etapa 3 seção c — Form inputs (MVP+polish ✅; refinamentos avancados pendentes)
 
-#### Saída esperada
+**Progresso 2026-05-03:** parser/render/raster/engine/runtime/browser_app
+suportam `<form>` + `<input type="text/submit/password">` end-to-end
+incluindo indicador visual de foco (borda 2 px HEADING + caret) e
+percent-encoding RFC 3986 (`%XX` para chars nao-unreserved). Ver
+"Entregas consolidadas" acima.
 
-M8.2 fecha. W3.4 (stretch) entregue. Browser se torna o **primeiro app real em ring 3**, abrindo o caminho para os apps de F7.
+**Gap remanescente (impacto medio):**
+
+- **`<textarea>` e `<select>/<option>`**: nao parseados ainda;
+  textarea pode reusar TAG_INPUT com flag de multilinha; select
+  precisa de novo node + listbox dropdown.
+- **Submit por POST**: hoje so GET (query string em URL); para POST,
+  precisa-se de body separado no NAVIGATE + `method` no FORM node.
+- **Validacao client-side basica**: `required`, `minlength`,
+  `pattern` ignorados; aceitar tudo no submit.
+- **Cursor blink**: caret atualmente solido; visualmente parece
+  fixo. Idealmente alterna 500 ms via timer.
+
+**Criterios de aceite (remanescentes):**
+
+- `<textarea>` aparece como caixa multi-linha editavel.
+- Form com `method="post"` envia body separado.
+
+##### Etapa 3 seção d — Tabelas (MVP ✅; refinamentos pendentes)
+
+**Progresso 2026-05-03:** parser/render/raster suportam tabelas
+2D simples com `<table>/<tr>/<td>/<th>`. Layout em grade fixa
+(largura igual por coluna), borda 1 px LINK ao redor de cada
+celula, header (TH) com bg MUTED + texto HEADING. Ver
+"Entregas consolidadas" acima.
+
+**Gap remanescente:**
+
+- **Box model CSS inline `style=`**: hoje sem padding/margin/border
+  customizaveis; reativar parser minimalista de `style="padding:4px;
+  border: 1px solid #x"` (reusa logica do
+  `src/apps/css_parser/` removido na slice 6 — portar o minimo para
+  userland).
+- **`colspan` / `rowspan`**: hoje cada celula ocupa exatamente 1
+  posicao de grade; tabelas reais usam spans para "merge" de celulas.
+- **Larguras variaveis por coluna**: hoje `cell_w = avail_w / cols`
+  igual; sites reais dependem de auto-fit por conteudo.
+- **Scroll horizontal** quando `cols * TABLE_MIN_CELL_W > viewport_w`:
+  hoje a tabela inteira e descartada (`table_col_count = 0`); melhor
+  emitir mesmo assim e deixar o usuario scrollar.
+
+**Criterios de aceite (remanescentes):**
+
+- `<div style="padding: 8px; border: 1px solid #333">` mostra borda.
+- `<td colspan="2">` ocupa duas colunas.
+- Tabela com 8 colunas em viewport 480 px ainda eh visivel
+  (scroll horizontal ou auto-fit text).
+
+##### Etapa 3 seção f — Fonte real (não 8×8)
+
+**Gap:** Fonte embutida e 8×8 monospace. Pagina moderna fica ilegivel.
+
+**Entregaveis:**
+
+- Parser TTF minimalista ou bundle de bitmap 16×16 de open-source
+  font (`userland/assets/fonts/capy-16.bmp`).
+- `capyhtml_font_ops_default` passa a apontar para a nova fonte.
+- Glyph cache em `.bss` (256 glifos × 16×16 = 64 KiB).
+
+**Criterios de aceite:**
+
+- Texto renderizado tem serifas/proporcoes razoaveis (nao mais
+  pixel-blocky 8×8).
+- `capyhtml_raster` zero-copy continua funcionando.
+
+##### Etapa 5 — Hardening pré-JS
+
+**Gap:** Browser ainda confia no engine ring-3; sem rate limiting,
+budget de memoria, audit log, whitelist.
+
+**Entregaveis:**
+
+- **Seccomp-like syscall filter** aplicado ao engine em
+  `browser_engine_spawn`: bloqueia `open/exec/socket/etc`. So permite
+  `read/write/exit/yield/mmap limitado`.
+- **Memory budget per nav**: chrome contabiliza bytes alocados
+  pelo engine (via stat de paginas mapeadas); mata em excesso.
+- **IPC rate limiting**: chrome limita frames/sec emitidos pelo
+  engine (ex. 60 fps).
+- **URL whitelist/blacklist** opcional (feature flag):
+  `/etc/browser/policy.list` com dominios permitidos.
+- **Audit log**: emit `[audit] [browser] nav_started url=X`,
+  `[browser] nav_failed reason=...` via klog.
+
+**Criterios de aceite:**
+
+- Engine com loop infinito e morto por rate limit antes de travar
+  o chrome.
+- Engine tentando abrir um arquivo e bloqueado por syscall filter
+  (audit log evidencia).
+- Tests: novo `test_browser_hardening` cobre os gates.
+
+##### Validacao visual em QEMU (bloqueio transversal)
+
+- **Depende de:** cross-toolchain `x86_64-elf-*` em CI (nao disponivel
+  no host macOS de desenvolvimento).
+- **Alvo:** `make smoke-x64-browser-spawn` passa com 9 markers
+  debugcon. Harness ja pronto em
+  `tools/scripts/smoke_x64_browser_spawn.py`.
+
+#### Saida esperada (quando 100%)
+
+M8.2 fecha; browser e o primeiro app real em ring-3 com HTML/CSS
+maturity suficiente para paginas web comuns (texto, links, imagens,
+forms, tabelas) e com hardening que impede crash-as-a-service.
 
 ---
 
 ### F4 — Stack de sockets userland + TLS (libcapy-net + libcapy-tls)
 
+**Status:** 🟡 **20%** — Etapa 4 seções a (HTTP) + b (HTTPS) antecipadas via bridge kernel-side em F3.3g (2026-05-02). Seções c (libcapy-net userland) + d (libcapy-tls userland) ainda precisam ser entregues para o objetivo original (apps ring 3 fazendo rede sem bypass pelo kernel).
 **Criticidade:** alta — destrava update real, browser HTTPS, qualquer IPC de rede futuro.
 **Depende de:** F1 (M5 fork/exec) + parcialmente F3 (motivação real). Pode iniciar antes de F3 fechar.
 **Paralelo possível com:** F3.
@@ -366,9 +581,17 @@ M8.2 fecha. W3.4 (stretch) entregue. Browser se torna o **primeiro app real em r
 **Esforço:** 5–8 sessões.
 **Branch sugerida:** `feature/f4-userland-net`.
 
+#### Progresso 2026-05-02 (bridge kernel-side entregue em F3.3g)
+
+- ✅ HTTP real funcional no browser: `chrome_runtime_dispatch_pending_fetch` em `src/apps/browser_chrome/runtime.c` prefixo-checa `http://` e delega a `http_get()` de `src/net/services/http/redirect_download.c` (stack TCP + headers + redirects + BearSSL TLS 1.2 já presente no kernel antes de F4).
+- ✅ HTTPS reutiliza o mesmo caminho (`http_get` escolhe TLS via `use_tls` dentro do `http_parse_url`).
+- ✅ Buffers IPC escalados: chrome `g_fetch_response_scratch` 1 MiB + 4 KiB em `.bss`; engine ring 3 `g_request_payload` + `g_fetch_scratch` 1 MiB + 4 KiB cada.
+- ⏳ Este bridge **não é o design final de F4**: é uma ponte que mora no kernel, violando temporariamente o princípio "apps em ring 3 não chamam syscalls HTTP diretamente". Quando F4 c/d chegarem, o bridge migra para uma call em `libcapy-net` e o `chrome_runtime_dispatch_pending_fetch` passa a ser pure-orchestration.
+- ⏳ Sem isolamento criptográfico em ring 3: BearSSL roda em kernel context; um bug na engine TLS afeta o kernel. F4 c/d recompilam BearSSL como lib userland.
+
 #### Objetivo
 
-Hoje, rede é **chamada direta de kernel** (`html_viewer_issue_request` chama `http_request_send` dentro do kernel). Para apps reais isolados, precisamos de **socket syscalls + libcapy-net em userland**.
+Hoje, rede é **chamada direta de kernel** (browser chama `http_request_send` dentro do kernel). Para apps reais isolados, precisamos de **socket syscalls + libcapy-net em userland**.
 
 #### Entregáveis
 
@@ -789,7 +1012,7 @@ CapyOS é considerado **estruturalmente sólido** quando:
 
 | Versão | Conteúdo | Fase fechada |
 |---|---|---|
-| `0.8.0-alpha.5` | M5 userland + W1/W2/W3 | **F1** |
+| `0.8.0-alpha.6` | M5 userland + W1/W2/W3 + browser ring-3 | **F1** |
 | `0.8.0-alpha.6` | DHCP smoke VMware + assinatura release | **F2** |
 | `0.8.0-beta.1` | Browser isolado + watchdog | **F3** |
 | `0.8.0-beta.2` | Sockets userland + TLS | **F4** |

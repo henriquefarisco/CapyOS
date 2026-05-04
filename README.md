@@ -4,8 +4,8 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-05-01
-Versao de referencia: `0.8.0-alpha.5`
+Ultima atualizacao: 2026-05-03
+Versao de referencia: `0.8.0-alpha.6`
 Consolidacao atual de `develop`: M5 userland completo (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash multi-processo) sobre a base de robustez ja entregue (DHCP automatico, gates endurecidos, metricas de performance, cache DNS/HTTP, journal CAPYFS autenticado, op_budget no navegador, API de privilegios, eventos de auditoria estruturados `[audit]`, SHA-256 de payload de update). Polish UX pos-M5: `clear` context-aware no terminal do desktop, task manager com auto-refresh e botao Kill funcional, browser com parser yield cooperativo e timeout duro de 30s. Roadmap consolidado em [`docs/plans/active/capyos-master-plan.md`](docs/plans/active/capyos-master-plan.md) (F1-F10 linear).
 
 CapyOS e um sistema operacional hobby escrito em C/Assembly, com foco atual em:
@@ -65,11 +65,10 @@ Observacao importante:
 - indice principal: `docs/README.md`
 - indice de planos: `docs/plans/README.md`
 - arquitetura atual: `docs/architecture/system-overview.md`
-- plano-mestre do sistema: `docs/plans/active/system-master-plan.md`
-- plano-mestre de consolidacao atual: `docs/plans/active/capyos-master-improvement-plan.md`
-- plano de execucao atual: `docs/plans/active/system-execution-plan.md`
-- roadmap tecnico por dominio: `docs/plans/active/system-roadmap.md`
-- hardening de plataforma: `docs/plans/historical/platform-hardening-plan.md`
+- **plano-mestre vivo** (fonte de verdade unica): `docs/plans/active/capyos-master-plan.md`
+- status executivo (% por fase + pendencias): `docs/plans/STATUS.md`
+- entregas F3 browser consolidadas: `docs/plans/historical/f3-browser-delivered.md`
+- hardening de plataforma (historico): `docs/plans/historical/platform-hardening-plan.md`
 - validacao de boot/login/CLI: `docs/testing/boot-and-cli-validation.md`
 - referencia de comandos: `docs/reference/cli-reference.md`
 - guia Hyper-V historico/nao suportado: `docs/setup/hyper-v.md`
@@ -177,15 +176,15 @@ acompanhar a evolucao visual do sistema por release alpha.
 
 ### Boot e login
 
-![Login do sistema](docs/screenshots/0.8.0-alpha.5/login-system.png)
+![Login do sistema](docs/screenshots/0.8.0-alpha.6/login-system.png)
 
-![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.5/bootstage1-iso.png)
+![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.6/bootstage1-iso.png)
 
 ### Desktop, navegador e apps
 
-![Desktop com navegador](docs/screenshots/0.8.0-alpha.5/desktop-browser1.png)
+![Desktop com navegador](docs/screenshots/0.8.0-alpha.6/desktop-browser1.png)
 
-![Desktop com apps](docs/screenshots/0.8.0-alpha.5/desktop-apps.png)
+![Desktop com apps](docs/screenshots/0.8.0-alpha.6/desktop-apps.png)
 
 ## Estado atual por dominio
 
@@ -318,9 +317,9 @@ make inspect-disk IMG=build/disk-gpt.img
 ## Roadmap tecnico (macro)
 
 A evolucao detalhada esta em:
-- `docs/plans/historical/mvp-implementation-plan.md`
-- `docs/plans/active/system-roadmap.md`
-- `docs/plans/active/system-master-plan.md`
+- `docs/plans/active/capyos-master-plan.md` (fonte unica)
+- `docs/plans/STATUS.md` (progresso + pendencias)
+- `docs/plans/historical/` (entregas consolidadas, referencia tecnica)
 
 Eixos principais:
 - CAPYFS: journal, recuperacao, fsck, escalabilidade

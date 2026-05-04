@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 .codex/
 .claude/
+.DS_Store

@@ -6,8 +6,18 @@ static const char *validate_theme(const char *input) {
   if (!input || cstring_length(input) == 0) {
     return "capyos";
   }
+  /* "love"/"high-contrast" adicionados em 2026-05-01 (post-M5 W4).
+   * "love" e o nome canonico; "rosa"/"pink" sao apelidos legados que
+   * existiam em builds anteriores e continuam aceitos por arquivos
+   * /system/config.ini que migraram de versao, mas sempre normalizam
+   * para "love". A UI nao expoe mais os nomes antigos. */
+  if (strings_equal(input, "love") || strings_equal(input, "rosa") ||
+      strings_equal(input, "pink")) {
+    return "love";
+  }
   if (strings_equal(input, "capyos") || strings_equal(input, "CAPYOS") ||
-      strings_equal(input, "ocean") || strings_equal(input, "forest")) {
+      strings_equal(input, "ocean") || strings_equal(input, "forest") ||
+      strings_equal(input, "high-contrast")) {
     return strings_equal(input, "CAPYOS") ? "capyos" : input;
   }
   return "capyos";
@@ -36,6 +46,12 @@ static void system_settings_set_defaults(struct system_settings *settings) {
   settings->ipv4_dns = 0;
   settings->splash_enabled = 1;
   settings->diagnostics_enabled = 0;
+  /* Etapa F4 homepage (2026-05-03): default = wikipedia.org. Quando
+   * a rede esta indisponivel, o browser_app cai automaticamente
+   * para a pagina embarcada `file://capyos/wikipedia` que tem o
+   * mesmo conteudo offline (ver browser_app/browser_app.c). */
+  cstring_copy(settings->browser_homepage, sizeof(settings->browser_homepage),
+               "https://wikipedia.org");
 }
 
 /* ---- config line parser ---- */
@@ -175,7 +191,13 @@ int config_verify_config_file(const char *hostname, const char *theme,
     vga_write("Falha ao reabrir configuracao em /system/config.ini.\n");
     return -1;
   }
-  char buffer[384];
+  /* Etapa F4 homepage (2026-05-03): bump de 384 -> 1024 para que
+   * a linha `browser_homepage=...` (ate ~280 bytes) nao corte o
+   * tail do arquivo durante o re-read pos-save. Verifier ignora
+   * a linha do homepage (verifica apenas os campos legados), mas
+   * precisa que o read inteiro caiba para nao perder os campos
+   * que podem aparecer DEPOIS no arquivo no futuro. */
+  char buffer[1024];
   long read = vfs_read(f, buffer, sizeof(buffer) - 1);
   vfs_close(f);
   if (read <= 0) {
@@ -268,7 +290,10 @@ int config_write_settings_file(const struct system_settings *settings) {
   const char *service_target_value =
       system_service_target_or_default(settings->service_target);
   char ipv4_text[16], mask_text[16], gateway_text[16], dns_text[16];
-  char config_buffer[512];
+  /* Etapa F4 homepage (2026-05-03): bump de 512 -> 1024 para
+   * acomodar `browser_homepage=` + URL ate 255 chars sem perder
+   * truncation safety dos demais campos. */
+  char config_buffer[1024];
   config_buffer[0] = '\0';
   system_ipv4_to_string(settings->ipv4_addr, ipv4_text);
   system_ipv4_to_string(settings->ipv4_mask, mask_text);
@@ -319,6 +344,17 @@ int config_write_settings_file(const struct system_settings *settings) {
   config_buffer_append(config_buffer, sizeof(config_buffer), "\n");
   config_buffer_append(config_buffer, sizeof(config_buffer), "dns=");
   config_buffer_append(config_buffer, sizeof(config_buffer), dns_text);
+  config_buffer_append(config_buffer, sizeof(config_buffer), "\n");
+  /* Etapa F4 homepage (2026-05-03): persiste a homepage do browser.
+   * Se vazia (que so deveria acontecer se um config antigo for
+   * carregado e nao tocou no campo), grava o default explicito para
+   * que o config.ini pos-save sempre tenha um valor concreto. */
+  config_buffer_append(config_buffer, sizeof(config_buffer),
+                       "browser_homepage=");
+  config_buffer_append(
+      config_buffer, sizeof(config_buffer),
+      settings->browser_homepage[0] ? settings->browser_homepage
+                                    : "https://wikipedia.org");
   config_buffer_append(config_buffer, sizeof(config_buffer), "\n");
 
   return config_write_text_file("/system/config.ini", config_buffer);
@@ -371,8 +407,11 @@ static void apply_config_line(struct system_settings *settings,
   if (eq == 0 || eq >= len) {
     return;
   }
-  char key[16];
-  char value[64];
+  /* Etapa F4 homepage (2026-05-03): bump dos buffers porque
+   * `browser_homepage` (16 chars) nao cabe em key[16] (klen <= 15)
+   * e a URL pode chegar a 255 chars. Antes era key[16]/value[64]. */
+  char key[32];
+  char value[SYSTEM_BROWSER_HOMEPAGE_MAX];
   size_t klen = (eq < sizeof(key) - 1) ? eq : (sizeof(key) - 1);
   for (size_t i = 0; i < klen; ++i) {
     key[i] = line[i];
@@ -432,6 +471,15 @@ static void apply_config_line(struct system_settings *settings,
     uint32_t parsed = 0;
     if (system_parse_ipv4(value, &parsed) == 0) {
       settings->ipv4_dns = parsed;
+    }
+  } else if (strings_equal(key, "browser_homepage")) {
+    /* Etapa F4 homepage (2026-05-03): URL inicial do browser.
+     * Aceita qualquer string nao-vazia; validacao real (esquema
+     * suportado, comprimento, etc.) acontece no browser_app na
+     * hora do navigate. */
+    if (value[0] != '\0') {
+      cstring_copy(settings->browser_homepage,
+                   sizeof(settings->browser_homepage), value);
     }
   }
 }

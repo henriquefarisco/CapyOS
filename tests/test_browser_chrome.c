@@ -313,6 +313,33 @@ static void test_dispatch_log(void) {
     uint32_t a = browser_chrome_dispatch_event(&c, &h, pl, 0);
     CCHECK((a & BROWSER_CHROME_ACTION_LOG_FORWARD) != 0u,
            "LOG -> LOG_FORWARD");
+    /* F3.3c slice 4: LOG payload captured into chrome state so the
+     * smoke harness / klog forwarder / GUI status bar can read it
+     * without intercepting the IPC frame. */
+    CCHECK(c.last_log_level == BROWSER_IPC_LOG_INFO,
+           "LOG level captured");
+    CCHECK(c.last_log_msg_len == 5u, "LOG msg_len captured");
+    CCHECK(strcmp(c.last_log_msg, "hello") == 0,
+           "LOG msg payload captured verbatim");
+}
+
+static void test_dispatch_log_truncates_oversized(void) {
+    /* Mensagens maiores que BROWSER_CHROME_LOG_MSG_MAX-1 sao
+     * truncadas mas o NUL terminator e preservado para o caller. */
+    struct browser_chrome c;
+    browser_chrome_init(&c, 0u);
+    uint16_t big = 300u;  /* > 192 max */
+    uint8_t pl[3 + 300];
+    pl[0] = BROWSER_IPC_LOG_INFO;
+    be_put_u16(&pl[1], big);
+    memset(&pl[3], 'x', big);
+    struct browser_ipc_header h = make_hdr(BROWSER_IPC_EVENT_LOG,
+                                           (uint32_t)(3u + big));
+    (void)browser_chrome_dispatch_event(&c, &h, pl, 0);
+    CCHECK(c.last_log_msg_len == BROWSER_CHROME_LOG_MSG_MAX - 1u,
+           "oversized LOG truncated to MAX-1");
+    CCHECK(c.last_log_msg[BROWSER_CHROME_LOG_MSG_MAX - 1u] == '\0',
+           "truncated LOG is NUL-terminated");
 }
 
 static void test_dispatch_request_kind_is_protocol_error(void) {
@@ -383,6 +410,7 @@ int test_browser_chrome_run(void) {
     test_dispatch_frame_stale_nav();
     test_dispatch_pong_routes_to_watchdog();
     test_dispatch_log();
+    test_dispatch_log_truncates_oversized();
     test_dispatch_request_kind_is_protocol_error();
     test_dispatch_short_payload_is_error();
     test_dispatch_null_args();

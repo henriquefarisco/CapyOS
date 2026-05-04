@@ -24,7 +24,6 @@ int run_capyfs_journal_cause_tests(void);
 int run_update_transact_tests(void);
 int run_gen_boot_config_tests(void);
 int run_user_home_tests(void);
-int run_html_viewer_tests(void);
 int run_http_encoding_tests(void);
 int run_net_dns_tests(void);
 int run_net_probe_tests(void);
@@ -74,10 +73,21 @@ int run_op_budget_tests(void);
 int run_privilege_tests(void);
 int run_buffer_cache_pacing_tests(void);
 int test_browser_ipc_run(void);
+int test_browser_ipc_fetch_run(void);
 int test_browser_watchdog_run(void);
 int test_browser_chrome_run(void);
+int test_browser_chrome_fetch_run(void);
+int test_browser_fetch_resolver_run(void);
+int test_browser_runtime_fetch_run(void);
 int test_browser_chrome_runtime_run(void);
+int test_browser_chrome_audit_run(void);
 int test_browser_e2e_run(void);
+int test_capyhtml_parser_run(void);
+int test_capyhtml_render_run(void);
+int test_capyhtml_raster_run(void);
+int test_browser_app_url_edit_run(void);
+int test_syscall_pipe_priority_run(void);
+int test_process_current_dynamic_run(void);
 
 int main(void) {
     int failures = 0;
@@ -105,7 +115,6 @@ int main(void) {
     failures += run_update_transact_tests();
     failures += run_gen_boot_config_tests();
     failures += run_user_home_tests();
-    failures += run_html_viewer_tests();
     failures += run_http_encoding_tests();
     failures += run_net_dns_tests();
     failures += run_net_probe_tests();
@@ -155,10 +164,21 @@ int main(void) {
     failures += run_privilege_tests();
     failures += run_buffer_cache_pacing_tests();
     failures += test_browser_ipc_run();
+    failures += test_browser_ipc_fetch_run();
     failures += test_browser_watchdog_run();
     failures += test_browser_chrome_run();
+    failures += test_browser_chrome_fetch_run();
+    failures += test_browser_fetch_resolver_run();
+    failures += test_browser_runtime_fetch_run();
     failures += test_browser_chrome_runtime_run();
+    failures += test_browser_chrome_audit_run();
     failures += test_browser_e2e_run();
+    failures += test_capyhtml_parser_run();
+    failures += test_capyhtml_render_run();
+    failures += test_capyhtml_raster_run();
+    failures += test_browser_app_url_edit_run();
+    failures += test_syscall_pipe_priority_run();
+    failures += test_process_current_dynamic_run();
 
     if (failures == 0) {
         printf("Todos os testes passaram.\n");

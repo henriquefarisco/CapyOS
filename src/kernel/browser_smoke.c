@@ -101,6 +101,16 @@ static void browser_smoke_poller_task(void *arg) {
                     break;
                 default: break;
             }
+            /* F3.3c slice 4: forward LOG_FORWARD events to debugcon
+             * so the smoke harness can assert the parser actually
+             * ran in ring 3. The chrome saved the message into
+             * `last_log_msg`; we just print it verbatim. */
+            if ((actions & BROWSER_CHROME_ACTION_LOG_FORWARD) &&
+                rt->chrome.last_log_msg_len > 0u) {
+                bs_write("[browser-smoke] event LOG ");
+                bs_write(rt->chrome.last_log_msg);
+                bs_write("\n");
+            }
             if (!got_frame && rt->chrome.last_frame.width > 0u) {
                 bs_write("[browser-smoke] event FRAME w=");
                 bs_write_dec(rt->chrome.last_frame.width);
@@ -193,6 +203,10 @@ void kernel_boot_run_browser_smoke(void) {
     chrome_runtime_init(&g_smoke_rt, r.request_pipe_id, r.response_pipe_id,
                         r.engine_pid, 0u);
     chrome_runtime_set_pipe_ops(pipe_write, pipe_read);
+    /* F3.3f: EVENT_FRAME pos slice 4-final e 96 KiB, nao cabe num
+     * pipe de 4 KiB. O yield faz `read_full` cooperar com o
+     * scheduler quando o pipe drena mid-payload. */
+    chrome_runtime_set_yield_op(task_yield);
 
     /* Arma engine main_thread para o trampoline x64_user_first_dispatch.
      * RIP/RSP foram primados por elf_load_into_process. */

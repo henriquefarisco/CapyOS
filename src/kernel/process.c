@@ -1,9 +1,15 @@
 #include "kernel/process.h"
 #include "kernel/task.h"
 #include "kernel/elf_loader.h"
+#include "kernel/pipe.h"
+#include "fs/vfs.h"
 #include "memory/vmm.h"
 #include "memory/kmem.h"
 #include <stddef.h>
+
+/* 2026-05-02: FD type and pipe direction constants now live in
+ * include/kernel/process.h (FD_TYPE_*, FD_PIPE_FLAG_*). Removed
+ * the local copies that duplicated them. */
 
 static void process_dbgcon_putc(uint8_t c) {
 #if defined(__x86_64__) && !defined(UNIT_TEST)
@@ -80,12 +86,18 @@ void process_system_init(void) {
 }
 
 struct process *process_create(const char *name, uint32_t uid, uint32_t gid) {
+  /* 2026-05-02: resolve the implicit parent via process_current()
+   * (now dynamic) instead of reading the never-updated `current_proc`
+   * directly. Pre-fix every spawn ended up with ppid=0 because
+   * `current_proc` stayed NULL forever; now ppid mirrors the actual
+   * task that called process_create. */
+  struct process *implicit_parent = process_current();
   for (int i = 0; i < PROCESS_MAX; i++) {
     if (proc_table[i].state == PROC_STATE_UNUSED) {
       struct process *p = &proc_table[i];
       proc_memset(p, 0, sizeof(*p));
       p->pid = next_proc_pid++;
-      p->ppid = current_proc ? current_proc->pid : 0;
+      p->ppid = implicit_parent ? implicit_parent->pid : 0;
       proc_strcpy(p->name, name ? name : "unnamed", PROCESS_NAME_MAX);
       p->state = PROC_STATE_EMBRYO;
       p->uid = uid;
@@ -103,11 +115,11 @@ struct process *process_create(const char *name, uint32_t uid, uint32_t gid) {
         p->state = PROC_STATE_UNUSED;
         return NULL;
       }
-      /* Phase 6.5: link into the implicit parent (`current_proc`).
+      /* Phase 6.5: link into the implicit parent (`process_current()`).
        * `proc_memset` already zeroed `parent`/`children`/`next_sibling`
        * a few lines above, so the helper's detached-input invariant
        * is satisfied. */
-      process_link_child(p, current_proc);
+      process_link_child(p, implicit_parent);
       return p;
     }
   }
@@ -216,7 +228,13 @@ int process_exec_replace(struct process *proc, const uint8_t *data,
 }
 
 void process_exit(int code) {
-  if (!current_proc) {
+  /* 2026-05-02: resolve via process_current() (dynamic) so the
+   * dying task's process slot is correctly identified. Pre-fix this
+   * read `current_proc` directly which was always NULL, so every
+   * call to process_exit hit the noreturn halt loop and the actual
+   * process slot stayed RUNNING forever -- waiters spun. */
+  struct process *me = process_current();
+  if (!me) {
 #if defined(UNIT_TEST) || !defined(__x86_64__)
     /* Host unit tests should never reach this guard with current_proc=NULL,
      * but the function still must compile on non-x86 hosts. */
@@ -225,8 +243,8 @@ void process_exit(int code) {
     for (;;) __asm__ volatile("hlt");
 #endif
   }
-  current_proc->exit_code = code;
-  current_proc->state = PROC_STATE_ZOMBIE;
+  me->exit_code = code;
+  me->state = PROC_STATE_ZOMBIE;
   task_exit(code);
 }
 
@@ -298,8 +316,46 @@ void process_destroy(struct process *p) {
   p->state = PROC_STATE_UNUSED;
 }
 
+/* 2026-05-02: ROOT-CAUSE fix for "browser engine never sees NAVIGATE
+ * (and capy_fork / capy_exec / capy_open / capy_pipe / SYS_BRK / fault
+ * classifier all silently failed because process_current() returned
+ * NULL).
+ *
+ * Pre-fix: `current_proc` was a static pointer set only by
+ * `process_system_init` (to NULL) and `process_set_current` (a setter
+ * that NO production code ever called). The scheduler updates
+ * `current_task` via `task_set_current` on every context switch but
+ * never touched `current_proc`, so `process_current()` returned NULL
+ * for the entire kernel lifetime. The fact that fork/exec/pipe smokes
+ * "passed" in CI was a chain of coincidences: the syscall handlers
+ * that depended on a non-NULL process all returned -1, and the smokes
+ * matched markers emitted via the legacy stdin_buf/debugcon fallbacks
+ * that fired BEFORE the FD-table check in sys_read/sys_write.
+ *
+ * The browser engine uncovered the bug because it actually depends
+ * on `process_current()` returning the right process so sys_read(0)
+ * routes to its request pipe, not stdin_buf.
+ *
+ * Fix: resolve dynamically from `task_current()`. The current task
+ * was always tracked correctly by the scheduler; we just walk the
+ * process table to find the slot whose `main_thread` is that task.
+ * O(PROCESS_MAX=128) per call, only invoked from syscall and fault
+ * slow paths, dwarfed by syscall entry/exit overhead.
+ *
+ * `current_proc` is kept as a TEST-ONLY override: host unit tests
+ * that exercise sys_read/sys_write directly without driving a full
+ * task can call `process_set_current(p)` to fake the resolution. In
+ * production it stays NULL and the dynamic path always fires. */
 struct process *process_current(void) {
-  return current_proc;
+  if (current_proc) return current_proc; /* test override */
+  struct task *t = task_current();
+  if (!t) return NULL;
+  for (int i = 0; i < PROCESS_MAX; i++) {
+    struct process *p = &proc_table[i];
+    if (p->state == PROC_STATE_UNUSED) continue;
+    if (p->main_thread == t) return p;
+  }
+  return NULL;
 }
 
 void process_set_current(struct process *p) {
@@ -349,6 +405,20 @@ int process_kill(uint32_t pid, int signal) {
     task_kill(p->main_thread->pid);
     p->main_thread = NULL;
   }
+  /* 2026-05-02: release FDs IMMEDIATELY on kill, even for parented
+   * processes that stay ZOMBIE waiting for wait(). The slot itself
+   * survives so wait() can still read exit_code, but the kernel
+   * resources backing the FDs (pipe ends, VFS files) must be
+   * freed at kill time so peers observing the other end of a
+   * pipe see EOF / broken-pipe deterministically. Without this,
+   * task-manager-initiated kill of the browser engine left the
+   * response_pipe write end held by the ZOMBIE slot; the chrome
+   * runtime polled forever and the browser_app window stayed
+   * open after kill. parent->wait() reaps the slot via
+   * process_destroy which is a no-op on already-freed FDs. */
+  for (int i = 0; i < PROCESS_FD_MAX; i++) {
+    process_fd_free(p, i);
+  }
   if (!p->parent) {
     process_destroy(p);
   }
@@ -381,10 +451,33 @@ int process_fd_alloc(struct process *proc) {
 
 void process_fd_free(struct process *proc, int fd) {
   if (!proc || fd < 0 || fd >= PROCESS_FD_MAX) return;
-  proc->fds[fd].type = 0;
-  proc->fds[fd].private_data = NULL;
-  proc->fds[fd].flags = 0;
-  proc->fds[fd].offset = 0;
+  /* 2026-05-02: release the underlying kernel resource backing
+   * this FD before clearing the slot. The pre-fix path silently
+   * dropped pipe ends, leaking them across process_destroy.
+   * Concretely this broke the Task Manager kill flow for the
+   * browser: when the user invoked process_kill(engine_pid, 9)
+   * the engine's response_pipe write end stayed open in the
+   * pipe table, so the chrome runtime never observed EOF on
+   * its read end and the browser_app window kept polling a
+   * dead engine forever. Mirrors sys_close (src/kernel/syscall.c)
+   * for VFS files and pipe ends. New FD types added later must
+   * extend this switch in lockstep with sys_close. */
+  struct file_descriptor *slot = &proc->fds[fd];
+  if (slot->type == FD_TYPE_VFS) {
+    struct file *file = (struct file *)slot->private_data;
+    if (file) vfs_close(file);
+  } else if (slot->type == FD_TYPE_PIPE) {
+    int pipe_id = (int)(intptr_t)slot->private_data;
+    if (slot->flags & FD_PIPE_FLAG_READ) {
+      pipe_close_read(pipe_id);
+    } else if (slot->flags & FD_PIPE_FLAG_WRITE) {
+      pipe_close_write(pipe_id);
+    }
+  }
+  slot->type = FD_TYPE_FREE;
+  slot->private_data = NULL;
+  slot->flags = 0;
+  slot->offset = 0;
 }
 
 size_t process_count(void) {

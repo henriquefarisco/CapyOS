@@ -8,6 +8,22 @@
 #define WM_BORDER_WIDTH 2
 #define WM_SNAP_THRESHOLD 8
 
+/* 2026-05-02: hit area for resize grips. The visible border is
+ * still WM_BORDER_WIDTH (2 px) but we accept clicks within
+ * WM_RESIZE_GRIP_WIDTH (6 px) of the right/bottom edges so the
+ * user does not have to land precisely on a 2 px line. The corner
+ * grip uses the same width on both axes. Keep this >= the visible
+ * border width and small enough that it does not overlap typical
+ * window content padding. */
+#define WM_RESIZE_GRIP_WIDTH 6
+
+/* Minimum size enforced when a resize drag tries to shrink a window.
+ * Smaller values would push title-bar buttons + content off-screen.
+ * Apps that need a stricter floor can clamp again in their on_resize
+ * handler. */
+#define WM_MIN_WINDOW_W 120u
+#define WM_MIN_WINDOW_H 80u
+
 enum wm_drag_mode {
   WM_DRAG_NONE = 0,
   WM_DRAG_MOVE,

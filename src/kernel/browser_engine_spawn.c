@@ -19,13 +19,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* FD type constants espelhadas de src/kernel/syscall.c. Mantidas
- * como literais aqui porque syscall.c nao expoe header com elas
- * (sao detalhe interno da abi). Se forem mover para header
- * dedicado, consolidar la e remover daqui. */
-#define FD_TYPE_PIPE      2
-#define FD_PIPE_FLAG_READ  0x1u
-#define FD_PIPE_FLAG_WRITE 0x2u
+/* 2026-05-02: FD type and pipe direction constants now em
+ * include/kernel/process.h (via FD_TYPE_PIPE / FD_PIPE_FLAG_*).
+ * Antes eram duplicadas aqui, em syscall.c e em process.c. */
 
 static void install_pipe_fd(struct process *proc, int fd_index,
                             int pipe_id, uint32_t flags) {

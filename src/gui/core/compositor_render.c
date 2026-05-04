@@ -1,0 +1,413 @@
+/*
+ * src/gui/core/compositor_render.c
+ *
+ * Scene composition + frame presentation + cursor rendering for the
+ * compositor. Split out of `compositor.c` on 2026-05-02 (Etapa 2
+ * audit) to keep each TU below the 900-line layout-audit cap.
+ *
+ * Pipeline:
+ *   1. `compositor_render` is the entry point called by the desktop
+ *      runtime each tick.
+ *   2. If the scene is dirty and a backbuffer exists,
+ *      `compose_scene` rasterises wallpaper + desktop callback +
+ *      every visible window in z-order into the backbuffer, then
+ *      `present_full_frame_from_backbuffer` blits the backbuffer
+ *      to the front framebuffer in one shot. No backbuffer means
+ *      direct front-buffer composition (initial fallback).
+ *   3. `compositor_render_cursor` paints the cursor sprite directly
+ *      on the front buffer, optionally restoring the previous
+ *      cursor area from the backbuffer to erase the old position.
+ *
+ * Window decoration (title bar + close button + outline + rounded
+ * corners) lives here because it is purely a render-time concern;
+ * window creation/lifecycle stays in `compositor.c`.
+ */
+
+#include "internal/compositor_internal.h"
+#include "gui/font.h"
+
+/* Pixel-perfect 1 px outline around a window (title bar + body)
+ * that follows the rounded mask. A pixel is on the perimeter if
+ * it is inside the shape and at least one orthogonal neighbour
+ * is outside. The check matches `comp_window_pixel_inside`'s
+ * mask, so the outline traces the rose-petal curve of the corners.
+ *
+ * Called AFTER the title bar paint and body blit so the border
+ * sits ON TOP of both, which means windows have a visible edge
+ * even when their body bg color is close to the wallpaper or a
+ * sibling window's body. Fixes the "windows blend into the
+ * desktop" complaint reported on the love+capyos themes. */
+static void render_window_outline(struct gui_window *win,
+                                  uint32_t *buf, uint32_t buf_stride) {
+  uint32_t total_w = win->frame.width;
+  uint32_t title_h = win->decorated ? comp_window_title_height() : 0u;
+  uint32_t total_h = title_h + win->frame.height;
+  if (total_w == 0u || total_h == 0u) return;
+
+  int32_t origin_x = win->frame.x;
+  int32_t origin_y = win->frame.y - (int32_t)title_h;
+
+  /* Etapa UX W7-ish (2026-05-03): use o corner_radius por-janela.
+   * Decorated windows tem default 8 (set em compositor_create_window);
+   * overlays podem opt-in setando win->corner_radius. */
+  uint32_t corner_r = win->corner_radius;
+  if (corner_r != 0u &&
+      (total_w < corner_r * 2u || total_h < corner_r * 2u)) {
+    corner_r = 0u;
+  }
+
+  /* Sem corner_radius e sem decoration nao tem o que delinhar. */
+  if (corner_r == 0u && !win->decorated) return;
+
+  uint32_t color = g_theme.window_border;
+  /* Border custom da janela (e.g. menu popup pode usar accent). */
+  if (win->border_color != 0u) color = win->border_color;
+  /* Focus accent: focused windows get the active title color as
+   * outline so the user sees which window will receive input. */
+  if (win->focused) color = g_theme.title_active;
+
+  for (uint32_t row = 0; row < total_h; row++) {
+    int32_t py = origin_y + (int32_t)row;
+    if (py < 0 || (uint32_t)py >= comp_height) continue;
+    for (uint32_t col = 0; col < total_w; col++) {
+      int rounded = (corner_r != 0u);
+      int inside = rounded
+          ? comp_window_pixel_inside(col, row, total_w, total_h, corner_r)
+          : 1;
+      if (!inside) continue;
+      /* Perimeter test: any orthogonal neighbor outside the shape
+       * (or outside the rect bounds) makes this pixel a border
+       * pixel. The four-direction check produces a clean 1 px
+       * line, including on the curved corners. */
+      int n_left   = (col == 0u) ||
+          (rounded && !comp_window_pixel_inside(col - 1u, row, total_w, total_h, corner_r));
+      int n_right  = (col + 1u >= total_w) ||
+          (rounded && !comp_window_pixel_inside(col + 1u, row, total_w, total_h, corner_r));
+      int n_top    = (row == 0u) ||
+          (rounded && !comp_window_pixel_inside(col, row - 1u, total_w, total_h, corner_r));
+      int n_bot    = (row + 1u >= total_h) ||
+          (rounded && !comp_window_pixel_inside(col, row + 1u, total_w, total_h, corner_r));
+      if (!(n_left || n_right || n_top || n_bot)) continue;
+
+      int32_t px = origin_x + (int32_t)col;
+      if (px < 0 || (uint32_t)px >= comp_width) continue;
+      buf[py * buf_stride + px] = color;
+    }
+  }
+}
+
+static void render_window_decoration(struct gui_window *win, uint32_t *buf,
+                                     uint32_t buf_stride) {
+  if (!win->decorated) return;
+  int32_t x = win->frame.x;
+  int32_t y = win->frame.y;
+  uint32_t w = win->frame.width;
+
+  uint32_t title_color = win->focused ? g_theme.title_active : g_theme.title_inactive;
+  uint32_t title_h = comp_window_title_height();
+  uint32_t total_h = title_h + win->frame.height;
+  uint32_t corner_r = COMP_WINDOW_CORNER_RADIUS;
+  /* Skip rounding for windows narrower or shorter than 2*radius. */
+  if (w < corner_r * 2u || total_h < corner_r * 2u) corner_r = 0u;
+
+  for (uint32_t row = 0; row < title_h; row++) {
+    int32_t py = y - (int32_t)title_h + (int32_t)row;
+    if (py < 0 || (uint32_t)py >= comp_height) continue;
+    for (uint32_t col = 0; col < w; col++) {
+      int32_t px = x + (int32_t)col;
+      if (px < 0 || (uint32_t)px >= comp_width) continue;
+      if (corner_r != 0u &&
+          !comp_window_pixel_inside(col, row, w, total_h, corner_r)) {
+        continue;
+      }
+      buf[py * buf_stride + px] = title_color;
+    }
+  }
+
+  {
+    const struct font *f = font_default();
+    if (f) {
+      struct gui_surface title_surf = { buf, comp_width, comp_height, buf_stride * 4 };
+      font_draw_string(&title_surf, f, x + 4, y - (int32_t)title_h + 4,
+                       win->title, g_theme.text);
+
+      /* Etapa F4 minimize/maximize (2026-05-03): 3 botoes na direita
+       * do title bar (R->L): Close, Maximize/Restore, Minimize.
+       * Cada botao btn_size x btn_size, separados por 4 px.
+       * Labels:
+       *   Close     -> "X"
+       *   Maximize  -> "[]" (ou "][" quando ja maximizado = restore)
+       *   Minimize  -> "_" */
+      int32_t btn_size = (int32_t)title_h - 6;
+      int32_t btn_y = y - (int32_t)title_h + 3;
+      const struct {
+        int32_t offset;       /* posicao a partir da direita */
+        uint32_t bg;
+        const char *label;
+      } btns[3] = {
+        { 1, g_theme.accent_alt, "X" },
+        { 2, g_theme.accent_alt, win->maximized ? "][" : "[]" },
+        { 3, g_theme.accent_alt, "_" }
+      };
+      for (int b = 0; b < 3; b++) {
+        int32_t btn_x = x + (int32_t)w
+                         - btns[b].offset * btn_size
+                         - btns[b].offset * 4;
+        for (int32_t row = 0; row < btn_size; row++) {
+          int32_t py = btn_y + row;
+          if (py < 0 || (uint32_t)py >= comp_height) continue;
+          for (int32_t col = 0; col < btn_size; col++) {
+            int32_t px = btn_x + col;
+            if (px < 0 || (uint32_t)px >= comp_width) continue;
+            buf[py * buf_stride + px] = btns[b].bg;
+          }
+        }
+        /* Label centralizado horizontalmente. Glyph 8 px; labels
+         * de 1 ou 2 chars. */
+        int label_w = 0;
+        const char *lp = btns[b].label;
+        while (lp && *lp) { label_w += 8; lp++; }
+        font_draw_string(&title_surf, f,
+                         btn_x + (btn_size - label_w) / 2,
+                         btn_y + (btn_size / 2)
+                            - (int32_t)(f->glyph_height / 2),
+                         btns[b].label, g_theme.text);
+      }
+    }
+  }
+}
+
+static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
+  uint32_t max_z = 0;
+
+  if (!buf || buf_stride == 0) return;
+
+  for (uint32_t y = 0; y < comp_height; y++) {
+    comp_memset32(buf + y * buf_stride, comp_wallpaper, comp_width);
+  }
+
+  if (comp_desktop_paint_cb) {
+    struct gui_surface desktop = { buf, comp_width, comp_height, buf_stride * 4 };
+    comp_desktop_paint_cb(&desktop);
+  }
+
+  for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
+    if (comp_windows[i].id && comp_windows[i].visible &&
+        comp_windows[i].z_order > max_z) {
+      max_z = comp_windows[i].z_order;
+    }
+  }
+
+  for (uint32_t z = 0; z <= max_z; z++) {
+    for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
+      struct gui_window *win = &comp_windows[i];
+      if (!win->id || !win->visible || win->z_order != z) continue;
+      if (!win->surface.pixels) continue;
+
+      if (win->on_paint) win->on_paint(win);
+      render_window_decoration(win, buf, buf_stride);
+
+      {
+        int32_t wx = win->frame.x;
+        int32_t wy = win->frame.y;
+        uint32_t sw = win->surface.width;
+        /* Etapa UX W7-ish (2026-05-03): use o per-window
+         * corner_radius. Decorated tem 8 (default); overlays podem
+         * setar para arredondar (e.g., menu popup com 6 px). */
+        uint32_t title_h = win->decorated ? comp_window_title_height() : 0u;
+        uint32_t total_h = title_h + win->frame.height;
+        uint32_t corner_r = win->corner_radius;
+        if (corner_r != 0u && (win->frame.width < corner_r * 2u ||
+                                total_h < corner_r * 2u)) {
+          corner_r = 0u;
+        }
+        /* Para overlays (sem title bar) com corner_radius, o body
+         * comeca em row=0 do mask total. Para decorated, body comeca
+         * abaixo do title bar. */
+        for (uint32_t row = 0; row < win->frame.height; row++) {
+          int32_t py = wy + (int32_t)row;
+          int32_t px_start = 0;
+          int32_t px_end = 0;
+          uint32_t col_start = 0;
+          uint32_t copy_len = 0;
+          if (py < 0 || (uint32_t)py >= comp_height) continue;
+          px_start = wx < 0 ? 0 : wx;
+          px_end = wx + (int32_t)win->frame.width;
+          if (px_end > (int32_t)comp_width) px_end = (int32_t)comp_width;
+          if (px_start >= px_end) continue;
+          col_start = (uint32_t)(px_start - wx);
+          copy_len = (uint32_t)(px_end - px_start);
+          if (corner_r == 0u) {
+            comp_memcpy(&buf[py * buf_stride + px_start],
+                        &win->surface.pixels[row * sw + col_start],
+                        copy_len * 4);
+          } else {
+            uint32_t win_row = row + title_h;
+            /* Mascara nas bordas: o row pode estar dentro de qualquer
+             * dos 4 cantos. Para overlay (title_h=0) o top tambem
+             * arredonda. Otimizacao: se win_row e win_col estao longe
+             * dos cantos, comp_window_pixel_inside e trivialmente 1. */
+            int row_in_top    = (win_row < corner_r);
+            int row_in_bot    = (win_row + corner_r >= total_h);
+            if (!row_in_top && !row_in_bot) {
+              comp_memcpy(&buf[py * buf_stride + px_start],
+                          &win->surface.pixels[row * sw + col_start],
+                          copy_len * 4);
+            } else {
+              for (uint32_t c = 0; c < copy_len; c++) {
+                uint32_t win_col = col_start + c;
+                if (!comp_window_pixel_inside(win_col, win_row,
+                                              win->frame.width, total_h,
+                                              corner_r)) {
+                  continue;
+                }
+                buf[py * buf_stride + px_start + (int32_t)c] =
+                    win->surface.pixels[row * sw + col_start + c];
+              }
+            }
+          }
+        }
+      }
+
+      /* Outline draws for decorated windows or any rounded overlay. */
+      if (win->decorated || win->corner_radius != 0u) {
+        render_window_outline(win, buf, buf_stride);
+      }
+    }
+  }
+}
+
+static void present_full_frame_from_backbuffer(void) {
+  uint32_t front_stride = comp_pitch / 4;
+  if (!comp_fb || !comp_backbuffer || front_stride == 0) return;
+  for (uint32_t y = 0; y < comp_height; y++) {
+    comp_memcpy(&comp_fb[y * front_stride],
+                &comp_backbuffer[y * comp_backbuffer_stride],
+                comp_width * sizeof(uint32_t));
+  }
+}
+
+static void copy_backbuffer_rect_to_front(int32_t x, int32_t y,
+                                          uint32_t w, uint32_t h) {
+  int32_t x0 = x;
+  int32_t y0 = y;
+  int32_t x1 = x + (int32_t)w;
+  int32_t y1 = y + (int32_t)h;
+  uint32_t front_stride = comp_pitch / 4;
+
+  if (!comp_fb || !comp_backbuffer || front_stride == 0
+      || comp_backbuffer_stride == 0) {
+    return;
+  }
+
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > (int32_t)comp_width) x1 = (int32_t)comp_width;
+  if (y1 > (int32_t)comp_height) y1 = (int32_t)comp_height;
+  if (x0 >= x1 || y0 >= y1) return;
+
+  for (int32_t py = y0; py < y1; py++) {
+    comp_memcpy(&comp_fb[(uint32_t)py * front_stride + (uint32_t)x0],
+                &comp_backbuffer[(uint32_t)py * comp_backbuffer_stride + (uint32_t)x0],
+                (size_t)(x1 - x0) * sizeof(uint32_t));
+  }
+}
+
+/* Etapa F4 cursors (2026-05-03): tabela de bitmasks 8x12 por kind.
+ * Cada bit ON = pixel a desenhar; o pixel da borda externa (col=0
+ * ou row=0) e desenhado em preto, os internos em theme->text para
+ * ficar visivel sobre qualquer fundo.
+ *
+ * Layout dos bitmaps (1 = pixel; bit mais significativo no col 0):
+ *   ARROW  : seta padrao (mesmo do antigo cursor_mask)
+ *   TEXT   : I-beam (linhas verticais + topo/base)
+ *   RES H  : <-> setas horizontais
+ *   RES V  : ^v setas verticais
+ *   RES_DG : diagonal (top-left <-> bottom-right)
+ *   LOAD   : ampulheta minimalista */
+static const uint8_t k_cursor_masks[COMP_CURSOR_KIND_COUNT][COMP_CURSOR_HEIGHT] = {
+  /* ARROW */ {
+    0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC,
+    0xFE, 0xFC, 0xF8, 0xD0, 0x88, 0x04
+  },
+  /* TEXT (I-beam) */ {
+    0xE7, 0x18, 0x18, 0x18, 0x18, 0x18,
+    0x18, 0x18, 0x18, 0x18, 0x18, 0xE7
+  },
+  /* RESIZE_H (<->) */ {
+    0x00, 0x10, 0x30, 0x70, 0xFE, 0xFE,
+    0xFE, 0xFE, 0x70, 0x30, 0x10, 0x00
+  },
+  /* RESIZE_V (^v) */ {
+    0x18, 0x3C, 0x7E, 0xFF, 0x18, 0x18,
+    0x18, 0x18, 0xFF, 0x7E, 0x3C, 0x18
+  },
+  /* RESIZE_DIAG (\) */ {
+    0xF0, 0xE0, 0xC0, 0x90, 0x08, 0x04,
+    0x20, 0x10, 0x09, 0x03, 0x07, 0x0F
+  },
+  /* LOADING (ampulheta) */ {
+    0xFE, 0x82, 0x44, 0x28, 0x10, 0x10,
+    0x10, 0x10, 0x28, 0x44, 0x82, 0xFE
+  }
+};
+
+static void draw_cursor_on_front(int32_t x, int32_t y) {
+  if (!comp_fb) return;
+  uint8_t kind = comp_cursor_kind_active;
+  if (kind >= (uint8_t)COMP_CURSOR_KIND_COUNT) {
+    kind = (uint8_t)COMP_CURSOR_ARROW;
+  }
+  const uint8_t *mask = k_cursor_masks[kind];
+
+  for (int row = 0; row < COMP_CURSOR_HEIGHT; row++) {
+    int32_t py = y + row;
+    if (py < 0 || (uint32_t)py >= comp_height) continue;
+    uint32_t *line = (uint32_t *)((uint8_t *)comp_fb + py * comp_pitch);
+    for (int col = 0; col < COMP_CURSOR_WIDTH; col++) {
+      int32_t px = x + col;
+      if (!(mask[row] & (0x80 >> col))) continue;
+      if (px < 0 || (uint32_t)px >= comp_width) continue;
+      line[px] = (col == 0 || row == 0) ? 0x000000 : g_theme.text;
+    }
+  }
+}
+
+void compositor_render(void) {
+  uint32_t front_stride = comp_pitch / 4;
+  if (!comp_fb || front_stride == 0) return;
+
+  comp_full_presented = 0;
+  if (!comp_scene_dirty) return;
+
+  if (comp_backbuffer) {
+    compose_scene(comp_backbuffer, comp_backbuffer_stride);
+    present_full_frame_from_backbuffer();
+  } else {
+    compose_scene(comp_fb, front_stride);
+  }
+
+  comp_scene_dirty = 0;
+  comp_full_presented = 1;
+  comp_stats.frames_rendered++;
+}
+
+void compositor_render_cursor(int32_t x, int32_t y) {
+  if (!comp_fb) return;
+
+  if (!comp_full_presented && comp_cursor_valid &&
+      comp_cursor_x == x && comp_cursor_y == y) {
+    return;
+  }
+
+  if (comp_backbuffer && !comp_full_presented && comp_cursor_valid) {
+    copy_backbuffer_rect_to_front(comp_cursor_x, comp_cursor_y,
+                                  COMP_CURSOR_WIDTH, COMP_CURSOR_HEIGHT);
+  }
+
+  draw_cursor_on_front(x, y);
+  comp_cursor_x = x;
+  comp_cursor_y = y;
+  comp_cursor_valid = 1;
+  comp_full_presented = 0;
+}

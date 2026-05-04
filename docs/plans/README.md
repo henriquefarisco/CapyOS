@@ -1,9 +1,12 @@
 # Indice De Planos CapyOS
 
-> **Atualizado em 2026-05-01** — todos os planos antigos foram consolidados em
-> [`active/capyos-master-plan.md`](active/capyos-master-plan.md). A pasta
-> `active/` agora contem **um unico plano linear** (F1-F10 + roadmap macro).
-
+> **Atualizado em 2026-05-03** — reorganizacao do plano F3:
+> entregas consolidadas em
+> [`historical/f3-browser-delivered.md`](historical/f3-browser-delivered.md);
+> restante detalhado em [`active/capyos-master-plan.md`](active/capyos-master-plan.md) §F3.
+>
+> A pasta `active/` continua com **um unico plano linear** (F1-F10 + roadmap macro).
+>
 > **Visao executiva:** [`STATUS.md`](STATUS.md) consolida pendencias e
 > percentual por fase.
 
@@ -12,16 +15,16 @@
 ```
 docs/plans/
 ├── README.md                # este indice
-├── STATUS.md                # status centralizado (% + dependencias)
+├── STATUS.md                # status centralizado (% + dependencias + pendencias)
 ├── active/                  # planos vigentes que orientam implementacao
-├── historical/              # planos legados ou substituidos
+├── historical/              # planos legados ou substituidos + entregas consolidadas
 └── experimental/            # trilhas de laboratorio fora da release oficial
 ```
 
 Estados aceitos neste indice:
 
 - `Ativo`: fonte valida para decisao tecnica atual (em `active/`).
-- `Historico`: contexto antigo, nao deve guiar implementacao nova sozinho (em `historical/`).
+- `Historico`: contexto antigo ou entrega consolidada, nao orienta implementacao nova sozinho (em `historical/`).
 - `Experimental`: investigacao ou trilha de laboratorio sem promessa de release (em `experimental/`).
 - `Substituido`: mantido apenas por rastreabilidade; use o documento indicado.
 
@@ -29,13 +32,21 @@ Estados aceitos neste indice:
 
 | Documento | Papel atual |
 |---|---|
-| [`capyos-master-plan.md`](active/capyos-master-plan.md) | **Fonte de verdade unica.** Estado consolidado (M0-M8 + M4 final + M5 userland + W1-W3) e plano linear F1-F10. |
+| [`capyos-master-plan.md`](active/capyos-master-plan.md) | **Fonte de verdade unica.** Estado consolidado (M0-M8 + M4 final + M5 userland + W1-W3 + F3 browser 96%) e plano linear F1-F10 com **restante detalhado por fase**. |
 
 ## Planos historicos (`historical/`)
 
-Documentos abaixo foram **consolidados em `capyos-master-plan.md`** em
-2026-05-01 e ficam aqui apenas para rastreabilidade. Nao orientam decisao
-tecnica nova.
+Documentos abaixo foram **consolidados em `capyos-master-plan.md`** e
+ficam aqui apenas para rastreabilidade ou como referencia tecnica de
+execucao de entregas ja finalizadas. Nao orientam decisao tecnica nova.
+
+### Entregas consolidadas
+
+| Documento | Papel | Consolidado em |
+|---|---|---|
+| [`f3-browser-delivered.md`](historical/f3-browser-delivered.md) | F3 browser ring-3: F3.3a..F3.3h + Etapas 1/2/3 b/e + polish + polish++ + 4 a/b. ~1161 asserts host novos. Links tecnicos detalhados abaixo. | 2026-05-03 |
+| [`f3-3c-html-viewer-userland-slicing.md`](historical/f3-3c-html-viewer-userland-slicing.md) | Fatiamento Slice 1..6 da migracao parser/render/raster/fetch para ring 3. Todas as slices 100% entregues. | 2026-05-03 (antes em `active/`) |
+| [`f3-3f-browser-desktop-wiring.md`](historical/f3-3f-browser-desktop-wiring.md) | Roteiro linearizado do wiring desktop↔engine ring-3 (Etapas 1..4 com 10 secoes tecnicas). | 2026-05-03 (antes em `active/`) |
 
 ### Consolidados em 2026-05-01
 

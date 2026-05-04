@@ -9,21 +9,13 @@
 #include "fs/vfs.h"
 #include <stddef.h>
 
-/* M5 phase D: process FD types. Type 0 stays "free slot"; type 1
- * is the existing VFS file binding (sys_open). Type 2 is a pipe
- * end produced by sys_pipe; the `flags` field carries the
- * direction (FD_PIPE_FLAG_READ for the read end, FD_PIPE_FLAG_WRITE
- * for the write end) and `private_data` carries the kernel pipe
- * id cast through (void *).
- *
- * Adding a new FD type means picking the next integer here, then
- * extending the switch in sys_read/sys_write/sys_close. */
-#define FD_TYPE_FREE 0
-#define FD_TYPE_VFS  1
-#define FD_TYPE_PIPE 2
-
-#define FD_PIPE_FLAG_READ  0x1u
-#define FD_PIPE_FLAG_WRITE 0x2u
+/* 2026-05-02: FD type discriminators (FD_TYPE_FREE/VFS/PIPE) and
+ * pipe direction flags (FD_PIPE_FLAG_READ/WRITE) now centralised
+ * in include/kernel/process.h. They were previously duplicated
+ * here, in src/kernel/process.c and src/kernel/browser_engine_spawn.c.
+ * Adding a new FD type still requires extending sys_read /
+ * sys_write / sys_close in this file AND process_fd_free in
+ * src/kernel/process.c in lockstep. */
 
 static syscall_handler_fn syscall_table[SYSCALL_COUNT];
 
@@ -41,22 +33,47 @@ static int64_t sys_exit(struct syscall_frame *f) {
 
 /* M5 phase D: pipe-aware sys_read.
  *
- * fd dispatch:
- *   - PIPE FDs with FD_PIPE_FLAG_READ: pipe_read; if buffer empty
- *     and write end still open, busy-yield until data or EOF.
- *   - Anything else: -1 (stdin / VFS-file read not modelled yet). */
-static int64_t sys_read(struct syscall_frame *f) {
+ * fd dispatch (in priority order):
+ *   - process fd table slot has FD_TYPE_PIPE + FD_PIPE_FLAG_READ:
+ *     pipe_read; if buffer empty and write end still open, busy-yield
+ *     until data or EOF. THIS RUNS FIRST so that processes that
+ *     install an explicit pipe at fd 0 (e.g. the browser engine
+ *     spawned via browser_engine_spawn) get the pipe semantics --
+ *     not the legacy stdin_buf shortcut. Without this priority,
+ *     the engine's `capy_read(0, ...)` would silently drain the
+ *     kernel keyboard buffer instead of its request pipe and never
+ *     observe a NAVIGATE.
+ *   - fd == 0 with FD_TYPE_FREE slot: drain kernel stdin_buf (legacy
+ *     M5 stdin behaviour for hello/capysh). Yields until at least
+ *     1 byte arrives, returning whatever is currently buffered.
+ *   - VFS / anything else: -1 (not modelled yet). */
+int64_t sys_read(struct syscall_frame *f) {
   int fd = (int)f->rdi;
   void *buf = (void *)f->rsi;
   size_t len = (size_t)f->rdx;
   if (!buf || len == 0) return 0;
 
-  /* M5 phase E.2: fd 0 (stdin) drains the kernel stdin_buf with
-   * cooperative blocking. We yield until at least 1 byte is
-   * available, then return whatever is currently buffered (up to
-   * `len`). This matches POSIX read-1-or-more semantics on a
-   * blocking tty -- callers expecting line buffering implement it
-   * in user space (capysh accumulates until '\n'). */
+  struct process *proc = process_current();
+  if (proc && fd >= 0 && fd < PROCESS_FD_MAX) {
+    struct file_descriptor *slot = &proc->fds[fd];
+    if (slot->type == FD_TYPE_PIPE && (slot->flags & FD_PIPE_FLAG_READ)) {
+      int pipe_id = (int)(intptr_t)slot->private_data;
+      for (;;) {
+        int rd = pipe_read(pipe_id, buf, len);
+        if (rd > 0) return (int64_t)rd;
+        if (rd == 0) return 0;            /* EOF: write end closed */
+        /* rd < 0 means "would block" (buffer empty and write end
+         * still open). Yield and retry. The yield path is
+         * cooperative; preemptive scheduling lets the writer
+         * make progress in the meantime. */
+        task_yield();
+      }
+    }
+  }
+
+  /* Legacy fd 0 stdin_buf shortcut: only fires if the caller did NOT
+   * install an explicit pipe at fd 0 (i.e. slot type is FD_TYPE_FREE
+   * or the caller has no process context). hello/capysh rely on this. */
   if (fd == 0) {
     uint8_t *dst = (uint8_t *)buf;
     size_t copied = 0;
@@ -79,74 +96,78 @@ static int64_t sys_read(struct syscall_frame *f) {
     return (int64_t)copied;
   }
 
-  struct process *proc = process_current();
-  if (!proc || fd < 0 || fd >= PROCESS_FD_MAX) return -1;
-  struct file_descriptor *slot = &proc->fds[fd];
-
-  if (slot->type == FD_TYPE_PIPE && (slot->flags & FD_PIPE_FLAG_READ)) {
-    int pipe_id = (int)(intptr_t)slot->private_data;
-    for (;;) {
-      int rd = pipe_read(pipe_id, buf, len);
-      if (rd > 0) return (int64_t)rd;
-      if (rd == 0) return 0;            /* EOF: write end closed */
-      /* rd < 0 means "would block" (buffer empty and write end
-       * still open). Yield and retry. The yield path is
-       * cooperative; preemptive scheduling lets the writer
-       * make progress in the meantime. */
-      task_yield();
-    }
-  }
   return -1;
 }
 
 /* M5 phase D: pipe-aware sys_write.
  *
- * fd dispatch:
- *   - 1 (stdout) / 2 (stderr): debug-console (port 0xE9). Same as
- *     before for parity with the boot-time `hello` smoke chain.
- *   - PIPE FDs with FD_PIPE_FLAG_WRITE: pipe_write; on full buffer
- *     busy-yield until space (or until reader closes the pipe ->
- *     -1 broken pipe).
+ * fd dispatch (in priority order):
+ *   - process fd table slot has FD_TYPE_PIPE + FD_PIPE_FLAG_WRITE:
+ *     pipe_write; on full buffer busy-yield until space (or until
+ *     the reader closes the pipe -> -1 broken pipe). THIS RUNS
+ *     FIRST so that processes that install an explicit pipe at
+ *     fd 1 (e.g. the browser engine writing events to its response
+ *     pipe via fd 1) get the pipe semantics -- not the legacy
+ *     debugcon shortcut. Without this priority, every event the
+ *     engine emits would silently land on port 0xE9 instead of
+ *     reaching the chrome runtime, which is exactly the symptom
+ *     reported as "browser does not load home page".
+ *   - fd == 1 or fd == 2 with FD_TYPE_FREE slot: debug-console
+ *     (port 0xE9). Legacy stdout/stderr behaviour kept for hello /
+ *     capysh and any other binary that has not installed an
+ *     explicit fd 1/2 mapping.
  *   - Anything else: -1. */
-static int64_t sys_write(struct syscall_frame *f) {
+int64_t sys_write(struct syscall_frame *f) {
   int fd = (int)f->rdi;
   const void *buf = (const void *)f->rsi;
   size_t len = (size_t)f->rdx;
   if (!buf || len == 0) return 0;
 
+  struct process *proc = process_current();
+  if (proc && fd >= 0 && fd < PROCESS_FD_MAX) {
+    struct file_descriptor *slot = &proc->fds[fd];
+    if (slot->type == FD_TYPE_PIPE && (slot->flags & FD_PIPE_FLAG_WRITE)) {
+      int pipe_id = (int)(intptr_t)slot->private_data;
+      size_t written = 0;
+      const uint8_t *src = (const uint8_t *)buf;
+      while (written < len) {
+        int wr = pipe_write(pipe_id, src + written, len - written);
+        if (wr > 0) {
+          written += (size_t)wr;
+          continue;
+        }
+        /* wr < 0: either buffer full (would block) or read end
+         * closed. We disambiguate by yielding once and retrying;
+         * if the caller has already partially written we return
+         * the partial count rather than -1 to match POSIX-ish
+         * semantics. */
+        if (written > 0) return (int64_t)written;
+        task_yield();
+      }
+      return (int64_t)written;
+    }
+  }
+
+  /* Legacy fd 1/2 debugcon shortcut: only fires if the caller did NOT
+   * install an explicit pipe at fd 1/2 (i.e. slot type is FD_TYPE_FREE
+   * or the caller has no process context). hello/capysh use this. */
   if (fd == 1 || fd == 2) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
     const char *s = (const char *)buf;
     for (size_t i = 0; i < len; i++) {
       __asm__ volatile("outb %0, %1"
                        : : "a"((uint8_t)s[i]), "Nd"((uint16_t)0xE9));
     }
+#else
+    /* Host unit tests cannot emit IO ports; behave like a sink so
+     * the contract "returns len bytes consumed" still holds. The
+     * tests/test_syscall_pipe_priority.c regression locks this
+     * fallback contract. */
+    (void)buf;
+#endif
     return (int64_t)len;
   }
 
-  struct process *proc = process_current();
-  if (!proc || fd < 0 || fd >= PROCESS_FD_MAX) return -1;
-  struct file_descriptor *slot = &proc->fds[fd];
-
-  if (slot->type == FD_TYPE_PIPE && (slot->flags & FD_PIPE_FLAG_WRITE)) {
-    int pipe_id = (int)(intptr_t)slot->private_data;
-    size_t written = 0;
-    const uint8_t *src = (const uint8_t *)buf;
-    while (written < len) {
-      int wr = pipe_write(pipe_id, src + written, len - written);
-      if (wr > 0) {
-        written += (size_t)wr;
-        continue;
-      }
-      /* wr < 0: either buffer full (would block) or read end
-       * closed. We disambiguate by yielding once and retrying;
-       * if the caller has already partially written we return
-       * the partial count rather than -1 to match POSIX-ish
-       * semantics. */
-      if (written > 0) return (int64_t)written;
-      task_yield();
-    }
-    return (int64_t)written;
-  }
   return -1;
 }
 

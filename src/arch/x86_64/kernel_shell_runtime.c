@@ -513,6 +513,12 @@ static void apply_default_settings(struct system_settings *settings) {
                        ((uint32_t)1u << 8) | 1u;
   settings->splash_enabled = 0;
   settings->diagnostics_enabled = 0;
+  /* Etapa F4 homepage (2026-05-03): default browser homepage para
+   * boots em ambientes onde /system/config.ini nao existe ainda
+   * (first-boot raw, instalador). Mantem alinhamento com o default
+   * em src/config/system_settings.c (system_settings_set_defaults). */
+  local_copy(settings->browser_homepage, sizeof(settings->browser_homepage),
+             "https://wikipedia.org");
 }
 
 int x64_kernel_prepare_shell_runtime(

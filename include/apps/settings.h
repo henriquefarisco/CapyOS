@@ -9,6 +9,11 @@ enum settings_tab {
   SETTINGS_TAB_NETWORK,
   SETTINGS_TAB_KEYBOARD,
   SETTINGS_TAB_LANGUAGE,
+  /* Etapa F4 settings (2026-05-03): novo tab Browser para exibir
+   * a homepage configurada (em /system/config.ini). Posicionado
+   * antes de Users/Updates/About porque pertence a "preferencias"
+   * de UI mais imediatas que o usuario quer customizar. */
+  SETTINGS_TAB_BROWSER,
   SETTINGS_TAB_USERS,
   SETTINGS_TAB_UPDATES,
   SETTINGS_TAB_ABOUT,

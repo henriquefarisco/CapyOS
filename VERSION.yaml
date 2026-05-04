@@ -6,11 +6,14 @@ meta:
   description: "Canalizacao oficial de versoes do CapyOS na trilha UEFI/GPT x86_64"
 channels:
   alpha:
-    current: 0.8.0-alpha.5
-    extended: 0.8.0-alpha.5+20260501
+    current: 0.8.0-alpha.6
+    extended: 0.8.0-alpha.6+20260503
     stability: experimental
-    summary: "M5 userland completo (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash), polish de UX (clear context-aware, task manager auto-refresh + Kill, browser parser yield + timeout 30s) e consolidacao dos planos de roteiro em um unico master plan linear F1-F10"
+    summary: "Browser ring-3 maduro etapa 2: pipe kernel 64 KiB (16x throughput), task manager kill agora libera FDs imediatamente fechando a janela, janela bumpada 192x148 -> 480x384 + framebuffer engine 480x360, log forward do engine ao debugcon, deteccao defensiva de morte do engine no tick, e consolidacao da nomenclatura unica Etapa N / Secao a-e em todos os planos ativos"
     history:
+      - version: 0.8.0-alpha.6+20260503
+        date: 2026-05-02
+        summary: "Etapa 2 (Estabilidade pre-JS) do roteiro do browser: PIPE_BUF_SIZE 4 KiB -> 64 KiB (frame 480x360 transferido em ~11 round-trips ao inves de ~170), process_kill agora libera FDs imediatamente em vez de esperar process_destroy, process_fd_free fecha pipes/files corretamente (fix do leak silencioso de longa data), browser_app detecta morte externa do engine via process_stats_get (marker [D]), forward de EVENT_LOG do engine ao debugcon (visibilidade total de erros do ring 3), bump engine framebuffer 192x128 -> 480x360 (chrome scratch 128 KiB -> 768 KiB), unificacao de nomenclatura Etapa N / Secao a-e em todos os docs ativos"
       - version: 0.8.0-alpha.5+20260501
         date: 2026-05-01
         summary: "M5 userland (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash multi-processo), W1 TTY clear context-aware, W2 task manager auto-refresh + Kill button funcional, W3 browser parser yield cooperativo + timeout duro 30s + per-frame async drain, e consolidacao de 9 planos paralelos em docs/plans/active/capyos-master-plan.md (plano linear unico F1-F10)"

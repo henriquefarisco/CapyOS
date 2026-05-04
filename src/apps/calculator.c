@@ -96,6 +96,18 @@ static void calculator_window_paint(struct gui_window *win) {
   calculator_paint((struct calculator_app *)win->user_data);
 }
 
+/* 2026-05-02: repaint after a user resize drag. compositor_resize_window
+ * has already cleared the new pixel buffer to bg_color; we just need to
+ * re-render the calculator UI on top so the user does not see a blank
+ * window between the drag-end and the next event-driven repaint. */
+static void calculator_window_resize(struct gui_window *win,
+                                     uint32_t w, uint32_t h) {
+  (void)w;
+  (void)h;
+  if (!win || !win->user_data) return;
+  calculator_paint((struct calculator_app *)win->user_data);
+}
+
 static void calculator_window_mouse(struct gui_window *win, int32_t x, int32_t y,
                                     uint8_t buttons) {
   struct calculator_app *app = NULL;
@@ -191,6 +203,7 @@ void calculator_open(void) {
   g_calc.window->on_mouse = calculator_window_mouse;
   g_calc.window->on_key = calculator_window_key;
   g_calc.window->on_close = calculator_on_close;
+  g_calc.window->on_resize = calculator_window_resize;
   compositor_show_window(g_calc.window->id);
   compositor_focus_window(g_calc.window->id);
 

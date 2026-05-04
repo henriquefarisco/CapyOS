@@ -25,7 +25,7 @@
 #include "apps/text_editor.h"
 #include "apps/task_manager.h"
 #include "apps/settings.h"
-#include "apps/html_viewer.h"
+#include "apps/browser_app.h"
 #include "security/tls.h"
 #include "arch/x86_64/framebuffer_console.h"
 #include "drivers/pcie.h"
@@ -315,10 +315,14 @@ static int cmd_open_settings(struct shell_context *c, int a, char **v) {
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   settings_open(); return 0;
 }
+/* F3.3f: spawn the ring-3 chrome runtime + capybrowser engine
+ * and open a compositor window. The kernel-side html_viewer was
+ * removed in slice 6; everything now lives in ring 3. */
 static int cmd_open_browser(struct shell_context *c, int a, char **v) {
   (void)a;(void)v;
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
-  html_viewer_open(); return 0;
+  browser_app_open();
+  return 0;
 }
 
 #define EXT_CMD_COUNT 24

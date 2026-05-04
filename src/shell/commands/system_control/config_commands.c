@@ -77,6 +77,17 @@ static const char *theme_name_or_null(const char *name) {
   if (shell_string_equal(name, "forest")) {
     return "forest";
   }
+  /* Tema "love" adicionado em 2026-05-01 (post-M5 W4). "rosa"/"pink"
+   * sao apelidos legados de builds anteriores: aceitos para nao
+   * quebrar config.ini migrados, mas normalizados para "love". A UI
+   * do shell expoe apenas "love". */
+  if (shell_string_equal(name, "love") || shell_string_equal(name, "rosa") ||
+      shell_string_equal(name, "pink")) {
+    return "love";
+  }
+  if (shell_string_equal(name, "high-contrast")) {
+    return "high-contrast";
+  }
   return NULL;
 }
 
@@ -152,6 +163,14 @@ int cmd_config_theme(struct shell_context *ctx, int argc, char **argv) {
                                     " - forest : variante verde/floresta\n",
                                     " - forest : green/forest variant\n",
                                     " - forest : variante verde/bosque\n"));
+    shell_print(localization_select(language,
+                                    " - love   : variante magenta/coral moderna\n",
+                                    " - love   : modern magenta/coral variant\n",
+                                    " - love   : variante magenta/coral moderna\n"));
+    shell_print(localization_select(language,
+                                    " - high-contrast : preto e branco para acessibilidade\n",
+                                    " - high-contrast : black & white for accessibility\n",
+                                    " - high-contrast : blanco y negro para accesibilidad\n"));
     return 0;
   }
 

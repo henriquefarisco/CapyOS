@@ -94,6 +94,7 @@ int browser_ipc_kind_is_request(uint16_t kind) {
         case BROWSER_IPC_KEY:
         case BROWSER_IPC_PING:
         case BROWSER_IPC_SHUTDOWN:
+        case BROWSER_IPC_FETCH_RESPONSE:
             return 1;
         default:
             return 0;
@@ -112,6 +113,7 @@ int browser_ipc_kind_is_event(uint16_t kind) {
         case BROWSER_IPC_EVENT_CURSOR:
         case BROWSER_IPC_EVENT_PONG:
         case BROWSER_IPC_EVENT_LOG:
+        case BROWSER_IPC_EVENT_FETCH_REQUEST:
             return 1;
         default:
             return 0;
@@ -155,6 +157,13 @@ uint32_t browser_ipc_kind_min_payload(uint16_t kind) {
         case BROWSER_IPC_EVENT_LOG:          return 3; /* level u8 + msg_len u16 */
         case BROWSER_IPC_EVENT_FRAME:
             return 12; /* nav_id u32 + w u16 + h u16 + stride u32 (depois pixels) */
+        case BROWSER_IPC_EVENT_FETCH_REQUEST:
+            /* seq u32 + nav_id u32 + method u8 + url_len u16 (depois utf8) */
+            return 11;
+        case BROWSER_IPC_FETCH_RESPONSE:
+            /* seq u32 + nav_id u32 + status u16 + ctype_len u16
+             * + body_len u32 (depois ctype utf8 e body bytes) */
+            return 16;
 
         default:
             return (uint32_t)-1;
