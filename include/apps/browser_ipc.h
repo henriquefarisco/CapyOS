@@ -47,6 +47,13 @@ enum browser_ipc_kind {
      * "chrome -> engine command" range so the codec direction
      * predicates keep working unchanged. */
     BROWSER_IPC_FETCH_RESPONSE  = 0x0C,
+    /* Etapa 3 secao a fetch+decode (2026-05-05): chrome -> engine
+     * IMAGE_RESPONSE. Carries decoded BGRA pixels (or error status)
+     * for an image previously requested via EVENT_IMAGE_REQUEST.
+     * Ordering mirrors FETCH_RESPONSE -- a NAV_FAILED or new
+     * NAV_STARTED invalidates pending requests, so out-of-order
+     * arrival is tolerable as long as the engine matches by img_id. */
+    BROWSER_IPC_IMAGE_RESPONSE  = 0x0D,
 
     /* engine -> chrome (event/resposta) */
     BROWSER_IPC_EVENT_TITLE         = 0x81,
@@ -63,7 +70,16 @@ enum browser_ipc_kind {
      * has no direct kernel access; it asks the chrome to fetch
      * `url` and forward the body via FETCH_RESPONSE. The seq is
      * engine-assigned and pairs request/response. */
-    BROWSER_IPC_EVENT_FETCH_REQUEST = 0x8B
+    BROWSER_IPC_EVENT_FETCH_REQUEST = 0x8B,
+    /* Etapa 3 secao a fetch+decode (2026-05-05): engine -> chrome
+     * IMAGE_REQUEST. Engine encontrou um <img src="..."> apos parse
+     * e quer pixels decodificados. Chrome resolve via mesmo caminho
+     * que FETCH (HTTP/HTTPS no kernel-side bridge) e roda png/jpeg
+     * decoder antes de devolver via IMAGE_RESPONSE. img_id e
+     * engine-assigned (monotonico por nav) e identifica o slot de
+     * cache; nav_id permite o engine descartar respostas tardias
+     * quando o usuario ja navegou para outra pagina. */
+    BROWSER_IPC_EVENT_IMAGE_REQUEST = 0x8C
 };
 
 /* Status codes returned in FETCH_RESPONSE.status. The numeric
@@ -192,6 +208,82 @@ int browser_ipc_fetch_response_encode(const struct browser_ipc_fetch_response *r
 /* Decode FETCH_RESPONSE payload from `in`. */
 int browser_ipc_fetch_response_decode(const uint8_t *in, uint32_t in_size,
                                       struct browser_ipc_fetch_response *resp);
+
+/* === Etapa 3 secao a fetch+decode (2026-05-05): image payloads ========
+ *
+ * Engine asks the chrome to fetch + decode an image; chrome answers
+ * with raw BGRA32 pixels (or error status). Wire shapes:
+ *
+ *   EVENT_IMAGE_REQUEST (engine -> chrome) payload:
+ *     [0..3]   img_id u32 BE       -- engine-assigned, paired with response
+ *     [4..7]   nav_id u32 BE       -- which navigation owns this image
+ *     [8..9]   url_len u16 BE      -- length of url bytes
+ *     [10..]   url utf8            -- url_len bytes
+ *
+ *   IMAGE_RESPONSE (chrome -> engine) payload:
+ *     [0..3]   img_id u32 BE       -- echoes the request
+ *     [4..7]   nav_id u32 BE       -- echoes the request
+ *     [8]      status u8           -- enum browser_ipc_image_status
+ *     [9]      format u8           -- enum browser_ipc_image_format
+ *     [10..11] width u16 BE        -- pixels (0 on error)
+ *     [12..13] height u16 BE       -- pixels (0 on error)
+ *     [14..17] pixel_bytes u32 BE  -- length of pixel data (0 on error)
+ *     [18..]   pixels              -- pixel_bytes bytes (BGRA32 raster)
+ *
+ * For a 320x240 BGRA image: 320*240*4 = 307200 bytes + 18 header =
+ * 307218, well within BROWSER_IPC_MAX_PAYLOAD (1 MiB). The chrome
+ * downscales larger images before sending; the engine cap (in
+ * userland/bin/capybrowser/main.c) refuses oversized responses for
+ * extra defense. */
+
+enum browser_ipc_image_status {
+    BROWSER_IPC_IMAGE_OK              = 0u, /* pixels valid */
+    BROWSER_IPC_IMAGE_TRANSPORT_ERR   = 1u, /* HTTP/DNS/timeout */
+    BROWSER_IPC_IMAGE_DECODE_ERR      = 2u, /* PNG/JPEG corrupt */
+    BROWSER_IPC_IMAGE_OVERSIZED       = 3u, /* > engine/chrome cap */
+    BROWSER_IPC_IMAGE_UNSUPPORTED     = 4u  /* unknown format */
+};
+
+enum browser_ipc_image_format {
+    BROWSER_IPC_IMAGE_FMT_BGRA32      = 0u  /* 4 bytes per pixel, B G R A */
+};
+
+struct browser_ipc_image_request {
+    uint32_t img_id;
+    uint32_t nav_id;
+    uint16_t url_len;
+    const uint8_t *url;
+};
+
+struct browser_ipc_image_response {
+    uint32_t img_id;
+    uint32_t nav_id;
+    uint8_t  status;       /* enum browser_ipc_image_status */
+    uint8_t  format;       /* enum browser_ipc_image_format */
+    uint16_t width;
+    uint16_t height;
+    uint32_t pixel_bytes;
+    const uint8_t *pixels; /* borrowed; lifetime <= input buffer */
+};
+
+/* Encode IMAGE_REQUEST payload into `out`. Writes 10 + url_len bytes;
+ * returns BROWSER_IPC_OK / SHORT / INVAL / PAYLOAD. */
+int browser_ipc_image_request_encode(const struct browser_ipc_image_request *req,
+                                     uint8_t *out, uint32_t out_size,
+                                     uint32_t *out_written);
+
+/* Decode IMAGE_REQUEST payload. `req->url` aliases into `in`. */
+int browser_ipc_image_request_decode(const uint8_t *in, uint32_t in_size,
+                                     struct browser_ipc_image_request *req);
+
+/* Encode IMAGE_RESPONSE payload (writes 18 + pixel_bytes). */
+int browser_ipc_image_response_encode(const struct browser_ipc_image_response *resp,
+                                      uint8_t *out, uint32_t out_size,
+                                      uint32_t *out_written);
+
+/* Decode IMAGE_RESPONSE payload. `resp->pixels` aliases into `in`. */
+int browser_ipc_image_response_decode(const uint8_t *in, uint32_t in_size,
+                                      struct browser_ipc_image_response *resp);
 
 /*
  * Decode header a partir de buffer (BE). Valida magic, kind conhecido

@@ -159,8 +159,8 @@ toolchain de host permite.
   `[D]` ao testar Task Manager kill em hardware emulado. Já deterministicamente
   validado pelo `test_browser_e2e` host (48 asserts), mas o boot real
   ainda não foi capturado nesta release.
-- **Captura de screenshots** novos com a janela 480×384 em
-  `docs/screenshots/0.8.0-alpha.6/`.
+- **Captura de screenshots** novos com a janela 480×384 em uma futura
+  versao de CapyUI (`docs/screenshots/CapyUI/v2/`).
 - **Etapa 3 (JS engine inicial)**: bloqueada até hoje pelos pré-requisitos
   da seção "Etapa 3 — Roteiro pós-Etapa 2". Com a Etapa 2 fechada e
   hardenizada, a Etapa 3 fica desbloqueada para iniciar `Seção a`

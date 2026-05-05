@@ -129,6 +129,20 @@ struct capyhtml_cmd {
     int32_t  h;           /* intrinsic height in px */
     const char *text;     /* borrowed pointer into doc->nodes[i].text */
     const char *href;     /* borrowed; non-NULL only for LINK runs */
+    /* Etapa 3 secao a fetch+decode (2026-05-05): para CMD_IMAGE, o
+     * caller (engine ring 3) pode populá-los apos `capyhtml_layout`
+     * com pixels BGRA32 decodificados de um cache; o raster
+     * `capyhtml_raster_draw` blita esses pixels no lugar do
+     * placeholder quando todos os tres campos sao validos
+     * (image_pixels != NULL && image_w > 0 && image_h > 0).
+     *
+     * Capyhtml NUNCA escreve nesses campos -- sao preenchidos pelo
+     * engine apos layout (ou ficam zero, e raster volta ao placeholder).
+     * Para outros kinds (TEXT, BULLET, RULE, INPUT, CELL) os campos
+     * sao ignorados pelo raster. */
+    const uint8_t *image_pixels; /* BGRA32 row-major, image_w cols */
+    uint16_t image_w;
+    uint16_t image_h;
 };
 
 /* Font metrics + width measurement injected by the caller. The

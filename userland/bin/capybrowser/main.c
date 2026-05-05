@@ -34,6 +34,7 @@
 #include "capyhtml/render.h"
 #include "capyhtml/raster.h"
 #include "capyhtml/font.h"
+#include "image_cache.h" /* Etapa 3 secao a fetch+decode (2026-05-05) */
 #include <capylibc/capylibc.h>
 #include <stdint.h>
 
@@ -263,6 +264,28 @@ static int emit_fetch_request(uint32_t seq, uint32_t nav_id,
                       buf, (uint32_t)(11u + url_len));
 }
 
+/* Etapa 3 secao a fetch+decode (2026-05-05): emite IMAGE_REQUEST
+ * para o chrome. Payload: img_id u32 + nav_id u32 + url_len u16 +
+ * url. URL clamped ao limite que cabe no buffer scratch local
+ * (1 KiB; URLs maiores sao raras em <img src=> e o engine ja
+ * trunca paths longos no parser). */
+static int emit_image_request(uint32_t img_id, uint32_t nav_id,
+                              const uint8_t *url, uint16_t url_len) {
+    uint8_t buf[10 + 1024];
+    if (url_len > 1024u) url_len = 1024u;
+    struct browser_ipc_image_request req;
+    req.img_id = img_id;
+    req.nav_id = nav_id;
+    req.url_len = url_len;
+    req.url = url;
+    uint32_t n = 0;
+    if (browser_ipc_image_request_encode(&req, buf, sizeof(buf), &n)
+        != BROWSER_IPC_OK) {
+        return -1;
+    }
+    return send_frame(BROWSER_IPC_EVENT_IMAGE_REQUEST, buf, n);
+}
+
 static int emit_nav_failed(uint32_t nav_id, const char *reason) {
     size_t rl = 0;
     while (reason && reason[rl] != '\0' && rl < 200u) ++rl;
@@ -281,6 +304,11 @@ static int emit_nav_failed(uint32_t nav_id, const char *reason) {
  * inteiro como uma unica payload de EVENT_FRAME, sem nenhum buffer
  * intermediario na pilha. */
 static uint8_t g_frame_payload[ENGINE_FRAME_TOTAL];
+
+/* Etapa 3 secao a fetch+decode (2026-05-05): cache de imagens
+ * decodificadas. ~675 KiB em .bss; ver image_cache.h para o
+ * trade-off de tamanho. Inicializado em main(). */
+static struct image_cache g_image_cache;
 
 /* F3.3g: scratches em .bss para receber request payload (main loop)
  * e fetch response (run_navigate/wait_for_fetch_response). Ambos
@@ -371,6 +399,77 @@ static void engine_default_palette(struct capyhtml_palette *out) {
     out->background_argb                    = 0xFFFAF7F7u; /* warm off-white */
 }
 
+/* Etapa 3 secao a fetch+decode (2026-05-05): walk no doc parseado
+ * e dispara IMAGE_REQUEST para cada `<img src=...>` que ainda nao
+ * tem cache hit. O engine emite no maximo IMAGE_CACHE_MAX_ENTRIES
+ * requests por nav (cache cheio = restantes ficam com placeholder).
+ * Idempotente: chamar 2x no mesmo doc nao duplica requests porque
+ * o lookup encontra a entry PENDING/OK do primeiro call.
+ *
+ * Antes do walk, invalida slots de navs antigas para liberar
+ * memoria as URLs novas. Respostas tardias da nav anterior ainda
+ * podem chegar; record_response casa por img_id e simplesmente
+ * descarta (returns -1) se o slot nao existe mais. */
+static void engine_request_images_for_doc(const struct capyhtml_document *doc,
+                                          uint32_t nav_id) {
+    if (!doc) return;
+    image_cache_invalidate_other_navs(&g_image_cache, nav_id);
+    for (int i = 0; i < doc->node_count; ++i) {
+        if (doc->nodes[i].type != CAPYHTML_NODE_TAG_IMG) continue;
+        const char *src = doc->nodes[i].href; /* IMG src vai em href */
+        if (!src || src[0] == '\0') continue;
+        size_t url_len_sz = cap_strlen_local(src);
+        if (url_len_sz == 0u || url_len_sz > 0xFFFFu) continue;
+        uint16_t url_len = (uint16_t)url_len_sz;
+
+        /* Hit (PENDING/OK/ERROR) -> nada a fazer. */
+        if (image_cache_lookup(&g_image_cache, src, url_len) >= 0) {
+            continue;
+        }
+        /* Miss: aloca slot + emite REQUEST. */
+        uint32_t img_id = 0u;
+        int slot = image_cache_alloc(&g_image_cache, nav_id,
+                                      src, url_len, &img_id);
+        if (slot < 0) {
+            /* Cache cheio; resto fica placeholder. */
+            break;
+        }
+        (void)emit_image_request(img_id, nav_id,
+                                  (const uint8_t *)src, url_len);
+    }
+}
+
+/* Forward decl para que engine_handle_image_response possa pedir
+ * re-render apos receber pixels novos. */
+static int32_t emit_real_frame_scrolled(uint32_t nav_id,
+                                         const struct capyhtml_document *doc,
+                                         int32_t scroll_y_px);
+
+/* Etapa 3 secao a fetch+decode (2026-05-05): handler para
+ * BROWSER_IPC_IMAGE_RESPONSE. Decodifica payload, atualiza o cache,
+ * e dispara um re-render do doc atual para que o raster use os
+ * pixels recem-recebidos no lugar do placeholder. */
+static void engine_handle_image_response(const uint8_t *payload,
+                                          uint32_t payload_len) {
+    struct browser_ipc_image_response resp;
+    if (browser_ipc_image_response_decode(payload, payload_len, &resp)
+        != BROWSER_IPC_OK) {
+        return;
+    }
+    /* record_response casa por img_id; nav_id stale gera -1
+     * silencioso. */
+    (void)image_cache_record_response(&g_image_cache, &resp);
+    /* Re-render se temos doc valido E a resposta diz respeito a
+     * nav corrente. Re-render para nav antiga seria desperdicio
+     * (frame ja invalidado pelo proximo NAV_STARTED). g_current_doc
+     * etc. sao file-scope statics ja declarados acima -- referenciar
+     * direto sem extern. */
+    if (g_current_doc_valid && resp.nav_id == g_current_nav) {
+        (void)emit_real_frame_scrolled(g_current_nav, &g_current_doc,
+                                        g_scroll_y_px);
+    }
+}
+
 /* Slice 4-final + Etapa 3 seção e (2026-05-02): layout + raster do
  * documento parseado com suporte a scroll vertical. Quando `doc`
  * produz pelo menos uma cmd, renderizamos o framebuffer inteiro e
@@ -430,6 +529,29 @@ static int32_t emit_real_frame_scrolled(uint32_t nav_id,
                               | CAPYHTML_INPUT_FLAG_FOCUSED);
             }
         }
+    }
+
+    /* Etapa 3 secao a fetch+decode (2026-05-05): para cada CMD_IMAGE
+     * com cache hit em status OK, popula image_pixels/w/h com os
+     * pixels BGRA decodificados. Raster vai blittar em vez de
+     * placeholder. CMDs com cache miss/PENDING/ERROR mantem
+     * image_pixels=NULL (zero do layout) e raster cai no
+     * placeholder. */
+    for (uint16_t i = 0; i < rr.cmd_count; ++i) {
+        if (cmds[i].kind != CAPYHTML_CMD_IMAGE) continue;
+        if (!cmds[i].href || cmds[i].href[0] == '\0') continue;
+        size_t url_len = cap_strlen_local(cmds[i].href);
+        if (url_len == 0u || url_len > 0xFFFFu) continue;
+        const struct image_cache_entry *e =
+            image_cache_find_url(&g_image_cache, cmds[i].href,
+                                 (uint16_t)url_len);
+        if (!e || e->status != IMAGE_CACHE_OK) continue;
+        if (e->pixel_bytes == 0u || e->width == 0u || e->height == 0u) {
+            continue;
+        }
+        cmds[i].image_pixels = e->pixels;
+        cmds[i].image_w = e->width;
+        cmds[i].image_h = e->height;
     }
 
     /* Raster no tamanho atual da viewport. O buffer estatico
@@ -837,6 +959,15 @@ static int run_navigate(const uint8_t *payload, uint32_t payload_len) {
          * pagina para o chrome atualizar `window->title`. Mesmo com
          * titulo vazio o emit e no-op, preservando o titulo anterior. */
         (void)emit_title(g_current_doc.title);
+
+        /* Etapa 3 secao a fetch+decode (2026-05-05): apos parse +
+         * primeiro frame, dispara IMAGE_REQUESTs para cada `<img>`
+         * sem cache hit. Cache invalidate_other_navs ja descartou
+         * slots de navs antigas; respostas tardias da nav anterior
+         * que possam estar no pipe sao descartadas pelo handler
+         * (img_id stale). Re-frames vao sair conforme as
+         * IMAGE_RESPONSEs chegarem. */
+        engine_request_images_for_doc(&g_current_doc, nav);
 
         /* Historico: se esta navegacao veio de BACK/FORWARD, nao
          * re-push; senao trunca o "futuro" e adiciona ao topo. */
@@ -1546,6 +1677,11 @@ static void run_forward(void) {
 int main(int rank) {
     (void)rank;
 
+    /* Etapa 3 secao a fetch+decode (2026-05-05): inicializa cache de
+     * imagens. .bss ja zerou os bytes mas o init seta next_img_id=1
+     * e zera contadores explicitamente para deixar o estado claro. */
+    image_cache_init(&g_image_cache);
+
     /* Anuncia versao via EVENT_LOG (chrome encaminha ao klog). */
     (void)emit_log(BROWSER_IPC_LOG_INFO, "capybrowser engine v=0 online");
     (void)capy_write(2, k_log_started, sizeof(k_log_started) - 1u);
@@ -1640,6 +1776,12 @@ int main(int rank) {
                 break;
             case BROWSER_IPC_KEY:
                 run_key(payload, hdr.payload_len);
+                break;
+            case BROWSER_IPC_IMAGE_RESPONSE:
+                /* Etapa 3 secao a fetch+decode (2026-05-05): chrome
+                 * decodificou a imagem e mandou os pixels. Atualiza
+                 * cache + re-render para o usuario ver. */
+                engine_handle_image_response(payload, hdr.payload_len);
                 break;
             default:
                 /* Stub: ignora silenciosamente. */

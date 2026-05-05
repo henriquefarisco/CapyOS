@@ -45,11 +45,18 @@ typedef int (*chrome_runtime_pipe_read_fn)(int pipe_id,
 
 /* Codigos de retorno dos pollers. */
 enum chrome_runtime_poll_status {
-    CHROME_RUNTIME_POLL_NO_DATA       = 0, /* would-block; nada feito */
-    CHROME_RUNTIME_POLL_EVENT_HANDLED = 1, /* um evento decodificado e despachado */
-    CHROME_RUNTIME_POLL_ENGINE_EOF    = 2, /* read retornou 0; engine saiu */
-    CHROME_RUNTIME_POLL_PROTOCOL_ERR  = 3, /* header invalido / payload inconsistente */
-    CHROME_RUNTIME_POLL_RATE_LIMITED  = 4  /* engine excedeu burst budget; retry next tick */
+    CHROME_RUNTIME_POLL_NO_DATA            = 0, /* would-block; nada feito */
+    CHROME_RUNTIME_POLL_EVENT_HANDLED      = 1, /* um evento decodificado e despachado */
+    CHROME_RUNTIME_POLL_ENGINE_EOF         = 2, /* read retornou 0; engine saiu */
+    CHROME_RUNTIME_POLL_PROTOCOL_ERR       = 3, /* header invalido / payload inconsistente */
+    CHROME_RUNTIME_POLL_RATE_LIMITED       = 4, /* engine excedeu burst budget; retry next tick */
+    /* Etapa 5 hardening (2026-05-05): engine excedeu o budget de bytes
+     * IPC acumulados desde o inicio da navegacao. Engine e marcado
+     * alive=0 (caller deve matar pid e respawnar via record_restart),
+     * audit log recebe CAPYC_AUDIT_BUDGET_EXCEEDED, e o evento que
+     * causou o excesso JA FOI dispatchado (porque o counter so e
+     * checado depois para evitar dropar um frame valido pequeno). */
+    CHROME_RUNTIME_POLL_NAV_BUDGET_EXCEEDED = 5
 };
 
 /* Etapa 5 hardening (2026-05-03): rate limiting de eventos vindos do
@@ -63,6 +70,36 @@ enum chrome_runtime_poll_status {
  * normal o engine nao chega perto disto (typicamente 1 EVENT_FRAME
  * por navegacao + alguns FETCH_REQUEST). */
 #define CHROME_RUNTIME_INCOMING_RATE_MAX  64u
+
+/* Etapa 5 hardening (2026-05-05): budget de bytes IPC por navegacao.
+ *
+ * Cada poll_event admitido acumula `header + payload` em
+ * `bytes_in_current_nav`. Quando o counter excede este limite, a
+ * runtime marca `engine_alive = 0`, incrementa
+ * `total_nav_budget_kills`, grava CAPYC_AUDIT_BUDGET_EXCEEDED e
+ * retorna POLL_NAV_BUDGET_EXCEEDED. O caller (browser_app) deve
+ * matar o pid e respawnar via `chrome_runtime_record_restart`.
+ *
+ * O contador zera em dois pontos para cobrir o ciclo de nav inteiro:
+ *   1. Quando o chrome envia NAVIGATE/BACK/FORWARD/RELOAD (lado do
+ *      iniciador da nav).
+ *   2. Quando recebe BROWSER_IPC_EVENT_NAV_STARTED (engine confirma
+ *      que comecou a nav; cobre o caso onde a URL foi alterada por
+ *      redirect).
+ *
+ * Default 16 MiB: cobre 1 frame BGRA 1024×768 (~3 MiB) + retransmissoes
+ * + telemetria com folga generosa, mas detecta um engine "vazando"
+ * frames bem antes de exaurir a memoria do chrome (que tem
+ * `event_scratch + last_frame_storage = 8 MiB` so). */
+#define CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX  (16u * 1024u * 1024u)
+
+/* Etapa 5 hardening (2026-05-05): override do limite de budget para
+ * testes que precisam validar o enforcement sem injetar 16 MiB+ de
+ * eventos sinteticos. Em producao a funcao nunca e chamada e o limite
+ * permanece em CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX. Passar `0` restaura
+ * o default. Nao tem efeito em rt's ja inicializados que ja excederam
+ * o budget (a checagem usa o valor atual do limite, nao um snapshot). */
+void chrome_runtime_set_nav_budget_for_test(uint64_t bytes);
 
 /* Etapa 5 hardening (2026-05-03): URL whitelist policy (opt-in).
  * Quando instalada, `chrome_runtime_send_navigate` chama o callback
@@ -157,6 +194,20 @@ struct chrome_runtime {
      * para detectar engine vazando memoria via spam de eventos. Sem
      * enforcement (audit log so). */
     uint64_t total_event_bytes_received;
+
+    /* Etapa 5 hardening (2026-05-05): budget de bytes por navegacao.
+     *
+     *   - bytes_in_current_nav: bytes recebidos desde o ultimo
+     *     "inicio de nav" (chrome enviou NAVIGATE/BACK/FORWARD/RELOAD,
+     *     ou recebeu EVENT_NAV_STARTED).
+     *   - total_nav_budget_kills: contador acumulado de quantas vezes
+     *     o budget foi excedido (e portanto o engine foi marcado
+     *     morto pelo runtime).
+     *
+     * Limite em CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX. Excedeu? Engine
+     * marcado alive=0 + audit log + return BUDGET_EXCEEDED. */
+    uint64_t bytes_in_current_nav;
+    uint32_t total_nav_budget_kills;
 
     /* Etapa 5 hardening (2026-05-03): ring buffer de audit log. Ver
      * browser_chrome_audit.h. Cada send/poll significativo grava uma
@@ -295,6 +346,32 @@ int chrome_runtime_send_forward(struct chrome_runtime *rt);
  * a 404 result, which the chrome still forwards as a valid
  * FETCH_RESPONSE so the engine can render an error page. */
 int chrome_runtime_dispatch_pending_fetch(struct chrome_runtime *rt);
+
+/* Internal helper shared by runtime submodules. Encodes and writes a
+ * full IPC frame to the engine request pipe, updating request counters. */
+int chrome_runtime_send_ipc_frame(struct chrome_runtime *rt,
+                                  uint16_t kind,
+                                  const uint8_t *payload,
+                                  uint32_t plen);
+
+/* Etapa 3 secao a fetch+decode (2026-05-05): drain the pending image
+ * request staged by the chrome dispatcher (EVENT_IMAGE_REQUEST
+ * handler), fetch the URL via HTTP/HTTPS, decode PNG/JPEG into a
+ * BGRA32 raster, and write IMAGE_RESPONSE back to the engine. The
+ * engine receives status=OK + pixels on success, or one of
+ * BROWSER_IPC_IMAGE_TRANSPORT_ERR / DECODE_ERR / OVERSIZED /
+ * UNSUPPORTED on failure (placeholder remains visible).
+ *
+ * Returns:
+ *    1 if a request was drained and a response was queued ok;
+ *    0 if no image request is pending (no-op);
+ *   -1 if write failed (engine treated as dead).
+ *
+ * In UNIT_TEST builds the function never invokes the real PNG/JPEG
+ * decoders -- it always reports UNSUPPORTED so host tests cover the
+ * I/O path without pulling in `gui/png_loader.c` and the kernel
+ * heap. The real decode is exercised in QEMU smoke tests. */
+int chrome_runtime_dispatch_pending_image(struct chrome_runtime *rt);
 
 /* Le um unico frame IPC do engine (se houver). Retorna um codigo de
  * `chrome_runtime_poll_status`. Quando retorna EVENT_HANDLED,

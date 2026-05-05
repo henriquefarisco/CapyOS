@@ -41,6 +41,12 @@ static chrome_runtime_yield_fn      g_yield_fn = (chrome_runtime_yield_fn)0;
  * all (default). Veja chrome_runtime_set_url_policy. */
 static chrome_runtime_url_policy_fn g_url_policy = (chrome_runtime_url_policy_fn)0;
 
+/* Etapa 5 hardening (2026-05-05): limite de budget mutavel por
+ * teste. Producao nunca chama o setter e o valor permanece no
+ * default CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX. */
+static uint64_t g_nav_budget_max =
+    (uint64_t)CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX;
+
 void chrome_runtime_set_pipe_ops(chrome_runtime_pipe_write_fn w,
                                  chrome_runtime_pipe_read_fn r) {
     g_write_fn = w;
@@ -53,6 +59,11 @@ void chrome_runtime_set_yield_op(chrome_runtime_yield_fn y) {
 
 void chrome_runtime_set_url_policy(chrome_runtime_url_policy_fn fn) {
     g_url_policy = fn;
+}
+
+void chrome_runtime_set_nav_budget_for_test(uint64_t bytes) {
+    g_nav_budget_max = (bytes != 0u)
+        ? bytes : (uint64_t)CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX;
 }
 
 void chrome_runtime_init(struct chrome_runtime *rt,
@@ -78,6 +89,9 @@ void chrome_runtime_init(struct chrome_runtime *rt,
     rt->total_incoming_drops = 0u;
     rt->total_url_blocked = 0u;
     rt->total_event_bytes_received = 0u;
+    /* Etapa 5 hardening (2026-05-05): zera nav budget. */
+    rt->bytes_in_current_nav = 0u;
+    rt->total_nav_budget_kills = 0u;
     capyc_audit_init(&rt->audit);
     for (size_t i = 0; i < CHROME_RUNTIME_EVENT_BUF_MAX; ++i) {
         rt->event_scratch[i] = 0u;
@@ -168,7 +182,7 @@ static void be_put_u32(uint8_t *p, uint32_t v) {
 }
 
 /* Encode + envia um frame com header + payload opcional. */
-static int send_frame(struct chrome_runtime *rt,
+int chrome_runtime_send_ipc_frame(struct chrome_runtime *rt,
                       uint16_t kind,
                       const uint8_t *payload,
                       uint32_t plen) {
@@ -198,6 +212,17 @@ static int send_frame(struct chrome_runtime *rt,
     return 0;
 }
 
+/* Etapa 5 hardening (2026-05-05): zera o budget de bytes acumulados
+ * para a navegacao em andamento. Chamado em qualquer ponto onde o
+ * chrome inicia uma nova navegacao (NAVIGATE/BACK/FORWARD/RELOAD)
+ * E quando o engine confirma a nav via EVENT_NAV_STARTED. Resetar
+ * duas vezes (em ambos os pontos) e idempotente, e cobre o caso onde
+ * a URL final apos redirect difere da pedida. */
+static void chrome_runtime_reset_nav_budget(struct chrome_runtime *rt) {
+    if (!rt) return;
+    rt->bytes_in_current_nav = 0u;
+}
+
 int chrome_runtime_send_navigate(struct chrome_runtime *rt,
                                  const char *url,
                                  size_t url_len) {
@@ -216,19 +241,23 @@ int chrome_runtime_send_navigate(struct chrome_runtime *rt,
     uint32_t n = browser_chrome_build_navigate_payload(url, url_len,
                                                         pl, sizeof(pl));
     if (n == 0u) return -1;
-    if (send_frame(rt, BROWSER_IPC_NAVIGATE, pl, n) != 0) return -1;
+    if (chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_NAVIGATE, pl, n) != 0) return -1;
     browser_chrome_record_navigate_sent(&rt->chrome, url, url_len);
     capyc_audit_record(&rt->audit, (uint8_t)CAPYC_AUDIT_NAV,
                        (uint16_t)url_len);
+    /* Etapa 5 hardening (2026-05-05): inicio de nova nav -> zera o
+     * budget. Eventos do engine relacionados a navs anteriores nao
+     * sao "nossos" do ponto de vista do budget desta nav. */
+    chrome_runtime_reset_nav_budget(rt);
     return 0;
 }
 
 int chrome_runtime_send_cancel(struct chrome_runtime *rt) {
-    return send_frame(rt, BROWSER_IPC_CANCEL, (const uint8_t *)0, 0u);
+    return chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_CANCEL, (const uint8_t *)0, 0u);
 }
 
 int chrome_runtime_send_shutdown(struct chrome_runtime *rt) {
-    return send_frame(rt, BROWSER_IPC_SHUTDOWN, (const uint8_t *)0, 0u);
+    return chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_SHUTDOWN, (const uint8_t *)0, 0u);
 }
 
 int chrome_runtime_send_ping(struct chrome_runtime *rt, uint64_t now_ticks) {
@@ -236,7 +265,7 @@ int chrome_runtime_send_ping(struct chrome_runtime *rt, uint64_t now_ticks) {
     uint32_t nonce = browser_watchdog_alloc_nonce(&rt->chrome.watchdog);
     uint8_t pl[4];
     be_put_u32(pl, nonce);
-    if (send_frame(rt, BROWSER_IPC_PING, pl, sizeof(pl)) != 0) return -1;
+    if (chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_PING, pl, sizeof(pl)) != 0) return -1;
     browser_watchdog_record_ping(&rt->chrome.watchdog, nonce, now_ticks);
     return 0;
 }
@@ -254,7 +283,7 @@ int chrome_runtime_send_resize(struct chrome_runtime *rt,
     pl[1] = (uint8_t)(width & 0xFFu);
     pl[2] = (uint8_t)((height >> 8) & 0xFFu);
     pl[3] = (uint8_t)(height & 0xFFu);
-    if (send_frame(rt, BROWSER_IPC_RESIZE, pl, sizeof(pl)) != 0) return -1;
+    if (chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_RESIZE, pl, sizeof(pl)) != 0) return -1;
     return 0;
 }
 
@@ -270,7 +299,7 @@ int chrome_runtime_send_click(struct chrome_runtime *rt,
     pl[2] = (uint8_t)((y >> 8) & 0xFFu);
     pl[3] = (uint8_t)(y & 0xFFu);
     pl[4] = button;
-    if (send_frame(rt, BROWSER_IPC_CLICK, pl, sizeof(pl)) != 0) return -1;
+    if (chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_CLICK, pl, sizeof(pl)) != 0) return -1;
     return 0;
 }
 
@@ -286,7 +315,7 @@ int chrome_runtime_send_scroll(struct chrome_runtime *rt,
     pl[1] = (uint8_t)((u >> 16) & 0xFFu);
     pl[2] = (uint8_t)((u >> 8) & 0xFFu);
     pl[3] = (uint8_t)(u & 0xFFu);
-    if (send_frame(rt, BROWSER_IPC_SCROLL, pl, sizeof(pl)) != 0) return -1;
+    if (chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_SCROLL, pl, sizeof(pl)) != 0) return -1;
     return 0;
 }
 
@@ -301,27 +330,39 @@ int chrome_runtime_send_key(struct chrome_runtime *rt,
     pl[2] = (uint8_t)((keycode >> 8) & 0xFFu);
     pl[3] = (uint8_t)(keycode & 0xFFu);
     pl[4] = mods;
-    if (send_frame(rt, BROWSER_IPC_KEY, pl, sizeof(pl)) != 0) return -1;
+    if (chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_KEY, pl, sizeof(pl)) != 0) return -1;
     return 0;
 }
 
 /* Etapa 3 seção b (2026-05-02): BROWSER_IPC_RELOAD. Vazio; engine
  * mantem a ultima URL navegada em estado interno e re-emite a
- * sequencia completa de navegacao. */
+ * sequencia completa de navegacao.
+ *
+ * Etapa 5 hardening refinement (2026-05-05): RELOAD inicia uma nav
+ * fresca do ponto de vista do budget; zera bytes_in_current_nav. */
 int chrome_runtime_send_reload(struct chrome_runtime *rt) {
-    return send_frame(rt, BROWSER_IPC_RELOAD, (const uint8_t *)0, 0u);
+    int rc = chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_RELOAD, (const uint8_t *)0, 0u);
+    if (rc == 0) chrome_runtime_reset_nav_budget(rt);
+    return rc;
 }
 
 /* Etapa 3 seção b-polish (2026-05-03): BROWSER_IPC_BACK/FORWARD.
  * Payload vazio; engine guarda o ring de historico e decide a URL
  * destino. Mesmo contrato de send_reload: 0 ok / -1 em broken pipe
- * ou engine morto. */
+ * ou engine morto.
+ *
+ * Etapa 5 hardening refinement (2026-05-05): BACK/FORWARD tambem
+ * iniciam navs frescas; zeram o budget. */
 int chrome_runtime_send_back(struct chrome_runtime *rt) {
-    return send_frame(rt, BROWSER_IPC_BACK, (const uint8_t *)0, 0u);
+    int rc = chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_BACK, (const uint8_t *)0, 0u);
+    if (rc == 0) chrome_runtime_reset_nav_budget(rt);
+    return rc;
 }
 
 int chrome_runtime_send_forward(struct chrome_runtime *rt) {
-    return send_frame(rt, BROWSER_IPC_FORWARD, (const uint8_t *)0, 0u);
+    int rc = chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_FORWARD, (const uint8_t *)0, 0u);
+    if (rc == 0) chrome_runtime_reset_nav_budget(rt);
+    return rc;
 }
 
 /* Slice 5c / F3.3g: drain the pending fetch staged by the chrome
@@ -548,7 +589,7 @@ int chrome_runtime_dispatch_pending_fetch(struct chrome_runtime *rt) {
             return -1; /* should never happen: 16 B fits easily */
         }
     }
-    int sr = send_frame(rt, BROWSER_IPC_FETCH_RESPONSE,
+    int sr = chrome_runtime_send_ipc_frame(rt, BROWSER_IPC_FETCH_RESPONSE,
                         g_fetch_response_scratch, n);
 #ifndef UNIT_TEST
     if (used_http) http_response_free(&http_resp);
@@ -622,6 +663,14 @@ int chrome_runtime_poll_event(struct chrome_runtime *rt,
         }
     }
 
+    /* Etapa 5 hardening (2026-05-05): EVENT_NAV_STARTED inicia uma
+     * janela de budget nova. Reset ANTES do dispatch para que o
+     * proprio NAV_STARTED conte como o primeiro evento da nav (poucas
+     * centenas de bytes, longe do limite). */
+    if (hdr.kind == BROWSER_IPC_EVENT_NAV_STARTED) {
+        chrome_runtime_reset_nav_budget(rt);
+    }
+
     uint32_t actions = browser_chrome_dispatch_event(
         &rt->chrome, &hdr, hdr.payload_len > 0u ? plbuf : (const uint8_t *)0,
         now_ticks);
@@ -629,8 +678,12 @@ int chrome_runtime_poll_event(struct chrome_runtime *rt,
     /* Etapa 5 hardening (2026-05-03): conta como evento admitido para
      * o budget do tick + acumula bytes recebidos para observability. */
     rt->incoming_in_window++;
-    rt->total_event_bytes_received +=
+    uint64_t event_bytes =
         (uint64_t)BROWSER_IPC_HEADER_SIZE + (uint64_t)hdr.payload_len;
+    rt->total_event_bytes_received += event_bytes;
+    /* Etapa 5 hardening (2026-05-05): incrementa o contador da
+     * navegacao corrente. Checagem de limite vem logo depois. */
+    rt->bytes_in_current_nav += event_bytes;
     if (hdr.kind == BROWSER_IPC_EVENT_PONG) {
         rt->total_pongs_received++;
     }
@@ -664,6 +717,25 @@ int chrome_runtime_poll_event(struct chrome_runtime *rt,
     }
 
     if (out_actions) *out_actions = actions;
+
+    /* Etapa 5 hardening (2026-05-05): cheque o budget DEPOIS do
+     * dispatch, para que o evento corrente (geralmente um frame
+     * valido) ainda chegue ao caller -- a kill so se aplica a
+     * proxima rodada de eventos. Politica: passou o limite =>
+     * engine_alive = 0 + audit + status BUDGET_EXCEEDED. O caller
+     * (browser_app) vai detectar engine_alive == 0 no proximo tick
+     * e respawnar via record_restart. */
+    if (rt->bytes_in_current_nav > g_nav_budget_max) {
+        rt->engine_alive = 0;
+        rt->total_nav_budget_kills++;
+        /* code = KiB acumulados truncados a uint16 (max ~64 MiB). */
+        uint64_t kib = rt->bytes_in_current_nav >> 10;
+        uint16_t code = (kib > 0xFFFFu) ? 0xFFFFu : (uint16_t)kib;
+        capyc_audit_record(&rt->audit,
+                           (uint8_t)CAPYC_AUDIT_BUDGET_EXCEEDED, code);
+        return CHROME_RUNTIME_POLL_NAV_BUDGET_EXCEEDED;
+    }
+
     return CHROME_RUNTIME_POLL_EVENT_HANDLED;
 }
 
@@ -713,6 +785,10 @@ void chrome_runtime_record_restart(struct chrome_runtime *rt,
     rt->chrome.last_frame.stride = 0u;
     rt->chrome.last_frame.pixels = (const uint8_t *)0;
     rt->chrome.last_frame.pixel_bytes = 0u;
+    /* Etapa 5 hardening (2026-05-05): novo engine = nova nav fresca
+     * do ponto de vista do budget. `total_nav_budget_kills` PRESERVA
+     * (e telemetria cumulativa, nao reseta entre respawns). */
+    rt->bytes_in_current_nav = 0u;
     /* Storage dedicado tambem e invalidado para que um poll
      * que toque last_frame_storage por engano nao exponha bytes
      * do engine antigo. Apenas o primeiro byte basta para detectar

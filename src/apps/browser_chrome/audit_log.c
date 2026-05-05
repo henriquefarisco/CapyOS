@@ -11,6 +11,8 @@ void capyc_audit_init(struct chrome_audit_state *st) {
     if (!st) return;
     st->head = 0u;
     st->total = 0u;
+    /* Etapa 5 hardening (2026-05-05 sessao 3): sink default = NULL. */
+    st->sink = (capyc_audit_sink_fn)0;
     for (uint32_t i = 0; i < CHROME_AUDIT_RING_SIZE; ++i) {
         st->entries[i].category = (uint8_t)CAPYC_AUDIT_UNKNOWN;
         st->entries[i].reserved = 0u;
@@ -34,6 +36,18 @@ void capyc_audit_record(struct chrome_audit_state *st,
     st->total++;
     st->entries[slot].seq = st->total;
     st->head = (st->head + 1u) & mask;
+    /* Etapa 5 hardening (2026-05-05 sessao 3): notifica sink se
+     * instalado. Chamada apos commit no ring para que um sink que
+     * por sua vez chame capyc_audit_at(st, ...) veja a entry nova. */
+    if (st->sink) {
+        st->sink(category, code, st->total);
+    }
+}
+
+void capyc_audit_set_sink(struct chrome_audit_state *st,
+                          capyc_audit_sink_fn fn) {
+    if (!st) return;
+    st->sink = fn;
 }
 
 uint32_t capyc_audit_count(const struct chrome_audit_state *st) {

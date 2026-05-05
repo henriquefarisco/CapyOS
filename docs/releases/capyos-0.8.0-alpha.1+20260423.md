@@ -36,7 +36,7 @@ Base: consolidacao continua da trilha `UEFI/GPT/x86_64`
 ## Documentacao e versao
 
 - `README.md` atualizado para refletir a nova alpha
-- screenshots oficiais agora ficam em `docs/screenshots/0.8.0-alpha.1/`
+- screenshots oficiais consolidados posteriormente em `docs/screenshots/CapyUI/v1/`
 - `VERSION.yaml` e `include/core/version.h` alinhados com
   `0.8.0-alpha.1+20260423`
 

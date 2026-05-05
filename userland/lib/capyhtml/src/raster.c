@@ -127,16 +127,23 @@ static void draw_text_cmd(const struct capyhtml_raster_target *t,
     }
 }
 
-/* Etapa 3 seção a (2026-05-03): desenha um placeholder visivel para
- * <img> quando o pipeline real de fetch+decode ainda nao existe.
- * Layout:
- *   - fill_rect com cor muted (background dim do palette)
- *   - borda de 1 px em MUTED role (mesma tonalidade, suficiente para
- *     demarcar sem poluir visualmente)
- *   - canto superior-esquerdo: barra de 3x3 px em color_role do
- *     link para sinalizar "isto e clicavel / carregavel"
- *   - se cmd->text (alt text) nao vazio, tenta escrever primeiros
- *     N caracteres centralizados com a fonte 8x8 embutida
+/* Etapa 3 seção a (2026-05-03; refinement 2026-05-05): desenha
+ * `<img>` em duas modalidades:
+ *
+ *   1. Pixels decodificados disponiveis: o engine populou
+ *      `cmd->image_pixels` apos `capyhtml_layout` (a partir de um
+ *      cache de imagens BGRA32). Blita esses pixels diretamente no
+ *      target (clipa para `cmd->w x cmd->h` se a imagem real for
+ *      maior). Top-left aligned dentro do rect.
+ *
+ *   2. Sem pixels: desenha placeholder visivel:
+ *      - fill_rect com cor muted (background dim do palette)
+ *      - borda de 1 px em LINK role (mesma tonalidade, suficiente para
+ *        demarcar sem poluir visualmente)
+ *      - canto superior-esquerdo: barra de 3x3 px em color_role do
+ *        link para sinalizar "isto e clicavel / carregavel"
+ *      - se cmd->text (alt text) nao vazio, tenta escrever primeiros
+ *        N caracteres centralizados com a fonte 8x8 embutida
  *
  * Clip: put_pixel / fill_rect ja bound-checam, entao partes fora da
  * viewport sao descartadas silenciosamente (IMG clipado quando o
@@ -146,6 +153,33 @@ static void draw_image_cmd(const struct capyhtml_raster_target *t,
                            const struct capyhtml_palette      *pal) {
     if (cmd->w <= 0 || cmd->h <= 0) return;
 
+    /* Etapa 3 secao a fetch+decode (2026-05-05): preferimos pixels
+     * reais do cache. cmd->image_pixels carrega bytes BGRA32
+     * row-major (B G R A); reconstruimos o uint32 ARGB
+     * (0xAARRGGBB) que `put_pixel` espera. Loop simples sem memcpy:
+     * o stride do target pode diferir de image_w*4, e a imagem
+     * pode precisar ser clipada quando maior que cmd->w x cmd->h. */
+    if (cmd->image_pixels && cmd->image_w > 0u && cmd->image_h > 0u) {
+        int32_t blit_w = (int32_t)cmd->image_w;
+        int32_t blit_h = (int32_t)cmd->image_h;
+        if (blit_w > cmd->w) blit_w = cmd->w;
+        if (blit_h > cmd->h) blit_h = cmd->h;
+        for (int32_t py = 0; py < blit_h; ++py) {
+            const uint8_t *row = cmd->image_pixels
+                               + (size_t)py * (size_t)cmd->image_w * 4u;
+            for (int32_t px = 0; px < blit_w; ++px) {
+                uint32_t b = row[px * 4 + 0];
+                uint32_t g = row[px * 4 + 1];
+                uint32_t r = row[px * 4 + 2];
+                uint32_t a = row[px * 4 + 3];
+                uint32_t argb = (a << 24) | (r << 16) | (g << 8) | b;
+                put_pixel(t, cmd->x + px, cmd->y + py, argb);
+            }
+        }
+        return;
+    }
+
+    /* Fallback: placeholder visual. */
     uint32_t muted = pick_color(pal, CAPYHTML_COLOR_MUTED);
     uint32_t link  = pick_color(pal, CAPYHTML_COLOR_LINK);
 

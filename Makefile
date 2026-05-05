@@ -329,9 +329,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/browser_smoke.o \
 	$(BUILD)/x86_64/apps/browser_ipc/codec.o \
 	$(BUILD)/x86_64/apps/browser_ipc/fetch.o \
+	$(BUILD)/x86_64/apps/browser_ipc/image.o \
 	$(BUILD)/x86_64/apps/browser_chrome/watchdog.o \
 	$(BUILD)/x86_64/apps/browser_chrome/chrome.o \
 	$(BUILD)/x86_64/apps/browser_chrome/runtime.o \
+	$(BUILD)/x86_64/apps/browser_chrome/runtime_image.o \
 	$(BUILD)/x86_64/apps/browser_chrome/audit_log.o \
 	$(BUILD)/x86_64/apps/browser_chrome/fetch_resolver.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
@@ -552,12 +554,18 @@ capysh-blob: $(CAPYSH_BLOB_OBJ)
 # free of kernel/libc symbols).
 CAPYBROWSER_IPC_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/codec.o
 CAPYBROWSER_FETCH_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/fetch.o
+CAPYBROWSER_IMAGE_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/image.o
 
 $(CAPYBROWSER_IPC_OBJ): src/apps/browser_ipc/codec.c
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 
 $(CAPYBROWSER_FETCH_OBJ): src/apps/browser_ipc/fetch.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+# Etapa 3 secao a fetch+decode (2026-05-05): image IPC payload codec.
+$(CAPYBROWSER_IMAGE_OBJ): src/apps/browser_ipc/image.c
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 
@@ -590,8 +598,10 @@ $(CAPYHTML_RASTER_OBJ): userland/lib/capyhtml/src/raster.c
 CAPYBROWSER_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser.elf
 CAPYBROWSER_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/bin/capybrowser/main.o \
+	$(CAPYLIBC_BUILD_DIR)/bin/capybrowser/image_cache.o \
 	$(CAPYBROWSER_IPC_OBJ) \
 	$(CAPYBROWSER_FETCH_OBJ) \
+	$(CAPYBROWSER_IMAGE_OBJ) \
 	$(CAPYHTML_PARSER_OBJ) \
 	$(CAPYHTML_RENDER_OBJ) \
 	$(CAPYHTML_FONT_OBJ) \
@@ -766,7 +776,7 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Iuserland/lib/capyhtml/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Iuserland/lib/capyhtml/include -Iuserland/bin/capybrowser -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
 TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
@@ -826,17 +836,20 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
                tests/test_browser_ipc.c src/apps/browser_ipc/codec.c \
                tests/test_browser_ipc_fetch.c src/apps/browser_ipc/fetch.c \
+               tests/test_browser_ipc_image.c src/apps/browser_ipc/image.c \
+               tests/test_capybrowser_image_cache.c userland/bin/capybrowser/image_cache.c \
                tests/test_browser_watchdog.c src/apps/browser_chrome/watchdog.c \
                tests/test_browser_chrome.c src/apps/browser_chrome/chrome.c \
                tests/test_browser_chrome_fetch.c \
                tests/test_browser_fetch_resolver.c src/apps/browser_chrome/fetch_resolver.c \
                tests/test_browser_runtime_fetch.c \
-               tests/test_browser_chrome_runtime.c tests/test_browser_chrome_runtime_mock.c tests/test_browser_chrome_runtime_rate.c src/apps/browser_chrome/runtime.c src/apps/browser_chrome/audit_log.c \
+               tests/test_browser_runtime_image.c \
+               tests/test_browser_chrome_runtime.c tests/test_browser_chrome_runtime_mock.c tests/test_browser_chrome_runtime_rate.c src/apps/browser_chrome/runtime.c src/apps/browser_chrome/runtime_image.c src/apps/browser_chrome/audit_log.c \
                tests/test_browser_chrome_audit.c \
                tests/test_browser_e2e.c \
                tests/test_capyhtml_parser.c userland/lib/capyhtml/src/parser.c \
                tests/test_capyhtml_render.c userland/lib/capyhtml/src/render.c \
-               tests/test_capyhtml_raster.c userland/lib/capyhtml/src/raster.c \
+               tests/test_capyhtml_raster.c tests/test_capyhtml_raster_image.c userland/lib/capyhtml/src/raster.c \
                userland/lib/capyhtml/src/font.c \
                tests/test_browser_app_url_edit.c src/apps/browser_app/url_edit.c \
                tests/test_syscall_pipe_priority.c src/kernel/syscall.c tests/stub_syscall_deps.c \

@@ -53,7 +53,13 @@ enum browser_chrome_action {
      * chamar `browser_chrome_take_pending_fetch()` para ler os
      * campos, resolver a URL via backend, e enviar
      * FETCH_RESPONSE de volta. */
-    BROWSER_CHROME_ACTION_FETCH_REQUESTED = (1u << 5)
+    BROWSER_CHROME_ACTION_FETCH_REQUESTED = (1u << 5),
+    /* Etapa 3 secao a fetch+decode (2026-05-05): engine pediu
+     * fetch+decode de uma imagem. Caller drena via
+     * `browser_chrome_take_pending_image()`, resolve URL via HTTP,
+     * decodifica PNG/JPEG, e envia IMAGE_RESPONSE de volta com
+     * pixels BGRA32. */
+    BROWSER_CHROME_ACTION_IMAGE_REQUESTED = (1u << 6)
 };
 
 struct browser_chrome_frame_meta {
@@ -114,6 +120,20 @@ struct browser_chrome {
     char     pending_fetch_url[BROWSER_CHROME_URL_MAX];
     uint16_t pending_fetch_url_len;
 
+    /* Etapa 3 secao a fetch+decode (2026-05-05): pending image
+     * request. Mesmo modelo do pending_fetch -- engine emite
+     * EVENT_IMAGE_REQUEST, dispatcher copia (img_id, nav_id, url),
+     * caller drena, decodifica, envia IMAGE_RESPONSE. Apenas uma
+     * imagem pode estar pendente por vez (engine respeita esse
+     * limite na pratica porque emite REQUESTs sequencialmente
+     * apos cache miss; chrome rejeita superposicao como protocol
+     * error). */
+    uint8_t  pending_image_active;
+    uint32_t pending_image_id;
+    uint32_t pending_image_nav_id;
+    char     pending_image_url[BROWSER_CHROME_URL_MAX];
+    uint16_t pending_image_url_len;
+
     /* Telemetria */
     uint32_t total_events_handled;
     uint32_t total_protocol_errors;
@@ -126,6 +146,13 @@ struct browser_chrome {
  * valid until the next `browser_chrome_*` call that mutates state. */
 int browser_chrome_take_pending_fetch(struct browser_chrome *c,
                                       struct browser_ipc_fetch_request *out);
+
+/* Etapa 3 secao a fetch+decode (2026-05-05): take the pending image
+ * request (if any). Mesmo contrato de take_pending_fetch: 1 se
+ * drenou, 0 se nada pendente. `out->url` borrows do chrome e
+ * permanece valido ate o proximo browser_chrome_* mutador. */
+int browser_chrome_take_pending_image(struct browser_chrome *c,
+                                      struct browser_ipc_image_request *out);
 
 /* F3.3c slice 5b: build a FETCH_RESPONSE payload buffer from the
  * resolved fetch result. Thin wrapper over

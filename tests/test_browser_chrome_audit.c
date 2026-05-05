@@ -105,6 +105,8 @@ static void test_null_safety(void) {
     /* Nao deve crash. */
     capyc_audit_init((struct chrome_audit_state *)0);
     capyc_audit_record((struct chrome_audit_state *)0, 0u, 0u);
+    capyc_audit_set_sink((struct chrome_audit_state *)0,
+                         (capyc_audit_sink_fn)0);
     A_OK(capyc_audit_count((const struct chrome_audit_state *)0) == 0u,
          "null: count=0");
     A_OK(capyc_audit_visible((const struct chrome_audit_state *)0) == 0u,
@@ -112,6 +114,79 @@ static void test_null_safety(void) {
     A_OK(capyc_audit_at((const struct chrome_audit_state *)0, 0) ==
             (const struct chrome_audit_entry *)0,
          "null: at = NULL");
+}
+
+/* Etapa 5 hardening (2026-05-05 sessao 3): callback sink recebe cada
+ * record. Mockamos via variaveis estaticas porque o sink eh ABI sem
+ * void* user_data por design (manter API minima; callers que precisam
+ * de contexto fazem global ou wrappers). */
+static uint32_t g_sink_calls = 0u;
+static uint8_t  g_sink_last_category = 0u;
+static uint16_t g_sink_last_code = 0u;
+static uint32_t g_sink_last_seq = 0u;
+
+static void test_sink(uint8_t category, uint16_t code, uint32_t seq) {
+    g_sink_calls++;
+    g_sink_last_category = category;
+    g_sink_last_code = code;
+    g_sink_last_seq = seq;
+}
+
+static void test_sink_default_is_null(void) {
+    struct chrome_audit_state st;
+    capyc_audit_init(&st);
+    /* Sem sink instalado: record nao deve crashar nem invocar
+     * nada. Assertimos que o ring foi atualizado mesmo assim. */
+    capyc_audit_record(&st, (uint8_t)CAPYC_AUDIT_NAV, 1u);
+    A_OK(capyc_audit_count(&st) == 1u, "sink default: count=1");
+    A_OK(st.sink == (capyc_audit_sink_fn)0,
+         "sink default: ponteiro = NULL");
+}
+
+static void test_sink_called_per_record(void) {
+    struct chrome_audit_state st;
+    capyc_audit_init(&st);
+    g_sink_calls = 0u;
+    g_sink_last_category = 0u;
+    g_sink_last_code = 0u;
+    g_sink_last_seq = 0u;
+    capyc_audit_set_sink(&st, test_sink);
+
+    capyc_audit_record(&st, (uint8_t)CAPYC_AUDIT_NAV, 100u);
+    A_OK(g_sink_calls == 1u, "sink: 1 call apos 1 record");
+    A_OK(g_sink_last_category == (uint8_t)CAPYC_AUDIT_NAV,
+         "sink: category propagado");
+    A_OK(g_sink_last_code == 100u, "sink: code propagado");
+    A_OK(g_sink_last_seq == 1u, "sink: seq=1 (primeira entry)");
+
+    capyc_audit_record(&st, (uint8_t)CAPYC_AUDIT_FETCH, 200u);
+    A_OK(g_sink_calls == 2u, "sink: 2 calls apos 2 records");
+    A_OK(g_sink_last_category == (uint8_t)CAPYC_AUDIT_FETCH,
+         "sink: segundo category");
+    A_OK(g_sink_last_code == 200u, "sink: segundo code");
+    A_OK(g_sink_last_seq == 2u, "sink: seq=2");
+}
+
+static void test_sink_can_be_replaced_and_disabled(void) {
+    struct chrome_audit_state st;
+    capyc_audit_init(&st);
+    g_sink_calls = 0u;
+    capyc_audit_set_sink(&st, test_sink);
+    capyc_audit_record(&st, (uint8_t)CAPYC_AUDIT_NAV, 1u);
+    A_OK(g_sink_calls == 1u, "replace: 1 call enquanto sink ativo");
+
+    /* Desabilita. */
+    capyc_audit_set_sink(&st, (capyc_audit_sink_fn)0);
+    capyc_audit_record(&st, (uint8_t)CAPYC_AUDIT_NAV, 2u);
+    A_OK(g_sink_calls == 1u,
+         "disable: count nao incrementa apos sink=NULL");
+    A_OK(capyc_audit_count(&st) == 2u,
+         "disable: ring continua aceitando records");
+
+    /* Re-habilita. */
+    capyc_audit_set_sink(&st, test_sink);
+    capyc_audit_record(&st, (uint8_t)CAPYC_AUDIT_NAV, 3u);
+    A_OK(g_sink_calls == 2u, "re-enable: sink chamado de novo");
 }
 
 int test_browser_chrome_audit_run(void) {
@@ -122,6 +197,9 @@ int test_browser_chrome_audit_run(void) {
     test_record_appends_in_order();
     test_ring_wraparound_drops_oldest();
     test_null_safety();
+    test_sink_default_is_null();
+    test_sink_called_per_record();
+    test_sink_can_be_replaced_and_disabled();
     printf("  -> %d/%d passed\n", g_passed, g_passed + g_failed);
     return g_failed;
 }

@@ -40,13 +40,18 @@
 /* Categorias de eventos. Sao estaveis (nao reordene; valores
  * podem aparecer em telemetria persistida). */
 enum chrome_audit_category {
-    CAPYC_AUDIT_UNKNOWN     = 0u,
-    CAPYC_AUDIT_NAV         = 1u, /* NAVIGATE enviado */
-    CAPYC_AUDIT_RATE_DROP   = 2u, /* poll_event excedeu budget */
-    CAPYC_AUDIT_POLICY_DENY = 3u, /* URL bloqueada por whitelist */
-    CAPYC_AUDIT_ENGINE_EOF  = 4u, /* engine fechou pipe */
-    CAPYC_AUDIT_PROTOCOL    = 5u, /* protocolo violado pelo engine */
-    CAPYC_AUDIT_FETCH       = 6u  /* fetch despachado */
+    CAPYC_AUDIT_UNKNOWN          = 0u,
+    CAPYC_AUDIT_NAV              = 1u, /* NAVIGATE enviado */
+    CAPYC_AUDIT_RATE_DROP        = 2u, /* poll_event excedeu budget */
+    CAPYC_AUDIT_POLICY_DENY      = 3u, /* URL bloqueada por whitelist */
+    CAPYC_AUDIT_ENGINE_EOF       = 4u, /* engine fechou pipe */
+    CAPYC_AUDIT_PROTOCOL         = 5u, /* protocolo violado pelo engine */
+    CAPYC_AUDIT_FETCH            = 6u, /* fetch despachado */
+    /* Etapa 5 hardening (2026-05-05): engine excedeu o budget de bytes
+     * IPC permitido por navegacao. `code` carrega o KiB acumulados
+     * truncados (uint16). Vem acompanhado de engine_alive=0 e
+     * total_nav_budget_kills++ para o caller respawnar. */
+    CAPYC_AUDIT_BUDGET_EXCEEDED  = 7u
 };
 
 struct chrome_audit_entry {
@@ -56,6 +61,23 @@ struct chrome_audit_entry {
     uint32_t seq;       /* numero monotonico desde init */
 };
 
+/* Etapa 5 hardening (2026-05-05 sessao 3): callback opcional invocado
+ * a cada `capyc_audit_record` apos a entry estar gravada no ring.
+ * O caller (kernel) tipicamente liga isso a um sink de debugcon
+ * (`outb 0xE9`) para tornar o audit log visivel sem precisar
+ * scrappar o struct. Recebe (category, code, seq) ja preenchidos.
+ *
+ * Contrato:
+ *  - Pode ser NULL (default = no-op). NULL e seguro.
+ *  - Chamado SEMPRE no contexto da chamada `capyc_audit_record`,
+ *    apos write completo. Nao chama de volta no audit log.
+ *  - Deve ser leve (sem alocacao); o caller esta normalmente em
+ *    fast path do dispatcher.
+ */
+typedef void (*capyc_audit_sink_fn)(uint8_t category,
+                                    uint16_t code,
+                                    uint32_t seq);
+
 struct chrome_audit_state {
     /* Ring circular. `head` aponta para o slot do PROXIMO write; ao
      * escrever, head = (head + 1) & (RING_SIZE - 1). */
@@ -64,6 +86,9 @@ struct chrome_audit_state {
     /* Quantos foram apendados desde init, monotonico. Quando
      * total > RING_SIZE, ring envolve. */
     uint32_t total;
+    /* Etapa 5 hardening (2026-05-05 sessao 3): sink opcional. NULL
+     * por default depois de capyc_audit_init. */
+    capyc_audit_sink_fn sink;
 };
 
 /* Zera o ring. */
@@ -74,6 +99,12 @@ void capyc_audit_init(struct chrome_audit_state *st);
 void capyc_audit_record(struct chrome_audit_state *st,
                         uint8_t category,
                         uint16_t code);
+
+/* Etapa 5 hardening (2026-05-05 sessao 3): instala/remove sink
+ * de notificacao por record. Passar NULL desabilita. Sobrescreve
+ * sink anterior sem aviso. Idempotente. */
+void capyc_audit_set_sink(struct chrome_audit_state *st,
+                          capyc_audit_sink_fn fn);
 
 /* Retorna o numero de entradas adicionadas desde init (pode
  * exceder RING_SIZE). */

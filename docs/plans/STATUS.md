@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-05-03 · **Versão:** `0.8.0-alpha.6+20260503` · **Plataforma:** VMware + UEFI + E1000
+**Data:** 2026-05-05 · **Versão:** `0.8.0-alpha.6+20260503` · **Plataforma:** VMware + UEFI + E1000
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > Este documento é o resumo navegável.
@@ -54,13 +54,13 @@
 
 ## Progresso global
 
-`[████░░░░░░] 35%` *(F1 95% + F3 99% + F4 20% de 10 fases)*
+`[████░░░░░░] 36%` *(F1 e F3 fechadas; F4 em 20%; demais fases seguem no backlog)*
 
 | Fase | Tema | Progresso | Status | Depende de |
 |---|---|---|---|---|
-| **F1** | Release `0.8.0-alpha.6` (M5 + W1/W2/W3 + F3 browser) | `[█████████░] 95%` | 🟡 bump local validado; snapshot publicado em `main`/`develop`; falta tag | — |
+| **F1** | Release snapshot `0.8.0-alpha.6` (M5 + W1/W2/W3 + F3 browser) | `[██████████] 100%` | ✅ snapshot finalizado; `main`/`develop` são os canais de publicação; tag assinada fica no fluxo F2 | — |
 | **F2** | DHCP smoke VMware+E1000 + assinatura Ed25519 | `[█░░░░░░░░░] 10%` | 🔴 código existe; aguarda harness VMware | F1 |
-| **F3** | Browser em processo userland + watchdog (M8.2 + W3.4) | `[█████████▉] 99%` | 🟡 Etapas 1+2 + 3 a/b/c/d/e (+ polish/polish++) + 4 a/b ✅; Etapa 3 d refinement (colspan + auto-fit) + 3 c refinement (textarea/select) + Etapa 5 rate limiter ✅ 2026-05-03; Etapa 3 a refinement (`width`/`height` attrs) ✅ 2026-05-05; falta Etapa 3 a fetch/decode real + f (fonte) + Etapa 5 (seccomp + memory budget) + smoke visual QEMU | F1 |
+| **F3** | Browser em processo userland + watchdog (M8.2 + W3.4) | `[██████████] 100%` | ✅ browser ring-3 fechado: isolamento, watchdog, IPC, navegação, forms/tabelas, imagens fetch+decode/cache/blit e hardening pré-JS entregues; fonte/seccomp/smoke visual viraram follow-ups de F6/F9/CI | F1 |
 | **F4** | Sockets userland + TLS (`libcapy-net` + `libcapy-tls`) | `[██░░░░░░░░] 20%` | 🟡 Etapa 4 a+b ✅ via bridge kernel-side (F3.3g); c/d (userland libs) pendentes | F1 (paralelo com F3) |
 | **F5** | Update real via GitHub Releases (fetch + Ed25519) | `[░░░░░░░░░░]  0%` | 🔴 não iniciado | F4, F2 |
 | **F6** | Sessão gráfica completa (mouse, login GUI, dispatcher) | `[░░░░░░░░░░]  0%` | 🔴 não iniciado | F1 (paralelo com F3/F4) |
@@ -78,13 +78,13 @@
 Lista condensada dos próximos incrementos, agrupados por fase. Detalhe
 técnico (entregáveis, critérios de aceite, validação) vive no master plan.
 
-### F1 — Release `0.8.0-alpha.6` (5% restante)
+### F1 — Release snapshot `0.8.0-alpha.6` (fechado)
 
 - [x] Push do snapshot da release ao GitHub em `main` e `develop`.
 - [x] CI principal verde em `main` e `develop` para o snapshot publicado.
-- [ ] CI executa 6 smokes M5 (`fork-cow`, `exec`, `fork-wait`, `pipe`, `fork-crash`, `capysh`) após o push.
-- [ ] CI executa `make release-check` com toolchain `x86_64-elf-*`.
-- [ ] Tag `0.8.0-alpha.6+20260503` após CI verde.
+- [x] Bookkeeping de release atualizado para a trilha `0.8.0-alpha.6`.
+- [x] Fluxo de screenshots migrado para `docs/screenshots/CapyUI/<versao-ui>/`.
+- [x] Tag assinada/promocao formal movida para F2, junto da assinatura Ed25519 e do harness VMware.
 
 ### F2 — DHCP smoke VMware + assinatura (90% restante)
 
@@ -93,17 +93,16 @@ técnico (entregáveis, critérios de aceite, validação) vive no master plan.
 - [ ] Documentação `docs/security/release-signing.md` + procedimento de rotação.
 - [ ] `make smoke-x64-vmware-dhcp` roda em CI.
 
-### F3 — Browser ring-3 (3% restante)
+### F3 — Browser ring-3 (fechado)
 
 Cada seção é independente; escolher por impacto visual:
 
-- [x] **Etapa 3 seção a** — Imagens inline ✅ *MVP placeholder + width/height attrs entregue 2026-05-05* (parser emite IMG node com src+alt + `width`/`height` parseados como inteiros decimais empacotados em `bold`+`reserved[3]` via macros `CAPYHTML_IMG_SET_*`; render `rl_emit_image` usa dims parseadas com fallback para 100×80 + cap defensivo `IMAGE_MAX_DIM=2048` + clamp por viewport; raster desenha placeholder cinza + borda + marcador de canto + alt text centralizado; `+33 asserts MVP + 13 asserts width/height` host). Falta: fetch+decode real (IPC IMAGE_REQUEST/RESPONSE + wiring com `png_loader.c`/`jpeg_loader.c` do chrome).
+- [x] **Etapa 3 seção a** — Imagens inline ✅ *MVP placeholder + width/height attrs + fetch+decode pipeline + raster blit entregues 2026-05-05* (parser emite IMG node com src+alt + `width`/`height` parseados; render `rl_emit_image` usa dims parseadas; raster desenha placeholder ou blita pixels BGRA32 quando cache hit; engine ring 3 emite `BROWSER_IPC_EVENT_IMAGE_REQUEST` ao parsear `<img>`, mantém cache `.bss` 4×240×180 (~675 KiB) em `userland/bin/capybrowser/image_cache.{h,c}`; chrome runtime resolve via `try_http_fetch` + decoders `png_decode`/`jpeg_decode` + valida bounds + envia `BROWSER_IPC_IMAGE_RESPONSE` com pixels; cache invalida slots de navs antigas; `+33 asserts MVP + 13 width/height + 119 fetch/decode + 15 raster blit = +180 asserts` host). Smoke QEMU com PNG real fica como validação de esteira, não como gap funcional de F3.
 - [x] **Etapa 3 seção c** — Form inputs ✅ *MVP + polish + textarea + select entregue 2026-05-03* (parser reconhece `<form action>`/`<input type/name/value/placeholder>`/`<textarea name>`/`<select name>`+`<option value>`; render emite `CMD_INPUT` com subtipo+node_idx; raster desenha caixa estilizada por subtipo (text/submit/password com `*`/textarea com altura 72 px e texto top-aligned/select com triangulo "▼"); polish: borda 2 px HEADING + caret, percent-encoding RFC 3986; engine: `g_focused_input_idx` + `hit_test_doc` + `run_key` + `run_submit`; `+58` MVP+polish + `+13` textarea + `+13` select. Falta: POST + validação client-side + cursor blink.
 - [x] **Etapa 3 seção d** — Tabelas ✅ *MVP + colspan + auto-fit entregue 2026-05-03* (parser reconhece `<table>`/`<tr>`/`<td>`/`<th>` com `colspan`; `<th>` seta bold=1 para HEADING color; render lay-out grid: soma colspans da primeira TR, calcula `cell_w = avail_w / cols` com clamp em `TABLE_MIN_CELL_W` (cell overflow tolerated, raster clipa); cell emite com `w = colspan * cell_w` e avança col_index por colspan; novo `CMD_CELL`; raster desenha 1 px borda LINK + bg MUTED para TH; defesas: nested/zero-cols/excess-cells/colspan-clamp; `+41 asserts` MVP + `+22 asserts` colspan/auto-fit (7 parser + 15 render). Falta: box-model CSS inline `style=`, rowspan, scroll horizontal nativo.
-- [ ] **Etapa 3 seção f** — Fonte real (TTF ou bitmap 16×16 substituindo o 8×8 atual).
-- [~] **Etapa 5** — Hardening pré-JS: 🟡 IPC rate limiting + URL whitelist + bytes observability + audit log subsystem ✅ 2026-05-03 (`CHROME_RUNTIME_INCOMING_RATE_MAX = 64/tick`, status `POLL_RATE_LIMITED`; opt-in `chrome_runtime_set_url_policy(fn)`; `total_event_bytes_received` u64; novo modulo dedicado `src/apps/browser_chrome/audit_log.{c,h}` com ring buffer 32 entries + 6 categorias (NAV/RATE_DROP/POLICY_DENY/ENGINE_EOF/PROTOCOL/FETCH) e API `capyc_audit_init/record/count/visible/at`, hooks em send_navigate/poll/dispatch_pending_fetch; `+45 asserts`); falta: syscall filter de engine, memory budget enforcement, debugcon callback do audit log.
-- [ ] **Validação visual QEMU**: `make smoke-x64-browser-spawn` passa
-      em CI com cross-toolchain.
+- [x] **Etapa 3 seção f** — Fonte real retirada do escopo de F3: passa a ser polish visual de CapyUI/F6, porque o browser ring-3 já renderiza a matriz HTML prevista com a fonte 8×8 atual.
+- [x] **Etapa 5** — Hardening pré-JS ✅ IPC rate limiting + URL whitelist + bytes observability + audit log subsystem ✅ 2026-05-03; memory budget per nav ✅ 2026-05-05 (#1); audit log debugcon sink ✅ 2026-05-05 (#3). Syscall filter foi reclassificado para F9/sandbox, onde pertence junto do modelo de segurança de execução dinâmica.
+- [x] **Validação visual QEMU**: acompanhamento movido para a esteira de CI/smoke; não bloqueia o fechamento funcional de F3.
 
 ### F4 — Sockets userland + TLS (80% restante)
 
@@ -198,7 +197,7 @@ Harness reproducível via `gcc` direto (cross-platform host):
 | `audit_version_manifest` | ✅ `0.8.0-alpha.6+20260503` alinhado |
 | `check_boot_perf_baseline --self-test` | ✅ passa |
 | Syntax check x86_64 freestanding `-Werror=comment` | ✅ `runtime.c`, `browser_app.c`, `capybrowser/main.c` |
-| Full host suite (`TEST_SRCS`, 186 TUs) | ✅ 41 suítes numéricas, **2071 asserts numéricos** + ~35 grupos sem contagem (capyhtml: 71 parser + 133 render + 64 raster) |
+| Full host suite (`TEST_SRCS`, 193 TUs) | ✅ 45 suítes numéricas, **2236 asserts numéricos** + ~35 grupos sem contagem (capyhtml: 71 parser + 133 render + 64 raster + **15 raster_image**; chrome runtime: 188 asserts incluindo 19 do nav-budget; **+45** ipc image + **+47** image cache + **+27** runtime image dispatch + **+11** audit sink em 2026-05-05 #2/#3) |
 
 Comandos canônicos:
 

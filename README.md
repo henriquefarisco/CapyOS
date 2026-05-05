@@ -4,7 +4,7 @@
   <img src="assets/branding/icon.svg" alt="CapyOS symbol" width="180" />
 </p>
 
-Ultima atualizacao: 2026-05-03
+Ultima atualizacao: 2026-05-05
 Versao de referencia: `0.8.0-alpha.6`
 Consolidacao atual de `develop`: M5 userland completo (fork/exec/wait/pipe + capysh ring 3 + isolamento de crash multi-processo) sobre a base de robustez ja entregue (DHCP automatico, gates endurecidos, metricas de performance, cache DNS/HTTP, journal CAPYFS autenticado, op_budget no navegador, API de privilegios, eventos de auditoria estruturados `[audit]`, SHA-256 de payload de update). Polish UX pos-M5: `clear` context-aware no terminal do desktop, task manager com auto-refresh e botao Kill funcional, browser com parser yield cooperativo e timeout duro de 30s. Roadmap consolidado em [`docs/plans/active/capyos-master-plan.md`](docs/plans/active/capyos-master-plan.md) (F1-F10 linear).
 
@@ -73,7 +73,7 @@ Observacao importante:
 - referencia de comandos: `docs/reference/cli-reference.md`
 - guia Hyper-V historico/nao suportado: `docs/setup/hyper-v.md`
 - release notes: `docs/releases/README.md`
-- screenshots versionados: `docs/screenshots/README.md`
+- screenshots por versao de interface: `docs/screenshots/README.md`
 
 ## Visao geral do projeto
 
@@ -169,22 +169,24 @@ Impacto pratico:
 - `Hyper-V NetVSC/VMBus` nao e caminho suportado nesta fase
 - COM1 permanece para debug e contingencia
 
-## Screenshots da versao atual
+## Screenshots oficiais disponiveis
 
-Os prints oficiais agora ficam versionados em `docs/screenshots/<versao>/` para
-acompanhar a evolucao visual do sistema por release alpha.
+Os prints oficiais ficam versionados por CapyUI em
+`docs/screenshots/CapyUI/<versao-ui>/`. Releases sem mudanca visual reutilizam
+a mesma versao de interface; releases com mudanca visual ganham nova pasta
+somente depois de captura validada.
 
 ### Boot e login
 
-![Login do sistema](docs/screenshots/0.8.0-alpha.6/login-system.png)
+![Login do sistema](docs/screenshots/CapyUI/v1/login-system.png)
 
-![Provisionamento/boot da ISO](docs/screenshots/0.8.0-alpha.6/bootstage1-iso.png)
+![Provisionamento/boot da ISO](docs/screenshots/CapyUI/v1/bootstage1-iso.png)
 
 ### Desktop, navegador e apps
 
-![Desktop com navegador](docs/screenshots/0.8.0-alpha.6/desktop-browser1.png)
+![Desktop com navegador](docs/screenshots/CapyUI/v1/desktop-browser1.png)
 
-![Desktop com apps](docs/screenshots/0.8.0-alpha.6/desktop-apps.png)
+![Desktop com apps](docs/screenshots/CapyUI/v1/desktop-apps.png)
 
 ## Estado atual por dominio
 

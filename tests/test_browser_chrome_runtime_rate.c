@@ -252,6 +252,166 @@ static void test_audit_rate_drop_records_rate(void) {
     R_OK(rate_count == 2, "audit rate: 2 entries de RATE_DROP");
 }
 
+/* === Etapa 5 hardening (2026-05-05): nav budget enforcement ============ */
+
+static void test_nav_budget_init_zeroed(void) {
+    mock_pipe_reset_all();
+    mock_pipe_install_ops();
+    static struct chrome_runtime rt;
+    chrome_runtime_init(&rt, 0, 1, 1u, 0u);
+    R_OK(rt.bytes_in_current_nav == 0u, "budget: bytes_in_current_nav=0 init");
+    R_OK(rt.total_nav_budget_kills == 0u, "budget: total_nav_budget_kills=0 init");
+}
+
+static void test_nav_budget_accumulates_per_event(void) {
+    /* Cada evento admitido aumenta bytes_in_current_nav pelo seu
+     * (header + payload). Sem ultrapassar o limite, contador soma e
+     * nao kill. */
+    mock_pipe_reset_all();
+    mock_pipe_install_ops();
+    static struct chrome_runtime rt;
+    chrome_runtime_init(&rt, 0, 1, 1u, 0u);
+    /* Default budget e 16 MiB; nao mexer (3 events * 18 bytes
+     * cabem trivialmente). */
+
+    for (uint32_t i = 0; i < 3u; ++i) inject_title(1, i + 1u);
+    uint32_t actions = 0u;
+    for (int i = 0; i < 3; ++i) chrome_runtime_poll_event(&rt, 0u, &actions);
+
+    /* 3 * (12 header + 6 payload) = 54. */
+    R_OK(rt.bytes_in_current_nav == 3u * (BROWSER_IPC_HEADER_SIZE + 6u),
+         "budget: bytes_in_current_nav acumula header+payload");
+    R_OK(rt.engine_alive == 1, "budget: engine_alive intacto sob limite");
+    R_OK(rt.total_nav_budget_kills == 0u,
+         "budget: zero kills quando dentro do limite");
+}
+
+static void test_nav_budget_resets_on_send_navigate(void) {
+    /* send_navigate zera o counter (inicio de uma nav nova). */
+    mock_pipe_reset_all();
+    mock_pipe_install_ops();
+    static struct chrome_runtime rt;
+    chrome_runtime_init(&rt, 0, 1, 1u, 0u);
+
+    /* Acumula alguns bytes via eventos. */
+    for (uint32_t i = 0; i < 2u; ++i) inject_title(1, i + 1u);
+    uint32_t actions = 0u;
+    for (int i = 0; i < 2; ++i) chrome_runtime_poll_event(&rt, 0u, &actions);
+    R_OK(rt.bytes_in_current_nav > 0u,
+         "budget: pre-condicao -- counter cresceu");
+
+    /* Nova nav -> reset. */
+    int rc = chrome_runtime_send_navigate(&rt, "http://x", 8);
+    R_OK(rc == 0, "budget: navigate ok");
+    R_OK(rt.bytes_in_current_nav == 0u,
+         "budget: send_navigate zera bytes_in_current_nav");
+}
+
+static void test_nav_budget_resets_on_event_nav_started(void) {
+    /* Quando o engine envia EVENT_NAV_STARTED, o runtime zera o
+     * budget ANTES de incrementar com o tamanho do proprio evento. */
+    mock_pipe_reset_all();
+    mock_pipe_install_ops();
+    static struct chrome_runtime rt;
+    chrome_runtime_init(&rt, 0, 1, 1u, 0u);
+
+    /* Acumula bytes com um TITLE primeiro. */
+    inject_title(1, 1u);
+    uint32_t actions = 0u;
+    chrome_runtime_poll_event(&rt, 0u, &actions);
+    uint64_t after_title = rt.bytes_in_current_nav;
+    R_OK(after_title > 0u, "budget: pre -- title aumentou contador");
+
+    /* Injetar NAV_STARTED: payload = nav_id(4) + url_len(2) + url. */
+    uint8_t nav_pl[6 + 4];
+    be_put_u32(&nav_pl[0], 42u); /* nav_id */
+    be_put_u16(&nav_pl[4], 4u);  /* url_len */
+    memcpy(&nav_pl[6], "abcd", 4);
+    inject_event(1, BROWSER_IPC_EVENT_NAV_STARTED, 2u, nav_pl, 10u);
+
+    chrome_runtime_poll_event(&rt, 0u, &actions);
+
+    /* Apos NAV_STARTED, contador foi zerado e ENTAO incrementado pelo
+     * tamanho desse evento (header 12 + payload 10 = 22). */
+    R_OK(rt.bytes_in_current_nav == BROWSER_IPC_HEADER_SIZE + 10u,
+         "budget: NAV_STARTED reseta + conta apenas o proprio evento");
+}
+
+static void test_nav_budget_excess_kills_engine(void) {
+    /* Override do limite para cabivel em poucos eventos. Injetar
+     * eventos ate exceder. Verificar status, audit, telemetria. */
+    mock_pipe_reset_all();
+    mock_pipe_install_ops();
+    static struct chrome_runtime rt;
+    chrome_runtime_init(&rt, 0, 1, 1u, 0u);
+
+    /* Limite baixo: 50 bytes. Primeiro evento (18 B) admite, segundo
+     * (cumulativo 36 B) admite, terceiro (cumulativo 54 B) excede. */
+    chrome_runtime_set_nav_budget_for_test(50u);
+
+    for (uint32_t i = 0; i < 4u; ++i) inject_title(1, i + 1u);
+    uint32_t actions = 0u;
+    int last_status = 0;
+    int handled = 0, exceeded = 0;
+    for (int i = 0; i < 4; ++i) {
+        last_status = chrome_runtime_poll_event(&rt, 0u, &actions);
+        if (last_status == CHROME_RUNTIME_POLL_EVENT_HANDLED) handled++;
+        else if (last_status ==
+                 CHROME_RUNTIME_POLL_NAV_BUDGET_EXCEEDED) exceeded++;
+    }
+    R_OK(handled >= 2, "budget excess: ao menos 2 eventos passaram");
+    R_OK(exceeded >= 1,
+         "budget excess: ao menos 1 retornou NAV_BUDGET_EXCEEDED");
+    R_OK(rt.engine_alive == 0,
+         "budget excess: engine_alive=0 apos overshoot");
+    R_OK(rt.total_nav_budget_kills >= 1u,
+         "budget excess: total_nav_budget_kills incrementou");
+
+    /* Audit log tem ao menos uma entrada de BUDGET_EXCEEDED. */
+    int budget_count = 0;
+    uint32_t vis = capyc_audit_visible(&rt.audit);
+    for (uint32_t k = 0; k < vis; ++k) {
+        const struct chrome_audit_entry *e = capyc_audit_at(&rt.audit, k);
+        if (e && e->category == (uint8_t)CAPYC_AUDIT_BUDGET_EXCEEDED) {
+            budget_count++;
+        }
+    }
+    R_OK(budget_count >= 1,
+         "budget excess: audit log tem >=1 entry BUDGET_EXCEEDED");
+
+    /* Restaura default global para nao vazar para outros tests. */
+    chrome_runtime_set_nav_budget_for_test(0u);
+}
+
+static void test_nav_budget_record_restart_clears(void) {
+    /* Apos record_restart, bytes_in_current_nav volta a zero mas
+     * total_nav_budget_kills (telemetria cumulativa) preserva. */
+    mock_pipe_reset_all();
+    mock_pipe_install_ops();
+    static struct chrome_runtime rt;
+    chrome_runtime_init(&rt, 0, 1, 1u, 0u);
+    chrome_runtime_set_nav_budget_for_test(30u);
+
+    /* Excede o limite. */
+    for (uint32_t i = 0; i < 3u; ++i) inject_title(1, i + 1u);
+    uint32_t actions = 0u;
+    for (int i = 0; i < 3; ++i) chrome_runtime_poll_event(&rt, 0u, &actions);
+    R_OK(rt.engine_alive == 0, "budget restart: pre -- engine morto");
+    uint32_t kills_before = rt.total_nav_budget_kills;
+    R_OK(kills_before >= 1u, "budget restart: pre -- houve kills");
+
+    /* Restart. */
+    chrome_runtime_record_restart(&rt, 2, 3, 99u, 100u);
+    R_OK(rt.bytes_in_current_nav == 0u,
+         "budget restart: bytes_in_current_nav zerado");
+    R_OK(rt.total_nav_budget_kills == kills_before,
+         "budget restart: total_nav_budget_kills preservado (telemetria)");
+    R_OK(rt.engine_alive == 1,
+         "budget restart: engine_alive volta a 1 com novo pid");
+
+    chrome_runtime_set_nav_budget_for_test(0u);
+}
+
 int test_browser_chrome_runtime_rate_run(int *out_passed, int *out_failed) {
     g_passed = 0;
     g_failed = 0;
@@ -265,6 +425,12 @@ int test_browser_chrome_runtime_rate_run(int *out_passed, int *out_failed) {
     test_audit_navigate_records_nav_entry();
     test_audit_policy_deny_records_deny();
     test_audit_rate_drop_records_rate();
+    test_nav_budget_init_zeroed();
+    test_nav_budget_accumulates_per_event();
+    test_nav_budget_resets_on_send_navigate();
+    test_nav_budget_resets_on_event_nav_started();
+    test_nav_budget_excess_kills_engine();
+    test_nav_budget_record_restart_clears();
     if (out_passed) *out_passed = g_passed;
     if (out_failed) *out_failed = g_failed;
     return g_failed;

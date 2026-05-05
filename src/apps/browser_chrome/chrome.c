@@ -71,6 +71,12 @@ void browser_chrome_init(struct browser_chrome *c, uint64_t now_ticks) {
     c->pending_fetch_nav_id = 0u;
     c->pending_fetch_url[0] = '\0';
     c->pending_fetch_url_len = 0u;
+    /* Etapa 3 secao a fetch+decode (2026-05-05): no pending image. */
+    c->pending_image_active = 0u;
+    c->pending_image_id = 0u;
+    c->pending_image_nav_id = 0u;
+    c->pending_image_url[0] = '\0';
+    c->pending_image_url_len = 0u;
     browser_watchdog_init(&c->watchdog, now_ticks);
 }
 
@@ -323,6 +329,46 @@ int browser_chrome_take_pending_fetch(struct browser_chrome *c,
     return 1;
 }
 
+/* Etapa 3 secao a fetch+decode (2026-05-05): EVENT_IMAGE_REQUEST
+ * handler. Mesmo padrao de handle_fetch_request: stage e levanta
+ * action bit; runtime drena via take_pending_image. Apenas uma
+ * imagem pendente por vez -- segunda request antes de drenar e
+ * tratada como protocol_err. */
+static uint32_t handle_image_request(struct browser_chrome *c,
+                                     const uint8_t *payload, uint32_t plen) {
+    struct browser_ipc_image_request req;
+    int rc = browser_ipc_image_request_decode(payload, plen, &req);
+    if (rc != BROWSER_IPC_OK) return BROWSER_CHROME_ACTION_PROTOCOL_ERR;
+    if (c->pending_image_active) {
+        return BROWSER_CHROME_ACTION_PROTOCOL_ERR;
+    }
+    c->pending_image_id = req.img_id;
+    c->pending_image_nav_id = req.nav_id;
+    uint16_t take = req.url_len;
+    if (take >= BROWSER_CHROME_URL_MAX) {
+        take = (uint16_t)(BROWSER_CHROME_URL_MAX - 1u);
+    }
+    for (uint16_t i = 0; i < take; ++i) {
+        c->pending_image_url[i] = (char)req.url[i];
+    }
+    c->pending_image_url[take] = '\0';
+    c->pending_image_url_len = take;
+    c->pending_image_active = 1u;
+    return BROWSER_CHROME_ACTION_IMAGE_REQUESTED;
+}
+
+int browser_chrome_take_pending_image(struct browser_chrome *c,
+                                      struct browser_ipc_image_request *out) {
+    if (!c || !out) return 0;
+    if (!c->pending_image_active) return 0;
+    out->img_id = c->pending_image_id;
+    out->nav_id = c->pending_image_nav_id;
+    out->url_len = c->pending_image_url_len;
+    out->url = (const uint8_t *)c->pending_image_url;
+    c->pending_image_active = 0u;
+    return 1;
+}
+
 uint32_t browser_chrome_build_fetch_response_payload(
     uint32_t seq, uint32_t nav_id, uint16_t status,
     const uint8_t *content_type, uint16_t content_type_len,
@@ -393,6 +439,9 @@ uint32_t browser_chrome_dispatch_event(struct browser_chrome *c,
             break;
         case BROWSER_IPC_EVENT_FETCH_REQUEST:
             actions = handle_fetch_request(c, payload, hdr->payload_len);
+            break;
+        case BROWSER_IPC_EVENT_IMAGE_REQUEST:
+            actions = handle_image_request(c, payload, hdr->payload_len);
             break;
         default:
             actions = BROWSER_CHROME_ACTION_PROTOCOL_ERR;

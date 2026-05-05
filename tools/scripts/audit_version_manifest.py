@@ -63,7 +63,7 @@ def main() -> int:
 
     try:
         require_contains(readme, f"Versao de referencia: `{current}`", "README.md")
-        require_contains(readme, f"docs/screenshots/{current}/", "README.md")
+        require_contains(readme, "docs/screenshots/CapyUI/", "README.md")
     except RuntimeError as exc:
         errors.append(str(exc))
 

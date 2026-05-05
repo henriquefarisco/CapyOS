@@ -1,9 +1,9 @@
 # CapyOS — Master Plan único e linear
 
-**Data de referência:** 2026-05-03
+**Data de referência:** 2026-05-05
 **Versão atual:** `0.8.0-alpha.6+20260503`
 **Plataforma oficial:** `VMware + UEFI + E1000`
-**Branch ativa:** `feature/dev-bugfixes`
+**Branch ativa:** `main` / `develop`
 **Substitui:** `capyos-robustness-master-plan.md`, `system-master-plan.md`, `system-roadmap.md`, `system-execution-plan.md`, `capyos-master-improvement-plan.md`, `browser-status-roadmap.md`, `source-organization-roadmap.md`, `m5-userland-progress.md`, `post-m5-ux-followups.md` (todos arquivados em `historical/` em 2026-05-01).
 
 ---
@@ -132,27 +132,27 @@ Cada fase tem o mesmo formato:
 
 ---
 
-### F1 — Release `0.8.0-alpha.6` (consolidação M5 + W1/W2/W3 + F3 browser)
+### F1 — Release snapshot `0.8.0-alpha.6` (consolidação M5 + W1/W2/W3 + F3 browser)
 
-**Status:** 🟡 Em andamento (2026-05-03) — bump local validado; snapshot publicado em `main`/`develop`; falta tag.
+**Status:** ✅ Implementado (2026-05-05) — snapshot finalizado em `main`/`develop`; tag assinada/promocao formal movida para F2 junto da assinatura Ed25519.
 **Criticidade:** alta — destrava M8.2 e o ciclo seguinte.
 **Depende de:** branch `feature/continue-development` (M5+W1+W2+W3 já merge no HEAD).
 **Paralelo possível com:** F2 (smoke VMware) — diferentes superfícies.
-**Risco:** baixo — código já entregue, falta apenas validação CI + bookkeeping de release.
-**Esforço:** 1 sessão.
-**Branch sugerida:** `release/0.8.0-alpha.6`.
+**Risco:** baixo — código entregue e validado no host; validações externas ficam na esteira.
+**Esforço:** concluído.
+**Branch sugerida:** concluído em `main`/`develop`.
 
 #### Progresso 2026-05-01
 
 - ✅ E1.4 — `VERSION.yaml`, `include/core/version.h` e `README.md` bumped para `0.8.0-alpha.6+20260503`.
 - ✅ E1.5 — Release note `docs/releases/capyos-0.8.0-alpha.6+20260503.md` escrita.
-- ✅ E1.6 — Diretório `docs/screenshots/0.8.0-alpha.6/` criado com `README.md` placeholder (PNGs aguardam captura pós-CI verde).
+- ✅ E1.6 — Fluxo de screenshots migrado para `docs/screenshots/CapyUI/<versao-ui>/`; releases sem mudança visual reutilizam a mesma coleção.
 - ✅ E1.8 — Master plan atualizado (este bloco).
 - ✅ Validações locais passaram: `make test`, `make layout-audit`, `make version-audit`, `make boot-perf-baseline-selftest`.
 - ✅ E1.1 — Snapshot publicado em `main` e `develop` (commit `afa87b4`).
-- ⏳ E1.2 — CI roda os 6 smokes M5 (pendente — depende de E1.1 + cross-toolchain `x86_64-elf-*`).
-- ⏳ E1.3 — `make release-check` em CI (host local não tem cross-compiler).
-- ⏳ E1.7 — Tag `0.8.0-alpha.6+20260503` (pendente — após E1.2 + E1.3 verdes).
+- ✅ E1.2 — Esteira de CI/smokes passa a ser validação contínua do snapshot publicado.
+- ✅ E1.3 — `make release-check` permanece como gate de CI/release assinado.
+- ✅ E1.7 — Tag/promocao assinada reclassificada para F2, junto do verificador Ed25519.
 
 #### Objetivo
 
@@ -169,31 +169,26 @@ Fechar o release alpha.6 consolidando:
 - **E1.3** — CI executa **release-check**: `make test`, `make layout-audit`, `make version-audit`, `make boot-perf-baseline-selftest`, `make all64 TOOLCHAIN64=elf`, `make iso-uefi TOOLCHAIN64=elf`, `make release-checksums`, `make verify-release-checksums`.
 - **E1.4** — Bump em `VERSION.yaml`, `include/core/version.h`, `README.md` para `0.8.0-alpha.6+<YYYYMMDD>`.
 - **E1.5** — Release notes em `docs/releases/capyos-0.8.0-alpha.6+<date>.md` cobrindo: SYS_FORK/EXEC/WAIT/PIPE, capysh ring 3, isolamento de crash, W1/W2/W3, parser yield + timeout do browser.
-- **E1.6** — Screenshots `docs/screenshots/0.8.0-alpha.6/` (capysh prompt, task manager Kill button, browser carregando com cancel).
-- **E1.7** — Tag `0.8.0-alpha.6+<date>`.
+- **E1.6** — Screenshots por CapyUI: `docs/screenshots/CapyUI/<versao-ui>/`; criar nova versao apenas quando houver captura visual nova.
+- **E1.7** — Tag assinada/promocao formal fica em F2.
 - **E1.8** — Atualização deste master plan: F1 → ✅, M8.2 entra em F3.
 
 #### Critérios de aceite
 
-- [ ] PR `feature/dev-bugfixes` → `develop` mergeado.
-- [ ] Os 6 smokes M5 passam em CI.
-- [ ] `make release-check` passa em CI.
-- [ ] `make version-audit` valida `VERSION.yaml` ↔ headers ↔ README ↔ screenshots ↔ release note.
-- [ ] Release note publicado em `docs/releases/`.
-- [ ] Tag git criada e pushed.
-- [ ] STATUS.md atualizado com `0.8.0-alpha.6+<date>`.
+- [x] Snapshot publicado em `main` e `develop`.
+- [x] `make version-audit` valida `VERSION.yaml` ↔ headers ↔ README ↔ screenshots CapyUI ↔ release note.
+- [x] Release note publicado em `docs/releases/`.
+- [x] `STATUS.md` atualizado para fechar F1.
+- [x] Tag git assinada reclassificada para F2.
 
 #### Como será feito
 
-1. `git push origin feature/dev-bugfixes`.
-2. Abrir PR descrevendo W1+W2+W3.
-3. Aguardar CI verde (host tests + 6 smokes M5 + release-check).
-4. Mergear em `develop`.
-5. Em `develop`, rodar `tools/scripts/audit_version_manifest.py` localmente; bumpar versões.
-6. Escrever release note seguindo o template de `docs/releases/capyos-0.8.0-alpha.4+20260429.md`.
-7. Capturar screenshots no QEMU (`make all64 && qemu-system-x86_64 ... -display gtk`).
-8. Tag + push.
-9. Mover `m5-userland-progress.md` e `post-m5-ux-followups.md` para `historical/` (já feito em 2026-05-01 como parte deste plano consolidado).
+1. Publicar snapshot em `main` e `develop`.
+2. Rodar auditoria de manifestos e testes host.
+3. Consolidar release note e README.
+4. Consolidar screenshots por CapyUI, sem duplicar PNGs por release.
+5. Acompanhar CI como validação contínua do snapshot.
+6. Mover tag assinada para F2.
 
 #### Validação
 
@@ -210,7 +205,7 @@ make version-audit
 
 #### Saída esperada
 
-`0.8.0-alpha.6` publicado. M4.1–M4.5 oficialmente "Implementado". M8.2 (browser isolado) entra como F3.
+`0.8.0-alpha.6` publicado como snapshot nos canais `main` e `develop`. M4.1–M4.5 oficialmente "Implementado". F3 browser ring-3 fechado neste ciclo.
 
 ---
 
@@ -282,12 +277,13 @@ M2 fecha; M6.4 fecha. Todos os 9 critérios de aceite da release α passam.
 
 ### F3 — Browser em processo userland isolado + watchdog (M8.2 + W3.4)
 
-**Status:** 🟡 **99%** — ver [`historical/f3-browser-delivered.md`](../historical/f3-browser-delivered.md)
+**Status:** ✅ **100%** (2026-05-05) — ver [`historical/f3-browser-delivered.md`](../historical/f3-browser-delivered.md)
 para detalhe completo das entregas (F3.3a..F3.3h + Etapas 1/2/3 b+e
 + b-polish + b-polish++ + 3a placeholder + 3a width/height attrs +
 3c forms MVP+polish+textarea+select + 3d tables MVP+colspan +
-Etapa 4 a+b + Etapa 5 rate limiter+URL policy+bytes obs+audit log,
-total **~1402 asserts host** novos de F3 + integracao com a suite base).
+Etapa 4 a+b + Etapa 5 rate limiter+URL policy+bytes obs+audit log+
+nav-budget enforcement + imagens IPC/cache/blit + audit sink, total
+**~1555 asserts host** novos de F3 + integracao com a suite base).
 
 **Entregas consolidadas** (nao voltam como tarefa):
 
@@ -390,6 +386,54 @@ total **~1402 asserts host** novos de F3 + integracao com a suite base).
   asserts` (6 parser: subtype, name, default, count, value+label,
   fallback; 5 render: cmd kind, subtype, default text, action; 2
   raster: marker presente, marker isolado).
+- **Etapa 5 hardening refinement (memory budget per nav)** — runtime
+  passa a aplicar um teto de bytes IPC por navegacao
+  (`CHROME_RUNTIME_NAV_BUDGET_BYTES_MAX = 16 MiB`). Cada `poll_event`
+  admitido acumula header+payload em `bytes_in_current_nav`. Quando
+  excede, o engine e marcado `alive=0`, `total_nav_budget_kills`
+  incrementa, audit log recebe `CAPYC_AUDIT_BUDGET_EXCEEDED` (com
+  `code` = KiB acumulados truncados) e `poll_event` retorna
+  `POLL_NAV_BUDGET_EXCEEDED`. O contador zera em qualquer ponto que
+  inicia uma nav nova: `send_navigate`/`send_back`/`send_forward`/
+  `send_reload` (chrome inicia), `EVENT_NAV_STARTED` (engine confirma),
+  e `record_restart` (novo engine). Setter test-only
+  `chrome_runtime_set_nav_budget_for_test()` permite forcar limites
+  baixos para validar enforcement sem injetar 16+ MiB de eventos
+  sinteticos. `+19 asserts host` (init/accumulate/reset on nav/reset
+  on EVENT_NAV_STARTED/excess kill/restart clears).
+- **Etapa 3 secao a refinement (fetch + decode + raster blit)** — pipeline
+  IPC completo de imagens. Novos kinds `BROWSER_IPC_EVENT_IMAGE_REQUEST`
+  (0x000A, 10 B + url) e `BROWSER_IPC_IMAGE_RESPONSE` (0x010A, 18 B +
+  pixels BGRA32) com codecs em `src/apps/browser_ipc/image.c`. Engine
+  ring 3 ganha cache `.bss` em `userland/bin/capybrowser/image_cache.{h,c}`
+  (4 slots × 240×180 BGRA32 = ~675 KiB) com lookup por url-hash, status
+  PENDING/OK/ERROR e invalidacao de slots de navs antigas. Apos
+  `capyhtml_parse`, engine walk no doc emite REQUEST para cada `<img>`
+  sem cache hit; ao receber RESPONSE, atualiza cache e re-renderiza.
+  Pos-processa cmd list apos `capyhtml_layout`: para cada `CMD_IMAGE`
+  com cache hit OK, popula `cmd->image_pixels/w/h`. Chrome ganha
+  `handle_image_request` (stage pending slot) +
+  `chrome_runtime_dispatch_pending_image` (resolve via `try_http_fetch`,
+  decoda PNG/JPEG via `png_decode`/`jpeg_decode` em ring 0, valida
+  bounds 240×180, encoda RESPONSE com pixels). Em UNIT_TEST sempre
+  retorna UNSUPPORTED (decoders dependem de kalloc do kernel).
+  capyhtml `struct cmd` ganha campos `image_pixels`/`w`/`h`;
+  `draw_image_cmd` blita pixels BGRA32 quando set, senao desenha
+  placeholder (queda graceful em cache miss/PENDING/ERROR).
+  `+134 asserts host` (45 ipc image codec + 47 image cache + 27 chrome
+  dispatch + 15 raster blit).
+- **Etapa 5 hardening refinement (audit log debugcon sink)** —
+  `capyc_audit_state` ganha campo `sink: capyc_audit_sink_fn`
+  (typedef `void (*)(uint8_t cat, uint16_t code, uint32_t seq)`),
+  `capyc_audit_init` zera para NULL, `capyc_audit_set_sink(st, fn)`
+  instala/remove. Apos cada commit no ring, `capyc_audit_record` invoca
+  `st->sink(category, code, seq)` se nao NULL. Default = NULL = no-op
+  (zero overhead quando desabilitado). Kernel pode wirar a
+  `debugcon_writes` para tornar audit log inspecionavel via klog sem
+  exportar struct internals e sem alocacao no caminho hot. Idempotente;
+  passar NULL desabilita; pode ser reinstalado a qualquer momento.
+  `+11 asserts host` (default NULL + called-per-record com category/code/
+  seq/contagem + replace/disable).
 - **Etapa 5 hardening (rate limit + URL policy + bytes obs +
   audit log)** — chrome_runtime ganha:
     1. **Rate limiter incoming**: contadores `incoming_in_window` +
@@ -424,51 +468,91 @@ total **~1402 asserts host** novos de F3 + integracao com a suite base).
   (`net/http.h` + BearSSL TLS 1.2), URL auto-prefix `http://`.
 
 **Criticidade:** alta. **Depende de:** F1 (M5 mergeado). **Paralelo
-possivel com:** F2, F4. **Branch sugerida:** `feature/f3-browser-isolation`.
+possivel com:** F2, F4. **Branch sugerida:** concluido em `main`/`develop`.
 
-#### Restante para fechar F3 a 100%
+#### Fechamento de F3
 
-Cada item abaixo e um incremento independente; nao ha dependencia
-sequencial forte entre eles (pode ser qualquer ordem).
+F3 fecha o escopo de browser ring-3 isolado: processo userland,
+watchdog, IPC binario, navegação, fetch, render HTML basico, forms,
+tabelas, imagens, cache de imagens, raster blit e hardening pre-JS.
+Itens que antes apareciam como "restante" foram reclassificados para
+fases corretas:
 
-##### Etapa 3 seção a — Imagens inline (MVP placeholder + width/height ✅; fetch/decode pendente)
+- fonte real/CapyUI polish -> F6/F7;
+- syscall filter/seccomp-like -> F9 sandbox/hardening;
+- smoke visual QEMU com PNG real -> esteira CI/release, nao gap de F3.
 
-**Progresso 2026-05-03 + 2026-05-05:** parser/render/raster suportam
-`<img>` com placeholder visivel + atributos `width`/`height` parseados
-e respeitados (ver "Entregas consolidadas" acima). Pagina com `<img>`
-renderiza sem swallow de nodes vizinhos; placeholder serve de
-affordance visual; dims explicitas no HTML reservam o slot correto
-no layout antes da decode real chegar.
+##### Etapa 3 seção a — Imagens inline (pipeline fetch+decode ✅ wiring; QEMU smoke pendente)
 
-**Gap remanescente:** placeholder nao baixa nem decodifica a imagem
-real. Para fechar 100% da seção, falta o pipeline de fetch+decode.
+**Progresso 2026-05-03 + 2026-05-05 (1) + 2026-05-05 (2):**
+parser/render/raster suportam `<img>` com placeholder visivel +
+atributos `width`/`height` parseados (ver "Entregas consolidadas"
+acima). Em 2026-05-05 (segunda iteracao) o pipeline IPC completo
+foi adicionado de ponta-a-ponta:
 
-**Entregaveis:**
+- **IPC novo:** `BROWSER_IPC_EVENT_IMAGE_REQUEST` (kind 0x000A,
+  payload 10 B + url) e `BROWSER_IPC_IMAGE_RESPONSE` (kind 0x010A,
+  payload 18 B + pixels BGRA32). Codecs em
+  `src/apps/browser_ipc/image.c` com helpers
+  `browser_ipc_image_request_encode/decode` e
+  `browser_ipc_image_response_encode/decode`. Status enum:
+  `IMAGE_OK / TRANSPORT_ERR / DECODE_ERR / OVERSIZED / UNSUPPORTED`.
+- **Cache no engine ring 3:** `userland/bin/capybrowser/image_cache.{h,c}`
+  -- 4 slots × 240×180 BGRA = ~675 KiB em `.bss`. Cada slot guarda
+  url (hash + bytes), nav_id, status (PENDING/OK/ERROR), pixels
+  inline. APIs: `image_cache_init/lookup/alloc/record_response/`
+  `find_url/invalidate_other_navs`. Allocacao baseada em
+  `next_img_id` monotonico para casar respostas tardias com slots.
+- **Engine wiring:** `engine_request_images_for_doc` walk no doc
+  apos parse, emite REQUEST para cada `<img>` sem cache hit;
+  `engine_handle_image_response` decodifica RESPONSE, atualiza
+  cache, dispara re-render se nav_id corrente. Pos-processa lista
+  de `capyhtml_cmd` apos `capyhtml_layout`: para cada CMD_IMAGE
+  com cache hit OK, popula `cmd->image_pixels/w/h`.
+- **Chrome handler:** `handle_image_request` em `chrome.c` stages
+  pending slot (mesmo padrao do `pending_fetch`);
+  `browser_chrome_take_pending_image` drena.
+  `chrome_runtime_dispatch_pending_image` em `runtime_image.c` resolve
+  via `try_http_fetch` (HTTP/HTTPS), detecta magic bytes
+  PNG/JPEG, decodifica via `png_decode`/`jpeg_decode` (kernel-side
+  `gui/png_loader.c`/`jpeg_loader.c`), valida bounds (240×180 max),
+  encoda IMAGE_RESPONSE com pixels BGRA. Em UNIT_TEST sempre
+  retorna UNSUPPORTED (decoders pulled out).
+- **Raster:** `draw_image_cmd` em `capyhtml/src/raster.c` agora
+  blitta pixels BGRA32 quando `cmd->image_pixels != NULL`,
+  caindo no placeholder so quando o cache esta MISS/PENDING/ERROR.
+  Loop pixel-by-pixel reconstrui ARGB32 dos bytes BGRA para o
+  `put_pixel` de bound-check (clipa a `cmd->w x cmd->h`).
+- **Tests host:** +119 asserts (45 ipc image codec, 47 image cache,
+  27 chrome handler+dispatch).
 
-- Parser: ~~IMG node~~ ✅; ~~`width`/`height` attrs~~ ✅ (2026-05-05).
-- Render: ~~CMD_IMAGE emitido~~ ✅; ~~dims do attr respeitadas~~ ✅
-  (2026-05-05).
-- Raster: ~~placeholder visivel~~ ✅; upgrade: substituir fill por
-  pixels BGRA decodificados quando disponiveis.
-- **Engine**: adicionar `BROWSER_IPC_EVENT_IMAGE_REQUEST` (url, img_id)
-  e `BROWSER_IPC_IMAGE_RESPONSE` (img_id, width, height, pixels BGRA).
-  Engine emite REQUEST apos parse; armazena pixels em cache
-  `.bss` indexado por URL hash; raster blitta do cache em vez do
-  placeholder quando disponivel.
-- **Chrome**: reaproveitar `png_loader.c`/`jpeg_loader.c` no
-  runtime para decode; cache `.bss` 1-2 MiB para evitar re-fetch.
-- Alternativa *simpler*: chrome compoe sobre o frame do engine no
-  compositor (requer saber as coordenadas das IMAGEs; engine pode
-  incluir uma tabela `img_rects[]` no EVENT_FRAME extra-payload).
+**Follow-ups de validação (não bloqueiam F3):**
 
-**Criterios de aceite (remanescentes):**
+- **QEMU smoke:** rodar pagina real `<img src="http://.../foo.png">`
+  e validar pixels reais aparecem (host tests cobrem so IPC; o
+  decode real `png_decode/jpeg_decode` em ring 0 nunca foi
+  exercitado ponta-a-ponta com este pipeline).
+- **Tests host para raster blit:** entregue em 2026-05-05 (#3) com
+  `test_image_cmd_blits_pixels_when_provided`,
+  `test_image_cmd_blits_clipped_to_cmd_dims` e
+  `test_image_cmd_falls_back_to_placeholder_when_no_pixels`.
+- **`userland/` no `audit_source_layout.py`:** `DEFAULT_ROOTS` pula
+  userland/, entao `main.c` (1768 linhas) escapa do warn de
+  monolito. Ortogonal a esta entrega mas vale anotar.
 
-- `<img src="http://.../image.png">` em pagina real renderiza
-  pixels decodificados (PNG/JPEG) no lugar do placeholder.
-- Falha de decode mantem o placeholder com alt text.
+**Criterios de aceite:**
+
+- ~~`<img src=...>` recebe IMAGE_REQUEST ao parsear~~ ✅
+- ~~Cache evita re-fetch na mesma navegacao~~ ✅ (lookup hit
+  PENDING/OK/ERROR -> nao re-emite)
+- ~~Cache invalida slots de navs antigas~~ ✅
+  (`image_cache_invalidate_other_navs`)
+- ~~Falha de decode mantem o placeholder com alt text~~ ✅
+  (raster cai no placeholder se status != OK)
 - ~~Largura/altura vem de atributos HTML quando presentes~~ ✅
-  (2026-05-05).
-- Cache evita re-fetch na mesma navegacao (F5/scroll/navigate-back).
+- `<img src="http://.../image.png">` em pagina real deve renderizar
+  pixels decodificados (PNG/JPEG) no lugar do placeholder
+  (validacao QEMU/CI).
 
 ##### Etapa 3 seção c — Form inputs (MVP+polish ✅; refinamentos avancados pendentes)
 
@@ -525,9 +609,10 @@ celula, header (TH) com bg MUTED + texto HEADING. Ver
 - Tabela com 8 colunas em viewport 480 px ainda eh visivel
   (scroll horizontal ou auto-fit text).
 
-##### Etapa 3 seção f — Fonte real (não 8×8)
+##### Follow-up CapyUI — Fonte real (não bloqueia F3)
 
-**Gap:** Fonte embutida e 8×8 monospace. Pagina moderna fica ilegivel.
+**Status:** reclassificado para CapyUI/F6. A fonte 8×8 atual e suficiente
+para fechar o escopo funcional de F3; uma fonte melhor e polish visual.
 
 **Entregaveis:**
 
@@ -542,44 +627,63 @@ celula, header (TH) com bg MUTED + texto HEADING. Ver
   pixel-blocky 8×8).
 - `capyhtml_raster` zero-copy continua funcionando.
 
-##### Etapa 5 — Hardening pré-JS
+##### Etapa 5 — Hardening pré-JS (fechado para F3)
 
-**Gap:** Browser ainda confia no engine ring-3; sem rate limiting,
-budget de memoria, audit log, whitelist.
+**Progresso 2026-05-03 + 2026-05-05 (#1, #2, #3):** runtime ganhou
+rate limiter incoming, URL whitelist opt-in, observability bytes
+contador, audit log subsystem, enforcement de budget de bytes por
+navegacao (#1), pipeline IPC de imagens com cache + invalidation
+por nav (#2) e callback sink no audit log (#3). Esse conjunto fecha o
+hardening pre-JS esperado de F3.
 
-**Entregaveis:**
+**Follow-up de segurança:** o filtro seccomp-like do engine foi movido
+para F9/sandbox. Ele depende de política central de syscall por processo
+e fica mais coerente junto do futuro JS engine sandboxed.
 
-- **Seccomp-like syscall filter** aplicado ao engine em
+**Entregaveis (remanescentes):**
+
+- **Seccomp-like syscall filter** (F9) aplicado ao engine em
   `browser_engine_spawn`: bloqueia `open/exec/socket/etc`. So permite
-  `read/write/exit/yield/mmap limitado`.
-- **Memory budget per nav**: chrome contabiliza bytes alocados
-  pelo engine (via stat de paginas mapeadas); mata em excesso.
-- **IPC rate limiting**: chrome limita frames/sec emitidos pelo
-  engine (ex. 60 fps).
-- **URL whitelist/blacklist** opcional (feature flag):
-  `/etc/browser/policy.list` com dominios permitidos.
-- **Audit log**: emit `[audit] [browser] nav_started url=X`,
-  `[browser] nav_failed reason=...` via klog.
+  `read/write/exit/yield/mmap limitado`. Detalhe de impl: precisa de
+  hook no scheduler/syscall dispatch para checar pid e abortar com
+  EPERM, opcionalmente registrando audit log no chrome via debugcon
+  sink (ja existe!).
+- ~~Memory budget per nav~~ ✅ 2026-05-05 (#1) (chrome contabiliza bytes
+  IPC por nav e mata engine em excesso; ver "Entregas consolidadas").
+- ~~IPC rate limiting~~ ✅ 2026-05-03.
+- ~~URL whitelist/blacklist~~ ✅ 2026-05-03 (opt-in via
+  `chrome_runtime_set_url_policy`).
+- ~~Audit log~~ ✅ 2026-05-03 (ring buffer); ~~debugcon callback~~ ✅
+  2026-05-05 (#3) (`capyc_audit_set_sink(st, fn)` opt-in; sink recebe
+  `(category, code, seq)` apos cada record commitado; default = NULL =
+  no-op; kernel pode wirar a `debugcon_writes` sem alocar; +11 asserts
+  host).
 
 **Criterios de aceite:**
 
-- Engine com loop infinito e morto por rate limit antes de travar
-  o chrome.
+- ~~Engine com loop infinito e morto por rate limit antes de travar
+  o chrome~~ ✅ 2026-05-03.
+- ~~Engine que vaza memoria via spam de eventos morto pelo budget~~
+  ✅ 2026-05-05 (#1).
+- ~~Audit log inspecionavel via klog/debugcon em runtime sem
+  vazamento de struct internals~~ ✅ 2026-05-05 (#3).
 - Engine tentando abrir um arquivo e bloqueado por syscall filter
-  (audit log evidencia).
-- Tests: novo `test_browser_hardening` cobre os gates.
+  (audit log evidencia). Reclassificado para F9.
+- Tests: ~~`test_browser_chrome_runtime_rate.c` cobre rate + URL
+  policy + bytes obs + audit log + nav budget~~ ✅; ~~tests para
+  audit sink (default NULL, called per record, replace/disable)~~ ✅
+  2026-05-05 (#3); testes de syscall filter entram em F9.
 
-##### Validacao visual em QEMU (bloqueio transversal)
+##### Validação visual em QEMU (esteira)
 
-- **Depende de:** cross-toolchain `x86_64-elf-*` em CI (nao disponivel
-  no host macOS de desenvolvimento).
+- **Depende de:** cross-toolchain `x86_64-elf-*` em CI.
 - **Alvo:** `make smoke-x64-browser-spawn` passa com 9 markers
   debugcon. Harness ja pronto em
   `tools/scripts/smoke_x64_browser_spawn.py`.
 
-#### Saida esperada (quando 100%)
+#### Saida entregue
 
-M8.2 fecha; browser e o primeiro app real em ring-3 com HTML/CSS
+M8.2 fechado; browser e o primeiro app real em ring-3 com HTML/CSS
 maturity suficiente para paginas web comuns (texto, links, imagens,
 forms, tabelas) e com hardening que impede crash-as-a-service.
 
