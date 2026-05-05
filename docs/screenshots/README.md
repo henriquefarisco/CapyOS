@@ -16,9 +16,9 @@ ou de layout que justifique comparar a UI.
 ## Versoes de interface
 
 | CapyUI | Releases cobertas | Status |
-|---|---|---|
-| `v1` | `0.8.0-alpha.1` ate `0.8.0-alpha.4` | Capturas oficiais disponiveis |
-| `v2` | `0.8.0-alpha.5` / `0.8.0-alpha.6` | Captura pendente apos smoke visual |
+| --- | --- | --- |
+| `v1` | `0.8.0-alpha.1` ate `0.8.0-alpha.4` | Capturas oficiais |
+| `v2` | `0.8.0-alpha.5` / `0.8.0-alpha.6` | Pendente |
 
 ## Estrutura atual
 
