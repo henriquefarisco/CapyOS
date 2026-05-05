@@ -248,6 +248,34 @@ static size_t skip_block(const char *html, size_t len, size_t pos,
     return len;
 }
 
+/* Etapa 3 seção a refinement (2026-05-05): parser de inteiro decimal
+ * positivo para attrs `width`/`height` de `<img>` (e futuro
+ * `colspan`). Aceita digitos ASCII; ignora trailing 'px' tolerantemente
+ * (HTML real ocasionalmente tem `width="100px"`). Retorna 0 quando o
+ * input nao comeca com digito ou e vazio (sentinela de "nao informado").
+ * Clampa para `max` para evitar overflow + layout absurdo. */
+static uint32_t parse_uint_attr(const char *s, uint32_t max) {
+    if (!s || !s[0]) return 0;
+    uint32_t v = 0;
+    size_t i = 0;
+    /* Tolerante: skip leading spaces (HTML permite `width=" 100"`). */
+    while (s[i] == ' ' || s[i] == '\t') i++;
+    if (s[i] < '0' || s[i] > '9') return 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        uint32_t d = (uint32_t)(s[i] - '0');
+        if (v > (max - d) / 10u) {
+            v = max;
+            /* consome digitos restantes mas mantem clamp. */
+            while (s[++i] >= '0' && s[i] <= '9') { /* skip */ }
+            return v;
+        }
+        v = v * 10u + d;
+        i++;
+    }
+    if (v > max) v = max;
+    return v;
+}
+
 /* Extract the value of `attr_name` from the attribute span [start, end).
  * Returns 1 on found and copies into `out`. */
 static int extract_attr(const char *attrs, size_t attrs_len,
@@ -460,19 +488,37 @@ static size_t collect_text_until_tag(const char *html, size_t len, size_t pos,
                 if (hv_streq_ci(inner_tag, "img")) {
                     char src_buf[CAPYHTML_URL_MAX];
                     char alt_buf[CAPYHTML_TEXT_MAX];
+                    char w_buf[16];
+                    char h_buf[16];
                     src_buf[0] = '\0';
                     alt_buf[0] = '\0';
+                    w_buf[0] = '\0';
+                    h_buf[0] = '\0';
                     extract_attr(html + inner_attr_start,
                                  inner_tag_end - inner_attr_start,
                                  "src", src_buf, sizeof(src_buf));
                     extract_attr(html + inner_attr_start,
                                  inner_tag_end - inner_attr_start,
                                  "alt", alt_buf, sizeof(alt_buf));
+                    extract_attr(html + inner_attr_start,
+                                 inner_tag_end - inner_attr_start,
+                                 "width", w_buf, sizeof(w_buf));
+                    extract_attr(html + inner_attr_start,
+                                 inner_tag_end - inner_attr_start,
+                                 "height", h_buf, sizeof(h_buf));
+                    uint32_t img_w = parse_uint_attr(w_buf, 0xFFFFu);
+                    uint32_t img_h = parse_uint_attr(h_buf, 0xFFFFu);
                     struct capyhtml_node *n = push_node(doc);
                     if (n) {
                         n->type = CAPYHTML_NODE_TAG_IMG;
                         hv_strcpy(n->href, sizeof(n->href), src_buf);
                         hv_strcpy(n->text, sizeof(n->text), alt_buf);
+                        if (img_w > 0) {
+                            CAPYHTML_IMG_SET_WIDTH(n, (uint16_t)img_w);
+                        }
+                        if (img_h > 0) {
+                            CAPYHTML_IMG_SET_HEIGHT(n, (uint16_t)img_h);
+                        }
                     }
                     pos = after_tag;
                     continue;
@@ -591,19 +637,31 @@ int capyhtml_parse(const char *html, size_t len,
                 continue;
             }
             /* Etapa 3 seção a (2026-05-03): <img>. Void tag; extrai
-             * `src` para o campo `href` do node (reusa o slot porque
-             * IMG nao tem href separado) e opcionalmente
-             * `width`/`height` para alt-text nos primeiros 32 chars
-             * de `text`. Sem src, ignora silenciosamente. */
+             * `src` para `href` (reusa o slot porque IMG nao tem href
+             * separado), `alt` para `text`. Refinement (2026-05-05):
+             * `width`/`height` parseados como inteiros decimais e
+             * empacotados em bold + reserved[3] via macros
+             * CAPYHTML_IMG_SET_*. 0 = atributo ausente (render usa
+             * defaults 100x80). Sem src, ignora silenciosamente. */
             if (hv_streq_ci(tag, "img")) {
                 char src_buf[CAPYHTML_URL_MAX];
                 char alt_buf[CAPYHTML_TEXT_MAX];
+                char w_buf[16];
+                char h_buf[16];
                 src_buf[0] = '\0';
                 alt_buf[0] = '\0';
+                w_buf[0] = '\0';
+                h_buf[0] = '\0';
                 extract_attr(html + attr_start, tag_end - attr_start,
                              "src", src_buf, sizeof(src_buf));
                 extract_attr(html + attr_start, tag_end - attr_start,
                              "alt", alt_buf, sizeof(alt_buf));
+                extract_attr(html + attr_start, tag_end - attr_start,
+                             "width", w_buf, sizeof(w_buf));
+                extract_attr(html + attr_start, tag_end - attr_start,
+                             "height", h_buf, sizeof(h_buf));
+                uint32_t img_w = parse_uint_attr(w_buf, 0xFFFFu);
+                uint32_t img_h = parse_uint_attr(h_buf, 0xFFFFu);
                 struct capyhtml_node *n = push_node(out_doc);
                 if (n) {
                     n->type = CAPYHTML_NODE_TAG_IMG;
@@ -611,6 +669,12 @@ int capyhtml_parse(const char *html, size_t len,
                     /* Alt vira texto do node; o renderer pode decidir
                      * escrever o alt dentro do placeholder ou nao. */
                     hv_strcpy(n->text, sizeof(n->text), alt_buf);
+                    if (img_w > 0) {
+                        CAPYHTML_IMG_SET_WIDTH(n, (uint16_t)img_w);
+                    }
+                    if (img_h > 0) {
+                        CAPYHTML_IMG_SET_HEIGHT(n, (uint16_t)img_h);
+                    }
                 }
                 continue;
             }

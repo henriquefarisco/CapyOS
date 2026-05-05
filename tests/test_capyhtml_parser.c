@@ -349,6 +349,97 @@ int test_capyhtml_parser_run(void) {
         }
     }
 
+    /* 17b. Etapa 3 seção a refinement (2026-05-05): <img width="W"
+     * height="H"> sao parseados e empacotados em bold + reserved[3]
+     * via macros CAPYHTML_IMG_GET_WIDTH/HEIGHT. 0 = atributo ausente
+     * (render usa defaults 100×80). */
+    {
+        parse("<img src=\"x.png\" width=\"320\" height=\"240\">");
+        TEST("<img width> stored in node (recoverable via macro)");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_WIDTH(&g_doc.nodes[idx]) == 320) {
+                PASS();
+            } else FAIL("img width not stored");
+        }
+        TEST("<img height> stored in node (recoverable via macro)");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_HEIGHT(&g_doc.nodes[idx]) == 240) {
+                PASS();
+            } else FAIL("img height not stored");
+        }
+    }
+    {
+        /* Sem width/height atributos: macros retornam 0 (sentinela
+         * "usar defaults"). */
+        parse("<img src=\"y.png\">");
+        TEST("<img> without width/height attrs: macros return 0");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_WIDTH(&g_doc.nodes[idx]) == 0 &&
+                CAPYHTML_IMG_GET_HEIGHT(&g_doc.nodes[idx]) == 0) {
+                PASS();
+            } else FAIL("missing width/height did not yield 0");
+        }
+    }
+    {
+        /* width="0" deve ser tratado como ausente (sentinela 0). */
+        parse("<img src=\"z.png\" width=\"0\" height=\"50\">");
+        TEST("<img width=0> -> 0 (treat as absent)");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_WIDTH(&g_doc.nodes[idx]) == 0 &&
+                CAPYHTML_IMG_GET_HEIGHT(&g_doc.nodes[idx]) == 50) {
+                PASS();
+            } else FAIL("width=0 not handled as sentinel");
+        }
+    }
+    {
+        /* IMG inline dentro de <p> tambem extrai width/height. */
+        parse("<p>foto: <img src=\"thumb.png\" "
+              "width=\"64\" height=\"48\"> ok</p>");
+        TEST("inline <img width=..> dentro de <p> tambem parseado");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_WIDTH(&g_doc.nodes[idx]) == 64 &&
+                CAPYHTML_IMG_GET_HEIGHT(&g_doc.nodes[idx]) == 48) {
+                PASS();
+            } else FAIL("inline img dims not parsed");
+        }
+    }
+    {
+        /* width com sufixo px tolerado. */
+        parse("<img src=\"a.png\" width=\"100px\" height=\"75px\">");
+        TEST("<img width=\"100px\"> tolera trailing 'px'");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_WIDTH(&g_doc.nodes[idx]) == 100 &&
+                CAPYHTML_IMG_GET_HEIGHT(&g_doc.nodes[idx]) == 75) {
+                PASS();
+            } else FAIL("trailing px not handled");
+        }
+    }
+    {
+        /* Valores absurdos clampados a 65535 (uint16 max do storage). */
+        parse("<img src=\"a.png\" width=\"99999999\" height=\"5\">");
+        TEST("<img width=99999999> clampa a 65535");
+        {
+            int idx = find_node_of_type(CAPYHTML_NODE_TAG_IMG);
+            if (idx >= 0 &&
+                CAPYHTML_IMG_GET_WIDTH(&g_doc.nodes[idx]) == 65535 &&
+                CAPYHTML_IMG_GET_HEIGHT(&g_doc.nodes[idx]) == 5) {
+                PASS();
+            } else FAIL("oversized width not clamped");
+        }
+    }
+
     /* 18. Etapa 3 seção c (2026-05-03): <form>/<input>. <form> tag
      * empurra um node FORM com action no href; <input> empurra um
      * node INPUT com name no `name`, value no `text`, e subtipo

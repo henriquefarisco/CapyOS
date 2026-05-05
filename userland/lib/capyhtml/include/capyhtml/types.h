@@ -127,6 +127,31 @@ enum capyhtml_node_type {
  * cicla value via Enter/Space lendo TAG_OPTION nodes seguintes. */
 #define CAPYHTML_INPUT_TYPE_SELECT   5u
 
+/* Etapa 3 seção a refinement (2026-05-05): atributos `width`/`height`
+ * de `<img>` empacotados no node sem inflar a struct. Para IMG, os 4
+ * bytes de `bold` + `reserved[0..2]` nao tem outro uso (IMG nao e
+ * heading nem INPUT nem TD), entao reusamos:
+ *   - bold        = width_lo  (low byte de width u16)
+ *   - reserved[0] = width_hi  (high byte de width u16)
+ *   - reserved[1] = height_lo
+ *   - reserved[2] = height_hi
+ * 0 em ambos = atributo nao informado; render usa defaults. Range
+ * 1..65535 px (clampa para sanity em IMG_MAX_DIM no renderer). */
+#define CAPYHTML_IMG_SET_WIDTH(n, w)                                          \
+    do {                                                                       \
+        (n)->bold = (uint8_t)((w) & 0xFFu);                                    \
+        (n)->reserved[0] = (uint8_t)(((w) >> 8) & 0xFFu);                      \
+    } while (0)
+#define CAPYHTML_IMG_GET_WIDTH(n)                                              \
+    ((uint16_t)((n)->bold | ((uint16_t)(n)->reserved[0] << 8)))
+#define CAPYHTML_IMG_SET_HEIGHT(n, h)                                          \
+    do {                                                                       \
+        (n)->reserved[1] = (uint8_t)((h) & 0xFFu);                             \
+        (n)->reserved[2] = (uint8_t)(((h) >> 8) & 0xFFu);                      \
+    } while (0)
+#define CAPYHTML_IMG_GET_HEIGHT(n)                                             \
+    ((uint16_t)((n)->reserved[1] | ((uint16_t)(n)->reserved[2] << 8)))
+
 struct capyhtml_node {
     enum capyhtml_node_type type;
     char                    text[CAPYHTML_TEXT_MAX];
@@ -135,8 +160,9 @@ struct capyhtml_node {
      * (form action -> href; INPUT name -> aqui). Vazio para outros
      * node types. */
     char                    name[CAPYHTML_NAME_MAX];
-    uint8_t                 bold;        /* h1/h2/h3/strong; INPUT subtype */
-    uint8_t                 reserved[3];
+    uint8_t                 bold;        /* h1/h2/h3/strong; INPUT subtype;
+                                          * IMG width_lo (ver macros acima) */
+    uint8_t                 reserved[3]; /* TD/TH colspan; IMG dims; varia */
 };
 
 struct capyhtml_document {

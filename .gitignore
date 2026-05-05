@@ -9,4 +9,5 @@ __pycache__/
 *.pyc
 .codex/
 .claude/
+.windsurf/
 .DS_Store

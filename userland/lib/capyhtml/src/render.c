@@ -45,11 +45,15 @@
 #define RULE_HEIGHT           2
 /* Etapa 3 seção a (2026-05-03): dimensoes default do placeholder de
  * <img>. 100x80 e proposital: altura menor que largura emula fotos
- * paisagem tipicas, mantendo o layout legivel em viewports de 480 px. */
+ * paisagem tipicas, mantendo o layout legivel em viewports de 480 px.
+ * Refinement (2026-05-05): IMAGE_MAX_DIM cap defensivo aplicado aos
+ * valores parseados de `width`/`height` para impedir que uma pagina
+ * com `<img width="999999">` reserve y-space absurdo (DoS via layout). */
 #define IMAGE_DEFAULT_W     100
 #define IMAGE_DEFAULT_H      80
 #define IMAGE_MARGIN_TOP      4
 #define IMAGE_MARGIN_BOT      4
+#define IMAGE_MAX_DIM      2048
 
 /* Etapa 3 seção c (2026-05-03): dimensoes default de <input>. Texto
  * 200×24 e suficiente para campos de busca/login tipicos sem dominar
@@ -357,15 +361,33 @@ static void rl_emit_input(struct rl_state *st,
     st->y += target_h + INPUT_MARGIN_BOT;
 }
 
-/* Etapa 3 seção a (2026-05-03): emite CMD_IMAGE para um node IMG.
- * Dimensoes vem de IMAGE_DEFAULT_W/H (futuro: parsear atributos
- * width/height). `href` carrega o src URL (para futuro fetch +
- * decode); `text` carrega o alt text (para screen-readers ou para
- * renderizacao dentro do placeholder quando a imagem nao carregar).
- * Layout reserva a altura completa + margens para que nodes
- * subsequentes nao sobreponham. */
+/* Etapa 3 seção a (2026-05-03; refinement 2026-05-05): emite
+ * CMD_IMAGE para um node IMG.
+ *
+ * Dimensoes:
+ *   - Se o parser extraiu `width="N"` / `height="M"` do HTML, esses
+ *     valores (CAPYHTML_IMG_GET_WIDTH/HEIGHT no node) tem prioridade.
+ *   - Fallback: IMAGE_DEFAULT_W (100) / IMAGE_DEFAULT_H (80).
+ *   - Cap absoluto: IMAGE_MAX_DIM (2048) para impedir DoS via layout
+ *     (`<img width="9999999">` reserva 9999999 px de y).
+ *   - rl_clamp_w aplica o cap final por viewport horizontal. Vertical
+ *     fica com o valor parseado/clamped: ainda confiamos no engine
+ *     para cancelar a navegacao se total_height_px estourar limite.
+ *
+ * `href` carrega o src URL (para futuro fetch + decode); `text`
+ * carrega o alt text (para screen-readers ou para renderizacao
+ * dentro do placeholder quando a imagem nao carregar). Layout reserva
+ * a altura completa + margens para que nodes subsequentes nao
+ * sobreponham. */
 static void rl_emit_image(struct rl_state *st,
                           const struct capyhtml_node *n) {
+    uint16_t parsed_w = CAPYHTML_IMG_GET_WIDTH(n);
+    uint16_t parsed_h = CAPYHTML_IMG_GET_HEIGHT(n);
+    int32_t want_w = parsed_w > 0 ? (int32_t)parsed_w : IMAGE_DEFAULT_W;
+    int32_t want_h = parsed_h > 0 ? (int32_t)parsed_h : IMAGE_DEFAULT_H;
+    if (want_w > IMAGE_MAX_DIM) want_w = IMAGE_MAX_DIM;
+    if (want_h > IMAGE_MAX_DIM) want_h = IMAGE_MAX_DIM;
+
     st->y += IMAGE_MARGIN_TOP;
     struct capyhtml_cmd *c = rl_alloc(st);
     if (!c) return;
@@ -373,14 +395,14 @@ static void rl_emit_image(struct rl_state *st,
     c->color_role = CAPYHTML_COLOR_MUTED;
     c->x = BLOCK_LEFT_MARGIN;
     c->y = st->y;
-    c->w = rl_clamp_w(st, c->x, IMAGE_DEFAULT_W);
-    c->h = IMAGE_DEFAULT_H;
+    c->w = rl_clamp_w(st, c->x, want_w);
+    c->h = want_h;
     /* Mesmo "text" do node vira alt-text; fica acessivel ao raster
      * que pode optar por escrever dentro do placeholder. */
     c->text = n->text[0] ? n->text : (const char *)0;
     /* src carregado no href para hit-test + future IMAGE_REQUEST. */
     c->href = n->href[0] ? n->href : (const char *)0;
-    st->y += IMAGE_DEFAULT_H + IMAGE_MARGIN_BOT;
+    st->y += want_h + IMAGE_MARGIN_BOT;
 }
 
 /* Etapa 3 seção d (2026-05-03; refinement 2026-05-03): conta TDs/THs

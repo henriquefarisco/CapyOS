@@ -60,7 +60,7 @@
 |---|---|---|---|---|
 | **F1** | Release `0.8.0-alpha.6` (M5 + W1/W2/W3 + F3 browser) | `[█████████░] 95%` | 🟡 bump local validado; snapshot publicado em `main`/`develop`; falta tag | — |
 | **F2** | DHCP smoke VMware+E1000 + assinatura Ed25519 | `[█░░░░░░░░░] 10%` | 🔴 código existe; aguarda harness VMware | F1 |
-| **F3** | Browser em processo userland + watchdog (M8.2 + W3.4) | `[█████████▉] 99%` | 🟡 Etapas 1+2 + 3 a/b/c/d/e (+ polish/polish++) + 4 a/b ✅; Etapa 3 d refinement (colspan + auto-fit) + 3 c refinement (textarea) + Etapa 5 rate limiter ✅ 2026-05-03; falta Etapa 3 a fetch/decode real + f + Etapa 5 (resto) + smoke visual QEMU | F1 |
+| **F3** | Browser em processo userland + watchdog (M8.2 + W3.4) | `[█████████▉] 99%` | 🟡 Etapas 1+2 + 3 a/b/c/d/e (+ polish/polish++) + 4 a/b ✅; Etapa 3 d refinement (colspan + auto-fit) + 3 c refinement (textarea/select) + Etapa 5 rate limiter ✅ 2026-05-03; Etapa 3 a refinement (`width`/`height` attrs) ✅ 2026-05-05; falta Etapa 3 a fetch/decode real + f (fonte) + Etapa 5 (seccomp + memory budget) + smoke visual QEMU | F1 |
 | **F4** | Sockets userland + TLS (`libcapy-net` + `libcapy-tls`) | `[██░░░░░░░░] 20%` | 🟡 Etapa 4 a+b ✅ via bridge kernel-side (F3.3g); c/d (userland libs) pendentes | F1 (paralelo com F3) |
 | **F5** | Update real via GitHub Releases (fetch + Ed25519) | `[░░░░░░░░░░]  0%` | 🔴 não iniciado | F4, F2 |
 | **F6** | Sessão gráfica completa (mouse, login GUI, dispatcher) | `[░░░░░░░░░░]  0%` | 🔴 não iniciado | F1 (paralelo com F3/F4) |
@@ -97,7 +97,7 @@ técnico (entregáveis, critérios de aceite, validação) vive no master plan.
 
 Cada seção é independente; escolher por impacto visual:
 
-- [x] **Etapa 3 seção a** — Imagens inline ✅ *MVP placeholder entregue 2026-05-03* (parser emite IMG node com src+alt; render emite `CMD_IMAGE` com 100×80 clampado; raster desenha placeholder cinza + borda + marcador de canto + alt text centralizado; `+33 asserts` host). Falta: fetch+decode real (IPC IMAGE_REQUEST/RESPONSE + wiring com `png_loader.c`/`jpeg_loader.c` do chrome).
+- [x] **Etapa 3 seção a** — Imagens inline ✅ *MVP placeholder + width/height attrs entregue 2026-05-05* (parser emite IMG node com src+alt + `width`/`height` parseados como inteiros decimais empacotados em `bold`+`reserved[3]` via macros `CAPYHTML_IMG_SET_*`; render `rl_emit_image` usa dims parseadas com fallback para 100×80 + cap defensivo `IMAGE_MAX_DIM=2048` + clamp por viewport; raster desenha placeholder cinza + borda + marcador de canto + alt text centralizado; `+33 asserts MVP + 13 asserts width/height` host). Falta: fetch+decode real (IPC IMAGE_REQUEST/RESPONSE + wiring com `png_loader.c`/`jpeg_loader.c` do chrome).
 - [x] **Etapa 3 seção c** — Form inputs ✅ *MVP + polish + textarea + select entregue 2026-05-03* (parser reconhece `<form action>`/`<input type/name/value/placeholder>`/`<textarea name>`/`<select name>`+`<option value>`; render emite `CMD_INPUT` com subtipo+node_idx; raster desenha caixa estilizada por subtipo (text/submit/password com `*`/textarea com altura 72 px e texto top-aligned/select com triangulo "▼"); polish: borda 2 px HEADING + caret, percent-encoding RFC 3986; engine: `g_focused_input_idx` + `hit_test_doc` + `run_key` + `run_submit`; `+58` MVP+polish + `+13` textarea + `+13` select. Falta: POST + validação client-side + cursor blink.
 - [x] **Etapa 3 seção d** — Tabelas ✅ *MVP + colspan + auto-fit entregue 2026-05-03* (parser reconhece `<table>`/`<tr>`/`<td>`/`<th>` com `colspan`; `<th>` seta bold=1 para HEADING color; render lay-out grid: soma colspans da primeira TR, calcula `cell_w = avail_w / cols` com clamp em `TABLE_MIN_CELL_W` (cell overflow tolerated, raster clipa); cell emite com `w = colspan * cell_w` e avança col_index por colspan; novo `CMD_CELL`; raster desenha 1 px borda LINK + bg MUTED para TH; defesas: nested/zero-cols/excess-cells/colspan-clamp; `+41 asserts` MVP + `+22 asserts` colspan/auto-fit (7 parser + 15 render). Falta: box-model CSS inline `style=`, rowspan, scroll horizontal nativo.
 - [ ] **Etapa 3 seção f** — Fonte real (TTF ou bitmap 16×16 substituindo o 8×8 atual).
@@ -198,7 +198,7 @@ Harness reproducível via `gcc` direto (cross-platform host):
 | `audit_version_manifest` | ✅ `0.8.0-alpha.6+20260503` alinhado |
 | `check_boot_perf_baseline --self-test` | ✅ passa |
 | Syntax check x86_64 freestanding `-Werror=comment` | ✅ `runtime.c`, `browser_app.c`, `capybrowser/main.c` |
-| Full host suite (`TEST_SRCS`, 186 TUs) | ✅ 41 suítes numéricas, **2058 asserts numéricos** + ~35 grupos sem contagem |
+| Full host suite (`TEST_SRCS`, 186 TUs) | ✅ 41 suítes numéricas, **2071 asserts numéricos** + ~35 grupos sem contagem (capyhtml: 71 parser + 133 render + 64 raster) |
 
 Comandos canônicos:
 

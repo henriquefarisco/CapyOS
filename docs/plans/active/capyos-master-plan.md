@@ -284,9 +284,10 @@ M2 fecha; M6.4 fecha. Todos os 9 critérios de aceite da release α passam.
 
 **Status:** 🟡 **99%** — ver [`historical/f3-browser-delivered.md`](../historical/f3-browser-delivered.md)
 para detalhe completo das entregas (F3.3a..F3.3h + Etapas 1/2/3 b+e
-+ b-polish + b-polish++ + 3a placeholder + 3c forms MVP+polish+textarea+select +
-3d tables MVP+colspan + Etapa 4 a+b + Etapa 5 rate limiter+URL policy+bytes obs+audit log,
-total **~1389 asserts host** novos de F3 + integracao com a suite base).
++ b-polish + b-polish++ + 3a placeholder + 3a width/height attrs +
+3c forms MVP+polish+textarea+select + 3d tables MVP+colspan +
+Etapa 4 a+b + Etapa 5 rate limiter+URL policy+bytes obs+audit log,
+total **~1402 asserts host** novos de F3 + integracao com a suite base).
 
 **Entregas consolidadas** (nao voltam como tarefa):
 
@@ -311,6 +312,16 @@ total **~1389 asserts host** novos de F3 + integracao com a suite base).
   desenha placeholder: fill MUTED + borda 1px LINK + marcador 3×3 no
   canto + alt text centralizado (se couber). `+33 asserts host` (7
   parser + 16 render + 10 raster).
+- **Etapa 3 seção a refinement (width/height attrs)** — parser
+  extrai atributos `width` e `height` de `<img>` (top-level e inline)
+  via novo helper `parse_uint_attr` (decimal, tolerante a sufixo
+  `px`, clamp em 65535); valores empacotados em `node->bold` +
+  `node->reserved[3]` via macros novas em `capyhtml/types.h`:
+  `CAPYHTML_IMG_SET_WIDTH/HEIGHT` + `CAPYHTML_IMG_GET_WIDTH/HEIGHT`.
+  `rl_emit_image` lê dims parseadas (fallback 100×80), aplica cap
+  defensivo `IMAGE_MAX_DIM=2048` (impede `<img width="999999">` DoS),
+  e `rl_clamp_w` segue clampando por viewport. `+13 asserts host`
+  (7 parser + 5 render + integracao no advance de y).
 - **Etapa 3 seção c (forms MVP)** — parser: `<form action>` empurra
   TAG_FORM com action no `href`; `<input type/name/value/placeholder>`
   empurra TAG_INPUT com `name` em campo proprio + `text=value` +
@@ -420,21 +431,23 @@ possivel com:** F2, F4. **Branch sugerida:** `feature/f3-browser-isolation`.
 Cada item abaixo e um incremento independente; nao ha dependencia
 sequencial forte entre eles (pode ser qualquer ordem).
 
-##### Etapa 3 seção a — Imagens inline (MVP placeholder ✅; fetch/decode pendente)
+##### Etapa 3 seção a — Imagens inline (MVP placeholder + width/height ✅; fetch/decode pendente)
 
-**Progresso 2026-05-03:** parser/render/raster agora suportam `<img>`
-com placeholder visivel (ver "Entregas consolidadas" acima). Pagina
-com `<img>` renderiza sem swallow de nodes vizinhos; o retangulo
-indicativo serve de affordance visual ate a decode real chegar.
+**Progresso 2026-05-03 + 2026-05-05:** parser/render/raster suportam
+`<img>` com placeholder visivel + atributos `width`/`height` parseados
+e respeitados (ver "Entregas consolidadas" acima). Pagina com `<img>`
+renderiza sem swallow de nodes vizinhos; placeholder serve de
+affordance visual; dims explicitas no HTML reservam o slot correto
+no layout antes da decode real chegar.
 
 **Gap remanescente:** placeholder nao baixa nem decodifica a imagem
 real. Para fechar 100% da seção, falta o pipeline de fetch+decode.
 
 **Entregaveis:**
 
-- Parser: ~~IMG node~~ ✅; opcional: parsear `width`/`height` attrs
-  para sobreescrever dims default 100×80.
-- Render: ~~CMD_IMAGE emitido~~ ✅.
+- Parser: ~~IMG node~~ ✅; ~~`width`/`height` attrs~~ ✅ (2026-05-05).
+- Render: ~~CMD_IMAGE emitido~~ ✅; ~~dims do attr respeitadas~~ ✅
+  (2026-05-05).
 - Raster: ~~placeholder visivel~~ ✅; upgrade: substituir fill por
   pixels BGRA decodificados quando disponiveis.
 - **Engine**: adicionar `BROWSER_IPC_EVENT_IMAGE_REQUEST` (url, img_id)
@@ -453,7 +466,8 @@ real. Para fechar 100% da seção, falta o pipeline de fetch+decode.
 - `<img src="http://.../image.png">` em pagina real renderiza
   pixels decodificados (PNG/JPEG) no lugar do placeholder.
 - Falha de decode mantem o placeholder com alt text.
-- Largura/altura vem de atributos HTML quando presentes.
+- ~~Largura/altura vem de atributos HTML quando presentes~~ ✅
+  (2026-05-05).
 - Cache evita re-fetch na mesma navegacao (F5/scroll/navigate-back).
 
 ##### Etapa 3 seção c — Form inputs (MVP+polish ✅; refinamentos avancados pendentes)

@@ -528,6 +528,82 @@ static void test_select_renders_first_option_default(void) {
          "select: inherits form action");
 }
 
+/* Etapa 3 seção a refinement (2026-05-05): <img width="W" height="H">
+ * sobreescreve as dimensoes default 100×80. Atributos parseados como
+ * inteiros decimais; range 1..2048 (clampado por IMAGE_MAX_DIM). */
+static void test_img_explicit_width_height(void) {
+    struct capyhtml_document doc;
+    struct capyhtml_font_ops f = mock_font();
+    struct capyhtml_cmd cmds[8];
+    struct capyhtml_render_result r;
+    parse_into("<img src=\"a.png\" width=\"200\" height=\"150\">", &doc);
+    int rc = capyhtml_layout(&doc, &f, 320, cmds, 8, &r);
+    R_OK(rc == 0, "img w/h: layout ok");
+    R_OK(r.cmd_count == 1, "img w/h: 1 cmd");
+    R_OK(cmds[0].kind == CAPYHTML_CMD_IMAGE, "img w/h: IMAGE cmd");
+    R_OK(cmds[0].w == 200, "img w/h: w = 200");
+    R_OK(cmds[0].h == 150, "img w/h: h = 150");
+}
+
+static void test_img_only_width_keeps_default_height(void) {
+    /* Apenas width informado: height fica em IMAGE_DEFAULT_H (80).
+     * Util para garantir que cada attr pode ser definido independente. */
+    struct capyhtml_document doc;
+    struct capyhtml_font_ops f = mock_font();
+    struct capyhtml_cmd cmds[8];
+    struct capyhtml_render_result r;
+    parse_into("<img src=\"b.png\" width=\"50\">", &doc);
+    capyhtml_layout(&doc, &f, 320, cmds, 8, &r);
+    R_OK(cmds[0].w == 50, "img w-only: w = 50");
+    R_OK(cmds[0].h == 80, "img w-only: h fallback to default 80");
+}
+
+static void test_img_only_height_keeps_default_width(void) {
+    struct capyhtml_document doc;
+    struct capyhtml_font_ops f = mock_font();
+    struct capyhtml_cmd cmds[8];
+    struct capyhtml_render_result r;
+    parse_into("<img src=\"c.png\" height=\"40\">", &doc);
+    capyhtml_layout(&doc, &f, 320, cmds, 8, &r);
+    R_OK(cmds[0].h == 40, "img h-only: h = 40");
+    /* Width segue o default 100 (mais 12 px de margem horizontal cabe
+     * em viewport 320 sem clamp). */
+    R_OK(cmds[0].w == 100, "img h-only: w fallback to default 100");
+}
+
+static void test_img_huge_width_clamped_to_max_dim(void) {
+    /* Pagina maliciosa: <img width="999999"> nao deve reservar 999999
+     * px. Cap defensivo IMAGE_MAX_DIM (2048) limita a altura
+     * reservada; rl_clamp_w corta a largura para o viewport. */
+    struct capyhtml_document doc;
+    struct capyhtml_font_ops f = mock_font();
+    struct capyhtml_cmd cmds[8];
+    struct capyhtml_render_result r;
+    parse_into("<img src=\"d.png\" width=\"999999\" height=\"999999\">",
+               &doc);
+    capyhtml_layout(&doc, &f, 320, cmds, 8, &r);
+    R_OK(cmds[0].h == 2048, "img huge: h clamped to IMAGE_MAX_DIM 2048");
+    /* Width clampado primeiro a IMAGE_MAX_DIM (2048), depois pelo
+     * viewport de 320 - 12 left - 12 right = 296. */
+    R_OK(cmds[0].w <= 308, "img huge: w clamped to viewport");
+}
+
+static void test_img_width_height_advance_y_correctly(void) {
+    /* Dois IMGs em sequencia: o segundo deve comecar em y >= y0 + h0
+     * + margens, refletindo dims explicitas em vez de defaults. */
+    struct capyhtml_document doc;
+    struct capyhtml_font_ops f = mock_font();
+    struct capyhtml_cmd cmds[8];
+    struct capyhtml_render_result r;
+    parse_into("<img src=\"a.png\" width=\"60\" height=\"40\">"
+               "<img src=\"b.png\" width=\"60\" height=\"40\">",
+               &doc);
+    capyhtml_layout(&doc, &f, 320, cmds, 8, &r);
+    R_OK(r.cmd_count == 2, "img seq: 2 cmds");
+    R_OK(cmds[1].y >= cmds[0].y + 40,
+         "img seq: cmd[1].y >= cmd[0].y + parsed_h");
+}
+
 /* Etapa 3 seção c refinement (2026-05-03): textarea emite CMD_INPUT
  * com altura > INPUT_HEIGHT padrao (24). */
 static void test_textarea_renders_taller_box(void) {
@@ -568,6 +644,11 @@ int test_capyhtml_render_run(void) {
     test_img_emits_image_cmd();
     test_img_without_src_still_emits();
     test_img_clamped_in_narrow_viewport();
+    test_img_explicit_width_height();
+    test_img_only_width_keeps_default_height();
+    test_img_only_height_keeps_default_width();
+    test_img_huge_width_clamped_to_max_dim();
+    test_img_width_height_advance_y_correctly();
     test_input_inside_form();
     test_input_outside_form_no_action();
     test_input_form_node_idx_back_to_doc();
