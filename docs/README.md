@@ -3,6 +3,7 @@
 Indice principal da documentacao ativa do projeto.
 
 Escopo atual:
+
 - nome oficial do sistema: `CapyOS`
 - trilha suportada: `UEFI/GPT/x86_64`
 - caminho validado: provisionamento por script + boot por HDD + login + CLI
@@ -11,8 +12,12 @@ Escopo atual:
 
 - `architecture/system-overview.md`
   - visao geral da arquitetura atual, boot, storage, drivers e lacunas
+- `project-overview.md`
+  - visao tecnica compacta do projeto, compatibilidade, funcionalidades,
+    validacao e roadmap macro
 - `architecture/capyui-shell-polish-v1.md`
-  - polish visual, launcher, wallpaper, decoração e tray avançado do CapyUI Shell v1 fechado
+  - polish visual, launcher, wallpaper, decoracao e tray avancado do CapyUI
+    Shell v1 fechado
 - `architecture/graphical-session-operational.md`
   - Etapa 2 da sessão gráfica operacional, frame pacing e próximos slices
 - `setup/hyper-v.md`
@@ -129,6 +134,7 @@ Escopo atual:
   - servem para implementacao e consolidacao tematica antes do merge
 
 Fluxo esperado:
+
 1. feature branch
 2. merge em `develop`
 3. validacao
