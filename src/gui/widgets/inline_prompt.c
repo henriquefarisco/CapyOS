@@ -13,6 +13,7 @@
 #include "gui/inline_prompt.h"
 #include "gui/compositor.h"
 #include "gui/font.h"
+#include "drivers/input/keyboard_layout.h"
 #include "lang/app_language.h"
 #include <stddef.h>
 
@@ -21,6 +22,7 @@ static struct {
   char  title[INLINE_PROMPT_TITLE_MAX];
   char  text[INLINE_PROMPT_TEXT_MAX];
   uint32_t cursor;
+  int secret;
   inline_prompt_submit_fn on_submit;
   void *ctx;
 } g_p = {0};
@@ -36,6 +38,87 @@ static void ip_strcpy(char *d, const char *s, uint32_t max) {
   if (!d || max == 0u) return;
   if (s) while (i + 1u < max && s[i]) { d[i] = s[i]; i++; }
   d[i] = '\0';
+}
+
+static void ip_zero(char *d, uint32_t max) {
+  if (!d) return;
+  volatile char *p = d;
+  for (uint32_t i = 0; i < max; i++) p[i] = '\0';
+}
+
+static void ip_fit_text(const struct font *f, const char *src,
+                        uint32_t max_width, char *out, uint32_t out_len) {
+  uint32_t len = 0;
+  uint32_t max_chars = 0;
+  if (!out || out_len == 0u) return;
+  out[0] = '\0';
+  if (!f || !src || max_width == 0u || f->glyph_width == 0u) return;
+  max_chars = max_width / f->glyph_width;
+  if (max_chars == 0u) return;
+  while (src[len]) len++;
+  if (len <= max_chars) {
+    ip_strcpy(out, src, out_len);
+    return;
+  }
+  if (max_chars <= 3u) {
+    uint32_t n = max_chars;
+    if (n >= out_len) n = out_len - 1u;
+    for (uint32_t i = 0; i < n; i++) out[i] = '.';
+    out[n] = '\0';
+    return;
+  }
+  {
+    uint32_t copy = max_chars - 3u;
+    if (copy > out_len - 4u) copy = out_len - 4u;
+    for (uint32_t i = 0; i < copy; i++) out[i] = src[i];
+    out[copy] = '.';
+    out[copy + 1u] = '.';
+    out[copy + 2u] = '.';
+    out[copy + 3u] = '\0';
+  }
+}
+
+static void ip_draw_fit(struct gui_surface *s, const struct font *f,
+                        int32_t x, int32_t y, uint32_t max_width,
+                        const char *text, uint32_t color) {
+  char fitted[80];
+  ip_fit_text(f, text, max_width, fitted, sizeof(fitted));
+  if (fitted[0]) font_draw_string(s, f, x, y, fitted, color);
+}
+
+static uint32_t ip_visible_start(uint32_t cursor, uint32_t visible_chars) {
+  if (visible_chars == 0u || cursor <= visible_chars) return 0u;
+  return cursor - visible_chars;
+}
+
+static void ip_visible_text(uint32_t start, uint32_t count, char *out,
+                            uint32_t out_len) {
+  uint32_t len = ip_strlen(g_p.text);
+  uint32_t copied = 0;
+  if (!out || out_len == 0u) return;
+  out[0] = '\0';
+  if (start > len) start = len;
+  while (copied < count && copied + 1u < out_len &&
+         g_p.text[start + copied]) {
+    out[copied] = g_p.secret ? '*' : g_p.text[start + copied];
+    copied++;
+  }
+  out[copied] = '\0';
+}
+
+static void ip_delete_at_cursor(void) {
+  uint32_t len = ip_strlen(g_p.text);
+  if (g_p.cursor >= len) return;
+  for (uint32_t i = g_p.cursor; i < len; i++) {
+    g_p.text[i] = g_p.text[i + 1u];
+  }
+}
+
+static uint32_t ip_visible_chars_for_width(const struct font *f,
+                                           int32_t input_width) {
+  uint32_t gw = (f && f->glyph_width) ? f->glyph_width : 8u;
+  if (input_width <= 8) return 0u;
+  return (uint32_t)(input_width - 8) / gw;
 }
 
 static void ip_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
@@ -65,8 +148,8 @@ static void ip_paint(struct gui_window *win) {
   /* Faixa accent no topo (4 px) — afirma destaque visual. */
   ip_fill_rect(s, 0, 0, s->width, 4, theme->accent);
 
-  /* Title em accent_text. */
-  font_draw_string(s, f, 8, 8, g_p.title, theme->text);
+  ip_draw_fit(s, f, 8, 8, s->width > 16u ? s->width - 16u : 0u,
+              g_p.title, theme->text);
 
   /* Caixa do input: 1 px border accent_alt + interior accent_alt
    * lighter. Fica 8 .. width-8 horizontal, 26 .. 44 vertical. */
@@ -79,33 +162,37 @@ static void ip_paint(struct gui_window *win) {
   ip_fill_rect(s, bx, by, 1, bh, theme->accent_alt);
   ip_fill_rect(s, bx + bw - 1, by, 1, bh, theme->accent_alt);
 
-  /* Texto digitado + caret. */
-  font_draw_string(s, f, bx + 4, by + 4, g_p.text, theme->terminal_fg);
-  /* Caret 1 px wide na coluna g_p.cursor. */
-  uint32_t gw = 8u; /* glyph width default font */
-  int32_t cx = bx + 4 + (int32_t)(g_p.cursor * gw);
+  uint32_t gw = f->glyph_width ? f->glyph_width : 8u;
+  uint32_t visible_chars = (bw > 8 && gw > 0u) ? (uint32_t)(bw - 8) / gw : 0u;
+  uint32_t start = ip_visible_start(g_p.cursor, visible_chars);
+  char visible[INLINE_PROMPT_TEXT_MAX];
+  ip_visible_text(start, visible_chars, visible, sizeof(visible));
+  font_draw_string(s, f, bx + 4, by + 4, visible, theme->terminal_fg);
+  int32_t cx = bx + 4 + (int32_t)((g_p.cursor - start) * gw);
   if (cx < bx + bw - 2)
     ip_fill_rect(s, cx, by + 3, 1, (uint32_t)bh - 6, theme->accent);
 
   /* Hint Enter / Esc na base.
    * Etapa F4 i18n (2026-05-03): localizado por sessao. */
   if (s->height > 50u) {
-    font_draw_string(s, f, 8, 46,
-                     APP_T("Enter: ok   Esc: cancelar",
-                            "Enter: ok   Esc: cancel",
-                            "Enter: ok   Esc: cancelar"),
-                     theme->text_muted);
+    ip_draw_fit(s, f, 8, 46, s->width > 16u ? s->width - 16u : 0u,
+                APP_T("Enter: ok   Esc: cancelar",
+                      "Enter: ok   Esc: cancel",
+                      "Enter: ok   Esc: cancelar"),
+                theme->text_muted);
   }
 }
 
-int inline_prompt_show(const char *title, const char *default_text,
-                       int32_t screen_x, int32_t screen_y,
-                       inline_prompt_submit_fn on_submit, void *ctx) {
+static int inline_prompt_show_mode(const char *title, const char *default_text,
+                                   int32_t screen_x, int32_t screen_y,
+                                   inline_prompt_submit_fn on_submit,
+                                   void *ctx, int secret) {
   inline_prompt_close();
   ip_strcpy(g_p.title, title ? title : "", INLINE_PROMPT_TITLE_MAX);
   ip_strcpy(g_p.text, default_text ? default_text : "",
             INLINE_PROMPT_TEXT_MAX);
   g_p.cursor = ip_strlen(g_p.text);
+  g_p.secret = secret ? 1 : 0;
   g_p.on_submit = on_submit;
   g_p.ctx = ctx;
   if (screen_x < 0) screen_x = 0;
@@ -116,6 +203,7 @@ int inline_prompt_show(const char *title, const char *default_text,
   if (!g_p.win) {
     g_p.on_submit = NULL;
     g_p.ctx = NULL;
+    g_p.secret = 0;
     return -1;
   }
   g_p.win->decorated = 0;
@@ -132,14 +220,29 @@ int inline_prompt_show(const char *title, const char *default_text,
   return 0;
 }
 
+int inline_prompt_show(const char *title, const char *default_text,
+                       int32_t screen_x, int32_t screen_y,
+                       inline_prompt_submit_fn on_submit, void *ctx) {
+  return inline_prompt_show_mode(title, default_text, screen_x, screen_y,
+                                 on_submit, ctx, 0);
+}
+
+int inline_prompt_show_secret(const char *title, const char *default_text,
+                              int32_t screen_x, int32_t screen_y,
+                              inline_prompt_submit_fn on_submit, void *ctx) {
+  return inline_prompt_show_mode(title, default_text, screen_x, screen_y,
+                                 on_submit, ctx, 1);
+}
+
 void inline_prompt_close(void) {
   if (g_p.win) {
     compositor_destroy_window(g_p.win->id);
     g_p.win = NULL;
   }
   g_p.title[0] = '\0';
-  g_p.text[0] = '\0';
+  ip_zero(g_p.text, INLINE_PROMPT_TEXT_MAX);
   g_p.cursor = 0;
+  g_p.secret = 0;
   g_p.on_submit = NULL;
   g_p.ctx = NULL;
 }
@@ -164,6 +267,7 @@ int inline_prompt_handle_key(uint32_t keycode, char ch) {
     ip_strcpy(snap, g_p.text, INLINE_PROMPT_TEXT_MAX);
     inline_prompt_close();
     if (cb) cb(snap, cb_ctx);
+    ip_zero(snap, INLINE_PROMPT_TEXT_MAX);
     return 1;
   }
   /* Backspace. */
@@ -177,6 +281,32 @@ int inline_prompt_handle_key(uint32_t keycode, char ch) {
         g_p.cursor--;
       }
     }
+    if (g_p.win) compositor_invalidate(g_p.win->id);
+    return 1;
+  }
+  if (keycode == KEY_LEFT) {
+    if (g_p.cursor > 0) g_p.cursor--;
+    if (g_p.win) compositor_invalidate(g_p.win->id);
+    return 1;
+  }
+  if (keycode == KEY_RIGHT) {
+    uint32_t len = ip_strlen(g_p.text);
+    if (g_p.cursor < len) g_p.cursor++;
+    if (g_p.win) compositor_invalidate(g_p.win->id);
+    return 1;
+  }
+  if (keycode == KEY_HOME) {
+    g_p.cursor = 0;
+    if (g_p.win) compositor_invalidate(g_p.win->id);
+    return 1;
+  }
+  if (keycode == KEY_END) {
+    g_p.cursor = ip_strlen(g_p.text);
+    if (g_p.win) compositor_invalidate(g_p.win->id);
+    return 1;
+  }
+  if (keycode == KEY_DELETE) {
+    ip_delete_at_cursor();
     if (g_p.win) compositor_invalidate(g_p.win->id);
     return 1;
   }
@@ -194,7 +324,7 @@ int inline_prompt_handle_key(uint32_t keycode, char ch) {
     if (g_p.win) compositor_invalidate(g_p.win->id);
     return 1;
   }
-  /* Outras teclas (arrows etc.) absorvidas pelo prompt sem efeito. */
+  /* Outras teclas sao absorvidas pelo prompt sem efeito. */
   return 1;
 }
 
@@ -209,7 +339,25 @@ int inline_prompt_handle_click(int32_t screen_x, int32_t screen_y) {
     inline_prompt_close();
     return 1;
   }
-  /* Click dentro do popup: por enquanto mantem foco; futuramente
-   * poderia mover o caret pra coluna do click. */
+  {
+    int32_t lx = screen_x - px;
+    int32_t ly = screen_y - py;
+    int32_t bx = 8, by = 24;
+    int32_t bw = (int32_t)pw - 16;
+    int32_t bh = 18;
+    if (lx >= bx && lx < bx + bw && ly >= by && ly < by + bh) {
+      const struct font *f = font_default();
+      uint32_t gw = (f && f->glyph_width) ? f->glyph_width : 8u;
+      uint32_t visible_chars = ip_visible_chars_for_width(f, bw);
+      uint32_t start = ip_visible_start(g_p.cursor, visible_chars);
+      int32_t rel = lx - (bx + 4);
+      uint32_t col = 0u;
+      uint32_t len = ip_strlen(g_p.text);
+      if (rel > 0) col = (uint32_t)(rel + (int32_t)(gw / 2u)) / gw;
+      g_p.cursor = start + col;
+      if (g_p.cursor > len) g_p.cursor = len;
+      compositor_invalidate(g_p.win->id);
+    }
+  }
   return 1;
 }

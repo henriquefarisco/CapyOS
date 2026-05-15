@@ -1,4 +1,5 @@
 #include "drivers/input/mouse.h"
+#include "security/csprng.h"
 #include <stddef.h>
 
 #define PS2_DATA_PORT    0x60
@@ -115,6 +116,14 @@ void mouse_ps2_irq_handler(void) {
   if (mouse_packet_idx == 0 && !(data & 0x08)) {
     return;
   }
+/* Cada byte de pacote PS/2 do mouse contem timing humano residual
+   * (intervalos entre movimentos do mouse sao nao-deterministicos e
+   * variam por sub-milissegundos entre interrupcoes consecutivas).
+   * Alimentar o CSPRNG com esses bytes engrossa a entropia de pool
+   * em qualquer sessao com mouse ativo, sem custo adicional alem da
+   * propria invocacao da ISR (que ja estava no caminho). */
+  csprng_feed_entropy((uint32_t)data);
+
 
   mouse_packet[mouse_packet_idx++] = data;
 

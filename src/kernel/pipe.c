@@ -78,3 +78,32 @@ int pipe_close_write(int pipe_id) {
   g_pipes[pipe_id].write_open = 0;
   return 0;
 }
+
+int pipe_read_end_open(int pipe_id) {
+  if (pipe_id < 0 || pipe_id >= PIPE_MAX) return -1;
+  return g_pipes[pipe_id].read_open ? 1 : 0;
+}
+
+uint32_t pipe_poll_events(int fd) {
+  if (!g_pipe_initialized) return 0;
+  int pipe_id = fd;
+  int write_end = 0;
+  if (fd >= 256 && fd < 256 + PIPE_MAX) {
+    pipe_id = fd - 256;
+    write_end = 1;
+  } else if (fd < 0 || fd >= PIPE_MAX) {
+    return 0;
+  }
+  struct pipe *p = &g_pipes[pipe_id];
+  if (!p->read_open && !p->write_open) return 0;
+  if (write_end) {
+    if (!p->write_open) return 0;
+    if (!p->read_open) return PIPE_POLLERR;
+    return (p->count < PIPE_BUF_SIZE) ? PIPE_POLLOUT : 0;
+  }
+  if (!p->read_open) return 0;
+  uint32_t events = 0;
+  if (p->count > 0) events |= PIPE_POLLIN;
+  if (!p->write_open) events |= PIPE_POLLHUP;
+  return events;
+}

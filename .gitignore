@@ -7,6 +7,12 @@ QEMU.sh
 scripts.py
 __pycache__/
 *.pyc
+*.bak
+*.swp
+*.code-workspace
+/logs/
+/tmp/
+/temp/
 .codex/
 .claude/
 .windsurf/

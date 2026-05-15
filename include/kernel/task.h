@@ -72,6 +72,7 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
 struct task *task_create_kernel(const char *name, task_entry_fn entry,
                                 void *arg);
 struct task *task_current(void);
+void task_set_current(struct task *t);
 struct task *task_by_pid(uint32_t pid);
 int task_kill(uint32_t pid);
 void task_exit(int code) __attribute__((noreturn));

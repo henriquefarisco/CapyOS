@@ -1,5 +1,6 @@
 /* system_settings.c: settings load/save, config file I/O, update catalog. */
 #include "internal/config_internal.h"
+#include "core/version.h"
 
 /* ---- validate_theme (forward) ---- */
 static const char *validate_theme(const char *input) {
@@ -46,10 +47,11 @@ static void system_settings_set_defaults(struct system_settings *settings) {
   settings->ipv4_dns = 0;
   settings->splash_enabled = 1;
   settings->diagnostics_enabled = 0;
-  /* Etapa F4 homepage (2026-05-03): default = wikipedia.org. Quando
-   * a rede esta indisponivel, o browser_app cai automaticamente
-   * para a pagina embarcada `file://capyos/wikipedia` que tem o
-   * mesmo conteudo offline (ver browser_app/browser_app.c). */
+  /* Etapa F4 homepage (2026-05-03): default = wikipedia.org.
+   * O campo `browser_homepage` permanece em config.ini apos a
+   * erradicacao do capybrowser na sessao 6 (2026-05-05) -- sera
+   * reusado pelo port do Firefox quando aterrissar.
+   * Ver docs/plans/active/firefox-port-roadmap.md. */
   cstring_copy(settings->browser_homepage, sizeof(settings->browser_homepage),
                "https://wikipedia.org");
 }
@@ -106,6 +108,40 @@ static int system_update_ensure_file(const char *path) {
   return 0;
 }
 
+static int system_update_version_core_ref(const char *version, char *out,
+                                          size_t out_size) {
+  const char *p = version;
+  size_t dots = 0u;
+  size_t written = 0u;
+
+  if (!out || out_size == 0u) {
+    return -1;
+  }
+  out[0] = '\0';
+  if (!p || !p[0]) {
+    return -1;
+  }
+  if (*p == 'v' || *p == 'V') {
+    ++p;
+  }
+  config_buffer_append(out, out_size, "refs/tags/v");
+  written = cstring_length(out);
+  while (*p && *p != '-' && *p != '+' && written + 1u < out_size) {
+    char next[2];
+    if (!((*p >= '0' && *p <= '9') || *p == '.')) {
+      break;
+    }
+    if (*p == '.') {
+      ++dots;
+    }
+    next[0] = *p++;
+    next[1] = '\0';
+    config_buffer_append(out, out_size, next);
+    written = cstring_length(out);
+  }
+  return dots == 2u ? 0 : -1;
+}
+
 static void system_update_remote_manifest_url(const char *channel, char *out,
                                               size_t out_size) {
   if (!out || out_size == 0) {
@@ -114,9 +150,19 @@ static void system_update_remote_manifest_url(const char *channel, char *out,
   out[0] = '\0';
   config_buffer_append(out, out_size,
                        "https://raw.githubusercontent.com/henriquefarisco/"
-                       "CapyOS/refs/heads/");
-  config_buffer_append(out, out_size,
-                       system_update_branch_for_channel(channel));
+                       "CapyOS/");
+  if (strings_equal(system_update_channel_or_default(channel), "develop")) {
+    config_buffer_append(out, out_size, "refs/heads/");
+    config_buffer_append(out, out_size,
+                         system_update_branch_for_channel(channel));
+  } else {
+    char stable_ref[32];
+    if (system_update_version_core_ref(CAPYOS_VERSION_EXTENDED, stable_ref,
+                                       sizeof(stable_ref)) != 0) {
+      cstring_copy(stable_ref, sizeof(stable_ref), "refs/heads/main");
+    }
+    config_buffer_append(out, out_size, stable_ref);
+  }
   config_buffer_append(out, out_size, "/system/update/latest.ini");
 }
 
@@ -473,10 +519,9 @@ static void apply_config_line(struct system_settings *settings,
       settings->ipv4_dns = parsed;
     }
   } else if (strings_equal(key, "browser_homepage")) {
-    /* Etapa F4 homepage (2026-05-03): URL inicial do browser.
-     * Aceita qualquer string nao-vazia; validacao real (esquema
-     * suportado, comprimento, etc.) acontece no browser_app na
-     * hora do navigate. */
+    /* URL inicial do browser. Validacao de esquema/comprimento
+     * acontecera no Firefox quando portado (sessao 6 erradicou o
+     * capybrowser; o campo persiste para o sucessor). */
     if (value[0] != '\0') {
       cstring_copy(settings->browser_homepage,
                    sizeof(settings->browser_homepage), value);

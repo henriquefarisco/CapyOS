@@ -248,6 +248,8 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->native_confirmed = 0;
   runtime->firmware_retired = 0;
   runtime->shift_active = 0;
+  runtime->ctrl_active = 0;
+  runtime->alt_active = 0;
   runtime->ps2_extended_prefix = 0;
   runtime->hyperv_extended_prefix = 0;
   runtime->dead_accent = 0;

@@ -89,6 +89,7 @@ struct gui_window {
    * (download, fetch, parse, etc.) podem setar este flag para
    * mostrar o cursor "loading" sobre sua janela. Limpar ao terminar. */
   int loading;
+  int capture_mouse;
   /* Etapa UX W7-ish (2026-05-03): raio dos cantos arredondados em px.
    * Default 0 = quadrado. compositor_create_window seta para
    * COMP_WINDOW_CORNER_RADIUS (8) automaticamente quando decorated.
@@ -101,9 +102,13 @@ struct gui_window {
   void (*on_paint)(struct gui_window *win);
   void (*on_close)(struct gui_window *win);
   void (*on_resize)(struct gui_window *win, uint32_t w, uint32_t h);
+  void (*on_focus)(struct gui_window *win);
+  void (*on_blur)(struct gui_window *win);
   void (*on_key)(struct gui_window *win, uint32_t keycode, uint8_t mods);
+  void (*on_key_up)(struct gui_window *win, uint32_t keycode, uint8_t mods);
   void (*on_mouse)(struct gui_window *win, int32_t x, int32_t y, uint8_t btns);
   void (*on_scroll)(struct gui_window *win, int32_t delta);
+  void (*on_timer)(struct gui_window *win, uint32_t timer_id);
   /* Etapa UX W7-ish (2026-05-03): hover (mouse-move sem botao) e
    * context menu (botao direito). Ambos opcionais; quando NULL, o
    * desktop loop ignora. As coordenadas sao locais a janela
@@ -142,10 +147,15 @@ void compositor_invalidate_rect(uint32_t window_id, struct gui_rect *rect);
  * desktop_icons quando muda selection / refresh de listagem. */
 void compositor_invalidate_all(void);
 void compositor_render(void);
+int compositor_needs_render(void);
+int compositor_cursor_needs_render(int32_t x, int32_t y);
 void compositor_render_cursor(int32_t x, int32_t y);
 struct gui_window *compositor_window_at(int32_t x, int32_t y);
 struct gui_window *compositor_focused_window(void);
+struct gui_window *compositor_get_window(uint32_t window_id);
+int compositor_window_exists(uint32_t window_id);
 void compositor_stats_get(struct compositor_stats *out);
+void compositor_screen_size(uint32_t *out_w, uint32_t *out_h);
 void compositor_set_wallpaper(uint32_t color);
 void compositor_apply_theme(const char *theme, uint32_t screen_w, uint32_t screen_h);
 const struct gui_theme_palette *compositor_theme(void);

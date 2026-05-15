@@ -25,7 +25,6 @@
 #include "apps/text_editor.h"
 #include "apps/task_manager.h"
 #include "apps/settings.h"
-#include "apps/browser_app.h"
 #include "security/tls.h"
 #include "arch/x86_64/framebuffer_console.h"
 #include "drivers/pcie.h"
@@ -315,17 +314,11 @@ static int cmd_open_settings(struct shell_context *c, int a, char **v) {
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   settings_open(); return 0;
 }
-/* F3.3f: spawn the ring-3 chrome runtime + capybrowser engine
- * and open a compositor window. The kernel-side html_viewer was
- * removed in slice 6; everything now lives in ring 3. */
-static int cmd_open_browser(struct shell_context *c, int a, char **v) {
-  (void)a;(void)v;
-  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
-  browser_app_open();
-  return 0;
-}
+/* `cmd_open_browser` erradicado na sessao 6 (2026-05-05). O
+ * capybrowser foi removido; o port do Firefox o substituira.
+ * Ver docs/plans/active/firefox-port-roadmap.md. */
 
-#define EXT_CMD_COUNT 24
+#define EXT_CMD_COUNT 23
 #define EXT_EARLY_COUNT 6
 
 static struct shell_command g_extended_commands[EXT_CMD_COUNT];
@@ -350,7 +343,6 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "open-editor",      cmd_open_editor);
   set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_open_tasks);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_open_settings);
-  set_cmd(&g_extended_commands[i++], "open-browser",     cmd_open_browser);
   set_cmd(&g_extended_commands[i++], "print-tasks",      cmd_print_tasks);
   set_cmd(&g_extended_commands[i++], "print-mem",        cmd_print_mem);
   set_cmd(&g_extended_commands[i++], "print-cpus",       cmd_print_cpus);

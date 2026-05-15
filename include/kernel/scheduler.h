@@ -46,5 +46,6 @@ void scheduler_set_running(int running);
 void scheduler_stats_get(struct scheduler_stats *out);
 struct task *scheduler_pick_next(void);
 int scheduler_running(void);
+int scheduler_can_sleep_current(void);
 
 #endif /* KERNEL_SCHEDULER_H */

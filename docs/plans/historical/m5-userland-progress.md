@@ -177,8 +177,8 @@ sem panic.
 | F | F.2 dispatcher kill-path | ✅ DONE (M4 phase 4+5f) | `src/arch/x86_64/interrupts.c:420-466` (process_exit(128+vector) em ARCH_FAULT_KILL_PROCESS) |
 | F | F.3 single-process smoke | ✅ DONE (M4 phase 5f) | `tools/scripts/smoke_x64_hello_segfault.py`; target `make smoke-x64-hello-segfault` |
 | F | F.4 multi-process smoke | IMPL | binário em `userland/bin/hello/main.c` (`CAPYOS_HELLO_FORK_CRASH`); harness `tools/scripts/smoke_x64_fork_crash.py`; target `make smoke-x64-fork-crash`. Valida que pai sobrevive ao crash do filho e capy_wait retorna status >= 128 |
-| E | E.1 stdin ring buffer | ✅ DONE | `include/kernel/stdin_buf.h` + `src/kernel/stdin_buf.c`; 19 host tests em `tests/test_stdin_buf.c` (init/FIFO/overflow/wrap-around) |
-| E | E.2 SYS_READ fd 0 | ✅ DONE | `src/kernel/syscall.c:54-80` (cooperative blocking via task_yield até stdin_buf_pop) |
+| E | E.1 stdin ring buffer | ✅ DONE | `include/kernel/stdin_buf.h` + `src/kernel/stdin_buf.c`; 50 host tests em `tests/test_stdin_buf.c` (init/FIFO/overflow/wrap-around/readiness/backpressure diagnostics/snapshot/reset window/batch drain/secure discard/discard-all) |
+| E | E.2 SYS_READ fd 0 | ✅ DONE | `src/kernel/syscall.c:85-103` (cooperative blocking até primeiro byte via `stdin_buf_pop`, depois batch drain via `stdin_buf_pop_many`) |
 | E | E.3 keyboard IRQ -> stdin_buf | ✅ DONE | `src/drivers/input/keyboard/core.c:13-35,200-205,253-256` (dual-feed: TTY echo + user_stdin_publish) |
 | E | E.4 capysh binário | ✅ DONE | `userland/bin/capysh/main.c` (banner, prompt, line buffer, builtins help/echo/pid/ppid/exectarget/exit) |
 | E | E.5 embed capysh + boot mode | ✅ DONE | `Makefile` regras `CAPYSH_ELF/BLOB_OBJ`; registry em `src/kernel/embedded_progs.c`; `kernel_boot_run_capysh` em `src/kernel/user_init.c:150-173`; macro `CAPYOS_BOOT_RUN_CAPYSH` em `src/arch/x86_64/kernel_main.c` |

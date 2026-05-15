@@ -1,4 +1,5 @@
 #include "kernel/syscall.h"
+#include "kernel/syscall_net.h"
 #include "kernel/task.h"
 #include "kernel/process.h"
 #include "kernel/scheduler.h"
@@ -69,6 +70,16 @@ int64_t sys_read(struct syscall_frame *f) {
         task_yield();
       }
     }
+    /* F4 seção c (2026-05-08): POSIX read on a socket FD delegates
+     * to the registered net backend (default = socket_recv). The
+     * backend internally polls TCP / drains UDP datagrams, mirroring
+     * the recv path exactly so a userland binary doing
+     * read(sockfd, ...) and recv(sockfd, ..., 0) observe identical
+     * semantics. */
+    if (slot->type == FD_TYPE_SOCKET) {
+      int kernel_fd = (int)(intptr_t)slot->private_data;
+      return syscall_net_fd_read(kernel_fd, buf, len);
+    }
   }
 
   /* Legacy fd 0 stdin_buf shortcut: only fires if the caller did NOT
@@ -88,11 +99,7 @@ int64_t sys_read(struct syscall_frame *f) {
     }
     /* Drain the rest WITHOUT blocking; if the buffer becomes empty
      * we return what we already have. */
-    while (copied < len) {
-      char c;
-      if (!stdin_buf_pop(&c)) break;
-      dst[copied++] = (uint8_t)c;
-    }
+    copied += stdin_buf_pop_many((char *)(dst + copied), len - copied);
     return (int64_t)copied;
   }
 
@@ -126,6 +133,12 @@ int64_t sys_write(struct syscall_frame *f) {
   struct process *proc = process_current();
   if (proc && fd >= 0 && fd < PROCESS_FD_MAX) {
     struct file_descriptor *slot = &proc->fds[fd];
+    /* F4 seção c (2026-05-08): POSIX write on a socket FD delegates
+     * to the registered net backend (default = socket_send). */
+    if (slot->type == FD_TYPE_SOCKET) {
+      int kernel_fd = (int)(intptr_t)slot->private_data;
+      return syscall_net_fd_write(kernel_fd, buf, len);
+    }
     if (slot->type == FD_TYPE_PIPE && (slot->flags & FD_PIPE_FLAG_WRITE)) {
       int pipe_id = (int)(intptr_t)slot->private_data;
       size_t written = 0;
@@ -137,11 +150,14 @@ int64_t sys_write(struct syscall_frame *f) {
           continue;
         }
         /* wr < 0: either buffer full (would block) or read end
-         * closed. We disambiguate by yielding once and retrying;
-         * if the caller has already partially written we return
-         * the partial count rather than -1 to match POSIX-ish
-         * semantics. */
-        if (written > 0) return (int64_t)written;
+         * closed. Pipes are the browser IPC transport and large
+         * frames must not devolve into dozens of partial user/kernel
+         * returns. Cooperatively yield until the reader drains; only
+         * fail when the read end is actually closed. A stalled reader
+         * blocks this writer task, not the whole system, because the
+         * scheduler continues running other tasks between yields. */
+        if (pipe_read_end_open(pipe_id) != 1)
+          return written > 0 ? (int64_t)written : -1;
         task_yield();
       }
       return (int64_t)written;
@@ -217,6 +233,12 @@ static int64_t sys_close(struct syscall_frame *f) {
       pipe_close_write(pipe_id);
     }
   }
+  /* FD_TYPE_SOCKET cleanup is handled inside `process_fd_free` via
+   * the registered close hook (process_fd_register_socket_close).
+   * sys_close therefore does NOT call socket_close directly here:
+   * doing so would either double-close (process_fd_free runs the
+   * hook again) or require a flag to skip the second call. The
+   * single-source-of-truth in process_fd_free is simpler. */
   process_fd_free(proc, fd);
   return 0;
 }
@@ -508,6 +530,12 @@ void syscall_init(void) {
   syscall_table[SYS_EXEC]    = sys_exec;
   syscall_table[SYS_WAIT]    = sys_wait;
   syscall_table[SYS_PIPE]    = sys_pipe;
+
+  /* F4 seção c (2026-05-08): wire SYS_SOCKET (28) .. SYS_RECV (34)
+   * through the dedicated module. The actual net backend is wired
+   * separately by `syscall_net_install_default_ops` during boot,
+   * so the table entries fail with -1 until that runs. */
+  syscall_net_register_handlers();
 
   syscall_init_msr();
 }

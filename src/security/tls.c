@@ -1,4 +1,5 @@
 #include "security/tls.h"
+#include "security/tls_hostname.h"
 
 #include "security/csprng.h"
 #include "drivers/rtc/rtc.h"
@@ -487,7 +488,7 @@ struct tls_context *tls_connect(int socket_fd, const char *hostname,
   const br_x509_trust_anchor *trust_anchors;
   size_t trust_anchor_count;
 
-  if (socket_fd < 0 || !hostname || !hostname[0]) {
+  if (socket_fd < 0 || !tls_hostname_valid(hostname)) {
     tls_record_failure(NULL, BR_ERR_BAD_PARAM);
     return NULL;
   }

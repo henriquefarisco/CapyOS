@@ -245,6 +245,12 @@ void process_exit(int code) {
   }
   me->exit_code = code;
   me->state = PROC_STATE_ZOMBIE;
+  /* Mirror process_kill(): the process slot may remain as a zombie
+   * until a parent wait()/orphan reap, but its owned descriptors must
+   * close at exit time. Otherwise peers never observe pipe EOF. */
+  for (int i = 0; i < PROCESS_FD_MAX; i++) {
+    process_fd_free(me, i);
+  }
   task_exit(code);
 }
 
@@ -449,6 +455,20 @@ int process_fd_alloc(struct process *proc) {
   return -1;
 }
 
+/* F4 seção c (2026-05-08): socket close hook -- registered by the
+ * production boot wiring (`syscall_net_init.c`) after the net stack
+ * is ready. Host tests either install a fake or leave it NULL, in
+ * which case FD_TYPE_SOCKET close just reclaims the slot. */
+static process_fd_socket_close_fn g_socket_close_fn = NULL;
+
+void process_fd_register_socket_close(process_fd_socket_close_fn fn) {
+  g_socket_close_fn = fn;
+}
+
+process_fd_socket_close_fn process_fd_socket_close_get(void) {
+  return g_socket_close_fn;
+}
+
 void process_fd_free(struct process *proc, int fd) {
   if (!proc || fd < 0 || fd >= PROCESS_FD_MAX) return;
   /* 2026-05-02: release the underlying kernel resource backing
@@ -461,7 +481,12 @@ void process_fd_free(struct process *proc, int fd) {
    * its read end and the browser_app window kept polling a
    * dead engine forever. Mirrors sys_close (src/kernel/syscall.c)
    * for VFS files and pipe ends. New FD types added later must
-   * extend this switch in lockstep with sys_close. */
+   * extend this switch in lockstep with sys_close.
+   *
+   * 2026-05-08 (F4 seção c): FD_TYPE_SOCKET dispatched through
+   * the registered socket-close hook so process_destroy / SYS_EXIT
+   * reach the net stack without process.c gaining a hard link
+   * dependency on `socket_close`. */
   struct file_descriptor *slot = &proc->fds[fd];
   if (slot->type == FD_TYPE_VFS) {
     struct file *file = (struct file *)slot->private_data;
@@ -472,6 +497,11 @@ void process_fd_free(struct process *proc, int fd) {
       pipe_close_read(pipe_id);
     } else if (slot->flags & FD_PIPE_FLAG_WRITE) {
       pipe_close_write(pipe_id);
+    }
+  } else if (slot->type == FD_TYPE_SOCKET) {
+    if (g_socket_close_fn) {
+      int sock_fd = (int)(intptr_t)slot->private_data;
+      if (sock_fd >= 0) (void)g_socket_close_fn(sock_fd);
     }
   }
   slot->type = FD_TYPE_FREE;

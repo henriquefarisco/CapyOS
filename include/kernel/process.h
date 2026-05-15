@@ -27,9 +27,10 @@ enum process_state {
  * here AND must extend the dispatch in `process_fd_free` (kernel
  * lifecycle path) and `sys_close` (userland close path) in
  * lockstep. */
-#define FD_TYPE_FREE 0  /* slot empty / available for alloc */
-#define FD_TYPE_VFS  1  /* private_data = struct file* (vfs.h) */
-#define FD_TYPE_PIPE 2  /* private_data = pipe id (int cast) */
+#define FD_TYPE_FREE   0  /* slot empty / available for alloc */
+#define FD_TYPE_VFS    1  /* private_data = struct file* (vfs.h) */
+#define FD_TYPE_PIPE   2  /* private_data = pipe id (int cast) */
+#define FD_TYPE_SOCKET 3  /* private_data = kernel socket fd (int cast) */
 
 /* Pipe-direction flags (bitmask in `struct file_descriptor::flags`
  * when `type == FD_TYPE_PIPE`). A single FD references exactly ONE
@@ -201,5 +202,27 @@ enum process_enter_user_mode_result {
  * resumes in user space and the kernel thread is suspended until the
  * process traps back via syscall or fault. */
 int process_enter_user_mode(struct process *proc);
+
+/* F4 seção c (2026-05-08) — socket FD lifecycle hooks.
+ *
+ * Sockets live in their own kernel-side table (`src/net/services/
+ * socket.c`); a process FD slot of type `FD_TYPE_SOCKET` stores the
+ * kernel socket fd in `private_data` (cast through intptr_t). Closing
+ * the slot must therefore reach into the socket layer, but `process.c`
+ * deliberately does not link against the net stack so that the host
+ * unit tests (which build `process.c` standalone with `stub_vmm.c`)
+ * stay free of net dependencies.
+ *
+ * The injection model below mirrors the provider-injection pattern
+ * already used by the linux_compat modules: production boot wiring
+ * registers `socket_close` via `process_fd_register_socket_close`
+ * after `socket_system_init`; tests either install a fake or leave
+ * the hook NULL (in which case FD_TYPE_SOCKET close is a no-op and
+ * only the slot is reclaimed). The same hook is reused by
+ * `sys_close` in `src/kernel/syscall.c` so the userland close path
+ * agrees with the lifecycle reaper. */
+typedef int (*process_fd_socket_close_fn)(int kernel_socket_fd);
+void process_fd_register_socket_close(process_fd_socket_close_fn fn);
+process_fd_socket_close_fn process_fd_socket_close_get(void);
 
 #endif /* KERNEL_PROCESS_H */

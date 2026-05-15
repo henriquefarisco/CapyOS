@@ -11,6 +11,10 @@ Escopo atual:
 
 - `architecture/system-overview.md`
   - visao geral da arquitetura atual, boot, storage, drivers e lacunas
+- `architecture/capyui-shell-polish-v1.md`
+  - polish visual, launcher, wallpaper, decoração e tray avançado do CapyUI Shell v1 fechado
+- `architecture/graphical-session-operational.md`
+  - Etapa 2 da sessão gráfica operacional, frame pacing e próximos slices
 - `setup/hyper-v.md`
   - guia historico de investigacao; Hyper-V nao e trilha suportada de release
 - `testing/boot-and-cli-validation.md`
@@ -18,8 +22,22 @@ Escopo atual:
 - `testing/pr-and-release-checklist.md`
   - checklist humano de PR/release que complementa os gates automaticos
     (`make test`, `make layout-audit`, `make release-check`)
+- `security/release-signing.md`
+  - procedimento operacional de assinatura Ed25519 de checksums de release,
+    chave offline, publicacao e rotacao
 - `reference/cli-reference.md`
   - referencia dos comandos do CapyCLI
+- `operations/update-from-github.md`
+  - procedimento operacional do fetch remoto de manifestos assinados pelo
+    `update-agent`
+- `operations/release-ci-smoke-readiness.md`
+  - gate publico de prontidao do smoke VMware oficial antes de ligar a VM real
+- `operations/release-ci-smoke-evidence.md`
+  - manifesto publico das evidencias pos-smoke VMware oficial
+- `operations/release-ci-smoke-acceptance.md`
+  - gate publico de aceitacao das evidencias pos-smoke VMware oficial
+- `operations/release-ci-smoke-promotion.md`
+  - gate publico de promocao pos-smoke VMware oficial
 - `plans/mvp-implementation-plan.md`
   - plano operacional do ciclo atual
 - `plans/README.md`
@@ -36,22 +54,55 @@ Escopo atual:
     estabilizar a arquitetura de pastas
 - `architecture/source-layout.md`
   - regras oficiais de organizacao de codigo e uso de `make layout-audit`
-- `plans/system-master-plan.md`
-  - plano-mestre de evolucao do sistema inteiro, cobrindo fundacoes faltantes,
-    seguranca, performance, GUI, atualizacoes, apps e linguagem propria
-- `plans/capyos-robustness-master-plan.md`
-  - plano vivo de robustez com matriz de status para release robusta,
-    performance, seguranca, DHCP no boot, browser/internet e clean code
-- `plans/capyos-master-improvement-plan.md`
-  - consolidacao tecnica mais recente da trilha x64, com foco em desktop,
-    limpeza do legado 32-bit, drivers e verificacao para `develop`
-- `plans/system-execution-plan.md`
-  - sequencia de execucao recomendada a partir do estado atual do projeto,
-    incluindo progresso, gates de release e proximos marcos
-- `plans/refactor-plan.md`
-  - fechamento da migracao para a trilha unica x64
-- `plans/system-roadmap.md`
-  - roadmap tecnico por dominio
+- `architecture/libcapy-net-http-hardening.md`
+  - contrato de seguranca do request-target HTTP em `libcapy-net`
+- `architecture/libcapy-tls-userland-contract.md`
+  - contrato da API TLS userland fail-closed de F4
+- `architecture/libcapy-net-https-fail-closed.md`
+  - contrato do adaptador HTTPS fail-closed em `libcapy-net`
+- `architecture/libcapy-tls-hostname-contract.md`
+  - contrato de hostname da fronteira TLS userland
+- `architecture/libcapy-tls-peer-verification-contract.md`
+  - contrato de peer verification obrigatório em `libcapy-tls`
+- `architecture/libcapy-tls-timeout-contract.md`
+  - contrato da janela de timeout em `libcapy-tls`
+- `architecture/libcapy-tls-config-snapshot.md`
+  - snapshot interno de configuração efetiva em `libcapy-tls`
+- `architecture/libcapy-tls-context-prep.md`
+  - contexto interno preparado em `libcapy-tls`
+- `architecture/libcapy-tls-context-lifecycle.md`
+  - ciclo de vida interno do contexto em `libcapy-tls`
+- `architecture/libcapy-tls-context-slot.md`
+  - slot interno gerenciado de contexto em `libcapy-tls`
+- `architecture/libcapy-tls-connect-slot.md`
+  - conexão TLS fail-closed usando slot gerenciado
+- `architecture/libcapy-tls-backend-stub.md`
+  - backend stub fail-closed em `libcapy-tls`
+- `architecture/libcapy-tls-backend-state.md`
+  - estado interno de backend em `libcapy-tls`
+- `architecture/libcapy-tls-backend-plan.md`
+  - plano interno fail-closed do backend BearSSL userland em `libcapy-tls`
+- `architecture/libcapy-tls-bearssl-state.md`
+  - estado BearSSL userland reservado metadata-only em `libcapy-tls`
+- `architecture/libcapy-tls-bearssl-adapter.md`
+  - adaptador BearSSL userland metadata-only em `libcapy-tls`
+- `architecture/libcapy-tls-trust-metadata.md`
+  - metadados de trust anchors em `libcapy-tls`
+- `architecture/libcapy-tls-trust-source.md`
+  - fonte e bundle userland metadata-only de trust anchors em `libcapy-tls`
+- `architecture/kernel-tls-hostname-contract.md`
+  - contrato de hostname do TLS kernel-side legado
+- `architecture/tls-hostname-shared-policy.md`
+  - política compartilhada de hostname TLS entre kernel e userland
+- `plans/active/capyos-master-plan.md`
+  - plano-mestre ativo e sequencial do CapyOS, com execução bloqueante da
+    Etapa 1 ate a Etapa 15
+- `plans/STATUS.md`
+  - visão executiva da próxima etapa permitida e das etapas bloqueadas
+- `plans/historical/implementation-delivered-through-alpha93.md`
+  - implementação finalizada até `0.8.0-alpha.93+20260510`
+- `plans/README.md`
+  - índice dos planos ativos, históricos e experimentais
 - `releases/README.md`
   - indice das release notes
 - `archive/`
@@ -87,7 +138,8 @@ Fluxo esperado:
 
 1. `../README.md`
 2. `architecture/system-overview.md`
-3. `plans/system-master-plan.md`
-4. `plans/system-execution-plan.md`
-5. `testing/boot-and-cli-validation.md`
-6. `releases/README.md`
+3. `plans/active/capyos-master-plan.md`
+4. `plans/STATUS.md`
+5. `plans/historical/implementation-delivered-through-alpha93.md`
+6. `testing/boot-and-cli-validation.md`
+7. `releases/README.md`

@@ -96,21 +96,138 @@ static void render_window_outline(struct gui_window *win,
   }
 }
 
+static uint32_t render_mix_color(uint32_t color, uint32_t target,
+                                 uint8_t amount) {
+  uint32_t r = (color >> 16) & 0xFFu;
+  uint32_t g = (color >> 8) & 0xFFu;
+  uint32_t b = color & 0xFFu;
+  uint32_t tr = (target >> 16) & 0xFFu;
+  uint32_t tg = (target >> 8) & 0xFFu;
+  uint32_t tb = target & 0xFFu;
+  r = r + ((tr > r) ? ((tr - r) * amount) / 255u
+                    : -((r - tr) * amount) / 255u);
+  g = g + ((tg > g) ? ((tg - g) * amount) / 255u
+                    : -((g - tg) * amount) / 255u);
+  b = b + ((tb > b) ? ((tb - b) * amount) / 255u
+                    : -((b - tb) * amount) / 255u);
+  return (r << 16) | (g << 8) | b;
+}
+
+static uint32_t render_lerp_color(uint32_t a, uint32_t b, uint8_t amount) {
+  uint32_t ar = (a >> 16) & 0xFFu;
+  uint32_t ag = (a >> 8) & 0xFFu;
+  uint32_t ab = a & 0xFFu;
+  uint32_t br = (b >> 16) & 0xFFu;
+  uint32_t bg = (b >> 8) & 0xFFu;
+  uint32_t bb = b & 0xFFu;
+  uint32_t r = ar + ((br > ar) ? ((br - ar) * amount) / 255u
+                               : -((ar - br) * amount) / 255u);
+  uint32_t g = ag + ((bg > ag) ? ((bg - ag) * amount) / 255u
+                               : -((ag - bg) * amount) / 255u);
+  uint32_t bl = ab + ((bb > ab) ? ((bb - ab) * amount) / 255u
+                                : -((ab - bb) * amount) / 255u);
+  return (r << 16) | (g << 8) | bl;
+}
+
+static void render_fill_rect_clip(uint32_t *buf, uint32_t buf_stride,
+                                  int32_t x, int32_t y, uint32_t w,
+                                  uint32_t h, uint32_t color) {
+  for (uint32_t row = 0; row < h; row++) {
+    int32_t py = y + (int32_t)row;
+    if (py < 0 || (uint32_t)py >= comp_height) continue;
+    for (uint32_t col = 0; col < w; col++) {
+      int32_t px = x + (int32_t)col;
+      if (px < 0 || (uint32_t)px >= comp_width) continue;
+      buf[py * buf_stride + px] = color;
+    }
+  }
+}
+
+static void render_fit_title(const struct font *f, const char *src,
+                             uint32_t max_width, char *out,
+                             uint32_t out_len) {
+  uint32_t len = 0;
+  uint32_t max_chars = 0;
+  if (!out || out_len == 0u) return;
+  out[0] = '\0';
+  if (!f || !src || f->glyph_width == 0u || max_width == 0u) return;
+  max_chars = max_width / f->glyph_width;
+  if (max_chars == 0u) return;
+  while (src[len] && len + 1u < out_len) len++;
+  if (len <= max_chars) {
+    for (uint32_t i = 0; i < len; i++) out[i] = src[i];
+    out[len] = '\0';
+    return;
+  }
+  if (max_chars <= 3u) {
+    uint32_t n = max_chars;
+    if (n >= out_len) n = out_len - 1u;
+    for (uint32_t i = 0; i < n; i++) out[i] = '.';
+    out[n] = '\0';
+    return;
+  }
+  {
+    uint32_t copy = max_chars - 3u;
+    if (copy > out_len - 4u) copy = out_len - 4u;
+    for (uint32_t i = 0; i < copy; i++) out[i] = src[i];
+    out[copy] = '.';
+    out[copy + 1u] = '.';
+    out[copy + 2u] = '.';
+    out[copy + 3u] = '\0';
+  }
+}
+
+static void render_window_button(uint32_t *buf, uint32_t buf_stride,
+                                 struct gui_surface *title_surf,
+                                 const struct font *f, int32_t x, int32_t y,
+                                 int32_t size, uint32_t bg,
+                                 uint32_t fg, const char *label) {
+  int label_w = 0;
+  const char *lp = label;
+  if (size <= 0) return;
+  render_fill_rect_clip(buf, buf_stride, x, y, (uint32_t)size,
+                        (uint32_t)size, render_mix_color(bg, 0x00000000, 80u));
+  if (size > 2) {
+    render_fill_rect_clip(buf, buf_stride, x + 1, y + 1,
+                          (uint32_t)(size - 2), (uint32_t)(size - 2), bg);
+  }
+  if (size > 4) {
+    render_fill_rect_clip(buf, buf_stride, x + 2, y + 2,
+                          (uint32_t)(size - 4), 1u,
+                          render_mix_color(bg, 0x00FFFFFF, 70u));
+  }
+  if (f && title_surf && label) {
+    while (lp && *lp) { label_w += (int)f->glyph_width; lp++; }
+    font_draw_string(title_surf, f, x + (size - label_w) / 2,
+                     y + (size / 2) - (int32_t)(f->glyph_height / 2),
+                     label, fg);
+  }
+}
+
 static void render_window_decoration(struct gui_window *win, uint32_t *buf,
                                      uint32_t buf_stride) {
   if (!win->decorated) return;
   int32_t x = win->frame.x;
   int32_t y = win->frame.y;
   uint32_t w = win->frame.width;
-
-  uint32_t title_color = win->focused ? g_theme.title_active : g_theme.title_inactive;
+  uint32_t title_base = win->focused ? g_theme.title_active
+                                     : g_theme.title_inactive;
+  uint32_t title_top = render_mix_color(title_base, 0x00FFFFFF,
+                                        win->focused ? 38u : 18u);
+  uint32_t title_bottom = render_mix_color(title_base, 0x00000000,
+                                           win->focused ? 32u : 44u);
   uint32_t title_h = comp_window_title_height();
   uint32_t total_h = title_h + win->frame.height;
-  uint32_t corner_r = COMP_WINDOW_CORNER_RADIUS;
-  /* Skip rounding for windows narrower or shorter than 2*radius. */
-  if (w < corner_r * 2u || total_h < corner_r * 2u) corner_r = 0u;
+  uint32_t corner_r = win->corner_radius;
+  if (corner_r != 0u && (w < corner_r * 2u || total_h < corner_r * 2u)) {
+    corner_r = 0u;
+  }
 
   for (uint32_t row = 0; row < title_h; row++) {
+    uint8_t amount = (title_h > 1u)
+        ? (uint8_t)((row * 255u) / (title_h - 1u))
+        : 0u;
+    uint32_t row_color = render_lerp_color(title_top, title_bottom, amount);
     int32_t py = y - (int32_t)title_h + (int32_t)row;
     if (py < 0 || (uint32_t)py >= comp_height) continue;
     for (uint32_t col = 0; col < w; col++) {
@@ -120,16 +237,50 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
           !comp_window_pixel_inside(col, row, w, total_h, corner_r)) {
         continue;
       }
-      buf[py * buf_stride + px] = title_color;
+      buf[py * buf_stride + px] = row_color;
+    }
+  }
+
+  if (title_h > 2u) {
+    const uint32_t rows[2] = { 0u, title_h - 1u };
+    const uint32_t colors[2] = {
+      render_mix_color(title_base, 0x00FFFFFF, win->focused ? 82u : 42u),
+      render_mix_color(title_base, 0x00000000, win->focused ? 85u : 120u)
+    };
+    for (uint32_t edge = 0; edge < 2u; edge++) {
+      uint32_t row = rows[edge];
+      int32_t py = y - (int32_t)title_h + (int32_t)row;
+      if (py < 0 || (uint32_t)py >= comp_height) continue;
+      for (uint32_t col = 0; col < w; col++) {
+        int32_t px = x + (int32_t)col;
+        if (px < 0 || (uint32_t)px >= comp_width) continue;
+        if (corner_r != 0u &&
+            !comp_window_pixel_inside(col, row, w, total_h, corner_r)) {
+          continue;
+        }
+        buf[py * buf_stride + px] = colors[edge];
+      }
     }
   }
 
   {
     const struct font *f = font_default();
     if (f) {
-      struct gui_surface title_surf = { buf, comp_width, comp_height, buf_stride * 4 };
-      font_draw_string(&title_surf, f, x + 4, y - (int32_t)title_h + 4,
-                       win->title, g_theme.text);
+      struct gui_surface title_surf = { buf, comp_width, comp_height,
+                                        buf_stride * 4 };
+      int32_t btn_size = (int32_t)title_h - 6;
+      int32_t btn_y = y - (int32_t)title_h + 3;
+      uint32_t control_w = (btn_size > 0) ? (uint32_t)(3 * btn_size + 16) : 0u;
+      uint32_t text_max = (w > control_w + 12u) ? (w - control_w - 12u) : 0u;
+      char title_fit[64];
+      render_fit_title(f, win->title, text_max, title_fit, sizeof(title_fit));
+      if (title_fit[0]) {
+        font_draw_string(&title_surf, f, x + 6,
+                         y - (int32_t)title_h + 4,
+                         title_fit,
+                         win->focused ? g_theme.accent_text
+                                      : g_theme.text_muted);
+      }
 
       /* Etapa F4 minimize/maximize (2026-05-03): 3 botoes na direita
        * do title bar (R->L): Close, Maximize/Restore, Minimize.
@@ -138,40 +289,31 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
        *   Close     -> "X"
        *   Maximize  -> "[]" (ou "][" quando ja maximizado = restore)
        *   Minimize  -> "_" */
-      int32_t btn_size = (int32_t)title_h - 6;
-      int32_t btn_y = y - (int32_t)title_h + 3;
       const struct {
-        int32_t offset;       /* posicao a partir da direita */
+        int32_t offset;
         uint32_t bg;
         const char *label;
       } btns[3] = {
-        { 1, g_theme.accent_alt, "X" },
-        { 2, g_theme.accent_alt, win->maximized ? "][" : "[]" },
-        { 3, g_theme.accent_alt, "_" }
+        { 1, win->focused ? 0x00B91C1C
+                          : render_mix_color(g_theme.title_inactive,
+                                             0x00000000, 44u), "X" },
+        { 2, win->focused ? g_theme.accent_alt
+                          : render_mix_color(g_theme.title_inactive,
+                                             g_theme.window_bg, 80u),
+          win->maximized ? "][" : "[]" },
+        { 3, win->focused ? g_theme.accent_alt
+                          : render_mix_color(g_theme.title_inactive,
+                                             g_theme.window_bg, 80u), "_" }
       };
       for (int b = 0; b < 3; b++) {
         int32_t btn_x = x + (int32_t)w
                          - btns[b].offset * btn_size
                          - btns[b].offset * 4;
-        for (int32_t row = 0; row < btn_size; row++) {
-          int32_t py = btn_y + row;
-          if (py < 0 || (uint32_t)py >= comp_height) continue;
-          for (int32_t col = 0; col < btn_size; col++) {
-            int32_t px = btn_x + col;
-            if (px < 0 || (uint32_t)px >= comp_width) continue;
-            buf[py * buf_stride + px] = btns[b].bg;
-          }
-        }
-        /* Label centralizado horizontalmente. Glyph 8 px; labels
-         * de 1 ou 2 chars. */
-        int label_w = 0;
-        const char *lp = btns[b].label;
-        while (lp && *lp) { label_w += 8; lp++; }
-        font_draw_string(&title_surf, f,
-                         btn_x + (btn_size - label_w) / 2,
-                         btn_y + (btn_size / 2)
-                            - (int32_t)(f->glyph_height / 2),
-                         btns[b].label, g_theme.text);
+        render_window_button(buf, buf_stride, &title_surf, f, btn_x, btn_y,
+                             btn_size, btns[b].bg,
+                             win->focused ? g_theme.accent_text
+                                          : g_theme.text_muted,
+                             btns[b].label);
       }
     }
   }

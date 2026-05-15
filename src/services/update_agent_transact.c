@@ -31,6 +31,7 @@ int update_agent_poll(void);
 int update_agent_clear_stage(void);
 int update_agent_set_pending_activation(int enabled);
 void update_agent_init(const char *current_version);
+static int update_agent_apply_boot_slot_current_status(void);
 
 /* ---- M6.4 payload sha256 verification helpers ----------------------- */
 
@@ -78,14 +79,16 @@ int update_agent_staged_requires_payload_verification(void) {
 }
 
 int update_agent_apply_boot_slot_verified(const char *actual_sha256_hex) {
-    if (update_agent_poll() < 0) return -1;
+    int poll_rc = update_agent_poll();
+    if (poll_rc < 0) return poll_rc;
     if (!update_agent_g_status.staged_payload_sha256[0]) {
-        /* Manifest did not declare a digest: legacy fallback path. We log
-         * it as INFO so the audit grep-er sees the non-verified
-         * application. */
-        klog(KLOG_INFO,
-             "[update] payload sha256 not declared; applying without verification");
-        return update_agent_apply_boot_slot();
+        update_agent_g_status.last_result = -30;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "staged payload sha256 missing; refusing verified apply");
+        klog(KLOG_WARN,
+             "[audit] [update] staged payload-sha256 missing -> refused");
+        return -30;
     }
 
     if (!actual_sha256_hex || !actual_sha256_hex[0]) {
@@ -119,18 +122,40 @@ int update_agent_apply_boot_slot_verified(const char *actual_sha256_hex) {
         return -31;
     }
 
+    int apply_rc = update_agent_apply_boot_slot_current_status();
+    if (apply_rc == 0) {
+        update_agent_g_status.last_result = 0;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "verified staged update applied to boot slot");
+    }
     klog(KLOG_INFO,
          "[audit] [update] payload-sha256 match -> applying staged update");
-    return update_agent_apply_boot_slot();
+    return apply_rc;
+}
+
+int update_agent_apply_cached_payload(void) {
+    int poll_rc = update_agent_poll();
+    if (poll_rc < 0) return poll_rc;
+    if (!update_agent_g_status.payload_cache_sha256[0]) {
+        update_agent_g_status.last_result = -50;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "payload cache sha256 missing; refusing cached apply");
+        klog(KLOG_WARN,
+             "[audit] [update] payload cache sha256 missing -> refused");
+        return -50;
+    }
+    return update_agent_apply_boot_slot_verified(
+        update_agent_g_status.payload_cache_sha256);
 }
 
 /* ---- Boot-slot lifecycle ------------------------------------------- */
 
-int update_agent_apply_boot_slot(void) {
+static int update_agent_apply_boot_slot_current_status(void) {
     struct boot_slot s0;
     uint32_t next_slot;
 
-    if (update_agent_poll() < 0) return -1;
     if (!update_agent_g_status.stage_ready ||
         !update_agent_g_status.pending_activation) {
         return -2;
@@ -159,28 +184,66 @@ int update_agent_apply_boot_slot(void) {
     return 0;
 }
 
+int update_agent_apply_boot_slot(void) {
+    int poll_rc = update_agent_poll();
+    if (poll_rc < 0) return poll_rc;
+    if (update_agent_g_status.staged_payload_sha256[0]) {
+        update_agent_g_status.last_result = -33;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "verified apply required for hashed staged update");
+        klog(KLOG_WARN,
+             "[audit] [update] direct apply refused; payload-sha256 requires verifier");
+        return -33;
+    }
+    return update_agent_apply_boot_slot_current_status();
+}
+
 int update_agent_confirm_health(void) {
+    int poll_rc = update_agent_poll();
+    if (poll_rc < 0) return poll_rc;
     if (boot_slot_confirm_health() != 0) {
+        update_agent_g_status.last_result = -1;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "boot health confirm failed");
         klog(KLOG_WARN, "[update] Boot slot health confirm failed.");
         return -1;
     }
     if (update_agent_g_status.pending_activation) {
-        update_agent_set_pending_activation(0);
+        int disarm_rc = update_agent_set_pending_activation(0);
+        if (disarm_rc < 0) return disarm_rc;
     }
+    update_agent_g_status.last_result = 0;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "boot health confirmed; update committed");
     klog(KLOG_INFO, "[update] Boot health confirmed; update committed.");
     return 0;
 }
 
 int update_agent_check_rollback(void) {
     if (!boot_slot_needs_rollback()) {
+        update_agent_g_status.last_result = 0;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "no boot rollback pending");
         return 0;
     }
     klog(KLOG_WARN, "[update] Unhealthy boot detected; initiating rollback.");
     if (boot_slot_rollback() != 0) {
+        update_agent_g_status.last_result = -1;
+        update_agent_local_copy(update_agent_g_status.summary,
+                                sizeof(update_agent_g_status.summary),
+                                "boot rollback failed");
         klog(KLOG_ERROR, "[update] Boot slot rollback failed.");
         return -1;
     }
     update_agent_clear_stage();
+    update_agent_g_status.last_result = 1;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "boot rollback completed; staged update cleared");
     klog(KLOG_INFO, "[update] Rollback complete; staged update cleared.");
     return 1;
 }

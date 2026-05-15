@@ -261,6 +261,58 @@ static int vfs_directory_has_entries(struct dentry *d) {
     return found;
 }
 
+#define VFS_RMDIR_RECURSIVE_MAX_CHILDREN 64
+#define VFS_RMDIR_RECURSIVE_PATH_MAX 256
+
+struct vfs_recursive_child_list {
+    char names[VFS_RMDIR_RECURSIVE_MAX_CHILDREN][VFS_NAME_MAX];
+    uint16_t modes[VFS_RMDIR_RECURSIVE_MAX_CHILDREN];
+    uint32_t count;
+    int overflow;
+};
+
+static int vfs_recursive_collect_child(const char *name, uint16_t mode, void *ctx) {
+    struct vfs_recursive_child_list *list = (struct vfs_recursive_child_list *)ctx;
+    if (!list || !name) {
+        return -1;
+    }
+    if (name_equal(name, ".") || name_equal(name, "..")) {
+        return 0;
+    }
+    if (list->count >= VFS_RMDIR_RECURSIVE_MAX_CHILDREN) {
+        list->overflow = 1;
+        return -1;
+    }
+    copy_name(list->names[list->count], name);
+    list->modes[list->count] = mode;
+    list->count++;
+    return 0;
+}
+
+static int vfs_join_child_path(const char *dir, const char *name,
+                               char *out, size_t out_len) {
+    size_t i = 0;
+    size_t j = 0;
+    if (!dir || !name || !out || out_len == 0) {
+        return -1;
+    }
+    while (dir[i]) {
+        if (j + 1 >= out_len) return -1;
+        out[j++] = dir[i++];
+    }
+    if (j > 1 && out[j - 1] != '/') {
+        if (j + 1 >= out_len) return -1;
+        out[j++] = '/';
+    }
+    i = 0;
+    while (name[i]) {
+        if (j + 1 >= out_len) return -1;
+        out[j++] = name[i++];
+    }
+    out[j] = '\0';
+    return 0;
+}
+
 int vfs_init(void) {
     root_sb = NULL;
     vfs_set_ok();
@@ -505,6 +557,62 @@ int vfs_rmdir(const char *path) {
     dentry_free_tree(removed);
     vfs_set_ok();
     return 0;
+}
+
+int vfs_rmdir_recursive(const char *path) {
+    struct vfs_stat stat;
+    struct vfs_recursive_child_list *children = NULL;
+    vfs_set_ok();
+    if (!path || path[0] == '\0') {
+        return vfs_fail(VFS_ERR_INVALID_ARGUMENT);
+    }
+    if (path[0] != '/') {
+        return vfs_fail(VFS_ERR_INVALID_PATH);
+    }
+    if (path[1] == '\0') {
+        return vfs_fail(VFS_ERR_INVALID_PATH);
+    }
+    if (vfs_stat_path(path, &stat) != 0) {
+        return vfs_fail_last_or(VFS_ERR_NOT_FOUND);
+    }
+    if ((stat.mode & VFS_MODE_DIR) == 0) {
+        return vfs_fail(VFS_ERR_NOT_DIRECTORY);
+    }
+    children = (struct vfs_recursive_child_list *)kalloc(sizeof(*children));
+    if (!children) {
+        return vfs_fail(VFS_ERR_NO_MEMORY);
+    }
+    children->count = 0;
+    children->overflow = 0;
+    {
+        int list_rc = vfs_listdir(path, vfs_recursive_collect_child, children);
+        if (list_rc != 0) {
+            int error = children->overflow ? VFS_ERR_NO_MEMORY :
+                        (g_vfs_last_error != VFS_OK ? g_vfs_last_error : VFS_ERR_IO);
+            kfree(children);
+            return vfs_fail(error);
+        }
+    }
+    for (uint32_t i = 0; i < children->count; i++) {
+        char child_path[VFS_RMDIR_RECURSIVE_PATH_MAX];
+        int rc = 0;
+        if (vfs_join_child_path(path, children->names[i], child_path,
+                                sizeof(child_path)) != 0) {
+            kfree(children);
+            return vfs_fail(VFS_ERR_NAME_TOO_LONG);
+        }
+        if (children->modes[i] & VFS_MODE_DIR) {
+            rc = vfs_rmdir_recursive(child_path);
+        } else {
+            rc = vfs_unlink(child_path);
+        }
+        if (rc != 0) {
+            kfree(children);
+            return rc;
+        }
+    }
+    kfree(children);
+    return vfs_rmdir(path);
 }
 
 int vfs_rename(const char *src_path, const char *dst_path) {

@@ -1,5 +1,6 @@
 /* system_setup_wizard.c: TUI wizard menus, UI text translations, prompts. */
 #include "internal/config_internal.h"
+#include "kernel/stdin_buf.h"
 
 #if defined(__x86_64__)
 #include "drivers/serial/serial_com1.h"
@@ -159,6 +160,7 @@ size_t wizard_prompt(const char *prompt, char *buffer, size_t buffer_len,
     return 0;
   }
   if (secret) {
+    stdin_buf_discard_all();
     tty_set_echo_mask('*');
   } else {
     tty_set_echo(1);
@@ -171,6 +173,9 @@ size_t wizard_prompt(const char *prompt, char *buffer, size_t buffer_len,
   wizard_serial_write("\r\n");
   tty_set_echo(1);
   tty_set_echo_mask('\0');
+  if (secret) {
+    stdin_buf_discard_all();
+  }
   return len;
 }
 

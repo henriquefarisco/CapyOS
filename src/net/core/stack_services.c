@@ -330,7 +330,11 @@ int net_dns_handle(struct net_dns_state *state, const uint8_t *payload,
     return 0;
   }
   if (net_dns_parse_first_a(payload, len, state->query_id,
-                            &state->answer_ip) == 0) {
+                            &state->answer_ip, &state->answer_ttl) == 0) {
+    state->response_ready = 1;
+  } else if (net_dns_parse_negative_ttl(payload, len, state->query_id,
+                                        &state->answer_negative_ttl) == 0) {
+    state->response_is_negative = 1;
     state->response_ready = 1;
   } else {
     state->response_failed = 1;

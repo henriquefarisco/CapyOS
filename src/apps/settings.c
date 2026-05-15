@@ -8,7 +8,9 @@
 #include "core/version.h"
 #include "drivers/input/keyboard.h"
 #include "net/stack.h"
+#include "auth/privilege.h"
 #include "auth/user.h"
+#include "auth/user_home.h"
 #include "auth/user_prefs.h"
 #include "auth/session.h"
 #include "lang/localization.h"
@@ -61,6 +63,7 @@ static const char *tab_names[SETTINGS_TAB_COUNT] = {
 /* Retorna o label localizado da tab pelo idioma da sessao ativa. */
 static const char *tab_label(enum settings_tab t) {
   const char *lang = app_current_language();
+  int idx = (int)t;
   switch (t) {
     case SETTINGS_TAB_DISPLAY:
       return localization_select(lang, "Tela", "Display", "Pantalla");
@@ -81,7 +84,8 @@ static const char *tab_label(enum settings_tab t) {
     case SETTINGS_TAB_ABOUT:
       return localization_select(lang, "Sobre", "About", "Acerca de");
     default:
-      return tab_names[t];
+      if (idx >= 0 && idx < (int)SETTINGS_TAB_COUNT) return tab_names[idx];
+      return tab_names[SETTINGS_TAB_DISPLAY];
   }
 }
 
@@ -114,6 +118,112 @@ static uint32_t g_row_count = 0u;
 static char g_pending_username[USER_NAME_MAX] = {0};
 
 static void rows_reset(void) { g_row_count = 0u; }
+
+static void settings_set_status(struct settings_app *app, const char *text,
+                                uint32_t color) {
+  if (!app) return;
+  kstrcpy(app->status_text, sizeof(app->status_text), text ? text : "");
+  app->status_color = color;
+  if (app->window) compositor_invalidate(app->window->id);
+}
+
+static int settings_valid_username_char(char c) {
+  if (c >= 'a' && c <= 'z') return 1;
+  if (c >= 'A' && c <= 'Z') return 1;
+  if (c >= '0' && c <= '9') return 1;
+  return c == '-' || c == '_';
+}
+
+static int settings_validate_username(const char *name) {
+  size_t len = 0;
+  if (!name || !name[0]) return -1;
+  while (name[len]) {
+    if (!settings_valid_username_char(name[len])) return -1;
+    len++;
+  }
+  return (len < USER_NAME_MAX) ? 0 : -1;
+}
+
+static int settings_require_admin(struct settings_app *app) {
+  struct session_context *sess = session_active();
+  const struct user_record *user = sess ? session_user(sess) : NULL;
+  if (privilege_user_is_admin(user)) return 0;
+  privilege_log_denied("settings-add-user", user);
+  settings_set_status(app,
+                      APP_T("Permissao negada: admin necessario",
+                            "Permission denied: admin required",
+                            "Permiso denegado: se requiere admin"),
+                      0x00F38BA8);
+  return -1;
+}
+
+static void settings_fit_text(const struct font *f, const char *src,
+                              uint32_t max_width, char *out,
+                              size_t out_len) {
+  size_t len = 0;
+  size_t max_chars = 0;
+  if (!out || out_len == 0) return;
+  out[0] = '\0';
+  if (!f || !src || max_width == 0 || f->glyph_width == 0) return;
+  max_chars = max_width / f->glyph_width;
+  if (max_chars == 0) return;
+  while (src[len]) len++;
+  if (len <= max_chars) {
+    kstrcpy(out, out_len, src);
+    return;
+  }
+  if (max_chars <= 3) {
+    size_t n = max_chars;
+    if (n >= out_len) n = out_len - 1;
+    for (size_t i = 0; i < n; i++) out[i] = '.';
+    out[n] = '\0';
+    return;
+  }
+  {
+    size_t copy = max_chars - 3;
+    if (copy > out_len - 4) copy = out_len - 4;
+    for (size_t i = 0; i < copy; i++) out[i] = src[i];
+    out[copy] = '.';
+    out[copy + 1] = '.';
+    out[copy + 2] = '.';
+    out[copy + 3] = '\0';
+  }
+}
+
+static void settings_draw_fit(struct gui_surface *s, const struct font *f,
+                              int32_t x, int32_t y, uint32_t max_width,
+                              const char *text, uint32_t color) {
+  char fitted[96];
+  settings_fit_text(f, text, max_width, fitted, sizeof(fitted));
+  if (fitted[0]) font_draw_string(s, f, x, y, fitted, color);
+}
+
+static int32_t settings_sidebar_width(uint32_t surface_w, uint8_t scale) {
+  int32_t w = 130 + 28 * (scale - 1);
+  if (surface_w < 360u) w = 104;
+  if ((uint32_t)w > surface_w / 2u) w = (int32_t)(surface_w / 2u);
+  if (w < 88) w = 88;
+  return w;
+}
+
+static void settings_layout_tabs(struct settings_app *app) {
+  if (!app || !app->window) return;
+  uint8_t scale = compositor_ui_scale();
+  uint32_t surface_w = app->window->surface.width;
+  int32_t sidebar_w = settings_sidebar_width(surface_w, scale);
+  uint32_t tab_w = (sidebar_w > 8) ? (uint32_t)(sidebar_w - 8) : 80u;
+  uint32_t tab_h = 28 + 6 * (scale - 1);
+  uint32_t tab_gap = 4 + 2 * (scale - 1);
+  for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
+    if (app->tab_buttons[i]) {
+      widget_set_bounds(app->tab_buttons[i], 4,
+                        4 + i * (int32_t)(tab_h + tab_gap),
+                        tab_w, tab_h);
+      widget_set_text(app->tab_buttons[i],
+                      tab_label((enum settings_tab)i));
+    }
+  }
+}
 
 static void rows_add(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
                      uint16_t kind, const char *arg) {
@@ -169,29 +279,101 @@ static void apply_language_choice(const char *lang) {
 
 /* Callback do segundo prompt (password) na criacao de usuario. */
 static void on_password_submit(const char *pwd, void *ctx) {
-  (void)ctx;
-  if (!g_pending_username[0]) return;
-  if (!pwd || !pwd[0]) {
-    g_pending_username[0] = '\0';
-    return;
-  }
+  struct settings_app *app = (struct settings_app *)ctx;
+  struct session_context *previous_session = NULL;
+  const char *lang = app_current_language();
   uint32_t uid = 0u, gid = 0u;
-  if (userdb_next_ids(&uid, &gid) != 0) {
+  char home[USER_HOME_MAX];
+  struct user_record rec;
+  if (!app) app = &g_settings;
+  if (!g_pending_username[0]) return;
+  if (settings_require_admin(app) != 0) {
     g_pending_username[0] = '\0';
     return;
   }
-  char home[USER_HOME_MAX];
+  if (!pwd || !pwd[0]) {
+    settings_set_status(app,
+                        APP_T("Senha obrigatoria", "Password required",
+                              "Contrasena obligatoria"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  if (!lang || !lang[0]) lang = "pt-BR";
+  user_record_clear(&rec);
+  previous_session = session_active();
+  session_set_active(NULL);
+  if (userdb_ensure() != 0) {
+    session_set_active(previous_session);
+    settings_set_status(app,
+                        APP_T("Falha ao preparar usuarios",
+                              "User database unavailable",
+                              "Base de usuarios no disponible"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  if (userdb_find(g_pending_username, NULL) == 0) {
+    session_set_active(previous_session);
+    settings_set_status(app,
+                        APP_T("Usuario ja existe", "User already exists",
+                              "Usuario ya existe"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  if (userdb_next_ids(&uid, &gid) != 0) {
+    session_set_active(previous_session);
+    settings_set_status(app,
+                        APP_T("Falha ao reservar UID", "Failed to reserve UID",
+                              "Fallo al reservar UID"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
   kstrcpy(home, sizeof(home), "/home/");
   size_t hl = kstrlen(home);
   for (size_t i = 0; g_pending_username[i] && hl + 1 < sizeof(home); ++i) {
     home[hl++] = g_pending_username[i];
   }
   home[hl] = '\0';
-  struct user_record rec;
   if (user_record_init(g_pending_username, pwd, "user", uid, gid,
-                        home, &rec) == 0) {
-    (void)userdb_add(&rec);
+                       home, &rec) != 0) {
+    session_set_active(previous_session);
+    user_record_clear(&rec);
+    settings_set_status(app,
+                        APP_T("Senha nao atende a politica",
+                              "Password does not meet policy",
+                              "La contrasena no cumple la politica"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
   }
+  if (user_home_prepare(home, uid, gid) != 0) {
+    session_set_active(previous_session);
+    user_record_clear(&rec);
+    settings_set_status(app,
+                        APP_T("Falha ao criar home", "Failed to create home",
+                              "Fallo al crear home"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  if (userdb_add(&rec) == 0) {
+    (void)user_prefs_save_language(&rec, lang ? lang : "pt-BR");
+    settings_set_status(app,
+                        APP_T("Usuario criado", "User created",
+                              "Usuario creado"),
+                        0x00A6E3A1);
+  } else {
+    settings_set_status(app,
+                        APP_T("Falha ao salvar usuario",
+                              "Failed to save user",
+                              "Fallo al guardar usuario"),
+                        0x00F38BA8);
+  }
+  session_set_active(previous_session);
+  user_record_clear(&rec);
   g_pending_username[0] = '\0';
 }
 
@@ -199,20 +381,85 @@ static void on_password_submit(const char *pwd, void *ctx) {
  * prompt para password mantendo o nome digitado em
  * g_pending_username. */
 static void on_username_submit(const char *name, void *ctx) {
-  (void)ctx;
+  struct settings_app *app = (struct settings_app *)ctx;
+  struct session_context *previous_session = NULL;
+  if (!app) app = &g_settings;
   if (!name || !name[0]) {
     g_pending_username[0] = '\0';
     return;
   }
+  if (settings_require_admin(app) != 0) {
+    g_pending_username[0] = '\0';
+    return;
+  }
+  if (settings_validate_username(name) != 0) {
+    settings_set_status(app,
+                        APP_T("Nome de usuario invalido",
+                              "Invalid username",
+                              "Nombre de usuario invalido"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  previous_session = session_active();
+  session_set_active(NULL);
+  if (userdb_ensure() != 0) {
+    session_set_active(previous_session);
+    settings_set_status(app,
+                        APP_T("Falha ao preparar usuarios",
+                              "User database unavailable",
+                              "Base de usuarios no disponible"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  if (userdb_find(name, NULL) == 0) {
+    session_set_active(previous_session);
+    settings_set_status(app,
+                        APP_T("Usuario ja existe", "User already exists",
+                              "Usuario ya existe"),
+                        0x00F38BA8);
+    g_pending_username[0] = '\0';
+    return;
+  }
+  session_set_active(previous_session);
   kstrcpy(g_pending_username, sizeof(g_pending_username), name);
-  inline_prompt_show("Password (chars only):", "",
-                     200, 220, on_password_submit, NULL);
+  settings_set_status(app,
+                      APP_T("Digite a senha do novo usuario",
+                            "Type the new user's password",
+                            "Escriba la contrasena del usuario"),
+                      0x00A6E3A1);
+  if (inline_prompt_show_secret("Password:", "",
+                                app->window ? app->window->frame.x + 180 : 200,
+                                app->window ? app->window->frame.y + 150 : 220,
+                                on_password_submit, app) != 0) {
+    g_pending_username[0] = '\0';
+    settings_set_status(app,
+                        APP_T("Falha ao abrir prompt de senha",
+                              "Failed to open password prompt",
+                              "Fallo al abrir el prompt de contrasena"),
+                        0x00F38BA8);
+  }
 }
 
 static void start_user_creation(void) {
   g_pending_username[0] = '\0';
-  inline_prompt_show("New username:", "",
-                     200, 200, on_username_submit, NULL);
+  if (settings_require_admin(&g_settings) != 0) return;
+  settings_set_status(&g_settings,
+                      APP_T("Digite o nome do novo usuario",
+                            "Type the new username",
+                            "Escriba el nuevo usuario"),
+                      0x00A6E3A1);
+  if (inline_prompt_show("New username:", "",
+                         g_settings.window ? g_settings.window->frame.x + 180 : 200,
+                         g_settings.window ? g_settings.window->frame.y + 128 : 200,
+                         on_username_submit, &g_settings) != 0) {
+    settings_set_status(&g_settings,
+                        APP_T("Falha ao abrir prompt de usuario",
+                              "Failed to open username prompt",
+                              "Fallo al abrir el prompt de usuario"),
+                        0x00F38BA8);
+  }
 }
 
 /* Callback do prompt de homepage do browser. */
@@ -274,7 +521,8 @@ static int32_t paint_option_row(struct gui_surface *s, const struct font *f,
       buf[bl++] = label[i];
     }
     buf[bl] = '\0';
-    font_draw_string(s, f, x + 6, y + 7, buf, fg);
+    settings_draw_fit(s, f, x + 6, y + 7,
+                      (w > 12) ? (uint32_t)(w - 12) : 0u, buf, fg);
   }
   rows_add(x, y, x + w, y + (int32_t)h, kind, arg);
   return y + (int32_t)h + 4;
@@ -303,7 +551,10 @@ static int32_t paint_action_button(struct gui_surface *s,
       row[px] = edge ? border : bg;
     }
   }
-  if (label) font_draw_string(s, f, x + 6, y + 7, label, fg);
+  if (label) {
+    settings_draw_fit(s, f, x + 6, y + 7,
+                      (w > 12) ? (uint32_t)(w - 12) : 0u, label, fg);
+  }
   rows_add(x, y, x + w, y + (int32_t)h, kind, NULL);
   return y + (int32_t)h + 4;
 }
@@ -352,6 +603,7 @@ static void settings_window_resize(struct gui_window *win,
   (void)w;
   (void)h;
   if (!win || !win->user_data) return;
+  settings_layout_tabs((struct settings_app *)win->user_data);
   settings_paint((struct settings_app *)win->user_data);
 }
 
@@ -440,6 +692,7 @@ void settings_open(void) {
     g_settings.tab_buttons[i] = btn;
   }
 
+  settings_layout_tabs(&g_settings);
   g_settings.active_tab = SETTINGS_TAB_DISPLAY;
   g_settings_open = 1;
 }
@@ -464,8 +717,12 @@ void settings_paint(struct settings_app *app) {
   const struct font *f = font_default();
   const struct gui_theme_palette *theme = compositor_theme();
   uint8_t scale = compositor_ui_scale();
-  int32_t sidebar_w = 130 + 28 * (scale - 1);
+  int32_t sidebar_w = settings_sidebar_width(s->width, scale);
+  uint32_t content_w = (s->width > (uint32_t)sidebar_w + 22u)
+                           ? s->width - (uint32_t)sidebar_w - 22u
+                           : 0u;
   if (!f) return;
+  settings_layout_tabs(app);
 
   /* Etapa F4 settings-actions (2026-05-03): zera lista de rows
    * clicaveis no inicio de cada paint. Cada tab re-registra suas
@@ -499,14 +756,22 @@ void settings_paint(struct settings_app *app) {
   /* Content area */
   int32_t cx = sidebar_w + 10;
   int32_t cy = 12;
+  int32_t row_w = (content_w > 240u) ? 220 : (int32_t)content_w;
+  int32_t action_w = (content_w > 190u) ? 170 : (int32_t)content_w;
+  if (row_w < 96) row_w = 96;
+  if (action_w < 96) action_w = 96;
 
-  font_draw_string(s, f, cx, cy, tab_label(app->active_tab), theme->accent);
+  settings_draw_fit(s, f, cx, cy, content_w, tab_label(app->active_tab),
+                    theme->accent);
   cy += 24;
 
   /* Separator */
-  for (uint32_t x = (uint32_t)cx; x < s->width - 8; x++) {
-    uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)cy * s->pitch);
-    line[x] = theme->window_border;
+  if ((uint32_t)cy < s->height) {
+    uint32_t x_end = (s->width > 8u) ? s->width - 8u : s->width;
+    for (uint32_t x = (uint32_t)cx; x < x_end; x++) {
+      uint32_t *line = (uint32_t *)((uint8_t *)s->pixels + (uint32_t)cy * s->pitch);
+      line[x] = theme->window_border;
+    }
   }
   cy += 8;
 
@@ -529,10 +794,11 @@ void settings_paint(struct settings_app *app) {
                      theme->text);
     cy += 18;
     static const char *const k_themes[] = {
-      "capyos", "ocean", "forest", "love", "high-contrast"
+      "capyos", "classic-modern", "ocean", "forest", "love",
+      "high-contrast"
     };
     for (size_t i = 0; i < sizeof(k_themes)/sizeof(k_themes[0]); ++i) {
-      cy = paint_option_row(s, f, theme, cx, cy, 220, k_themes[i],
+      cy = paint_option_row(s, f, theme, cx, cy, row_w, k_themes[i],
                              kstreq(current, k_themes[i]),
                              SETTINGS_ROW_THEME, k_themes[i]);
     }
@@ -608,7 +874,7 @@ void settings_paint(struct settings_app *app) {
     for (size_t i = 0; i < n; ++i) {
       const char *name = keyboard_layout_name(i);
       if (!name) continue;
-      cy = paint_option_row(s, f, theme, cx, cy, 220, name,
+      cy = paint_option_row(s, f, theme, cx, cy, row_w, name,
                              kstreq(current, name),
                              SETTINGS_ROW_KEYBOARD, name);
     }
@@ -629,7 +895,7 @@ void settings_paint(struct settings_app *app) {
     cy += 18;
     static const char *const k_langs[] = { "pt-BR", "en", "es" };
     for (size_t i = 0; i < sizeof(k_langs)/sizeof(k_langs[0]); ++i) {
-      cy = paint_option_row(s, f, theme, cx, cy, 220, k_langs[i],
+      cy = paint_option_row(s, f, theme, cx, cy, row_w, k_langs[i],
                              kstreq(current, k_langs[i]),
                              SETTINGS_ROW_LANGUAGE, k_langs[i]);
     }
@@ -679,26 +945,26 @@ void settings_paint(struct settings_app *app) {
       kbuf_append(line, sizeof(line), trunc);
       kbuf_append(line, sizeof(line), "...");
     }
-    font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
-    cy = paint_action_button(s, f, theme, cx, cy, 160,
-                              localization_select(lang,
-                                                   "Editar pagina inicial",
-                                                   "Edit homepage",
-                                                   "Editar pagina principal"),
-                              SETTINGS_ROW_HOMEPAGE);
+    settings_draw_fit(s, f, cx, cy, content_w, line, theme->text); cy += 18;
+    cy = paint_action_button(s, f, theme, cx, cy, action_w,
+                             localization_select(lang,
+                                                  "Editar pagina inicial",
+                                                  "Edit homepage",
+                                                  "Editar pagina principal"),
+                             SETTINGS_ROW_HOMEPAGE);
     cy += 4;
-    font_draw_string(s, f, cx, cy,
-                     localization_select(lang,
-                                          "Fallback offline: file://capyos/wikipedia",
-                                          "Offline fallback: file://capyos/wikipedia",
-                                          "Respaldo offline: file://capyos/wikipedia"),
-                     theme->text_muted); cy += 18;
-    font_draw_string(s, f, cx, cy,
-                     localization_select(lang,
-                                          "Toolbar: < Voltar  > Avancar  R Recarregar  H Inicial  Ir",
-                                          "Toolbar: < Back  > Forward  R Reload  H Home  Go",
-                                          "Toolbar: < Atras  > Adelante  R Recargar  H Inicio  Ir"),
-                     theme->text_muted); cy += 18;
+    settings_draw_fit(s, f, cx, cy, content_w,
+                      localization_select(lang,
+                                           "Fallback offline: file://capyos/wikipedia",
+                                           "Offline fallback: file://capyos/wikipedia",
+                                           "Respaldo offline: file://capyos/wikipedia"),
+                      theme->text_muted); cy += 18;
+    settings_draw_fit(s, f, cx, cy, content_w,
+                      localization_select(lang,
+                                           "Toolbar: < Voltar  > Avancar  R Recarregar  H Inicial  Ir",
+                                           "Toolbar: < Back  > Forward  R Reload  H Home  Go",
+                                           "Toolbar: < Atras  > Adelante  R Recargar  H Inicio  Ir"),
+                      theme->text_muted); cy += 18;
     break;
   }
   case SETTINGS_TAB_USERS: {
@@ -717,26 +983,26 @@ void settings_paint(struct settings_app *app) {
                  ? localization_select(lang, "configurados", "configured",
                                         "configurados")
                  : localization_select(lang, "nenhum", "none", "ninguno"));
-    font_draw_string(s, f, cx, cy, line, theme->text); cy += 18;
-    cy = paint_action_button(s, f, theme, cx, cy, 160,
-                              localization_select(lang,
-                                                   "Adicionar usuario...",
-                                                   "Add user...",
-                                                   "Anadir usuario..."),
-                              SETTINGS_ROW_NEWUSER);
+    settings_draw_fit(s, f, cx, cy, content_w, line, theme->text); cy += 18;
+    cy = paint_action_button(s, f, theme, cx, cy, action_w,
+                             localization_select(lang,
+                                                  "Adicionar usuario...",
+                                                  "Add user...",
+                                                  "Anadir usuario..."),
+                             SETTINGS_ROW_NEWUSER);
     cy += 4;
-    font_draw_string(s, f, cx, cy,
-                     localization_select(lang,
-                                          "Armazenado em /etc/users.db (PBKDF2-SHA256, 64k)",
-                                          "Stored in /etc/users.db (PBKDF2-SHA256, 64k rounds)",
-                                          "Almacenado en /etc/users.db (PBKDF2-SHA256, 64k)"),
-                     theme->text_muted); cy += 18;
-    font_draw_string(s, f, cx, cy,
-                     localization_select(lang,
-                                          "CLI: list-users, passwd <usuario>",
-                                          "CLI: list-users, passwd <user>",
-                                          "CLI: list-users, passwd <usuario>"),
-                     theme->text_muted); cy += 18;
+    settings_draw_fit(s, f, cx, cy, content_w,
+                      localization_select(lang,
+                                           "Armazenado em /etc/users.db (PBKDF2-SHA256, 64k)",
+                                           "Stored in /etc/users.db (PBKDF2-SHA256, 64k rounds)",
+                                           "Almacenado en /etc/users.db (PBKDF2-SHA256, 64k)"),
+                      theme->text_muted); cy += 18;
+    settings_draw_fit(s, f, cx, cy, content_w,
+                      localization_select(lang,
+                                           "CLI: list-users, passwd <usuario>",
+                                           "CLI: list-users, passwd <user>",
+                                           "CLI: list-users, passwd <usuario>"),
+                      theme->text_muted); cy += 18;
     break;
   }
   case SETTINGS_TAB_UPDATES: {
@@ -805,5 +1071,10 @@ void settings_paint(struct settings_app *app) {
   }
   default:
     break;
+  }
+  if (app->status_text[0] && s->height > f->glyph_height + 6u) {
+    int32_t status_y = (int32_t)s->height - (int32_t)f->glyph_height - 3;
+    settings_draw_fit(s, f, cx, status_y, content_w, app->status_text,
+                      app->status_color ? app->status_color : theme->text_muted);
   }
 }

@@ -158,6 +158,7 @@ int elf_load_into_process(struct process *proc, const uint8_t *data,
   if (proc->main_thread) {
     proc->main_thread->context.rip = result.entry_point;
     proc->main_thread->context.rsp = proc->stack_top - 8;
+    proc->main_thread->context.cr3 = proc->address_space->pml4_phys;
   }
 
   return 0;

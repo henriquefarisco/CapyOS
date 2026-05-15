@@ -1,5 +1,7 @@
 #include "internal/kernel_volume_runtime_internal.h"
 
+#include "security/volume_provider.h"
+
 int mount_root_capyfs(struct x64_kernel_volume_runtime_state *state,
                       const struct x64_kernel_volume_runtime_io *io,
                       struct block_device *dev, const char *label) {
@@ -62,10 +64,21 @@ int initialize_encrypted_data_volume(
   local_copy(state->active_volume_key, state->active_volume_key_size, normalized_key);
   *state->active_volume_key_ready = 1;
   dbg_puts("[kvr] init encrypted volume begin\n");
-  crypt_dev = open_crypt_volume_with_password(state, data_dev,
-                                              state->active_volume_key);
-  if (!crypt_dev) {
-    dbg_puts("[kvr] init crypt layer fail\n");
+  /*
+   * alpha.222: fresh install lands on the modern header-managed path.
+   * `volume_provider_install` generates a per-install random salt via
+   * the kernel CSPRNG, writes the alpha.221 on-disk header to LBA 0
+   * of the chunked 4 KiB device, derives AES-XTS keys via Argon2id
+   * (t_cost=3, m_cost=8192 KiB), and returns a crypt-wrapped offset
+   * device that starts at LBA 1 (= the FS data area). Legacy callers
+   * that boot pre-alpha.222 volumes hit `volume_provider_open` via
+   * `open_crypt_volume_with_password` instead, which transparently
+   * falls back to the PBKDF2 + g_disk_salt path.
+   */
+  if (volume_provider_install(data_dev, state->active_volume_key,
+                              &crypt_dev) != 0 ||
+      !crypt_dev) {
+    dbg_puts("[kvr] init crypt layer fail (volume_provider_install)\n");
     io_print(io, "[fs] ERRO: falha ao iniciar camada criptografica.\n");
     return -1;
   }

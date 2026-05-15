@@ -1,0 +1,767 @@
+#include "capy_tls_internal.h"
+
+static uint32_t capy_tls_bundle_fnv1a_byte(uint32_t hash, uint8_t byte) {
+  hash ^= byte;
+  hash *= 16777619u;
+  return hash;
+}
+
+static uint32_t capy_tls_bundle_fnv1a_cstr(uint32_t hash, const char *s) {
+  while (*s) {
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)*s);
+    s++;
+  }
+  return hash;
+}
+
+static uint32_t capy_tls_bundle_fnv1a_uint(uint32_t hash, uint32_t value) {
+  char digits[10];
+  size_t i = 0;
+  if (value == 0) return capy_tls_bundle_fnv1a_byte(hash, (uint8_t)'0');
+  while (value > 0 && i < sizeof(digits)) {
+    digits[i] = (char)('0' + (value % 10u));
+    value /= 10u;
+    i++;
+  }
+  while (i > 0) {
+    i--;
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)digits[i]);
+  }
+  return hash;
+}
+
+static const struct capy_tls_trust_anchor_bundle_entry
+    g_capy_tls_default_trust_bundle_entries[CAPY_TLS_DEFAULT_TRUST_ANCHOR_COUNT] = {
+  {
+    0u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 68u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    1u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 61u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    2u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 122u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    3u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 135u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    4u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 109u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    5u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 70u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    6u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 70u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    7u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 67u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    8u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 71u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    9u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 59u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    10u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 59u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    11u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 59u, 65u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    12u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 59u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    13u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 62u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    14u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 78u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    15u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 78u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    16u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 83u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    17u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 86u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    18u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 86u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    19u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 92u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    20u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 80u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    21u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 80u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    22u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 84u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    23u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 88u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    24u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 132u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    25u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 136u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    26u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 136u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    27u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 63u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    28u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 63u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    29u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 54u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    30u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 92u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    31u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 118u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    32u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 128u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    33u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 131u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    34u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 124u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    35u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 80u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    36u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 80u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    37u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 80u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    38u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 80u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    39u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 125u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    40u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 74u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    41u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 74u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    42u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 79u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    43u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 82u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    44u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 103u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    45u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 103u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    46u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 103u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    47u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 99u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    48u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 99u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    49u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 99u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    50u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 110u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    51u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 80u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    52u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 79u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    53u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 100u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    54u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 183u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    55u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 179u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    56u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 194u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    57u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 193u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    58u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 193u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    59u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 100u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    60u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 79u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    61u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 73u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    62u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 73u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    63u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 73u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    64u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 73u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    65u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 82u, 65u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    66u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 82u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    67u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 89u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    68u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 78u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    69u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 78u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    70u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 72u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    71u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 72u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    72u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 101u, 257u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    73u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 134u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    74u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 110u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    75u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 110u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    76u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 173u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    77u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 169u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    78u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 81u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    79u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 113u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    80u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 81u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    81u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 81u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    82u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 76u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    83u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 79u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    84u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 58u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    85u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 133u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    86u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 103u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    87u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 103u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    88u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 107u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    89u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 170u, 258u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    90u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 111u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    91u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 111u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    92u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 74u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    93u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 71u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    94u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 74u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    95u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 71u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    96u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 74u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    97u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 129u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    98u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 133u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    99u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 126u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    100u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 126u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    101u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 80u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    102u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 80u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    103u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 83u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    104u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 97u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    105u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 97u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    106u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 90u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    107u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 74u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    108u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 76u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    109u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 99u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    110u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 95u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    111u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 95u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    112u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 82u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    113u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 106u, 257u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    114u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 146u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    115u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 155u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    116u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 71u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    117u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 73u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    118u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 133u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    119u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 133u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    120u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 213u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    121u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 83u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    122u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 97u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    123u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 57u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    124u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 70u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    125u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 92u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    126u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 92u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    127u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 139u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    128u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 148u, 65u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    129u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 148u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    130u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 99u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    131u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 73u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    132u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 63u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    133u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 139u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    134u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 139u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    135u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 133u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    136u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 61u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    137u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 67u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    138u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 115u, 65u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    139u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 96u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    140u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 92u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    141u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 109u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    142u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 88u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    143u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 105u, 259u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    144u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK, 1, 73u, 97u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+  {
+    145u, CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK, 1, 69u, 515u,
+    CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS
+  },
+};
+
+static const struct capy_tls_trust_anchor_bundle g_capy_tls_default_trust_bundle = {
+  CAPY_TLS_DEFAULT_TRUST_ANCHOR_COUNT,
+  CAPY_TLS_DEFAULT_TRUST_SUBJECT_DN_TOTAL_BYTES,
+  CAPY_TLS_DEFAULT_TRUST_KEY_MATERIAL_TOTAL_BYTES,
+  CAPY_TLS_DEFAULT_TRUST_SUBJECT_DN_MAX_BYTES,
+  CAPY_TLS_DEFAULT_TRUST_KEY_MATERIAL_MAX_BYTES,
+  CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_FINGERPRINT,
+  CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_FLAGS,
+  1
+};
+
+static void capy_tls_trust_anchor_bundle_entry_zero(
+    struct capy_tls_trust_anchor_bundle_entry *entry) {
+  uint8_t *p = (uint8_t *)entry;
+  size_t i;
+  if (!entry) return;
+  for (i = 0; i < sizeof(*entry); i++) p[i] = 0;
+}
+
+static uint32_t capy_tls_trust_anchor_bundle_fingerprint_compute(void) {
+  uint32_t hash = 2166136261u;
+  uint32_t i;
+  hash = capy_tls_bundle_fnv1a_cstr(hash,
+      "capy-tls-default-trust-anchor-bundle:metadata-only:v1:");
+  for (i = 0; i < CAPY_TLS_DEFAULT_TRUST_ANCHOR_COUNT; i++) {
+    hash = capy_tls_bundle_fnv1a_uint(hash,
+        g_capy_tls_default_trust_bundle_entries[i].index);
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)':');
+    hash = capy_tls_bundle_fnv1a_uint(hash,
+        g_capy_tls_default_trust_bundle_entries[i].key_type);
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)':');
+    hash = capy_tls_bundle_fnv1a_uint(hash,
+        g_capy_tls_default_trust_bundle_entries[i].metadata_only);
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)':');
+    hash = capy_tls_bundle_fnv1a_uint(hash,
+        g_capy_tls_default_trust_bundle_entries[i].subject_dn_bytes);
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)':');
+    hash = capy_tls_bundle_fnv1a_uint(hash,
+        g_capy_tls_default_trust_bundle_entries[i].key_material_bytes);
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)':');
+    hash = capy_tls_bundle_fnv1a_uint(hash,
+        g_capy_tls_default_trust_bundle_entries[i].flags);
+    hash = capy_tls_bundle_fnv1a_byte(hash, (uint8_t)':');
+  }
+  return hash;
+}
+
+const struct capy_tls_trust_anchor_bundle_entry *
+capy_tls_default_trust_anchor_bundle_entries(void) {
+  return g_capy_tls_default_trust_bundle_entries;
+}
+
+const struct capy_tls_trust_anchor_bundle *
+capy_tls_default_trust_anchor_bundle(void) {
+  return &g_capy_tls_default_trust_bundle;
+}
+
+int capy_tls_default_trust_anchor_bundle_entry(
+    uint32_t index,
+    struct capy_tls_trust_anchor_bundle_entry *out) {
+  if (!out) return 0;
+  capy_tls_trust_anchor_bundle_entry_zero(out);
+  if (index >= capy_tls_default_trust_anchor_bundle_entry_count()) return 0;
+  *out = g_capy_tls_default_trust_bundle_entries[index];
+  return 1;
+}
+
+uint32_t capy_tls_default_trust_anchor_bundle_entry_count(void) {
+  return g_capy_tls_default_trust_bundle.entry_count;
+}
+
+uint32_t capy_tls_default_trust_anchor_bundle_fingerprint(void) {
+  return g_capy_tls_default_trust_bundle.fingerprint;
+}
+
+uint32_t capy_tls_default_trust_anchor_bundle_flags(void) {
+  return g_capy_tls_default_trust_bundle.flags;
+}
+
+int capy_tls_default_trust_anchor_bundle_consistent(void) {
+  const struct capy_tls_trust_anchor_slot *slots;
+  struct capy_tls_trust_anchor_bundle_entry entry;
+  uint32_t rsa_count = 0;
+  uint32_t ec_count = 0;
+  uint32_t subject_total = 0;
+  uint32_t key_total = 0;
+  uint32_t subject_max = 0;
+  uint32_t key_max = 0;
+  uint32_t i;
+  slots = capy_tls_default_trust_anchor_slots();
+  if (!slots) return 0;
+  if (!capy_tls_default_trust_anchor_descriptors_consistent()) return 0;
+  if (g_capy_tls_default_trust_bundle.metadata_only != 1) return 0;
+  if (g_capy_tls_default_trust_bundle.entry_count !=
+      CAPY_TLS_DEFAULT_TRUST_ANCHOR_COUNT) return 0;
+  if (g_capy_tls_default_trust_bundle.fingerprint !=
+      CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_FINGERPRINT) return 0;
+  if (g_capy_tls_default_trust_bundle.flags !=
+      CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_FLAGS) return 0;
+  if (capy_tls_trust_anchor_bundle_fingerprint_compute() !=
+      CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_FINGERPRINT) return 0;
+  for (i = 0; i < g_capy_tls_default_trust_bundle.entry_count; i++) {
+    if (!capy_tls_default_trust_anchor_bundle_entry(i, &entry)) return 0;
+    if (entry.index != i || entry.index != slots[i].index) return 0;
+    if (entry.key_type != slots[i].key_type) return 0;
+    if (entry.metadata_only != 1) return 0;
+    if (entry.flags != CAPY_TLS_DEFAULT_TRUST_ANCHOR_BUNDLE_ENTRY_FLAGS)
+      return 0;
+    if (entry.subject_dn_bytes == 0 || entry.key_material_bytes == 0)
+      return 0;
+    subject_total += entry.subject_dn_bytes;
+    key_total += entry.key_material_bytes;
+    if (entry.subject_dn_bytes > subject_max)
+      subject_max = entry.subject_dn_bytes;
+    if (entry.key_material_bytes > key_max)
+      key_max = entry.key_material_bytes;
+    if (entry.key_type == CAPY_TLS_TRUST_ANCHOR_KEYTYPE_RSA_MASK) {
+      rsa_count++;
+    } else if (entry.key_type == CAPY_TLS_TRUST_ANCHOR_KEYTYPE_EC_MASK) {
+      ec_count++;
+    } else return 0;
+  }
+  if (capy_tls_default_trust_anchor_bundle_entry(
+      CAPY_TLS_DEFAULT_TRUST_ANCHOR_COUNT, &entry)) return 0;
+  if (entry.index != 0 || entry.key_type != 0 || entry.metadata_only != 0 ||
+      entry.subject_dn_bytes != 0 || entry.key_material_bytes != 0 ||
+      entry.flags != 0) return 0;
+  if (rsa_count != CAPY_TLS_DEFAULT_TRUST_ANCHOR_RSA_COUNT) return 0;
+  if (ec_count != CAPY_TLS_DEFAULT_TRUST_ANCHOR_EC_COUNT) return 0;
+  if (subject_total != CAPY_TLS_DEFAULT_TRUST_SUBJECT_DN_TOTAL_BYTES) return 0;
+  if (key_total != CAPY_TLS_DEFAULT_TRUST_KEY_MATERIAL_TOTAL_BYTES) return 0;
+  if (subject_max != CAPY_TLS_DEFAULT_TRUST_SUBJECT_DN_MAX_BYTES) return 0;
+  if (key_max != CAPY_TLS_DEFAULT_TRUST_KEY_MATERIAL_MAX_BYTES) return 0;
+  if ((g_capy_tls_default_trust_bundle.flags &
+       CAPY_TLS_TRUST_ANCHOR_BUNDLE_FLAG_METADATA_ONLY) == 0)
+    return 0;
+  if ((g_capy_tls_default_trust_bundle.flags &
+       CAPY_TLS_TRUST_ANCHOR_BUNDLE_FLAG_KERNEL_BUNDLE_DERIVED) == 0)
+    return 0;
+  if ((g_capy_tls_default_trust_bundle.flags &
+       CAPY_TLS_TRUST_ANCHOR_BUNDLE_FLAG_CERT_BYTES_ABSENT) == 0)
+    return 0;
+  if ((g_capy_tls_default_trust_bundle.flags &
+       CAPY_TLS_TRUST_ANCHOR_BUNDLE_FLAG_FAIL_CLOSED_ONLY) == 0)
+    return 0;
+  return 1;
+}

@@ -55,7 +55,7 @@ static void append_u32_text(char *dst, size_t dst_size, uint32_t value) {
 
 void update_history_append_event(const char *event_name,
                                  const struct system_update_status *status) {
-  char line[320];
+  char line[640];
   struct dentry *d = NULL;
   struct file *f = NULL;
 
@@ -102,6 +102,18 @@ void update_history_append_event(const char *event_name,
   append_text(line, sizeof(line), " staged_ver=");
   append_text(line, sizeof(line),
               status->staged_version[0] ? status->staged_version : "-");
+  append_text(line, sizeof(line), " payload=");
+  append_text(line, sizeof(line),
+              status->staged_payload_url[0]
+                  ? status->staged_payload_url
+                  : (status->payload_url[0] ? status->payload_url : "-"));
+  append_text(line, sizeof(line), " payload_sha=");
+  append_text(line, sizeof(line),
+              status->payload_cache_sha256[0]
+                  ? status->payload_cache_sha256
+                  : (status->staged_payload_sha256[0]
+                         ? status->staged_payload_sha256
+                         : "-"));
   append_text(line, sizeof(line), " summary=");
   append_text(line, sizeof(line), status->summary[0] ? status->summary : "-");
   append_text(line, sizeof(line), "\n");
@@ -155,25 +167,45 @@ int recovery_storage_rewrite_config(const struct shell_context *ctx) {
 }
 
 int recovery_storage_reset_admin(const char *password) {
+  struct session_context *previous_session = NULL;
   struct user_record admin;
-  uint32_t uid = 1000u;
-  uint32_t gid = 1000u;
+  uint32_t uid = USER_UID_FIRST_REGULAR;
+  uint32_t gid = USER_GID_FIRST_REGULAR;
+  int rc = -1;
 
   if (!password || !password[0]) {
     return -1;
   }
-  if (x64_kernel_volume_runtime_ensure_dir_recursive("/home/admin") != 0) {
-    return -1;
+  user_record_clear(&admin);
+  previous_session = session_active();
+  session_set_active(NULL);
+  if (userdb_ensure() != 0) {
+    goto done;
   }
   if (userdb_find("admin", &admin) == 0) {
-    return userdb_set_password("admin", password);
+    const char *home = admin.home[0] == '/' ? admin.home : "/home/admin";
+    if (user_home_prepare(home, admin.uid, admin.gid) != 0) {
+      goto done;
+    }
+    rc = userdb_set_password("admin", password);
+    goto done;
   }
-  (void)userdb_next_ids(&uid, &gid);
+  if (userdb_next_ids(&uid, &gid) != 0) {
+    goto done;
+  }
+  if (user_home_prepare("/home/admin", uid, gid) != 0) {
+    goto done;
+  }
   if (user_record_init("admin", password, "admin", uid, gid, "/home/admin",
                        &admin) != 0) {
-    return -1;
+    goto done;
   }
-  return userdb_add(&admin);
+  rc = userdb_add(&admin);
+
+done:
+  session_set_active(previous_session);
+  user_record_clear(&admin);
+  return rc;
 }
 #endif
 

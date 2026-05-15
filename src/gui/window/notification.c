@@ -55,23 +55,31 @@ static void n_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
 void notify_paint(struct notification_manager *nm, struct gui_surface *surface) {
   if (!nm || !surface) return;
   const struct font *f = font_default();
-  if (!f) return;
-  int32_t base_x = (int32_t)(nm->screen_w - NOTIFY_WIDTH - 8);
-  int32_t base_y = 8;
+  const struct gui_theme_palette *theme = compositor_theme();
+  if (!f || !theme) return;
+  int32_t base_x = (nm->screen_w > NOTIFY_WIDTH + 12u)
+                       ? (int32_t)(nm->screen_w - NOTIFY_WIDTH - 12u)
+                       : 0;
+  int32_t base_y = 12;
   int slot = 0;
   for (int i = 0; i < NOTIFY_MAX; i++) {
     if (!nm->items[i].active) continue;
     int32_t y = base_y + slot * (int32_t)(NOTIFY_HEIGHT + 8);
-    uint32_t bg = 0x1E1E2E, accent = 0x89B4FA;
+    uint32_t bg = theme->window_bg;
+    uint32_t accent = theme->accent;
     switch (nm->items[i].type) {
-      case NOTIFY_SUCCESS: bg = 0x1E3A1E; accent = 0xA6E3A1; break;
-      case NOTIFY_WARNING: bg = 0x3A3A1E; accent = 0xF9E2AF; break;
-      case NOTIFY_ERROR:   bg = 0x3A1E1E; accent = 0xF38BA8; break;
+      case NOTIFY_SUCCESS: accent = 0x00A6E3A1; break;
+      case NOTIFY_WARNING: accent = 0x00F9E2AF; break;
+      case NOTIFY_ERROR:   accent = 0x00F38BA8; break;
       default: break;
     }
-    n_fill_rect(surface, base_x, y, NOTIFY_WIDTH, NOTIFY_HEIGHT, bg);
-    n_fill_rect(surface, base_x, y, 4, NOTIFY_HEIGHT, accent);
-    font_draw_string(surface, f, base_x + 12, y + 8, nm->items[i].text, 0xCDD6F4);
+    n_fill_rect(surface, base_x, y, NOTIFY_WIDTH, NOTIFY_HEIGHT,
+                theme->window_border);
+    n_fill_rect(surface, base_x + 1, y + 1, NOTIFY_WIDTH - 2,
+                NOTIFY_HEIGHT - 2, bg);
+    n_fill_rect(surface, base_x + 1, y + 1, 5, NOTIFY_HEIGHT - 2, accent);
+    font_draw_string(surface, f, base_x + 14, y + 8, nm->items[i].text,
+                     theme->text);
     slot++;
   }
 }

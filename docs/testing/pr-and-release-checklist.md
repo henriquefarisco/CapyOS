@@ -106,6 +106,9 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
       version-audit` passou.
 - [ ] Checksums de release (`build/release-artifacts.sha256`) foram
       regenerados e validados via `make verify-release-checksums TOOLCHAIN64=elf`.
+- [ ] Assinatura Ed25519 de release foi gerada e verificada com
+      `make sign-release-checksums` e `make verify-release-signature`, usando
+      chave privada offline e chave publica esperada.
 
 ## Notas
 

@@ -4,25 +4,18 @@
 #include "arch/x86_64/kernel_volume_runtime.h"
 #endif
 
-static void bytes_to_hex_str(const uint8_t *src, size_t len, char *dst,
-                             size_t dst_size) {
-  static const char hex_digits[] = "0123456789abcdef";
-  if (!dst || dst_size == 0) {
-    return;
+/* Reports whether `src` holds at least one non-zero byte without revealing
+ * any byte value. Constant time over `len`. Useful for boot diagnostics that
+ * must confirm a credential field is populated without leaking material. */
+static int bytes_have_nonzero(const uint8_t *src, size_t len) {
+  uint8_t acc = 0;
+  if (!src) {
+    return 0;
   }
-  size_t needed = len * 2;
-  size_t limit = (needed < dst_size - 1) ? needed : (dst_size - 1);
-  size_t di = 0;
-  for (size_t i = 0; i < len && (di + 1) < dst_size; ++i) {
-    uint8_t v = src[i];
-    if (di < limit) {
-      dst[di++] = hex_digits[(v >> 4) & 0x0F];
-    }
-    if (di < limit) {
-      dst[di++] = hex_digits[v & 0x0F];
-    }
+  for (size_t i = 0; i < len; ++i) {
+    acc |= src[i];
   }
-  dst[di] = '\0';
+  return acc != 0 ? 1 : 0;
 }
 
 int config_ensure_directory(const char *path) {
@@ -177,13 +170,22 @@ int config_verify_directory_exists(const char *path) {
 
 void config_log_user_record_state(const struct user_record *rec) {
   if (!rec) return;
+  /* Boot diagnostics must confirm the administrator record is populated
+   * without exposing salt or PBKDF2 hash material. Logging the raw bytes
+   * (even in hex) on the boot log would let anyone with read access to the
+   * log mount an offline brute-force attack against the credential, so we
+   * only report presence and the expected sizes here. The constants are
+   * compile-time public ABI from `auth/user.h`. */
   char uid_buf[12], gid_buf[12];
+  char salt_size_buf[12], hash_size_buf[12];
+  int salt_present = bytes_have_nonzero(rec->salt, USER_SALT_SIZE);
+  int hash_present = bytes_have_nonzero(rec->hash, USER_HASH_SIZE);
   config_u32_to_string(rec->uid, uid_buf, sizeof(uid_buf));
   config_u32_to_string(rec->gid, gid_buf, sizeof(gid_buf));
-  char salt_hex[USER_SALT_SIZE * 2 + 1];
-  char hash_hex[USER_HASH_SIZE * 2 + 1];
-  bytes_to_hex_str(rec->salt, USER_SALT_SIZE, salt_hex, sizeof(salt_hex));
-  bytes_to_hex_str(rec->hash, USER_HASH_SIZE, hash_hex, sizeof(hash_hex));
+  config_u32_to_string((uint32_t)USER_SALT_SIZE, salt_size_buf,
+                       sizeof(salt_size_buf));
+  config_u32_to_string((uint32_t)USER_HASH_SIZE, hash_size_buf,
+                       sizeof(hash_size_buf));
   config_log_buffer_append("   userdb: usuario=");
   config_log_buffer_append(rec->username);
   config_log_buffer_append(" uid=");
@@ -192,10 +194,12 @@ void config_log_user_record_state(const struct user_record *rec) {
   config_log_buffer_append(gid_buf);
   config_log_buffer_append(" home=");
   config_log_buffer_append(rec->home);
-  config_log_buffer_append(" salt=");
-  config_log_buffer_append(salt_hex);
-  config_log_buffer_append(" hash=");
-  config_log_buffer_append(hash_hex);
+  config_log_buffer_append(" salt=[redacted size=");
+  config_log_buffer_append(salt_size_buf);
+  config_log_buffer_append(salt_present ? " present=1]" : " present=0]");
+  config_log_buffer_append(" hash=[redacted size=");
+  config_log_buffer_append(hash_size_buf);
+  config_log_buffer_append(hash_present ? " present=1]" : " present=0]");
   config_log_buffer_append("\n");
   config_log_flush_pending();
 }

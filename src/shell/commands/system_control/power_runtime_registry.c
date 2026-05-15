@@ -315,7 +315,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[21];
+static struct shell_command g_system_control_commands[29];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -344,33 +344,49 @@ static void init_system_control_commands(void) {
   g_system_control_commands[9].handler = cmd_job_run;
   g_system_control_commands[10].name = "update-check";
   g_system_control_commands[10].handler = cmd_update_check;
-  g_system_control_commands[11].name = "update-stage";
-  g_system_control_commands[11].handler = cmd_update_stage;
-  g_system_control_commands[12].name = "update-arm";
-  g_system_control_commands[12].handler = cmd_update_arm;
-  g_system_control_commands[13].name = "update-clear";
-  g_system_control_commands[13].handler = cmd_update_clear;
-  g_system_control_commands[14].name = "update-import-manifest";
-  g_system_control_commands[14].handler = cmd_update_import_manifest;
-  g_system_control_commands[15].name = "update-channel";
-  g_system_control_commands[15].handler = cmd_update_channel;
-  g_system_control_commands[16].name = "service-target";
-  g_system_control_commands[16].handler = cmd_service_target;
-  g_system_control_commands[17].name = "recovery-resume";
-  g_system_control_commands[17].handler = cmd_recovery_resume;
-  g_system_control_commands[18].name = "recovery-verify";
-  g_system_control_commands[18].handler = cmd_recovery_verify;
-  g_system_control_commands[19].name = "recovery-login";
-  g_system_control_commands[19].handler = cmd_recovery_login;
-  g_system_control_commands[20].name = "recovery-storage-repair";
-  g_system_control_commands[20].handler = cmd_recovery_storage_repair;
+  g_system_control_commands[11].name = "update-fetch";
+  g_system_control_commands[11].handler = cmd_update_fetch;
+  g_system_control_commands[12].name = "update-download-payload";
+  g_system_control_commands[12].handler = cmd_update_download_payload;
+  g_system_control_commands[13].name = "update-prepare";
+  g_system_control_commands[13].handler = cmd_update_prepare;
+  g_system_control_commands[14].name = "update-prepare-dry-run";
+  g_system_control_commands[14].handler = cmd_update_prepare_dry_run;
+  g_system_control_commands[15].name = "update-prepare-explain";
+  g_system_control_commands[15].handler = cmd_update_prepare_explain;
+  g_system_control_commands[16].name = "update-stage";
+  g_system_control_commands[16].handler = cmd_update_stage;
+  g_system_control_commands[17].name = "update-arm";
+  g_system_control_commands[17].handler = cmd_update_arm;
+  g_system_control_commands[18].name = "update-apply";
+  g_system_control_commands[18].handler = cmd_update_apply;
+  g_system_control_commands[19].name = "update-confirm-health";
+  g_system_control_commands[19].handler = cmd_update_confirm_health;
+  g_system_control_commands[20].name = "update-rollback-check";
+  g_system_control_commands[20].handler = cmd_update_rollback_check;
+  g_system_control_commands[21].name = "update-clear";
+  g_system_control_commands[21].handler = cmd_update_clear;
+  g_system_control_commands[22].name = "update-import-manifest";
+  g_system_control_commands[22].handler = cmd_update_import_manifest;
+  g_system_control_commands[23].name = "update-channel";
+  g_system_control_commands[23].handler = cmd_update_channel;
+  g_system_control_commands[24].name = "service-target";
+  g_system_control_commands[24].handler = cmd_service_target;
+  g_system_control_commands[25].name = "recovery-resume";
+  g_system_control_commands[25].handler = cmd_recovery_resume;
+  g_system_control_commands[26].name = "recovery-verify";
+  g_system_control_commands[26].handler = cmd_recovery_verify;
+  g_system_control_commands[27].name = "recovery-login";
+  g_system_control_commands[27].handler = cmd_recovery_login;
+  g_system_control_commands[28].name = "recovery-storage-repair";
+  g_system_control_commands[28].handler = cmd_recovery_storage_repair;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
   init_system_control_commands();
   if (count) {
-    *count = 21;
+    *count = 29;
   }
   return g_system_control_commands;
 }

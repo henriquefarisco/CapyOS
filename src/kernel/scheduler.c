@@ -220,6 +220,18 @@ int scheduler_running(void) {
   return sched_running;
 }
 
+int scheduler_can_sleep_current(void) {
+  struct task *current = task_current();
+  if (!sched_running || !current) return 0;
+  if (stats.total_ticks == 0) return 0;
+  if (current->state != TASK_STATE_RUNNING) return 0;
+  for (struct task *t = run_queue_head; t; t = t->next) {
+    if (t != current && t->state == TASK_STATE_READY) return 1;
+  }
+  if (idle_task && current_policy != SCHED_POLICY_COOPERATIVE) return 1;
+  return 0;
+}
+
 void scheduler_start(void) {
   idle_task = task_create_kernel("idle", idle_entry, NULL);
   if (idle_task) {

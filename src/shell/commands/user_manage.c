@@ -4,8 +4,8 @@
 #include "lang/localization.h"
 #include "auth/privilege.h"
 #include "auth/user.h"
+#include "auth/user_home.h"
 #include "auth/user_prefs.h"
-#include "fs/vfs.h"
 #include "memory/kmem.h"
 
 enum user_manage_text_id {
@@ -215,37 +215,26 @@ static int validate_role(const char *role) {
 }
 
 static void build_home_path(const char *username, char *out, size_t out_len) {
+  size_t base = 0;
+  size_t name_len = 0;
+  if (!out || out_len == 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (!username) {
+    return;
+  }
   shell_copy(out, out_len, "/home/");
-  size_t base = shell_cstring_length(out);
-  size_t name_len = shell_cstring_length(username);
-  if (!username || base + name_len >= out_len) {
+  base = shell_cstring_length(out);
+  name_len = shell_cstring_length(username);
+  if (base + name_len >= out_len) {
+    out[0] = '\0';
     return;
   }
   for (size_t i = 0; i < name_len; ++i) {
     out[base + i] = username[i];
   }
   out[base + name_len] = '\0';
-}
-
-static int ensure_directory(const char *path, const struct vfs_metadata *meta) {
-  struct dentry *d = NULL;
-  if (vfs_lookup(path, &d) == 0 && d) {
-    int ok = d->inode && (d->inode->mode & VFS_MODE_DIR);
-    if (d->refcount) {
-      d->refcount--;
-    }
-    if (ok && meta) {
-      (void)vfs_set_metadata(path, meta);
-    }
-    return ok ? 0 : -1;
-  }
-  if (vfs_create(path, VFS_MODE_DIR, meta) != 0) {
-    return -1;
-  }
-  if (meta) {
-    (void)vfs_set_metadata(path, meta);
-  }
-  return 0;
 }
 
 static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
@@ -283,49 +272,45 @@ static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
     shell_print_error(user_manage_text(language, USER_MANAGE_INVALID_ROLE));
     return -1;
   }
-  if (userdb_find(username, NULL) == 0) {
-    shell_print_error(user_manage_text(language, USER_MANAGE_ALREADY_EXISTS));
-    return -1;
-  }
 
-  uint32_t uid = 1000;
-  uint32_t gid = 1000;
+  uint32_t uid = USER_UID_FIRST_REGULAR;
+  uint32_t gid = USER_GID_FIRST_REGULAR;
   struct session_context *previous_session = session_active();
   const char *default_language =
       (ctx && ctx->settings && ctx->settings->language[0])
           ? ctx->settings->language
           : "en";
-  int rc = -1;
-  if (userdb_next_ids(&uid, &gid) != 0) {
-    shell_print_error(
-        user_manage_text(language, USER_MANAGE_UID_RESERVE_FAILED));
-    return -1;
-  }
-
-  struct vfs_metadata home_root_meta = {0, 0, 0755};
-  session_set_active(NULL);
-  if (ensure_directory("/home", &home_root_meta) != 0) {
-    shell_print_error(
-        user_manage_text(language, USER_MANAGE_HOME_ROOT_FAILED));
-    goto done;
-  }
-
   char home[USER_HOME_MAX];
+  struct user_record user;
+  int rc = -1;
+
   build_home_path(username, home, sizeof(home));
   if (!home[0]) {
     shell_print_error(
         user_manage_text(language, USER_MANAGE_HOME_PATH_FAILED));
-    goto done;
+    return -1;
   }
 
-  struct vfs_metadata home_meta = {uid, gid, 0700};
-  if (ensure_directory(home, &home_meta) != 0) {
+  user_record_clear(&user);
+  session_set_active(NULL);
+  if (userdb_ensure() != 0) {
+    shell_print_error(user_manage_text(language, USER_MANAGE_DB_WRITE_FAILED));
+    goto done;
+  }
+  if (userdb_find(username, NULL) == 0) {
+    shell_print_error(user_manage_text(language, USER_MANAGE_ALREADY_EXISTS));
+    goto done;
+  }
+  if (userdb_next_ids(&uid, &gid) != 0) {
+    shell_print_error(
+        user_manage_text(language, USER_MANAGE_UID_RESERVE_FAILED));
+    goto done;
+  }
+  if (user_home_prepare(home, uid, gid) != 0) {
     shell_print_error(
         user_manage_text(language, USER_MANAGE_HOME_CREATE_FAILED));
     goto done;
   }
-
-  struct user_record user;
   if (user_record_init(username, password, role, uid, gid, home, &user) != 0) {
     shell_print_error(
         user_manage_text(language, USER_MANAGE_RECORD_BUILD_FAILED));
@@ -336,7 +321,6 @@ static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
     goto done;
   }
 
-  (void)vfs_set_metadata(home, &home_meta);
   if (user_prefs_save_language(&user, default_language) != 0) {
     shell_print(user_manage_text(language, USER_MANAGE_PREFS_WARNING));
   }
@@ -353,6 +337,7 @@ static int cmd_add_user(struct shell_context *ctx, int argc, char **argv) {
 
 done:
   session_set_active(previous_session);
+  user_record_clear(&user);
   return rc;
 }
 

@@ -521,8 +521,18 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
   return 0;
 }
 
+/* Sessão 44 (2026-05-08): tristate via signed-rc + optional out_neg_ttl.
+ *   rc == 0  : positive A record. *out_ip, *out_ttl populated.
+ *   rc == -1 : either (a) parseable definitive negative (NXDOMAIN /
+ *              NODATA with SOA) -> *out_neg_ttl populated with the
+ *              SOA-derived negative TTL; *out_ip and *out_ttl untouched;
+ *              or (b) transport/timeout/malformed -> nothing populated.
+ * Callers that need the (a)/(b) distinction pass a non-NULL out_neg_ttl
+ * and check `*out_neg_ttl > 0` after rc == -1. Older callers still get
+ * the binary 0/-1 contract by passing NULL. */
 int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
-                          uint32_t *out_ip) {
+                          uint32_t *out_ip, uint32_t *out_ttl,
+                          uint32_t *out_neg_ttl) {
   if (!g_net.initialized || !g_net.ready || !hostname || !out_ip ||
       timeout_ms < 100u || g_net.ipv4.addr == 0u || g_net.ipv4.dns == 0u) {
     return -1;
@@ -545,7 +555,13 @@ int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
   for (uint32_t elapsed = 0; elapsed <= timeout_ms; ++elapsed) {
     (void)net_stack_poll();
     if (g_net.dns.response_ready) {
+      if (g_net.dns.response_is_negative) {
+        if (out_neg_ttl) *out_neg_ttl = g_net.dns.answer_negative_ttl;
+        net_dns_reset(&g_net.dns);
+        return -1;
+      }
       *out_ip = g_net.dns.answer_ip;
+      if (out_ttl) *out_ttl = g_net.dns.answer_ttl;
       net_dns_reset(&g_net.dns);
       return 0;
     }

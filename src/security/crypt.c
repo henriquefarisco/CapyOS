@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "memory/kmem.h"
+#include "security/argon2.h"
 
 static inline void dbg_putc(char ch) {
 #ifdef UNIT_TEST
@@ -34,154 +35,21 @@ static uint32_t dbg_be32(const uint8_t *buf) {
          ((uint32_t)buf[2] << 8) | (uint32_t)buf[3];
 }
 
-static const uint32_t k256[64] = {
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
-    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
-    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
-    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
-    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
-
-static uint32_t rotr(uint32_t x, uint32_t n) {
-  return (x >> n) | (x << (32 - n));
-}
-
 static void secure_clear(uint8_t *ptr, size_t len);
-
-static void sha256_transform(struct sha256_ctx *ctx,
-                             const uint8_t data[SHA256_BLOCK_SIZE]) {
-  uint32_t m[64];
-  for (uint32_t i = 0; i < 16; ++i) {
-    m[i] = (uint32_t)data[i * 4 + 0] << 24 | (uint32_t)data[i * 4 + 1] << 16 |
-           (uint32_t)data[i * 4 + 2] << 8 | (uint32_t)data[i * 4 + 3];
-  }
-  for (uint32_t i = 16; i < 64; ++i) {
-    uint32_t s0 = rotr(m[i - 15], 7) ^ rotr(m[i - 15], 18) ^ (m[i - 15] >> 3);
-    uint32_t s1 = rotr(m[i - 2], 17) ^ rotr(m[i - 2], 19) ^ (m[i - 2] >> 10);
-    m[i] = m[i - 16] + s0 + m[i - 7] + s1;
-  }
-
-  uint32_t a = ctx->state[0];
-  uint32_t b = ctx->state[1];
-  uint32_t c = ctx->state[2];
-  uint32_t d = ctx->state[3];
-  uint32_t e = ctx->state[4];
-  uint32_t f = ctx->state[5];
-  uint32_t g = ctx->state[6];
-  uint32_t h = ctx->state[7];
-
-  for (uint32_t i = 0; i < 64; ++i) {
-    uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-    uint32_t ch = (e & f) ^ ((~e) & g);
-    uint32_t temp1 = h + S1 + ch + k256[i] + m[i];
-    uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-    uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-    uint32_t temp2 = S0 + maj;
-
-    h = g;
-    g = f;
-    f = e;
-    e = d + temp1;
-    d = c;
-    c = b;
-    b = a;
-    a = temp1 + temp2;
-  }
-
-  ctx->state[0] += a;
-  ctx->state[1] += b;
-  ctx->state[2] += c;
-  ctx->state[3] += d;
-  ctx->state[4] += e;
-  ctx->state[5] += f;
-  ctx->state[6] += g;
-  ctx->state[7] += h;
-}
-
-void sha256_init(struct sha256_ctx *ctx) {
-  ctx->datalen = 0;
-  ctx->bitlen = 0;
-  ctx->state[0] = 0x6a09e667;
-  ctx->state[1] = 0xbb67ae85;
-  ctx->state[2] = 0x3c6ef372;
-  ctx->state[3] = 0xa54ff53a;
-  ctx->state[4] = 0x510e527f;
-  ctx->state[5] = 0x9b05688c;
-  ctx->state[6] = 0x1f83d9ab;
-  ctx->state[7] = 0x5be0cd19;
-}
-
-void sha256_update(struct sha256_ctx *ctx, const uint8_t *data, size_t len) {
-  for (size_t i = 0; i < len; ++i) {
-    ctx->data[ctx->datalen++] = data[i];
-    if (ctx->datalen == SHA256_BLOCK_SIZE) {
-      sha256_transform(ctx, ctx->data);
-      ctx->bitlen += SHA256_BLOCK_SIZE * 8;
-      ctx->datalen = 0;
-    }
-  }
-}
-
-void sha256_final(struct sha256_ctx *ctx, uint8_t hash[SHA256_DIGEST_SIZE]) {
-  uint32_t i = ctx->datalen;
-
-  if (ctx->datalen < 56) {
-    ctx->data[i++] = 0x80;
-    while (i < 56) {
-      ctx->data[i++] = 0x00;
-    }
-  } else {
-    ctx->data[i++] = 0x80;
-    while (i < SHA256_BLOCK_SIZE) {
-      ctx->data[i++] = 0x00;
-    }
-    sha256_transform(ctx, ctx->data);
-    i = 0;
-    while (i < 56) {
-      ctx->data[i++] = 0x00;
-    }
-  }
-
-  ctx->bitlen += ctx->datalen * 8;
-  ctx->data[63] = (uint8_t)(ctx->bitlen);
-  ctx->data[62] = (uint8_t)(ctx->bitlen >> 8);
-  ctx->data[61] = (uint8_t)(ctx->bitlen >> 16);
-  ctx->data[60] = (uint8_t)(ctx->bitlen >> 24);
-  ctx->data[59] = (uint8_t)(ctx->bitlen >> 32);
-  ctx->data[58] = (uint8_t)(ctx->bitlen >> 40);
-  ctx->data[57] = (uint8_t)(ctx->bitlen >> 48);
-  ctx->data[56] = (uint8_t)(ctx->bitlen >> 56);
-  sha256_transform(ctx, ctx->data);
-
-  for (uint32_t j = 0; j < 4; ++j) {
-    hash[j] = (uint8_t)(ctx->state[0] >> (24 - j * 8));
-    hash[j + 4] = (uint8_t)(ctx->state[1] >> (24 - j * 8));
-    hash[j + 8] = (uint8_t)(ctx->state[2] >> (24 - j * 8));
-    hash[j + 12] = (uint8_t)(ctx->state[3] >> (24 - j * 8));
-    hash[j + 16] = (uint8_t)(ctx->state[4] >> (24 - j * 8));
-    hash[j + 20] = (uint8_t)(ctx->state[5] >> (24 - j * 8));
-    hash[j + 24] = (uint8_t)(ctx->state[6] >> (24 - j * 8));
-    hash[j + 28] = (uint8_t)(ctx->state[7] >> (24 - j * 8));
-  }
-  secure_clear(ctx->data, sizeof(ctx->data));
-}
 
 static void hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data,
                         size_t data_len, uint8_t out[SHA256_DIGEST_SIZE]) {
   uint8_t kopad[SHA256_BLOCK_SIZE];
   uint8_t kipad[SHA256_BLOCK_SIZE];
   uint8_t key_hash[SHA256_DIGEST_SIZE];
+  struct sha256_ctx key_ctx;
+  int key_ctx_used = 0;
 
   if (key_len > SHA256_BLOCK_SIZE) {
-    struct sha256_ctx key_ctx;
     sha256_init(&key_ctx);
     sha256_update(&key_ctx, key, key_len);
     sha256_final(&key_ctx, key_hash);
+    key_ctx_used = 1;
     key = key_hash;
     key_len = SHA256_DIGEST_SIZE;
   }
@@ -203,6 +71,18 @@ static void hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data,
   sha256_update(&ctx, out, SHA256_DIGEST_SIZE);
   sha256_final(&ctx, out);
 
+  /* Wipe every secret-bearing scratch buffer before returning. The pad
+   * buffers and any optional hashed key were already cleared; the new
+   * `sha256_clear` calls also zero the HMAC inner/outer SHA-256 state,
+   * which after `sha256_final` carries the produced hash in `state[]`
+   * and a padded copy of the last block (which itself was derived from
+   * the key XOR pad and the message digest) in `data[]`. Without these
+   * wipes the inner/outer hash leaked across the PBKDF2 inner loop and
+   * across the function boundary back to the caller's frame. */
+  sha256_clear(&ctx);
+  if (key_ctx_used) {
+    sha256_clear(&key_ctx);
+  }
   secure_clear(kopad, sizeof(kopad));
   secure_clear(kipad, sizeof(kipad));
   secure_clear(key_hash, sizeof(key_hash));
@@ -289,6 +169,87 @@ void crypt_derive_xts_keys(const char *password, const uint8_t *salt,
   }
 
   secure_clear(derived, sizeof(derived));
+}
+
+int crypt_derive_xts_keys_argon2id(const char *password,
+                                   const uint8_t *salt, size_t salt_len,
+                                   uint32_t t_cost, uint32_t m_cost,
+                                   uint8_t key1[CRYPT_KEY_SIZE],
+                                   uint8_t key2[CRYPT_KEY_SIZE]) {
+  /*
+   * Fail-closed first. Wipe the output buffers up front so a caller
+   * that forgets to check the return value receives an unambiguous
+   * all-zero "no key here" sentinel rather than uninitialised stack
+   * or whatever state the buffers happened to carry from a previous
+   * caller. Doing the wipe at the very top also covers the early
+   * return paths below.
+   */
+  if (key1) {
+    secure_clear(key1, CRYPT_KEY_SIZE);
+  }
+  if (key2) {
+    secure_clear(key2, CRYPT_KEY_SIZE);
+  }
+  if (!password || !salt || !key1 || !key2) {
+    return -1;
+  }
+  if (t_cost < ARGON2_MIN_T_COST || m_cost < ARGON2_MIN_M_COST) {
+    return -1;
+  }
+  /*
+   * RFC 9106 §3.1 mandates salt_len >= 8 (otherwise the salted H0
+   * pre-hash leaks too little entropy). The CapyOS volume header
+   * embeds a 16-byte salt today, so this lower bound is comfortably
+   * met; rejecting shorter salts here keeps future callers from
+   * unknowingly weakening the construction.
+   */
+  if (salt_len < 8u) {
+    return -1;
+  }
+
+  size_t pass_len = 0;
+  while (password[pass_len]) {
+    pass_len++;
+  }
+
+  size_t memory_bytes = (size_t)m_cost * 1024u;
+  uint8_t *memory = (uint8_t *)kalloc(memory_bytes);
+  if (!memory) {
+    return -1;
+  }
+
+  uint8_t derived[CRYPT_KEY_SIZE * 2];
+  int rc = argon2id_hash((const uint8_t *)password, pass_len, salt, salt_len,
+                         t_cost, m_cost, memory, memory_bytes, derived,
+                         sizeof(derived));
+
+  /*
+   * Wipe the Argon2id work memory BEFORE freeing so the freed heap
+   * region cannot retain material derived from the volume password
+   * (the matrix walked by the data-dependent passes carries
+   * password-derived state). Free order: wipe -> kfree, never the
+   * reverse, because kfree may immediately hand the region to
+   * another allocation that observes the residue.
+   */
+  secure_clear(memory, memory_bytes);
+  kfree(memory);
+
+  if (rc != 0) {
+    /* `derived` may carry partial H' output if Argon2id failed mid
+     * flight; wipe before returning to keep that scratch from
+     * leaking back to the caller's frame, and leave the already-
+     * zeroed `key1`/`key2` outputs as the documented "no key" state. */
+    secure_clear(derived, sizeof(derived));
+    return -1;
+  }
+
+  for (size_t i = 0; i < CRYPT_KEY_SIZE; ++i) {
+    key1[i] = derived[i];
+    key2[i] = derived[i + CRYPT_KEY_SIZE];
+  }
+
+  secure_clear(derived, sizeof(derived));
+  return 0;
 }
 
 #define AES_BLOCKLEN 16
@@ -789,6 +750,223 @@ void crypt_hmac_sha256(const uint8_t *key, size_t key_len,
   sha256_update(&ctx, k_pad, SHA256_BLOCK_SIZE);
   sha256_update(&ctx, out, SHA256_DIGEST_SIZE);
   sha256_final(&ctx, out);
+  /* `ctx` was reused three times to compute the optional key hash, the
+   * inner HMAC and the outer HMAC; after the last `sha256_final` it
+   * carries the produced MAC in `state[]` (which IS `out`) and the
+   * padded outer block in `data[]`. Wipe alongside the k_pad/tk
+   * buffers so the freed stack frame does not retain key material. */
+  sha256_clear(&ctx);
   secure_clear(k_pad, sizeof(k_pad));
   secure_clear(tk, sizeof(tk));
+}
+
+/*
+ * Streaming HMAC-SHA256 helper used by HKDF-SHA256 expand.
+ *
+ * The non-streaming `crypt_hmac_sha256` and the internal `hmac_sha256`
+ * both expect the full message in one buffer. HKDF expand iterates
+ *   T(i) = HMAC(PRK, T(i-1) || info || byte(i))
+ * where `info` is caller-supplied and can be arbitrarily long. Buffering
+ * `T(i-1) || info || byte(i)` into a single contiguous array would
+ * require either an unbounded stack frame or a kalloc, both of which
+ * are undesirable in a kernel-side crypto primitive. Instead, we expose
+ * `hkdf_hmac_begin/update/end` that wraps the standard HMAC pad/inner/
+ * outer construction around the streaming SHA-256 API.
+ *
+ * Lifetime: the caller declares the context on the stack, calls begin,
+ * then any number of updates, then end (which writes the 32-byte MAC).
+ * After `end`, the context is fully wiped — calling begin again starts
+ * a fresh HMAC. Each call to `end` is paired with one and only one
+ * `begin`; mixing them across instances would mean two stacks of
+ * unfinalised inner state which is not supported.
+ */
+struct hkdf_hmac_ctx {
+  struct sha256_ctx inner;
+  uint8_t kopad[SHA256_BLOCK_SIZE];
+};
+
+static void hkdf_hmac_begin(struct hkdf_hmac_ctx *ctx, const uint8_t *key,
+                            size_t key_len) {
+  uint8_t kipad[SHA256_BLOCK_SIZE];
+  uint8_t key_hash[SHA256_DIGEST_SIZE];
+  struct sha256_ctx key_ctx;
+  int key_ctx_used = 0;
+
+  if (key_len > SHA256_BLOCK_SIZE) {
+    sha256_init(&key_ctx);
+    sha256_update(&key_ctx, key, key_len);
+    sha256_final(&key_ctx, key_hash);
+    key_ctx_used = 1;
+    key = key_hash;
+    key_len = SHA256_DIGEST_SIZE;
+  }
+
+  for (size_t i = 0; i < SHA256_BLOCK_SIZE; ++i) {
+    uint8_t kc = (i < key_len) ? key[i] : 0x00;
+    kipad[i] = kc ^ 0x36;
+    ctx->kopad[i] = kc ^ 0x5c;
+  }
+
+  sha256_init(&ctx->inner);
+  sha256_update(&ctx->inner, kipad, SHA256_BLOCK_SIZE);
+
+  /* `kipad` carried `key XOR 0x36`; wipe before the stack frame leaves
+   * scope. `key_hash` (when used) carried the SHA-256 of the original
+   * key. Both are sensitive. The inner SHA-256 context now holds the
+   * absorbed kipad but `ctx->inner.state[]` is opaque MD state, not
+   * the key itself. */
+  secure_clear(kipad, sizeof(kipad));
+  if (key_ctx_used) {
+    sha256_clear(&key_ctx);
+  }
+  secure_clear(key_hash, sizeof(key_hash));
+}
+
+static void hkdf_hmac_update(struct hkdf_hmac_ctx *ctx, const uint8_t *data,
+                             size_t data_len) {
+  if (!data || data_len == 0) {
+    return;
+  }
+  sha256_update(&ctx->inner, data, data_len);
+}
+
+static void hkdf_hmac_end(struct hkdf_hmac_ctx *ctx,
+                          uint8_t out[SHA256_DIGEST_SIZE]) {
+  /* Finalise inner = SHA256(kipad || message). */
+  sha256_final(&ctx->inner, out);
+
+  /* Outer = SHA256(kopad || inner_digest). */
+  struct sha256_ctx outer;
+  sha256_init(&outer);
+  sha256_update(&outer, ctx->kopad, SHA256_BLOCK_SIZE);
+  sha256_update(&outer, out, SHA256_DIGEST_SIZE);
+  sha256_final(&outer, out);
+
+  /* `outer.state[]` and `outer.data[]` carry the produced MAC and a
+   * padded block derived from kopad — sensitive. `ctx->inner` has the
+   * finalised inner hash in state[] and a padded last block (derived
+   * from the kipad XOR message) in data[]. `ctx->kopad` is the key
+   * XOR 0x5c. All three regions must be wiped before scope exit. */
+  sha256_clear(&outer);
+  sha256_clear(&ctx->inner);
+  secure_clear(ctx->kopad, sizeof(ctx->kopad));
+}
+
+int crypt_hkdf_sha256_extract(const uint8_t *salt, size_t salt_len,
+                              const uint8_t *ikm, size_t ikm_len,
+                              uint8_t prk[SHA256_DIGEST_SIZE]) {
+  if (!prk) {
+    return -1;
+  }
+  /* RFC 5869 §2.2: if salt is not provided (NULL or zero-length), it
+   * is set to a string of HashLen zero octets. The substitution is
+   * mandatory — using the raw NULL/0-length pair would degenerate
+   * HMAC's key into the empty string and lose the universal-hash
+   * property that HKDF relies on for output uniformity. */
+  uint8_t zero_salt[SHA256_DIGEST_SIZE];
+  const uint8_t *effective_salt = salt;
+  size_t effective_salt_len = salt_len;
+  if (!effective_salt || effective_salt_len == 0) {
+    for (size_t i = 0; i < SHA256_DIGEST_SIZE; ++i) {
+      zero_salt[i] = 0u;
+    }
+    effective_salt = zero_salt;
+    effective_salt_len = SHA256_DIGEST_SIZE;
+  }
+  /* IKM may legitimately be empty (e.g., domain separation use cases);
+   * HMAC handles zero-length data without special treatment. We do
+   * normalise a NULL pointer to a non-NULL empty buffer just to
+   * satisfy strict pointer arithmetic discipline downstream. */
+  static const uint8_t empty_ikm = 0u;
+  const uint8_t *effective_ikm = ikm ? ikm : &empty_ikm;
+  size_t effective_ikm_len = ikm ? ikm_len : 0u;
+
+  hmac_sha256(effective_salt, effective_salt_len, effective_ikm,
+              effective_ikm_len, prk);
+
+  secure_clear(zero_salt, sizeof(zero_salt));
+  return 0;
+}
+
+int crypt_hkdf_sha256_expand(const uint8_t *prk, size_t prk_len,
+                             const uint8_t *info, size_t info_len,
+                             uint8_t *out, size_t out_len) {
+  if (!prk || !out) {
+    return -1;
+  }
+  if (out_len == 0u) {
+    /* RFC 5869 does not explicitly forbid L = 0 but it is
+     * semantically vacuous. Treat as success without writing. */
+    return 0;
+  }
+  /* RFC 5869 §2.3: L MUST be <= 255 * HashLen. Reject above the
+   * boundary so callers cannot trick HKDF into wrapping the counter
+   * byte and silently truncating output. */
+  if (out_len > (size_t)255u * (size_t)SHA256_DIGEST_SIZE) {
+    return -1;
+  }
+  /* The PRK MUST be at least HashLen bytes (RFC 5869 §2.3). Shorter
+   * PRKs would still produce output, but with degraded entropy bound;
+   * fail-closed enforces the security parameter expected by callers. */
+  if (prk_len < SHA256_DIGEST_SIZE) {
+    return -1;
+  }
+
+  uint8_t t_prev[SHA256_DIGEST_SIZE];
+  size_t t_prev_len = 0u; /* T(0) = empty */
+  size_t produced = 0u;
+  uint32_t counter = 1u;
+
+  while (produced < out_len) {
+    if (counter > 255u) {
+      /* Defence-in-depth: the L bound above already prevents this,
+       * but the explicit check makes the invariant local-visible. */
+      secure_clear(t_prev, sizeof(t_prev));
+      return -1;
+    }
+
+    struct hkdf_hmac_ctx hctx;
+    hkdf_hmac_begin(&hctx, prk, prk_len);
+    if (t_prev_len > 0u) {
+      hkdf_hmac_update(&hctx, t_prev, t_prev_len);
+    }
+    if (info && info_len > 0u) {
+      hkdf_hmac_update(&hctx, info, info_len);
+    }
+    uint8_t counter_byte = (uint8_t)counter;
+    hkdf_hmac_update(&hctx, &counter_byte, 1u);
+    hkdf_hmac_end(&hctx, t_prev);
+    t_prev_len = SHA256_DIGEST_SIZE;
+
+    size_t chunk = SHA256_DIGEST_SIZE;
+    if (produced + chunk > out_len) {
+      chunk = out_len - produced;
+    }
+    for (size_t i = 0u; i < chunk; ++i) {
+      out[produced + i] = t_prev[i];
+    }
+    produced += chunk;
+    counter++;
+  }
+
+  secure_clear(t_prev, sizeof(t_prev));
+  return 0;
+}
+
+int crypt_hkdf_sha256(const uint8_t *salt, size_t salt_len,
+                      const uint8_t *ikm, size_t ikm_len,
+                      const uint8_t *info, size_t info_len, uint8_t *out,
+                      size_t out_len) {
+  uint8_t prk[SHA256_DIGEST_SIZE];
+  int rc = crypt_hkdf_sha256_extract(salt, salt_len, ikm, ikm_len, prk);
+  if (rc != 0) {
+    secure_clear(prk, sizeof(prk));
+    return rc;
+  }
+  rc = crypt_hkdf_sha256_expand(prk, sizeof(prk), info, info_len, out, out_len);
+  /* Wipe the PRK before returning regardless of expand outcome — the
+   * PRK is the secret bridge between IKM and OKM and must not linger
+   * on the stack. */
+  secure_clear(prk, sizeof(prk));
+  return rc;
 }

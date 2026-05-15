@@ -82,6 +82,14 @@ int capy_wait(unsigned int pid, int *status);
  * returns -1 on broken pipe (read end closed). */
 int capy_pipe(int fds[2]);
 
+/* F4 seção c parte 2/2 (2026-05-08): close a userland file
+ * descriptor. Dispatches inside the kernel by `FD_TYPE_*`:
+ * VFS files go through `vfs_close`, pipe ends through
+ * `pipe_close_read` / `pipe_close_write`, sockets through the
+ * registered net close hook. Returns 0 on success, -1 on failure
+ * (out-of-range fd, slot already free). */
+int capy_close(int fd);
+
 /* I/O. The kernel currently honours fd 0 (stdin) / 1 (stdout) / 2
  * (stderr) as the only valid file descriptors for a fresh user
  * process; anything else returns -1 until the VFS is wired up to
@@ -96,6 +104,60 @@ void capy_sleep(unsigned long ticks);
 /* Time. Returns ticks since boot; the unit follows
  * `apic_timer_ticks()` (100 Hz today). */
 long capy_time(void);
+
+/* F4 seção c (2026-05-08) -- userland socket family.
+ *
+ * Thin wrappers around `SYS_SOCKET`..`SYS_RECV` (28..34). The
+ * kernel-side handlers live in `src/kernel/syscall_net.c` and are
+ * dispatched through an injectable backend (default = the in-kernel
+ * `socket_*` family in `src/net/services/socket.c`). All entries
+ * return `-1` either when an argument is invalid or when the
+ * backend has not been installed yet (e.g. host unit-test harness
+ * without a fake registered).
+ *
+ * A future libcapy-net layer (F4 seção d) will translate the `-1`
+ * return into a Linux-style errno; today the wrappers are just
+ * pass-throughs.
+ *
+ * Forward-declarations for `struct sockaddr_in` are mirrored from
+ * `include/net/socket.h` so user binaries don't need to pull in a
+ * kernel header. The on-the-wire layout MUST match `struct
+ * sockaddr_in` in `include/net/socket.h` byte-for-byte; a host
+ * regression test pins this in F4 seção d. */
+struct capy_sockaddr_in {
+  uint16_t sin_family;
+  uint16_t sin_port;
+  uint32_t sin_addr;
+  uint8_t  sin_zero[8];
+};
+
+#define CAPY_AF_INET     2
+#define CAPY_SOCK_STREAM 1
+#define CAPY_SOCK_DGRAM  2
+
+int  capy_socket(int domain, int type, int protocol);
+int  capy_bind(int fd, const struct capy_sockaddr_in *addr,
+               unsigned int addrlen);
+int  capy_listen(int fd, int backlog);
+int  capy_accept(int fd, struct capy_sockaddr_in *addr,
+                 unsigned int *addrlen);
+int  capy_connect(int fd, const struct capy_sockaddr_in *addr,
+                  unsigned int addrlen);
+long capy_send(int fd, const void *buf, size_t len, int flags);
+long capy_recv(int fd, void *buf, size_t len, int flags);
+
+/* F4 seção c parte 3/3 (2026-05-08) -- hostname → IPv4 lookup
+ * via the kernel-side DNS cache. Returns 0 on a cache hit and
+ * writes the resolved IP host-order into `*out_ip`; returns -1
+ * on cache miss / NULL args / non-zero `flags` / no installed
+ * resolver backend.
+ *
+ * Callers should pass `flags == 0`; the slot is reserved so a
+ * future iteration can carry "blocking-allowed / non-blocking
+ * only" without breaking ABI. The kernel does NOT auto-promote a
+ * miss to an active DNS query in this iteration -- the cache is
+ * seeded by DHCP discovery + (future) libcapy-net DNS client. */
+int capy_dns_resolve(const char *name, uint32_t *out_ip, int flags);
 
 #ifdef __cplusplus
 }

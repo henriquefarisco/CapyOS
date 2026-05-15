@@ -39,6 +39,27 @@ int privilege_check_admin_or_self(const struct user_record *user,
 
 static void priv_log_emit(int level, const char *verdict, const char *action,
                           const struct user_record *actor) {
+    /*
+     * PRIVACY: This function used to append `actor=<username>` to every
+     * `[priv] denied: ...` / `[priv] granted: ...` line, leaking the
+     * username on every denial. Every callsite of `privilege_log_denied`
+     * runs with `actor = session_active()->user`, so the leak fires on
+     * any UI action requiring admin (settings add-user, user-manage
+     * commands, set-pass:other) regardless of whether the action was
+     * benign or actually adversarial. `klog` is consumed by any
+     * shell/service with access to the kernel log pipe and is dumped
+     * verbatim in panics and crash buffers, so this leak survives
+     * outside the auth subsystem.
+     *
+     * The audit signal we genuinely want is "what privilege class
+     * attempted this action", not "which named principal". Switching to
+     * `actor_role=<role>` keeps the security-relevant signal (denial
+     * spike from non-admin role is the threat indicator) without
+     * leaking identifiers. Role strings are constrained to
+     * `USER_ROLE_MAX` and are not user-controlled in normal flows
+     * (only the admin tooling assigns them), so they do not become a
+     * new PII channel.
+     */
     char line[160];
     size_t pos = 0;
     const char *prefix = "[priv] ";
@@ -56,13 +77,13 @@ static void priv_log_emit(int level, const char *verdict, const char *action,
     while (action && action[i] && pos + 1 < sizeof(line)) {
         line[pos++] = action[i++];
     }
-    if (actor && actor->username[0]) {
-        const char *sep = " actor=";
+    if (actor && actor->role[0]) {
+        const char *sep = " actor_role=";
         size_t k = 0;
         while (sep[k] && pos + 1 < sizeof(line)) line[pos++] = sep[k++];
-        size_t u = 0;
-        while (actor->username[u] && pos + 1 < sizeof(line)) {
-            line[pos++] = actor->username[u++];
+        size_t r = 0;
+        while (actor->role[r] && pos + 1 < sizeof(line)) {
+            line[pos++] = actor->role[r++];
         }
     }
     line[pos] = '\0';

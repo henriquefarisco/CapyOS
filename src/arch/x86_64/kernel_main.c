@@ -60,11 +60,11 @@
 #include "kernel/task.h"
 #include "kernel/scheduler.h"
 #include "kernel/syscall.h"
+#include "kernel/syscall_net.h"
 #include "kernel/process.h"
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
-#include "kernel/browser_smoke.h"
 #include "memory/pmm.h"
 #include "memory/vmm.h"
 #include "memory/kmem.h"
@@ -83,6 +83,7 @@ extern uint8_t kmem_debug_header_magic(void);
 extern uint8_t kmem_debug_header_is_free(void);
 extern uint8_t __kernel_image_start[];
 extern uint8_t __kernel_image_end[];
+void login_render_window_layout(void);
 
 /* Per-CPU syscall kernel stack (M4 phase 3.5). Used as the kernel
  * stack pointer that the syscall path loads from
@@ -145,7 +146,7 @@ static void kmem_boot_debug_dump(uint8_t tag) {
   dbg_hex8(kmem_debug_header_magic());
 }
 
-static void dbgcon_write(const char *s) {
+static void __attribute__((unused)) dbgcon_write(const char *s) {
   if (!s) {
     return;
   }
@@ -385,6 +386,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('z');
   dbgcon_putc(kmem_debug_header_ok() ? 'c' : 'C');
   syscall_init();
+  /* F4 seção c (2026-05-08): bridge SYS_SOCKET..SYS_RECV to the
+   * real socket_* family in src/net/services/socket.c, and register
+   * the socket close hook on the process FD lifecycle. Both calls
+   * are idempotent (pointer stores), safe to repeat across the EBS
+   * and post-EBS init paths. */
+  syscall_net_install_default_ops();
   dbgcon_putc('q');
   dbgcon_putc(kmem_debug_header_ok() ? 'd' : 'D');
   dbgcon_putc('w');
@@ -443,6 +450,94 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_ui_splash_advance(3, 8);
   x64_timebase_init();
   dbgcon_putc('g');
+  /* Linux-ABI clock_gettime shim: captures TSC as the boot epoch so
+   * future Firefox/SpiderMonkey calls to clock_gettime(CLOCK_MONOTONIC)
+   * see monotonic time relative to this point. Cheap and idempotent;
+   * x64_timebase_init has already calibrated tsc_hz. */
+  extern void linux_clock_init_boot(void);
+  linux_clock_init_boot();
+  /* Linux-ABI getrandom shim: install csprng as the source. Done here
+   * (before pmm/vmm) so even early callers see a ready pool. */
+  extern void linux_random_init_boot(void);
+  linux_random_init_boot();
+  /* Linux-ABI process/thread/affinity shim: install task accessors so
+   * gettid/sched_yield/sched_*affinity/prctl/prlimit64 can resolve.
+   * Only registers function pointers; safe to call before the task
+   * system fully boots. */
+  extern void linux_process_init_boot(void);
+  linux_process_init_boot();
+  /* Linux-ABI fd shim: pipe2/dup3 wrappers around the kernel pipe
+   * primitive. */
+  extern void linux_fd_init_boot(void);
+  linux_fd_init_boot();
+  /* Linux-ABI mmap shim: anonymous private mappings via the VMM
+   * demand-page registry. Used by SpiderMonkey JIT and GC. */
+  extern void linux_mmap_init_boot(void);
+  linux_mmap_init_boot();
+  /* Linux-ABI futex shim: pthread mutex/cond wait/wake against
+   * the scheduler's task_block / task_unblock_channel. */
+  extern void linux_futex_init_boot(void);
+  linux_futex_init_boot();
+  /* Linux-ABI eventfd2/signalfd4/timerfd shims. eventfd2 and
+   * timerfd are functional; signalfd4 is storage-only until
+   * signal delivery infrastructure lands. */
+  extern void linux_eventfd_init_boot(void);
+  linux_eventfd_init_boot();
+  /* Linux-ABI net shim (accept4/recvmmsg/sendmmsg). Returns
+   * -ENOSYS until BSD sockets land. */
+  extern void linux_net_init_boot(void);
+  linux_net_init_boot();
+  /* Linux-ABI epoll shim: per-epfd interest list with fd_ready
+   * polling. yield wired to task_yield. */
+  extern void linux_epoll_init_boot(void);
+  linux_epoll_init_boot();
+  /* Linux-ABI memfd/pidfd shim: pid_exists callback for
+   * pidfd_open validation. */
+  extern void linux_memfd_init_boot(void);
+  linux_memfd_init_boot();
+  /* Linux-ABI procfs backend: renders /proc/cpuinfo,
+   * /proc/meminfo, /proc/self/{maps,exe,cmdline,status} into
+   * per-fd buffers via the linux_proc/linux_cpuinfo formatters.
+   * Must be wired BEFORE linux_vfs_init_boot because the router
+   * dispatches /proc/<x> paths here. */
+  extern void linux_procfs_init_boot(void);
+  linux_procfs_init_boot();
+  /* Linux-ABI tmpfs backend: in-memory filesystem for /tmp/.
+   * Owns its own state; resets the slot table at boot so the
+   * kernel starts with an empty /tmp/. Must precede
+   * linux_vfs_init_boot for the same reason as procfs. */
+  extern void linux_tmpfs_init_boot(void);
+  linux_tmpfs_init_boot();
+  /* Linux-ABI VFS front-door: file I/O syscalls (open/close/
+   * read/write/lseek) routed via linux_vfs_router to
+   * linux_devfs, linux_shm, linux_procfs and linux_tmpfs. */
+  extern void linux_vfs_init_boot(void);
+  linux_vfs_init_boot();
+  /* Linux-ABI brk shim: heap region tracker delegating page
+   * reservation to vmm_register_anon_region. Used by musl's
+   * early malloc before mmap is ready. */
+  extern void linux_brk_init_boot(void);
+  linux_brk_init_boot();
+  /* Linux-ABI arch_prctl shim: x86_64-specific TLS register
+   * setup (ARCH_SET_FS / GET_FS / SET_GS / GET_GS) writing the
+   * IA32_FS_BASE / IA32_KERNEL_GS_BASE MSRs. Critical for musl
+   * TLS bootstrap. */
+  extern void linux_arch_prctl_init_boot(void);
+  linux_arch_prctl_init_boot();
+  /* Linux-ABI exit/exit_group shim: terminates the calling
+   * task via task_exit(). Marco M1 single-thread model treats
+   * exit and exit_group as equivalent. */
+  extern void linux_exit_init_boot(void);
+  linux_exit_init_boot();
+  /* Note: linux_signal, linux_inotify, linux_clone, linux_shm
+   * carry no external state; their `_register_syscalls` hook
+   * (or pure formatter API in shm's case) is enough. */
+  /* Linux-ABI syscall dispatcher: populate the table by calling
+   * the weak `_register` hook of every linux_compat module that
+   * linked in (clock, random, process, fd, mmap, futex, eventfd,
+   * net, epoll, signal, memfd, inotify). Idempotent. */
+  extern void linux_syscall_init(void);
+  linux_syscall_init();
   x64_platform_timer_init(!handoff_boot_services_active());
   dbgcon_putc('h');
   /* The early post-EBS path is still sensitive to return corruption while the
@@ -487,6 +582,8 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
                   sizeof(g_syscall_kernel_stack)));
     klog(KLOG_INFO, "[tss] TSS loaded; ring-3 -> ring-0 IRQs safe.");
     syscall_init();
+    /* F4 seção c: see comment on the early EBS path above. */
+    syscall_net_install_default_ops();
     dbgcon_putc('v');
     klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
 #ifdef CAPYOS_BOOT_RUN_HELLO
@@ -561,9 +658,6 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
      * body); the rest of kernel_main below is intentionally
      * unreachable for the demo build. */
     capyos_preemptive_demo_run();
-#ifdef CAPYOS_BOOT_RUN_BROWSER_SMOKE
-    kernel_boot_run_browser_smoke(); /* F3.3e: noreturn */
-#endif
   }
   dbgcon_putc('3');
 
@@ -877,6 +971,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     login_ops.clear_view = fbcon_clear_view;
     login_ops.show_splash = login_show_splash;
     login_ops.ui_banner = ui_banner;
+    login_ops.render_window_layout = login_render_window_layout;
     login_ops.cmd_info = cmd_info;
     login_ops.service_poll = kernel_service_poll;
     login_ops.maintenance_mode_active = login_maintenance_mode_active;

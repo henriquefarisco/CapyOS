@@ -150,16 +150,60 @@ static void test_buffer_full_blocks(void) {
 
     /* Fill exactly PIPE_BUF_SIZE bytes. */
     char buf[PIPE_BUF_SIZE];
-    for (int i = 0; i < PIPE_BUF_SIZE; i++) buf[i] = (char)(i & 0xFF);
+    for (uint32_t i = 0; i < PIPE_BUF_SIZE; i++) buf[i] = (char)(i & 0xFF);
     int wr = pipe_write(pid, buf, PIPE_BUF_SIZE);
     TEST("pipe_write: accepts a full PIPE_BUF_SIZE payload");
-    if (wr == PIPE_BUF_SIZE) PASS();
+    if (wr == (int)PIPE_BUF_SIZE) PASS();
     else FAIL("did not accept full buffer");
 
     int wr2 = pipe_write(pid, "y", 1);
     TEST("pipe_write: returns -1 once buffer is full and not drained");
     if (wr2 == -1) PASS();
     else FAIL("did not signal would-block on full buffer");
+}
+
+static void test_poll_read_write_readiness(void) {
+    pipe_system_init();
+    int fds[2];
+    pipe_create(fds);
+    int pid = fds[0];
+
+    uint32_t r0 = pipe_poll_events(fds[0]);
+    uint32_t w0 = pipe_poll_events(fds[1]);
+    pipe_write(pid, "x", 1);
+    uint32_t r1 = pipe_poll_events(fds[0]);
+    uint32_t w1 = pipe_poll_events(fds[1]);
+    char out = 0;
+    pipe_read(pid, &out, 1);
+    uint32_t r2 = pipe_poll_events(fds[0]);
+
+    TEST("pipe_poll_events: read/write readiness follows buffer state");
+    if (r0 == 0 && w0 == PIPE_POLLOUT &&
+        r1 == PIPE_POLLIN && w1 == PIPE_POLLOUT &&
+        r2 == 0 && out == 'x') PASS();
+    else FAIL("pipe readiness state wrong");
+}
+
+static void test_poll_full_and_closed_edges(void) {
+    pipe_system_init();
+    int fds[2];
+    pipe_create(fds);
+    int pid = fds[0];
+    char buf[PIPE_BUF_SIZE];
+    for (uint32_t i = 0; i < PIPE_BUF_SIZE; i++) buf[i] = 'z';
+    pipe_write(pid, buf, PIPE_BUF_SIZE);
+    uint32_t full_write = pipe_poll_events(fds[1]);
+    uint32_t full_read = pipe_poll_events(fds[0]);
+    pipe_close_write(pid);
+    uint32_t read_hup = pipe_poll_events(fds[0]);
+    pipe_close_read(pid);
+    uint32_t closed_read = pipe_poll_events(fds[0]);
+
+    TEST("pipe_poll_events: full pipe and closed ends report safe readiness");
+    if (full_write == 0 && full_read == PIPE_POLLIN &&
+        read_hup == (PIPE_POLLIN | PIPE_POLLHUP) &&
+        closed_read == 0) PASS();
+    else FAIL("pipe edge readiness wrong");
 }
 
 int test_pipe_run(void) {
@@ -173,6 +217,8 @@ int test_pipe_run(void) {
     test_eof_after_close_write();
     test_broken_pipe_after_close_read();
     test_buffer_full_blocks();
+    test_poll_read_write_readiness();
+    test_poll_full_and_closed_edges();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;
 }

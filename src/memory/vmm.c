@@ -30,6 +30,36 @@ static void vmm_dbgcon_putc(uint8_t c) {
 static struct vmm_address_space kernel_as;
 static struct vmm_stats vmm_global_stats;
 
+/*
+ * The kernel image is linked in the low half at 0x04000000 today.
+ * User binaries start at VMM_USER_BASE (0x00400000), so a user AS must
+ * not inherit the firmware/early identity huge-pages below the kernel
+ * image or they mask the ELF loader's user mappings.
+ *
+ * Bug fix sessao 5 (2026-05-05): clone_table_for_user_as agora cumpre
+ * tres invariantes que estavam quebradas e causavam tela azul ao
+ * abrir o browser:
+ *
+ *   1. Ao escrever um entry pai apontando para uma tabela filha
+ *      recem-alocada (apos split de huge), o bit VMM_PAGE_HUGE DEVE
+ *      ser zerado. Senao a CPU interpreta o pai como huge leaf,
+ *      ignora a tabela filha, e mapeia 1 GiB/2 MiB para os primeiros
+ *      bytes do frame da tabela filha (lixo) -> #PF -> panic.
+ *
+ *   2. Entries leaf preservados do firmware (entry_base >= 64 MiB OU
+ *      level==1 sem split) nunca recebem VMM_PAGE_USER. Assim,
+ *      vmm_destroy_address_space pode distinguir frames que NOS
+ *      alocamos (sempre marcados USER no clone, ou tabelas que
+ *      possuimos) dos frames identity firmware (sem USER) que
+ *      jamais devem ir para o PMM.
+ *
+ *   3. PDPT entries no destroy precisam checar VMM_PAGE_HUGE antes
+ *      de descer pra PD; o original assumia que PDPT entry sempre
+ *      aponta para PD, mas firmware huges de 1 GiB tem HUGE bit no
+ *      PDPT level.
+ */
+#define VMM_LOW_KERNEL_CLONE_BASE 0x0000000004000000ULL
+
 static inline void invlpg(uint64_t addr) {
   __asm__ volatile("invlpg (%0)" : : "r"(addr) : "memory");
 }
@@ -54,6 +84,103 @@ static uint64_t *get_or_create_table(uint64_t *table, uint32_t index,
     table[index] = phys | flags | VMM_PAGE_PRESENT;
   }
   return (uint64_t *)(uintptr_t)(table[index] & VMM_PTE_PHYS_MASK);
+}
+
+static uint64_t vmm_level_span(int level) {
+  if (level == 3) return 1ULL << 30;
+  if (level == 2) return 1ULL << 21;
+  return VMM_PAGE_SIZE;
+}
+
+/* Bits to keep when materializing an entry pai apontando para tabela
+ * filha clonada/criada por nos. PHYS, HUGE e NX SAO descartados; HUGE
+ * porque o entry agora referencia um directory, nao uma huge leaf;
+ * NX porque tabelas intermediarias nao podem ser NX (senao a CPU
+ * impede execute em qualquer leaf descendente, ainda que com X=1).
+ * VMM_PAGE_USER e adicionado pelo caller para que o ring 3 possa
+ * descer ate as PTEs com USER, e para que o destroy distinga frames
+ * que nos alocamos (USER em entries pais) de leaves firmware. */
+#define VMM_PARENT_TABLE_FLAG_MASK \
+    (~(VMM_PTE_PHYS_MASK | VMM_PAGE_HUGE | VMM_PAGE_NX))
+
+static uint64_t clone_table_for_user_as(uint64_t src_phys, int level,
+                                        uint64_t base_virt) {
+  uint64_t dst_phys = pmm_alloc_page();
+  if (!dst_phys) return 0;
+
+  uint64_t *src = (uint64_t *)(uintptr_t)(src_phys & VMM_PTE_PHYS_MASK);
+  uint64_t *dst = (uint64_t *)(uintptr_t)dst_phys;
+  for (int i = 0; i < 512; i++) dst[i] = 0;
+
+  for (int i = 0; i < 512; i++) {
+    uint64_t entry = src[i];
+    uint64_t entry_base = base_virt + (uint64_t)i * vmm_level_span(level);
+    if (!(entry & VMM_PAGE_PRESENT)) {
+      continue;
+    }
+
+    int is_leaf = (level == 1) || (entry & VMM_PAGE_HUGE);
+
+    if (is_leaf) {
+      if (entry_base < VMM_LOW_KERNEL_CLONE_BASE && level > 1 &&
+          (entry & VMM_PAGE_HUGE)) {
+        /* Huge leaf abaixo do kernel image -> split em PT/PD para
+         * que o ELF loader possa instalar mappings user em 4 KiB
+         * sem corromper a arvore firmware. */
+        uint64_t child_phys = pmm_alloc_page();
+        if (!child_phys) return 0;
+        uint64_t *child = (uint64_t *)(uintptr_t)child_phys;
+        uint64_t leaf_flags = entry & ~(VMM_PTE_PHYS_MASK | VMM_PAGE_HUGE);
+        uint64_t leaf_phys_base = entry & VMM_PTE_PHYS_MASK;
+        uint64_t span = vmm_level_span(level - 1);
+        for (int k = 0; k < 512; k++) {
+          uint64_t sub_entry = leaf_flags |
+                               (leaf_phys_base + (uint64_t)k * span);
+          if (level - 1 > 1) sub_entry |= VMM_PAGE_HUGE;
+          child[k] = sub_entry;
+        }
+        uint64_t new_child = clone_table_for_user_as(
+            child_phys | VMM_PAGE_PRESENT | VMM_PAGE_WRITE,
+            level - 1, entry_base);
+        if (!new_child) {
+          pmm_free_page(child_phys);
+          return 0;
+        }
+        pmm_free_page(child_phys);
+        /* Entry pai aponta para tabela: HUGE/NX devem ser zerados.
+         * USER setado para o destroy reconhecer como nosso. */
+        dst[i] = (entry & VMM_PARENT_TABLE_FLAG_MASK) |
+                 new_child | VMM_PAGE_USER;
+        continue;
+      }
+      /* Leaf preservado direto (firmware identity). Nao adiciona USER
+       * para o destroy distinguir esse frame (firmware) de frames
+       * que nos alocamos. Como a CPU rejeita acesso ring 3 sem USER
+       * em qualquer nivel, isto tambem garante seguranca. */
+      dst[i] = entry;
+      continue;
+    }
+
+    /* Entry intermediario: aponta para tabela filha. Recurse. */
+    uint64_t child_phys =
+        clone_table_for_user_as(entry, level - 1, entry_base);
+    if (!child_phys) {
+      for (int j = 0; j < i; j++) {
+        uint64_t old = dst[j];
+        if ((old & VMM_PAGE_PRESENT) && !(old & VMM_PAGE_HUGE) &&
+            (old & VMM_PAGE_USER)) {
+          pmm_free_page(old & VMM_PTE_PHYS_MASK);
+        }
+      }
+      pmm_free_page(dst_phys);
+      return 0;
+    }
+
+    dst[i] = (entry & VMM_PARENT_TABLE_FLAG_MASK) |
+             child_phys | VMM_PAGE_USER;
+  }
+
+  return dst_phys;
 }
 
 void vmm_init(void) {
@@ -84,6 +211,20 @@ struct vmm_address_space *vmm_create_address_space(void) {
   for (int i = 0; i < 512; i++) pml4[i] = 0;
 
   uint64_t *kernel_pml4 = kernel_as.pml4_virt;
+  if (kernel_pml4[0] & VMM_PAGE_PRESENT) {
+    uint64_t low_clone = clone_table_for_user_as(kernel_pml4[0], 3, 0);
+    if (!low_clone) {
+      vmm_dbgcon_putc('L');
+      pmm_free_page(pml4_phys);
+      kfree(as);
+      return NULL;
+    }
+    /* PML4 entries nunca tem HUGE (rejeitado pelo hardware). NX e
+     * mascarado para nao bloquear execute em descendentes. USER
+     * marca o entry como nosso para o destroy walker. */
+    pml4[0] = (kernel_pml4[0] & VMM_PARENT_TABLE_FLAG_MASK) |
+              low_clone | VMM_PAGE_USER;
+  }
   for (int i = 256; i < 512; i++) {
     pml4[i] = kernel_pml4[i];
   }
@@ -233,32 +374,66 @@ void vmm_destroy_address_space(struct vmm_address_space *as) {
    * live in the page tables walked below. */
   vmm_clear_anon_regions(as);
 
+  /* Bug fix sessao 5 (2026-05-05): so libere frames que NOS alocamos.
+   *
+   * Apos clone_table_for_user_as, PML4[0] pode conter:
+   *   - Entries pais (PML4/PDPT/PD) que apontam para tabelas clonadas
+   *     por nos, marcados com VMM_PAGE_USER.
+   *   - Entries leaf preservados do firmware (huge identity), SEM
+   *     VMM_PAGE_USER, cujos frames vivem fora do range gerenciado
+   *     pelo PMM. Liberar esses frames marca paginas do kernel image
+   *     ou ACPI como livres, levando a corrupcao silenciosa.
+   *
+   * Regra: frame e descido/liberado apenas se a entry pai tiver
+   * VMM_PAGE_USER. Caso contrario, e firmware preservado e ignoramos. */
   uint64_t *pml4 = as->pml4_virt;
   for (int i = 0; i < 256; i++) {
     if (!(pml4[i] & VMM_PAGE_PRESENT)) continue;
+    if (!(pml4[i] & VMM_PAGE_USER)) {
+      /* Compartilhado/firmware-only nao deveria aparecer em PML4
+       * abaixo de 256, mas se aparecer, deixa intacto. */
+      continue;
+    }
     uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4[i] & VMM_PTE_PHYS_MASK);
     for (int j = 0; j < 512; j++) {
       if (!(pdpt[j] & VMM_PAGE_PRESENT)) continue;
+      if (pdpt[j] & VMM_PAGE_HUGE) {
+        /* Huge leaf de 1 GiB no PDPT level. Firmware-preservado
+         * (clone nao adiciona USER em leaves preservados). Mesmo
+         * defensivamente checa USER antes de liberar. */
+        if (pdpt[j] & VMM_PAGE_USER) {
+          pmm_free_page(pdpt[j] & VMM_PTE_PHYS_MASK);
+        }
+        continue;
+      }
+      if (!(pdpt[j] & VMM_PAGE_USER)) {
+        /* Entry pai apontando para tabela mas SEM USER -> nao foi
+         * clonado por nos (nao deveria aparecer apos a correcao,
+         * mas defensive guard). */
+        continue;
+      }
       uint64_t *pd = (uint64_t *)(uintptr_t)(pdpt[j] & VMM_PTE_PHYS_MASK);
       for (int k = 0; k < 512; k++) {
         if (!(pd[k] & VMM_PAGE_PRESENT)) continue;
         if (pd[k] & VMM_PAGE_HUGE) {
-          /* HUGE leaves at PD level are not refcounted today (the
-           * cloner skips them; phase 7c only CoWs 4 KiB PTs). Free
-           * straight to the PMM. */
-          pmm_free_page(pd[k] & VMM_PTE_PHYS_MASK);
+          /* HUGE PD leaf de 2 MiB. So libera se for nosso (USER).
+           * Firmware huges preservadas (sem USER) sao ignoradas. */
+          if (pd[k] & VMM_PAGE_USER) {
+            pmm_free_page(pd[k] & VMM_PTE_PHYS_MASK);
+          }
+          continue;
+        }
+        if (!(pd[k] & VMM_PAGE_USER)) {
+          /* Entry para PT sem USER -> nao clonado por nos. Skip. */
           continue;
         }
         uint64_t *pt = (uint64_t *)(uintptr_t)(pd[k] & VMM_PTE_PHYS_MASK);
         for (int l = 0; l < 512; l++) {
-          if (pt[l] & VMM_PAGE_PRESENT) {
-            /* M4 phase 7c: a frame may be shared via CoW with one or
-             * more sibling AS. Decrement the refcount first; only
-             * release the physical frame to the PMM when we are the
-             * last sharer. Frames that were never refcount-touched
-             * (single-AS user mappings, demand-paged anon pages)
-             * report 0 from pmm_frame_refcount_dec and we free them
-             * directly, preserving the pre-7c semantics. */
+          if ((pt[l] & VMM_PAGE_PRESENT) && (pt[l] & VMM_PAGE_USER)) {
+            /* M4 phase 7c: CoW-aware leaf release. Frames sem
+             * refcount tratam pmm_frame_refcount_get == 0 como sinal
+             * para liberacao direta. Frames firmware preservados
+             * pelo split nao tem USER e nao sao processados aqui. */
             uint64_t leaf_phys = pt[l] & VMM_PTE_PHYS_MASK;
             uint16_t pre = pmm_frame_refcount_get(leaf_phys);
             if (pre == 0u) {

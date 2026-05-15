@@ -50,8 +50,8 @@ Contexto operacional atual:
 | `perf-fs` | `perf-fs` | Exibe ocupacao e contadores do buffer cache de filesystem: validos, sujos, pinned, hits, misses, evictions, writebacks e erros. |
 | `perf-mem` | `perf-mem` | Exibe uso atual do heap do kernel em KiB e bytes. |
 | `perf-task` | `perf-task` | Lista as tasks do kernel e os processos ativos via os iteradores publicos `task_iter`/`process_iter`, mostrando PID, estado, prioridade, UID/GID e nome em snapshots seguros (sem expor a tabela privada). Base para o aba Tasks/Processes do task manager e para a telemetria CPU%/RSS planejada na M4 fase 7. |
-| `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo canal, branch, manifesto local, URL remota, versao staged e ativacao pendente. |
-| `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-import-manifest`, `update-stage`, `update-arm`, `update-clear` e `update-channel` em `/var/log/update-history.log`. |
+| `update-status` | `update-status` | Exibe o estado atual do catalogo local, do staging persistente e do `update-agent`, incluindo canal, branch, manifesto local, URL remota, origem/cache de payload, SHA-256 verificado, versao staged e ativacao pendente. |
+| `update-history` | `update-history` | Exibe o historico persistido das operacoes de `update-check`, `update-fetch`, `update-download-payload`, `update-prepare`, `update-import-manifest`, `update-stage`, `update-arm`, `update-apply`, `update-clear` e `update-channel` em `/var/log/update-history.log`. |
 | `recovery-status` | `recovery-status` | Exibe o estado do boot degradado, alvo de bootstrap/requested/boot/ativo e diagnosticos basicos de storage/rede para a sessao de recuperacao. |
 | `recovery-report` | `recovery-report` | Exibe o ultimo relatorio persistido de boot/recovery gravado em `/var/log/recovery-boot.txt`. |
 | `recovery-history` | `recovery-history` | Exibe o historico persistido de eventos de boot/recovery gravado em `/var/log/recovery-history.log`. |
@@ -74,9 +74,17 @@ Contexto operacional atual:
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
 | `job-run` | `job-run <nome>` | Agenda um job interno do kernel/work queue para execucao imediata no proximo tick. |
 | `update-check` | `update-check` | Forca uma leitura imediata do catalogo local de atualizacoes e atualiza o estado do `update-agent`. |
-| `update-import-manifest` | `update-import-manifest <caminho>` | Importa um manifesto externo para `/system/update/latest.ini`, validando se ele combina com `channel`, `branch` e `source` da trilha selecionada. |
-| `update-stage` | `update-stage` | Copia o manifesto cacheado mais recente para `/system/update/staged.ini` e persiste o estado local de staging. |
+| `update-fetch` | `update-fetch` | Baixa o manifesto remoto configurado, valida trilha, versão nova, `payload_sha256`, `payload_url` e `signature_ed25519`, e atualiza `/system/update/latest.ini`. |
+| `update-import-manifest` | `update-import-manifest <caminho>` | Importa um manifesto externo para `/system/update/latest.ini`, validando trilha, versão nova, `payload_sha256`, `payload_url` e `signature_ed25519`. |
+| `update-download-payload` | `update-download-payload` | Baixa o payload declarado por `payload_url`, calcula SHA-256 real, compara com `payload_sha256` e grava `/system/update/payload.bin` quando o digest bate. |
+| `update-prepare` | `update-prepare` | Executa o preparo seguro do update: fetch remoto, download/verificação de payload, staging e `update-arm on`, sem aplicar boot slot. |
+| `update-prepare-dry-run` | `update-prepare-dry-run` | Valida catálogo local, `payload_url`, assinatura e `payload_cache_sha256` que seriam usados no preparo, sem staging, arm ou apply. |
+| `update-prepare-explain` | `update-prepare-explain` | Mostra os gates locais do preparo (`poll`, catálogo, repositório, versão, payload, assinatura, cache e `stage_safe`) sem efeitos persistentes. |
+| `update-stage` | `update-stage` | Copia o manifesto cacheado mais recente para `/system/update/staged.ini` somente quando `payload_cache_sha256` já confirma o `payload_sha256` assinado. |
 | `update-arm` | `update-arm [on|off]` | Arma ou desarma a ativacao pendente do update staged sem remover o manifesto preparado. |
+| `update-apply` | `update-apply [payload_sha256]` | Aplica o staged update armado usando `payload_cache_sha256` verificado por padrão; o argumento manual continua disponível como fallback explícito. |
+| `update-confirm-health` | `update-confirm-health` | Confirma que o boot atual está saudável e conclui o update transacional. |
+| `update-rollback-check` | `update-rollback-check` | Verifica rollback de boot pendente e executa rollback seguro quando necessário. |
 | `update-clear` | `update-clear` | Remove o manifesto staged e limpa o estado persistente de ativacao pendente. |
 | `update-channel` | `update-channel [list|show|stable|develop]` | Alterna entre a trilha estavel (`main`) e a trilha em desenvolvimento (`develop`), persistindo a escolha em `/system/config.ini` e `/system/update/repository.ini`. |
 | `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. O boot pode degradar temporariamente o alvo ativo para `core` ou `maintenance` quando detectar falha estrutural. |
@@ -126,6 +134,7 @@ Contexto operacional atual:
 
 - `config-theme list` apresenta os temas disponiveis.
 - `config-theme show` exibe o tema ativo.
+- `config-theme classic-modern` aplica o tema Ubuntu/Windows 7-like e salva o padrao.
 - `config-theme ocean` aplica o tema azul/ciano e salva o padrao.
 - `config-theme forest` aplica o tema verde/floresta e salva o padrao.
 - `config-theme love` aplica o tema magenta/coral moderno.
@@ -186,23 +195,57 @@ Contexto operacional atual:
 - A base persistente de atualizacao agora reserva
   `/system/update/repository.ini`, `/system/update/cache/`,
   `/system/update/staged/` e `/system/update/state.ini`.
-- `update-channel stable` aponta o sistema para a branch `main`; `update-channel develop` aponta para a branch `develop`.
+- `update-channel develop` aponta `remote_manifest=` para `refs/heads/develop`; `update-channel stable` mantém `branch=main` para compatibilidade de manifesto, mas resolve `remote_manifest=` para `refs/tags/v<major>.<minor>.<patch>` derivado da versão corrente.
 - A escolha da trilha fica persistida tanto em `/system/config.ini` (`update_channel=`) quanto em `/system/update/repository.ini` (`channel=` e `branch=`).
-- `/system/update/repository.ini` tambem registra `source=` e `remote_manifest=`, que apontam para o manifesto bruto da branch escolhida no GitHub.
+- `/system/update/repository.ini` tambem registra `source=` e `remote_manifest=`, que apontam para o manifesto bruto do ref GitHub escolhido pela política de trilha.
 - Se o manifesto cacheado ou staged pertencer a outra trilha, o `update-agent`
   marca o estado como inconsistente ate que o cache seja atualizado ou o
   staging antigo seja limpo.
-- `update-import-manifest <caminho>` e a ponte atual entre o manifesto remoto e o catalogo local: ele valida `channel`, `branch` e `source` antes de substituir o cache persistente.
+- `update-fetch` baixa o `remote_manifest=` configurado em `/system/update/repository.ini`, grava uma cópia temporária em `/system/update/fetched.ini`, reutiliza a mesma validação de importação antes de substituir o catálogo persistente e imprime `payload=` com a origem declarada do payload.
+- `update-import-manifest <caminho>` permanece a ponte manual entre um manifesto externo e o catalogo local: ele valida `channel`, `branch`, `source`, versao mais nova que o sistema atual, `payload_sha256` hex64, `payload_url` HTTPS ou local sob `/system/update/`, e `signature_ed25519` hex128 antes de substituir o cache persistente. A assinatura cobre o texto canonico do manifesto sem a propria linha `signature_ed25519=`.
+- `update-download-payload` baixa a origem declarada em `payload_url`,
+  calcula SHA-256 real via `security/sha256`, recusa mismatch e persiste o
+  cache binario em `/system/update/payload.bin` com `payload_cache_sha256`
+  salvo em `/system/update/state.ini`.
+- `update-prepare-explain` mostra os gates locais de preparo (`poll`, catalogo,
+  repositorio, versao, `payload_sha256`, `payload_url`, assinatura, cache e
+  `stage_safe`) sem fetch, download, staging, arm ou apply.
+- `update-prepare-dry-run` revisa o catálogo local e o
+  `payload_cache_sha256` verificado que seriam usados em stage/arm, sem
+  persistir staging, armar ativacao ou aplicar boot slot.
+- `update-prepare` encadeia fetch remoto, download/verificacao de payload,
+  staging e arm da ativacao pendente sem aplicar boot slot; o apply continua
+  uma etapa separada por `update-apply`.
 - `update-stage` promove o manifesto cacheado atual para o staging
-  persistente; `update-arm on` marca esse staging como ativacao pendente.
-- As operacoes `update-check`, `update-import-manifest`, `update-stage`,
-  `update-arm`, `update-clear` e `update-channel` acrescentam eventos em
-  `/var/log/update-history.log`. Use `update-history` para auditar a trilha
-  local de staging e a trilha selecionada.
-- O `update-agent` continua sem baixar ou aplicar payloads automaticamente:
-  nesta etapa ele valida o repositorio selecionado, o catalogo local, o
-  staging persistente e a ativacao pendente para preparar a trilha segura de
-  update/rollback posterior.
+  persistente somente quando ele representa update mais novo, possui
+  `payload_sha256`, possui `payload_url` valido e tem assinatura Ed25519
+  valida; `update-arm on` marca esse staging como ativacao pendente.
+- `update-apply` aplica o staged update armado usando o
+  `payload_cache_sha256` validado por `update-download-payload`;
+  `update-apply <payload_sha256>` permanece como fallback manual explícito.
+  Cache ausente, digest malformado ou divergente é recusado antes de armar o
+  boot slot.
+- `update-confirm-health` confirma o boot atual como saudável, limpa a ativação
+  pendente persistente e conclui o update transacional.
+- `update-rollback-check` verifica rollback pendente; quando necessário, chama o
+  rollback de boot, limpa staging persistente e registra o resultado auditável.
+- As operacoes `update-check`, `update-fetch`, `update-download-payload`,
+  `update-import-manifest`, `update-prepare`, `update-stage`, `update-arm`,
+  `update-apply`, `update-confirm-health`, `update-rollback-check`, `update-clear` e
+  `update-channel` acrescentam eventos em `/var/log/update-history.log`. Use
+  `update-history` para auditar a trilha local de staging, a trilha
+  selecionada, a origem `payload=` e o digest `payload_sha=` associado ao
+  cache ou staged update.
+- O `update-agent` agora baixa manifestos remotos configurados, valida a
+  origem `payload_url`, baixa payloads por comando explícito ou por `update-prepare`, diagnostica
+  gates via `update-prepare-explain`, revisa readiness via
+  `update-prepare-dry-run`, calcula o SHA-256 real antes de
+  persistir cache binario e prepara staged updates armados quando
+  o digest baixado/cacheado bate com o manifesto assinado. A etapa ainda mantém
+  apply separado, mas já cobre repositorio selecionado,
+  catalogo local, staging persistente, protecao anti-downgrade,
+  `payload_sha256`, `payload_url`, `payload_cache_sha256`, assinatura
+  `signature_ed25519` e ativacao pendente.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,
   rede ja atendem ao alvo persistido antes de tentar a promocao.
 - Se o storage validado ainda nao estiver disponivel, o sistema recusa sair

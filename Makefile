@@ -34,7 +34,7 @@ ifeq ($(TOOLCHAIN64),elf)
     endif
     OBJCOPY64 := $(CROSS64)-objcopy
     STACKPROTECT64 := -fstack-protector-strong
-    $(warning Using $(LD64) for kernel linking; set LD64=$(CROSS64)-ld to force the cross linker)
+    $(info [build] Using $(LD64) for kernel linking; set LD64=$(CROSS64)-ld to force the cross linker)
   endif
 else
   CC64      := x86_64-linux-gnu-gcc
@@ -43,10 +43,21 @@ else
   endif
   OBJCOPY64 := x86_64-linux-gnu-objcopy
   STACKPROTECT64 := -fno-stack-protector
-  $(warning Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
-  $(warning Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
+  $(info [build] Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
+  $(info [build] Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
 CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
+# Bug fix critico (2026-05-05 sessao 4b): habilita preemptive
+# scheduler por default. Sem essa flag, `scheduler_set_running(1)`
+# nunca e chamado, `task_yield()` vira no-op, e tasks adicionadas
+# ao run_queue (engine ring 3 do browser, etc) NUNCA sao escalonadas.
+# Resultado pre-fix: tasks ring 3 spawnadas via scheduler_add
+# permaneciam no run_queue sem ser picked. (Sessao 6 erradicou o
+# navegador legacy; este comentario fica como justificativa
+# historica do default ON ate o port do Firefox utilizar a flag.)
+# Ver kernel/scheduler.c::scheduler_yield e
+# arch/x86_64/preemptive_boot.c::capyos_preemptive_mark_running.
+CFLAGS64  += -DCAPYOS_PREEMPTIVE_SCHEDULER
 # EXTRA_CFLAGS64 is appended last so callers can flip build-time
 # feature flags without editing CFLAGS64 in place. Examples:
 #   make all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
@@ -139,6 +150,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/lang/localization.o \
 	$(BUILD)/x86_64/lang/app_language.o \
 	$(BUILD)/x86_64/auth/login_runtime.o \
+	$(BUILD)/x86_64/auth/loginwindow_auth_submit.o \
+	$(BUILD)/x86_64/auth/loginwindow_auth_submit_userdb.o \
+	$(BUILD)/x86_64/auth/loginwindow_recovery_decision.o \
+	$(BUILD)/x86_64/auth/loginwindow_session_handoff.o \
+	$(BUILD)/x86_64/auth/login_window_gui_layout.o \
 	$(BUILD)/x86_64/net/bootstrap/network_bootstrap_config.o \
 	$(BUILD)/x86_64/net/bootstrap/network_bootstrap_diag.o \
 	$(BUILD)/x86_64/net/bootstrap/network_bootstrap.o \
@@ -151,6 +167,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/update_agent.o \
 	$(BUILD)/x86_64/services/update_agent_transact.o \
 	$(BUILD)/x86_64/auth/user.o \
+	$(BUILD)/x86_64/auth/user_password_hash.o \
 	$(BUILD)/x86_64/auth/user_prefs.o \
 	$(BUILD)/x86_64/kernel/log/klog.o \
 	$(BUILD)/x86_64/kernel/log/klog_persist.o \
@@ -223,7 +240,14 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_check.o \
 	$(BUILD)/x86_64/fs/vfs/vfs.o \
 	$(BUILD)/x86_64/security/crypt.o \
+	$(BUILD)/x86_64/security/volume_header.o \
+	$(BUILD)/x86_64/security/volume_provider.o \
+	$(BUILD)/x86_64/security/volume_provider_rekey_execute.o \
+	$(BUILD)/x86_64/security/volume_provider_rekey_commit.o \
+	$(BUILD)/x86_64/security/volume_provider_rekey_recovery.o \
+	$(BUILD)/x86_64/security/volume_provider_rekey_orchestrator.o \
 	$(BUILD)/x86_64/security/csprng.o \
+	$(BUILD)/x86_64/security/tls_hostname.o \
 	$(BUILD)/x86_64/security/tls.o \
 	$(BUILD)/x86_64/security/tls_trust_anchors.o \
 	$(BEARSSL_OBJS) \
@@ -271,6 +295,100 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/spinlock.o \
 	$(BUILD)/x86_64/kernel/worker.o \
 	$(BUILD)/x86_64/kernel/syscall.o \
+	$(BUILD)/x86_64/kernel/syscall_net.o \
+	$(BUILD)/x86_64/kernel/syscall_net_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_syscall.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_clock.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_clock_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_random.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_random_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_devfs.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_process.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_process_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_cpuinfo.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_proc.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_fd.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_fd_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_mmap.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_mmap_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_futex.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_futex_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_eventfd.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_eventfd_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_net.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_net_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_epoll.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_epoll_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_signal.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_memfd.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_memfd_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_inotify.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_clone.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_shm.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_vfs.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_vfs_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_vfs_router.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_procfs.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_procfs_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_tmpfs.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_tmpfs_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_brk.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_brk_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_arch_prctl.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_arch_prctl_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_exit.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_exit_init.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_ioctl.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_fcntl.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_io.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_stat.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_path.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_statx.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_dirent.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_at.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_dup.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_umask.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_wait.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_kill.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_trunc.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_sysinfo.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_priority.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_pgrp.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_fs_mut.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_mlock.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_creds.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_fs_meta.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_link.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_sync.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_utime.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_setid.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_chdir.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_xattr.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_statfs.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_advise.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_rlimit_legacy.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_caps.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_itimer.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_lock.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_sched_prio.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_posix_timer.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_time_legacy.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_sandbox.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_mincore.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_numa.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_settod.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_jit_aux.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_namespace.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_exec_ext.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_pipe_zero.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_proc_vm.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_openat2.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_pkey.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_landlock.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_seccomp.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_fanotify.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_io_uring.o \
+	$(BUILD)/x86_64/kernel/linux_compat/linux_modern_misc.o \
 	$(BUILD)/x86_64/kernel/elf_loader.o \
 	$(BUILD)/x86_64/kernel/embedded_hello.o \
 	$(BUILD)/x86_64/kernel/user_init.o \
@@ -281,7 +399,6 @@ CAPYOS64_OBJS = \
 	$(HELLO_BLOB_OBJ) \
 	$(EXECTARGET_BLOB_OBJ) \
 	$(CAPYSH_BLOB_OBJ) \
-	$(CAPYBROWSER_BLOB_OBJ) \
 	$(BUILD)/x86_64/memory/pmm.o \
 	$(BUILD)/x86_64/memory/pmm_refcount.o \
 	$(BUILD)/x86_64/memory/vmm.o \
@@ -304,6 +421,12 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/third_party/tinf/adler32.o \
 	$(BUILD)/x86_64/third_party/tinf/crc32.o \
 	$(BUILD)/x86_64/security/ed25519.o \
+	$(BUILD)/x86_64/security/fe25519.o \
+	$(BUILD)/x86_64/security/sha256.o \
+	$(BUILD)/x86_64/security/blake2b.o \
+	$(BUILD)/x86_64/security/argon2.o \
+	$(BUILD)/x86_64/security/chacha20_poly1305.o \
+	$(BUILD)/x86_64/security/x25519.o \
 	$(BUILD)/x86_64/boot/boot_slot.o \
 	$(BUILD)/x86_64/services/package_manager.o \
 	$(BUILD)/x86_64/drivers/input/mouse.o \
@@ -325,17 +448,6 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/auth/privilege.o \
 	$(BUILD)/x86_64/kernel/pipe.o \
 	$(BUILD)/x86_64/kernel/stdin_buf.o \
-	$(BUILD)/x86_64/kernel/browser_engine_spawn.o \
-	$(BUILD)/x86_64/kernel/browser_smoke.o \
-	$(BUILD)/x86_64/apps/browser_ipc/codec.o \
-	$(BUILD)/x86_64/apps/browser_ipc/fetch.o \
-	$(BUILD)/x86_64/apps/browser_ipc/image.o \
-	$(BUILD)/x86_64/apps/browser_chrome/watchdog.o \
-	$(BUILD)/x86_64/apps/browser_chrome/chrome.o \
-	$(BUILD)/x86_64/apps/browser_chrome/runtime.o \
-	$(BUILD)/x86_64/apps/browser_chrome/runtime_image.o \
-	$(BUILD)/x86_64/apps/browser_chrome/audit_log.o \
-	$(BUILD)/x86_64/apps/browser_chrome/fetch_resolver.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
@@ -344,20 +456,17 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/desktop/taskbar.o \
 	$(BUILD)/x86_64/security/sha512.o \
 	$(BUILD)/x86_64/gui/desktop/desktop.o \
+	$(BUILD)/x86_64/gui/desktop/desktop_smoke_readiness.o \
 	$(BUILD)/x86_64/gui/desktop/desktop_icons.o \
 	$(BUILD)/x86_64/gui/desktop/desktop_runtime.o \
 	$(BUILD)/x86_64/apps/calculator.o \
 	$(BUILD)/x86_64/apps/file_manager.o \
 	$(BUILD)/x86_64/apps/text_editor.o \
 	$(BUILD)/x86_64/apps/task_manager.o \
-	$(BUILD)/x86_64/apps/browser_app/browser_app.o \
-	$(BUILD)/x86_64/apps/browser_app/homepage.o \
-	$(BUILD)/x86_64/apps/browser_app/nav.o \
-	$(BUILD)/x86_64/apps/browser_app/toolbar.o \
-	$(BUILD)/x86_64/apps/browser_app/url_edit.o \
 	$(BUILD)/x86_64/apps/settings.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
 	$(BUILD)/x86_64/gui/window/window_manager.o \
+	$(BUILD)/x86_64/gui/window/window_dispatcher.o \
 	$(BUILD)/x86_64/gui/window/notification.o \
 	$(BUILD)/x86_64/gui/core/bmp_loader.o \
 	$(BUILD)/x86_64/gui/core/png_loader.o \
@@ -415,12 +524,15 @@ CAPYLIBC_BUILD_DIR ?= $(BUILD)/userland
 # User-space C flags: drop -mno-red-zone (user code can use the red
 # zone; SYSCALL itself does not clobber it) and add the userland
 # include path so user binaries can `#include <capylibc/capylibc.h>`.
+# Keep generated user code off FPU/SSE/MMX instructions: CapyOS does
+# not save/restore those states for ring-3 tasks yet.
 USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
                   -fno-asynchronous-unwind-tables -fno-unwind-tables \
                   -fcf-protection=none -fno-pic -fno-pie -fno-plt \
                   -fno-omit-frame-pointer -fno-strict-aliasing \
-                  -fno-stack-protector \
-                  -Iinclude -Iuserland/include -Iuserland/lib/capyhtml/include
+                  -fno-stack-protector -mno-sse -mno-sse2 -mno-mmx \
+                  -mno-80387 -msoft-float \
+                  -Iinclude -Iuserland/include
 
 $(CAPYLIBC_BUILD_DIR)/%.o: $(USERLAND_DIR)/%.S
 	@mkdir -p $(dir $@)
@@ -441,9 +553,42 @@ CAPYLIBC_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc/crt0.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc/syscall_stubs.o
 
-.PHONY: capylibc
+# F4 seção c parte 2/2 (2026-05-08): libcapy-net high-level userland
+# TCP client façade. Built as a separate object set so binaries that
+# don't need network I/O (hello, capysh) aren't forced to link the
+# extra ~6 KB. Future libcapy-net users (capybrowser migration,
+# update-agent fetch path) will pull this in via $(CAPYLIBC_NET_OBJS).
+CAPYLIBC_NET_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_endian.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_inet.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_tcp.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_error.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_resolve.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_url.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_tls.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_http.o \
+	$(CAPYLIBC_TLS_OBJS)
+
+CAPYLIBC_TLS_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_config.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_context.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_trust.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_trust_bundle.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_backend_plan.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_bearssl_state.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_bearssl_adapter.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_backend.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls.o
+
+.PHONY: capylibc capylibc-net capylibc-tls
 capylibc: $(CAPYLIBC_OBJS)
 	@echo "[ok] capylibc objects assembled: $(CAPYLIBC_OBJS)"
+
+capylibc-net: $(CAPYLIBC_NET_OBJS)
+	@echo "[ok] capylibc-net objects assembled: $(CAPYLIBC_NET_OBJS)"
+
+capylibc-tls: $(CAPYLIBC_TLS_OBJS)
+	@echo "[ok] capylibc-tls objects assembled: $(CAPYLIBC_TLS_OBJS)"
 
 # ── User binary: hello (M4 phase 5b) ────────────────────────────────
 # The first CapyOS user binary. Statically linked at the default
@@ -547,110 +692,11 @@ $(CAPYSH_BLOB_OBJ): $(CAPYSH_ELF)
 capysh-blob: $(CAPYSH_BLOB_OBJ)
 	@echo "[ok] capysh blob ready for kernel link: $(CAPYSH_BLOB_OBJ)"
 
-# F3.3b: browser engine binary (ring 3). Reads request frames from
-# fd 0 and writes events to fd 1 using the IPC protocol defined in
-# include/apps/browser_ipc.h. Reuses src/apps/browser_ipc/codec.c
-# verbatim (the codec depends only on <stdint.h> and is intentionally
-# free of kernel/libc symbols).
-CAPYBROWSER_IPC_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/codec.o
-CAPYBROWSER_FETCH_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/fetch.o
-CAPYBROWSER_IMAGE_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/browser_ipc/image.o
-
-$(CAPYBROWSER_IPC_OBJ): src/apps/browser_ipc/codec.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-$(CAPYBROWSER_FETCH_OBJ): src/apps/browser_ipc/fetch.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-# Etapa 3 secao a fetch+decode (2026-05-05): image IPC payload codec.
-$(CAPYBROWSER_IMAGE_OBJ): src/apps/browser_ipc/image.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-# F3.3c slice 4 (preview): libcapyhtml.a is built as a single TU
-# today; once Slice 2b adds css.c / forms.c they are added here as
-# additional object files. The same USERLAND_CFLAGS apply because the
-# library is freestanding by design.
-CAPYHTML_PARSER_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/parser.o
-CAPYHTML_RENDER_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/render.o
-CAPYHTML_FONT_OBJ   = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/font.o
-CAPYHTML_RASTER_OBJ = $(CAPYLIBC_BUILD_DIR)/lib/capyhtml/raster.o
-
-$(CAPYHTML_PARSER_OBJ): userland/lib/capyhtml/src/parser.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-$(CAPYHTML_RENDER_OBJ): userland/lib/capyhtml/src/render.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-# F3.3c slice 4-final: embedded 8x8 font + BGRA rasterizer.
-$(CAPYHTML_FONT_OBJ): userland/lib/capyhtml/src/font.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-$(CAPYHTML_RASTER_OBJ): userland/lib/capyhtml/src/raster.c
-	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
-
-CAPYBROWSER_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser.elf
-CAPYBROWSER_OBJS = \
-	$(CAPYLIBC_BUILD_DIR)/bin/capybrowser/main.o \
-	$(CAPYLIBC_BUILD_DIR)/bin/capybrowser/image_cache.o \
-	$(CAPYBROWSER_IPC_OBJ) \
-	$(CAPYBROWSER_FETCH_OBJ) \
-	$(CAPYBROWSER_IMAGE_OBJ) \
-	$(CAPYHTML_PARSER_OBJ) \
-	$(CAPYHTML_RENDER_OBJ) \
-	$(CAPYHTML_FONT_OBJ) \
-	$(CAPYHTML_RASTER_OBJ) \
-	$(CAPYLIBC_OBJS)
-
-$(CAPYBROWSER_ELF): $(CAPYBROWSER_OBJS)
-	@mkdir -p $(dir $@)
-	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYBROWSER_OBJS)
-
-.PHONY: capybrowser-elf
-capybrowser-elf: $(CAPYBROWSER_ELF)
-	@echo "[ok] user binary linked: $(CAPYBROWSER_ELF)"
-
-# F3.3c slice 1: prove libcapyhtml's skeleton compiles under the
-# userland cross-target without any kernel header. Clang is available
-# on every CI runner (and on macOS dev hosts where the cross gcc is
-# missing), so the syntax-check is portable. Slice 2 will replace the
-# stub TU with the real extracted parser; this rule keeps the contract
-# that "userland never accidentally re-imports a kernel header" green
-# for every PR going forward.
-CAPYHTML_DIR = userland/lib/capyhtml
-CAPYHTML_SYNTAX_CC ?= clang
-CAPYHTML_SYNTAX_FLAGS = -fsyntax-only -target x86_64-unknown-linux-gnu \
-                        -ffreestanding -nostdinc \
-                        -Iuserland/include -I$(CAPYHTML_DIR)/include \
-                        -isystem $(shell $(CAPYHTML_SYNTAX_CC) -print-resource-dir 2>/dev/null)/include
-
-.PHONY: capyhtml-userland-syntax
-capyhtml-userland-syntax:
-	@echo "[capyhtml] syntax-check userland TUs"
-	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/parser.c
-	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/render.c
-	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/font.c
-	$(CAPYHTML_SYNTAX_CC) $(CAPYHTML_SYNTAX_FLAGS) $(CAPYHTML_DIR)/src/raster.c
-	@echo "[ok] capyhtml userland skeleton compiles cleanly"
-
-CAPYBROWSER_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capybrowser/capybrowser_elf_blob.o
-
-$(CAPYBROWSER_BLOB_OBJ): $(CAPYBROWSER_ELF)
-	@mkdir -p '$(dir $@)'
-	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
-		-B i386:x86-64 \
-		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
-		'$(notdir $<)' '$(abspath $@)'
-
-.PHONY: capybrowser-blob
-capybrowser-blob: $(CAPYBROWSER_BLOB_OBJ)
-	@echo "[ok] capybrowser blob ready for kernel link: $(CAPYBROWSER_BLOB_OBJ)"
+# Sessao 6 (2026-05-05): regras do capybrowser/capyhtml/browser_ipc
+# erradicadas junto com o navegador legacy. Sera reaberto quando a
+# fase F4 do roadmap (cross-toolchain musl + dynamic linker) habilitar
+# o build do Firefox em userland/bin/firefox/.
+# Ver docs/plans/active/firefox-port-roadmap.md.
 
 $(BUILD)/x86_64/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
@@ -730,6 +776,267 @@ release-checksums:
 verify-release-checksums: release-checksums
 	sha256sum -c "$(RELEASE_SHA256)"
 
+.PHONY: sign-release-checksums
+sign-release-checksums: release-checksums
+	@if [ -z "$(RELEASE_PRIVATE_KEY)" ]; then echo "[err] informe RELEASE_PRIVATE_KEY=/caminho/offline/ed25519.pem"; exit 2; fi
+	@if [ -n "$(RELEASE_PUBLIC_KEY)" ]; then \
+		python3 tools/scripts/sign_release.py --input "$(RELEASE_SHA256)" --private-key "$(RELEASE_PRIVATE_KEY)" --signature "$(RELEASE_SIGNATURE)" --public-key-out "$(RELEASE_PUBLIC_KEY)" --force; \
+	else \
+		python3 tools/scripts/sign_release.py --input "$(RELEASE_SHA256)" --private-key "$(RELEASE_PRIVATE_KEY)" --signature "$(RELEASE_SIGNATURE)" --force; \
+	fi
+
+.PHONY: verify-release-signature
+verify-release-signature:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -n "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then \
+		python3 tools/scripts/verify_release_signature.py --input "$(RELEASE_SHA256)" --signature "$(RELEASE_SIGNATURE)" --public-key "$(RELEASE_PUBLIC_KEY)" --expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)"; \
+	else \
+		python3 tools/scripts/verify_release_signature.py --input "$(RELEASE_SHA256)" --signature "$(RELEASE_SIGNATURE)" --public-key "$(RELEASE_PUBLIC_KEY)"; \
+	fi
+
+.PHONY: verify-release-signature-selftest
+verify-release-signature-selftest:
+	python3 tools/scripts/verify_release_signature.py --self-test $(RELEASE_VERIFY_SELFTEST_ARGS)
+
+.PHONY: release-public-key-fingerprint
+release-public-key-fingerprint:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	python3 tools/scripts/release_public_key_fingerprint.py --public-key "$(RELEASE_PUBLIC_KEY)" $(RELEASE_PUBLIC_KEY_FINGERPRINT_ARGS)
+
+.PHONY: release-public-key-manifest
+release-public-key-manifest:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	python3 tools/scripts/release_public_key_manifest.py \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--output "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		$(RELEASE_PUBLIC_KEY_MANIFEST_ARGS)
+
+.PHONY: release-public-materials-check
+release-public-materials-check:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	python3 tools/scripts/release_public_materials_check.py \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		$(RELEASE_PUBLIC_MATERIALS_CHECK_ARGS)
+
+.PHONY: release-publication-manifest
+release-publication-manifest:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	python3 tools/scripts/release_publication_manifest.py \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--output "$(RELEASE_PUBLICATION_MANIFEST)" \
+		$(RELEASE_PUBLICATION_MANIFEST_ARGS)
+
+.PHONY: verify-release-publication-manifest
+verify-release-publication-manifest:
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	python3 tools/scripts/verify_release_publication_manifest.py \
+		--manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		$(RELEASE_PUBLICATION_VERIFY_ARGS)
+
+.PHONY: release-ci-publication-contract
+release-ci-publication-contract:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_publication_contract.py \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		$(RELEASE_CI_PUBLICATION_CONTRACT_ARGS)
+
+.PHONY: release-publication-gate
+release-publication-gate:
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	python3 tools/scripts/release_publication_gate.py \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		$(RELEASE_PUBLICATION_GATE_ARGS)
+
+.PHONY: release-official-handoff-manifest
+release-official-handoff-manifest:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_official_handoff_manifest.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		$(RELEASE_OFFICIAL_HANDOFF_ARGS)
+
+.PHONY: verify-release-official-handoff-manifest
+verify-release-official-handoff-manifest:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_official_handoff_manifest.py \
+		--verify \
+		--release-tag "$(RELEASE_TAG)" \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		$(RELEASE_OFFICIAL_HANDOFF_VERIFY_ARGS)
+
+.PHONY: release-ci-smoke-readiness
+release-ci-smoke-readiness:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_readiness.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		$(RELEASE_CI_SMOKE_READINESS_ARGS)
+
+.PHONY: release-ci-smoke-evidence
+release-ci-smoke-evidence:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_evidence.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_SMOKE_EVIDENCE_MANIFEST)" \
+		$(RELEASE_CI_SMOKE_EVIDENCE_ARGS)
+
+.PHONY: verify-release-ci-smoke-evidence
+verify-release-ci-smoke-evidence:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_evidence.py \
+		--verify \
+		--release-tag "$(RELEASE_TAG)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_SMOKE_EVIDENCE_MANIFEST)" \
+		$(RELEASE_CI_SMOKE_EVIDENCE_VERIFY_ARGS)
+
+.PHONY: release-ci-smoke-acceptance
+release-ci-smoke-acceptance:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_acceptance.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-evidence-manifest "$(RELEASE_SMOKE_EVIDENCE_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_SMOKE_ACCEPTANCE_MANIFEST)" \
+		$(RELEASE_CI_SMOKE_ACCEPTANCE_ARGS)
+
+.PHONY: verify-release-ci-smoke-acceptance
+verify-release-ci-smoke-acceptance:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_acceptance.py \
+		--verify \
+		--release-tag "$(RELEASE_TAG)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-evidence-manifest "$(RELEASE_SMOKE_EVIDENCE_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_SMOKE_ACCEPTANCE_MANIFEST)" \
+		$(RELEASE_CI_SMOKE_ACCEPTANCE_VERIFY_ARGS)
+
+.PHONY: release-ci-smoke-promotion
+release-ci-smoke-promotion:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_promotion.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-evidence-manifest "$(RELEASE_SMOKE_EVIDENCE_MANIFEST)" \
+		--smoke-acceptance-manifest "$(RELEASE_SMOKE_ACCEPTANCE_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_SMOKE_PROMOTION_MANIFEST)" \
+		$(RELEASE_CI_SMOKE_PROMOTION_ARGS)
+
+.PHONY: verify-release-ci-smoke-promotion
+verify-release-ci-smoke-promotion:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_smoke_promotion.py \
+		--verify \
+		--release-tag "$(RELEASE_TAG)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--handoff-manifest "$(RELEASE_OFFICIAL_HANDOFF_MANIFEST)" \
+		--smoke-evidence-manifest "$(RELEASE_SMOKE_EVIDENCE_MANIFEST)" \
+		--smoke-acceptance-manifest "$(RELEASE_SMOKE_ACCEPTANCE_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		--output "$(RELEASE_SMOKE_PROMOTION_MANIFEST)" \
+		$(RELEASE_CI_SMOKE_PROMOTION_VERIFY_ARGS)
+
+.PHONY: release-ci-official-provisioning-contract
+release-ci-official-provisioning-contract:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_official_provisioning_contract.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		$(RELEASE_CI_OFFICIAL_PROVISIONING_ARGS)
+
+.PHONY: release-ci-tag-gate
+release-ci-tag-gate:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
+	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
+	python3 tools/scripts/release_ci_tag_gate.py \
+		--release-tag "$(RELEASE_TAG)" \
+		--checksums "$(RELEASE_SHA256)" \
+		--signature "$(RELEASE_SIGNATURE)" \
+		--public-key "$(RELEASE_PUBLIC_KEY)" \
+		--expected-public-key-sha256 "$(RELEASE_PUBLIC_KEY_SHA256)" \
+		--public-key-manifest "$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+		--publication-manifest "$(RELEASE_PUBLICATION_MANIFEST)" \
+		--smoke-vmware-args "$(SMOKE_X64_VMWARE_ARGS)" \
+		$(RELEASE_CI_TAG_GATE_ARGS)
+
+.PHONY: release-ci-preflight
+release-ci-preflight:
+	RELEASE_PUBLIC_KEY="$(RELEASE_PUBLIC_KEY)" \
+	RELEASE_PUBLIC_KEY_SHA256="$(RELEASE_PUBLIC_KEY_SHA256)" \
+	RELEASE_PUBLIC_KEY_MANIFEST="$(RELEASE_PUBLIC_KEY_MANIFEST)" \
+	SMOKE_X64_VMWARE_ARGS="$(SMOKE_X64_VMWARE_ARGS)" \
+	python3 tools/scripts/release_ci_preflight.py $(RELEASE_CI_PREFLIGHT_ARGS)
+
 # GPT disk image helper (ESP FAT32 + BOOT raw + DATA). NÃƒÆ’Ã‚Â£o requer sudo.
 DISK_GPT_IMG ?= build/disk-gpt.img
 DISK_GPT_SIZE ?= 2G
@@ -750,7 +1057,7 @@ LEGACY_DISABLED_MSG = "[legacy] Caminho BIOS/x86_32 foi removido. Use apenas UEF
 .PHONY: legacy-disabled
 legacy-disabled:
 	@echo $(LEGACY_DISABLED_MSG)
-	@echo "[legacy] Alvos suportados: all64, iso-uefi, disk-gpt, provision-vhd, inspect-disk, smoke-x64-cli, smoke-x64-iso, test"
+	@echo "[legacy] Alvos suportados: all64, iso-uefi, disk-gpt, provision-vhd, inspect-disk, smoke-x64-cli, smoke-x64-vmware-mouse-events, smoke-x64-iso, test"
 	@exit 2
 
 $(GEN_MANIFEST_HOST): tools/host/src/gen_manifest.c | $(BUILD)
@@ -769,6 +1076,37 @@ GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
 ISO_DIR_EFI ?= build/iso-uefi-root
 ISO_IMG_EFI ?= build/CapyOS-Installer-UEFI.iso
 RELEASE_SHA256 := $(BUILD)/release-artifacts.sha256
+RELEASE_SIGNATURE := $(RELEASE_SHA256).sig
+RELEASE_PUBLIC_KEY_MANIFEST := $(BUILD)/release-public-key.manifest
+RELEASE_PUBLICATION_MANIFEST := $(BUILD)/release-publication.manifest
+RELEASE_OFFICIAL_HANDOFF_MANIFEST := $(BUILD)/release-official-handoff.manifest
+RELEASE_SMOKE_EVIDENCE_MANIFEST := $(BUILD)/release-smoke-evidence.manifest
+RELEASE_SMOKE_ACCEPTANCE_MANIFEST := $(BUILD)/release-smoke-acceptance.manifest
+RELEASE_SMOKE_PROMOTION_MANIFEST := $(BUILD)/release-smoke-promotion.manifest
+RELEASE_PRIVATE_KEY ?=
+RELEASE_PUBLIC_KEY ?=
+RELEASE_PUBLIC_KEY_SHA256 ?=
+RELEASE_TAG ?=
+RELEASE_PUBLIC_KEY_FINGERPRINT_ARGS ?= --format env
+RELEASE_PUBLIC_KEY_MANIFEST_ARGS ?= --force
+RELEASE_PUBLIC_MATERIALS_CHECK_ARGS ?=
+RELEASE_PUBLICATION_MANIFEST_ARGS ?= --force
+RELEASE_PUBLICATION_VERIFY_ARGS ?=
+RELEASE_PUBLICATION_GATE_ARGS ?=
+RELEASE_CI_PUBLICATION_CONTRACT_ARGS ?=
+RELEASE_CI_TAG_GATE_ARGS ?=
+RELEASE_CI_OFFICIAL_PROVISIONING_ARGS ?=
+RELEASE_OFFICIAL_HANDOFF_ARGS ?= --force
+RELEASE_OFFICIAL_HANDOFF_VERIFY_ARGS ?=
+RELEASE_CI_SMOKE_READINESS_ARGS ?=
+RELEASE_CI_SMOKE_EVIDENCE_ARGS ?= --force
+RELEASE_CI_SMOKE_EVIDENCE_VERIFY_ARGS ?=
+RELEASE_CI_SMOKE_ACCEPTANCE_ARGS ?= --force
+RELEASE_CI_SMOKE_ACCEPTANCE_VERIFY_ARGS ?=
+RELEASE_CI_SMOKE_PROMOTION_ARGS ?= --force
+RELEASE_CI_SMOKE_PROMOTION_VERIFY_ARGS ?=
+RELEASE_VERIFY_SELFTEST_ARGS ?=
+RELEASE_CI_PREFLIGHT_ARGS ?=
 EFI_BOOT := $(ISO_DIR_EFI)/EFI/BOOT
 BOOTX64 := $(EFI_BOOT)/BOOTX64.EFI
 EFI_STUB := $(BUILD)/boot/uefi_loader.efi
@@ -776,16 +1114,16 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Iuserland/lib/capyhtml/include -Iuserland/bin/capybrowser -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
+TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_loginwindow_auth_submit.c tests/test_loginwindow_recovery_decision.c tests/test_loginwindow_session_handoff.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
                tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
                src/fs/capyfs/capyfs_check.c src/fs/capyfs/capyfs_journal_integration.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
                tests/test_efi_block.c src/drivers/storage/efi_block.c \
                tests/test_net_dns.c src/net/services/dns.c \
                tests/test_net_probe.c src/drivers/net/net_probe.c src/drivers/net/netvsc.c \
-               src/auth/login_runtime.c src/auth/user_home.c src/services/service_boot_policy.c \
+               src/auth/login_runtime.c src/auth/loginwindow_auth_submit.c src/auth/loginwindow_recovery_decision.c src/auth/loginwindow_session_handoff.c src/auth/user_home.c src/services/service_boot_policy.c \
                tests/test_hyperv_runtime.c src/net/hyperv/hyperv_runtime.c \
                tests/test_input_hyperv_gate.c src/arch/x86_64/hyperv_input_gate.c \
                tests/test_hyperv_runtime_gate.c src/net/hyperv/hyperv_runtime_gate.c \
@@ -803,8 +1141,11 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
                tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/test_crypt_vectors.c \
+               tests/test_volume_header.c src/security/volume_header.c \
+               tests/test_volume_provider.c tests/test_volume_provider_execute.c tests/test_volume_provider_rekey_execute.c tests/test_volume_provider_rekey_commit.c tests/test_volume_provider_rekey_recovery.c tests/test_volume_provider_rekey_orchestrator.c src/security/volume_provider.c src/security/volume_provider_rekey_execute.c src/security/volume_provider_rekey_commit.c src/security/volume_provider_rekey_recovery.c src/security/volume_provider_rekey_orchestrator.c \
+               tests/test_user_password_hash.c src/auth/user_password_hash.c \
                src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-	               src/security/csprng.c src/security/crypt.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/services/update_agent_transact.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
+	               src/security/csprng.c src/security/crypt.c src/security/ed25519.c src/security/fe25519.c src/security/sha256.c src/security/sha512.c src/security/blake2b.c src/security/argon2.c src/security/chacha20_poly1305.c src/security/x25519.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/services/update_agent_transact.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
                src/util/kstring.c src/fs/journal/journal.c \
                tests/test_pmm.c src/memory/pmm.c \
                tests/test_task.c src/kernel/task.c \
@@ -828,31 +1169,115 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                tests/test_user_init.c src/kernel/user_init.c \
                tests/test_embedded_progs.c src/kernel/embedded_progs.c \
                tests/test_pipe.c src/kernel/pipe.c \
+               tests/test_linux_clock.c src/kernel/linux_compat/linux_clock.c \
+               tests/test_linux_syscall.c src/kernel/linux_compat/linux_syscall.c \
+               tests/test_linux_random.c src/kernel/linux_compat/linux_random.c \
+               tests/test_linux_devfs.c src/kernel/linux_compat/linux_devfs.c \
+               tests/test_linux_process.c src/kernel/linux_compat/linux_process.c \
+               tests/test_linux_cpuinfo.c src/kernel/linux_compat/linux_cpuinfo.c \
+               tests/test_linux_proc.c src/kernel/linux_compat/linux_proc.c \
+               tests/test_linux_fd.c src/kernel/linux_compat/linux_fd.c \
+               tests/test_linux_mmap.c src/kernel/linux_compat/linux_mmap.c \
+               tests/test_linux_futex.c src/kernel/linux_compat/linux_futex.c \
+               tests/test_linux_eventfd.c src/kernel/linux_compat/linux_eventfd.c \
+               tests/test_linux_net.c src/kernel/linux_compat/linux_net.c \
+               tests/test_linux_epoll.c src/kernel/linux_compat/linux_epoll.c \
+               tests/test_linux_signal.c src/kernel/linux_compat/linux_signal.c \
+               tests/test_linux_memfd.c src/kernel/linux_compat/linux_memfd.c \
+               tests/test_linux_inotify.c src/kernel/linux_compat/linux_inotify.c \
+               tests/test_linux_clone.c src/kernel/linux_compat/linux_clone.c \
+               tests/test_linux_shm.c src/kernel/linux_compat/linux_shm.c \
+               tests/test_linux_vfs.c src/kernel/linux_compat/linux_vfs.c \
+               tests/test_linux_vfs_router.c src/kernel/linux_compat/linux_vfs_router.c \
+               tests/test_linux_procfs.c src/kernel/linux_compat/linux_procfs.c \
+               tests/test_linux_tmpfs.c src/kernel/linux_compat/linux_tmpfs.c \
+               tests/test_linux_brk.c src/kernel/linux_compat/linux_brk.c \
+               tests/test_linux_arch_prctl.c src/kernel/linux_compat/linux_arch_prctl.c \
+               tests/test_linux_exit.c src/kernel/linux_compat/linux_exit.c \
+               tests/test_linux_ioctl.c src/kernel/linux_compat/linux_ioctl.c \
+               tests/test_linux_fcntl.c src/kernel/linux_compat/linux_fcntl.c \
+               tests/test_linux_io.c src/kernel/linux_compat/linux_io.c \
+               tests/test_linux_stat.c src/kernel/linux_compat/linux_stat.c \
+               tests/test_linux_path.c src/kernel/linux_compat/linux_path.c \
+               tests/test_linux_statx.c src/kernel/linux_compat/linux_statx.c \
+               tests/test_linux_dirent.c src/kernel/linux_compat/linux_dirent.c \
+               tests/test_linux_at.c src/kernel/linux_compat/linux_at.c \
+               tests/test_linux_dup.c src/kernel/linux_compat/linux_dup.c \
+               tests/test_linux_umask.c src/kernel/linux_compat/linux_umask.c \
+               tests/test_linux_wait.c src/kernel/linux_compat/linux_wait.c \
+               tests/test_linux_kill.c src/kernel/linux_compat/linux_kill.c \
+               tests/test_linux_trunc.c src/kernel/linux_compat/linux_trunc.c \
+               tests/test_linux_sysinfo.c src/kernel/linux_compat/linux_sysinfo.c \
+               tests/test_linux_priority.c src/kernel/linux_compat/linux_priority.c \
+               tests/test_linux_pgrp.c src/kernel/linux_compat/linux_pgrp.c \
+               tests/test_linux_fs_mut.c src/kernel/linux_compat/linux_fs_mut.c \
+               tests/test_linux_mlock.c src/kernel/linux_compat/linux_mlock.c \
+               tests/test_linux_creds.c src/kernel/linux_compat/linux_creds.c \
+               tests/test_linux_fs_meta.c src/kernel/linux_compat/linux_fs_meta.c \
+               tests/test_linux_link.c src/kernel/linux_compat/linux_link.c \
+               tests/test_linux_sync.c src/kernel/linux_compat/linux_sync.c \
+               tests/test_linux_utime.c src/kernel/linux_compat/linux_utime.c \
+               tests/test_linux_setid.c src/kernel/linux_compat/linux_setid.c \
+               tests/test_linux_chdir.c src/kernel/linux_compat/linux_chdir.c \
+               tests/test_linux_xattr.c src/kernel/linux_compat/linux_xattr.c \
+               tests/test_linux_statfs.c src/kernel/linux_compat/linux_statfs.c \
+               tests/test_linux_advise.c src/kernel/linux_compat/linux_advise.c \
+               tests/test_linux_rlimit_legacy.c src/kernel/linux_compat/linux_rlimit_legacy.c \
+               tests/test_linux_caps.c src/kernel/linux_compat/linux_caps.c \
+               tests/test_linux_itimer.c src/kernel/linux_compat/linux_itimer.c \
+               tests/test_linux_lock.c src/kernel/linux_compat/linux_lock.c \
+               tests/test_linux_sched_prio.c src/kernel/linux_compat/linux_sched_prio.c \
+               tests/test_linux_posix_timer.c src/kernel/linux_compat/linux_posix_timer.c \
+               tests/test_linux_time_legacy.c src/kernel/linux_compat/linux_time_legacy.c \
+               tests/test_linux_sandbox.c src/kernel/linux_compat/linux_sandbox.c \
+               tests/test_linux_mincore.c src/kernel/linux_compat/linux_mincore.c \
+               tests/test_linux_numa.c src/kernel/linux_compat/linux_numa.c \
+               tests/test_linux_settod.c src/kernel/linux_compat/linux_settod.c \
+               tests/test_linux_jit_aux.c src/kernel/linux_compat/linux_jit_aux.c \
+               tests/test_linux_namespace.c src/kernel/linux_compat/linux_namespace.c \
+               tests/test_linux_exec_ext.c src/kernel/linux_compat/linux_exec_ext.c \
+               tests/test_linux_pipe_zero.c src/kernel/linux_compat/linux_pipe_zero.c \
+               tests/test_linux_proc_vm.c src/kernel/linux_compat/linux_proc_vm.c \
+               tests/test_linux_openat2.c src/kernel/linux_compat/linux_openat2.c \
+               tests/test_linux_pkey.c src/kernel/linux_compat/linux_pkey.c \
+               tests/test_linux_landlock.c src/kernel/linux_compat/linux_landlock.c \
+               tests/test_linux_seccomp.c src/kernel/linux_compat/linux_seccomp.c \
+               tests/test_linux_fanotify.c src/kernel/linux_compat/linux_fanotify.c \
+               tests/test_linux_io_uring.c src/kernel/linux_compat/linux_io_uring.c \
+               tests/test_linux_modern_misc.c src/kernel/linux_compat/linux_modern_misc.c \
                tests/test_stdin_buf.c src/kernel/stdin_buf.c \
+               tests/test_gui_event.c src/gui/core/event.c \
+               tests/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_theme.c \
+               tests/test_gui_window_dispatcher.c src/gui/window/window_dispatcher.c \
+               tests/test_desktop_smoke_readiness.c src/gui/desktop/desktop_smoke_readiness.c \
                tests/test_dns_cache.c src/net/services/dns_cache.c \
+               tests/test_tls_hostname.c src/security/tls_hostname.c \
                tests/test_boot_slot.c src/boot/boot_slot.c \
                tests/test_op_budget.c src/util/op_budget.c \
                tests/test_privilege.c src/auth/privilege.c \
                tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
-               tests/test_browser_ipc.c src/apps/browser_ipc/codec.c \
-               tests/test_browser_ipc_fetch.c src/apps/browser_ipc/fetch.c \
-               tests/test_browser_ipc_image.c src/apps/browser_ipc/image.c \
-               tests/test_capybrowser_image_cache.c userland/bin/capybrowser/image_cache.c \
-               tests/test_browser_watchdog.c src/apps/browser_chrome/watchdog.c \
-               tests/test_browser_chrome.c src/apps/browser_chrome/chrome.c \
-               tests/test_browser_chrome_fetch.c \
-               tests/test_browser_fetch_resolver.c src/apps/browser_chrome/fetch_resolver.c \
-               tests/test_browser_runtime_fetch.c \
-               tests/test_browser_runtime_image.c \
-               tests/test_browser_chrome_runtime.c tests/test_browser_chrome_runtime_mock.c tests/test_browser_chrome_runtime_rate.c src/apps/browser_chrome/runtime.c src/apps/browser_chrome/runtime_image.c src/apps/browser_chrome/audit_log.c \
-               tests/test_browser_chrome_audit.c \
-               tests/test_browser_e2e.c \
-               tests/test_capyhtml_parser.c userland/lib/capyhtml/src/parser.c \
-               tests/test_capyhtml_render.c userland/lib/capyhtml/src/render.c \
-               tests/test_capyhtml_raster.c tests/test_capyhtml_raster_image.c userland/lib/capyhtml/src/raster.c \
-               userland/lib/capyhtml/src/font.c \
-               tests/test_browser_app_url_edit.c src/apps/browser_app/url_edit.c \
                tests/test_syscall_pipe_priority.c src/kernel/syscall.c tests/stub_syscall_deps.c \
+               tests/test_syscall_net.c src/kernel/syscall_net.c \
+               tests/test_capylibc_net.c \
+                   userland/lib/capylibc-net/capy_net_endian.c \
+                   userland/lib/capylibc-net/capy_net_inet.c \
+                   userland/lib/capylibc-net/capy_net_tcp.c \
+                   userland/lib/capylibc-net/capy_net_error.c \
+                   userland/lib/capylibc-net/capy_net_resolve.c \
+                   userland/lib/capylibc-net/capy_net_url.c \
+                   userland/lib/capylibc-net/capy_net_tls.c \
+                   userland/lib/capylibc-net/capy_net_http.c \
+               tests/test_capylibc_tls.c \
+                   userland/lib/capylibc-tls/capy_tls_config.c \
+                   userland/lib/capylibc-tls/capy_tls_context.c \
+                   userland/lib/capylibc-tls/capy_tls_trust.c \
+                   userland/lib/capylibc-tls/capy_tls_trust_bundle.c \
+                   userland/lib/capylibc-tls/capy_tls_backend_plan.c \
+                   userland/lib/capylibc-tls/capy_tls_bearssl_state.c \
+                   userland/lib/capylibc-tls/capy_tls_bearssl_adapter.c \
+                   userland/lib/capylibc-tls/capy_tls_backend.c \
+                   userland/lib/capylibc-tls/capy_tls.c \
+               tests/test_syscall_net_init.c src/kernel/syscall_net_init.c \
                tests/test_process_current_dynamic.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
@@ -919,6 +1344,7 @@ release-check:
 	$(MAKE) layout-audit
 	$(MAKE) version-audit
 	$(MAKE) boot-perf-baseline-selftest
+	$(MAKE) verify-release-signature-selftest
 	$(MAKE) all64 TOOLCHAIN64=elf
 	$(MAKE) iso-uefi TOOLCHAIN64=elf
 	$(MAKE) verify-release-checksums TOOLCHAIN64=elf
@@ -931,6 +1357,25 @@ smoke-x64-cli: all64 iso-uefi manifest64
 smoke-x64-boot-perf: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 de performance de boot..."
 	python3 tools/scripts/smoke_x64_cli.py --boot-perf-only --log build/ci/smoke_x64_boot_perf.log --disk build/ci/smoke_x64_boot_perf.img $(SMOKE_X64_BOOT_PERF_ARGS)
+
+smoke-x64-vmware-dhcp: all64 iso-uefi manifest64
+	@echo "Executando smoke test VMware+E1000 DHCP..."
+	python3 tools/scripts/smoke_x64_vmware.py $(SMOKE_X64_VMWARE_ARGS)
+
+smoke-x64-vmware-gui-session: all64 iso-uefi manifest64
+	@echo "Executando smoke test VMware+E1000 gui-session..."
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] gui-session ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+smoke-x64-vmware-mouse-events: all64 iso-uefi manifest64
+	@echo "Executando smoke test VMware+E1000 mouse-events..."
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] gui-session ready" \
+		--marker "[smoke] mouse-events ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
 
 smoke-x64-cli-nvme: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia) com NVMe..."
@@ -1177,28 +1622,10 @@ smoke-x64-capysh:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_capysh.py $(SMOKE_X64_CAPYSH_ARGS)
 
-# F3.3e: end-to-end browser-isolation smoke. Builds the kernel
-# with `-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_BROWSER_SMOKE`
-# so kernel_main calls `kernel_boot_run_browser_smoke()` after the
-# preemptive scheduler is armed. The boot CPU enters `hlt` while
-# two scheduler-managed tasks run concurrently:
-#
-#   - the kernel `browser-poller` task drives the chrome/runtime
-#     stack: NAVIGATE -> drain events -> PING -> PONG -> SHUTDOWN;
-#   - the ring-3 capybrowser engine consumes commands from fd 0,
-#     emits the canonical event sequence on fd 1.
-#
-# Both communicate via two kernel pipes set up by
-# `browser_engine_spawn`. The harness validates 9 deterministic
-# debugcon markers covering spawn, navigation, frame delivery,
-# watchdog ping/pong, and graceful shutdown.
-smoke-x64-browser-spawn:
-	@echo "Executando smoke test x64 (browser spawn ponta-a-ponta)..."
-	$(MAKE) clean
-	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_BROWSER_SMOKE'
-	$(MAKE) iso-uefi
-	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_browser_spawn.py $(SMOKE_X64_BROWSER_SPAWN_ARGS)
+# Sessao 6 (2026-05-05): target `smoke-x64-browser-spawn` erradicado
+# junto com o navegador legacy. Sera reaberto quando o port do
+# Firefox aterrissar com seu proprio smoke harness.
+# Ver docs/plans/active/firefox-port-roadmap.md.
 
 # M4 phase 9: aggregate target that runs the FULL preemptive
 # scheduler smoke matrix end-to-end. Exists so CI can invoke a
@@ -1250,6 +1677,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

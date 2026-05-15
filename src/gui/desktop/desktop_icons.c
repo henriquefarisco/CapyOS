@@ -6,7 +6,7 @@
  *
  * Comportamento:
  *   - Carrega vfs_listdir(path) na init e refresh.
- *   - Pinta cada entry como uma celula 80x80 com:
+ *   - Pinta cada entry como uma celula 88x86 com:
  *       icone 32x32 colorido (azul para dir, cinza p/ file)
  *       nome em duas linhas (truncated com "...")
  *   - Click esquerdo seleciona; click duplo (segundo click no mesmo
@@ -45,7 +45,17 @@ static struct {
   /* Contexto da operacao (rename/new) em curso. */
   int             pending_action;    /* DI_CTX_* */
   int             pending_target;    /* idx do icone alvo, ou -1 */
+  int             drag_active;
+  int             drag_source;
+  int             drag_over;
+  int             drag_open_on_release;
+  int             drag_moved;
+  int32_t         drag_start_x;
+  int32_t         drag_start_y;
 } g_di = {0};
+
+static char g_di_delete_path[256];
+static uint16_t g_di_delete_mode;
 
 #define DI_CTX_OPEN     1u
 #define DI_CTX_DELETE   2u
@@ -53,6 +63,8 @@ static struct {
 #define DI_CTX_NEW_FILE 4u
 #define DI_CTX_NEW_DIR  5u
 #define DI_CTX_REFRESH  6u
+
+static void di_sort_entries(void);
 
 /* === Helpers ============================================================ */
 static uint32_t di_strlen(const char *s) {
@@ -72,6 +84,28 @@ static int di_streq(const char *a, const char *b) {
   if (!a || !b) return 0;
   while (*a && *a == *b) { a++; b++; }
   return *a == 0 && *b == 0;
+}
+
+static const char *di_basename(const char *path) {
+  const char *base = path;
+  if (!path) return "";
+  for (uint32_t i = 0; path[i]; i++) {
+    if (path[i] == '/' && path[i + 1]) base = &path[i + 1];
+  }
+  return base ? base : "";
+}
+
+static int di_path_inside_or_same(const char *dir, const char *path) {
+  uint32_t plen = 0;
+  if (!dir || !path) return 0;
+  if (di_streq(dir, path)) return 1;
+  plen = di_strlen(path);
+  if (plen == 0u) return 0;
+  if (di_strlen(dir) <= plen) return 0;
+  for (uint32_t i = 0; i < plen; i++) {
+    if (dir[i] != path[i]) return 0;
+  }
+  return dir[plen] == '/';
 }
 
 static void di_join(const char *dir, const char *name, char *out,
@@ -104,6 +138,7 @@ static void di_load(void) {
   if (g_di.path[0]) {
     vfs_listdir(g_di.path, di_iter_cb, NULL);
   }
+  di_sort_entries();
 }
 
 static void di_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
@@ -121,12 +156,118 @@ static void di_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
   }
 }
 
-/* Calcula a posicao (px, py) do icone idx no grid. screen_h e usado
- * apenas para clamp; assume coluna unica esquerda. */
+static uint32_t di_mix_color(uint32_t color, uint32_t target,
+                             uint8_t amount) {
+  uint32_t r = (color >> 16) & 0xFFu;
+  uint32_t g = (color >> 8) & 0xFFu;
+  uint32_t b = color & 0xFFu;
+  uint32_t tr = (target >> 16) & 0xFFu;
+  uint32_t tg = (target >> 8) & 0xFFu;
+  uint32_t tb = target & 0xFFu;
+  int32_t nr = (int32_t)r + (((int32_t)tr - (int32_t)r) * amount) / 255;
+  int32_t ng = (int32_t)g + (((int32_t)tg - (int32_t)g) * amount) / 255;
+  int32_t nb = (int32_t)b + (((int32_t)tb - (int32_t)b) * amount) / 255;
+  if (nr < 0) nr = 0;
+  if (ng < 0) ng = 0;
+  if (nb < 0) nb = 0;
+  if (nr > 255) nr = 255;
+  if (ng > 255) ng = 255;
+  if (nb > 255) nb = 255;
+  return ((uint32_t)nr << 16) | ((uint32_t)ng << 8) | (uint32_t)nb;
+}
+
+static char di_lower(char c) {
+  if (c >= 'A' && c <= 'Z') return (char)(c - 'A' + 'a');
+  return c;
+}
+
+static int di_entry_is_dir(const struct di_entry *e) {
+  return e && ((e->mode & VFS_MODE_DIR) != 0);
+}
+
+static int di_entry_less(const struct di_entry *a, const struct di_entry *b) {
+  uint32_t i = 0;
+  int ad = di_entry_is_dir(a);
+  int bd = di_entry_is_dir(b);
+  if (ad != bd) return ad > bd;
+  while (a && b && a->name[i] && b->name[i]) {
+    char ca = di_lower(a->name[i]);
+    char cb = di_lower(b->name[i]);
+    if (ca != cb) return ca < cb;
+    i++;
+  }
+  return a && b && a->name[i] == '\0' && b->name[i] != '\0';
+}
+
+static void di_sort_entries(void) {
+  for (uint32_t i = 1; i < g_di.count; i++) {
+    struct di_entry current = g_di.entries[i];
+    uint32_t j = i;
+    while (j > 0 && di_entry_less(&current, &g_di.entries[j - 1u])) {
+      g_di.entries[j] = g_di.entries[j - 1u];
+      j--;
+    }
+    g_di.entries[j] = current;
+  }
+}
+
+static void di_ensure_screen(void) {
+  if (g_di.screen_w == 0u || g_di.screen_h == 0u) {
+    compositor_screen_size(&g_di.screen_w, &g_di.screen_h);
+  }
+}
+
+static uint32_t di_usable_height(void) {
+  uint32_t reserved = g_di.taskbar_h + DESKTOP_ICON_PAD_BOTTOM;
+  di_ensure_screen();
+  if (g_di.screen_h <= reserved) return 0;
+  return g_di.screen_h - reserved;
+}
+
+static uint32_t di_usable_width(void) {
+  di_ensure_screen();
+  if (g_di.screen_w <= DESKTOP_ICON_PAD_RIGHT) return g_di.screen_w;
+  return g_di.screen_w - DESKTOP_ICON_PAD_RIGHT;
+}
+
+static void di_draw_wallpaper(struct gui_surface *s,
+                              const struct gui_theme_palette *theme) {
+  uint32_t usable_h = 0;
+  uint32_t bands = 8u;
+  uint32_t top = 0;
+  uint32_t bottom = 0;
+  if (!s || !theme) return;
+  g_di.screen_w = s->width;
+  g_di.screen_h = s->height;
+  usable_h = di_usable_height();
+  if (usable_h == 0u) return;
+  top = di_mix_color(theme->wallpaper, theme->accent_alt, 18u);
+  bottom = di_mix_color(theme->wallpaper, 0x00000000, 32u);
+  for (uint32_t band = 0; band < bands; band++) {
+    uint32_t y0 = (usable_h * band) / bands;
+    uint32_t y1 = (usable_h * (band + 1u)) / bands;
+    uint8_t amount = (bands > 1u) ? (uint8_t)((band * 255u) / (bands - 1u)) : 0u;
+    di_fill_rect(s, 0, (int32_t)y0, s->width, y1 - y0,
+                 di_mix_color(top, bottom, amount));
+  }
+}
+
+static uint32_t di_rows_per_column(void) {
+  uint32_t usable_h = di_usable_height();
+  uint32_t rows = 1;
+  if (usable_h > DESKTOP_ICON_PAD_TOP) {
+    rows = (usable_h - DESKTOP_ICON_PAD_TOP) / DESKTOP_ICON_CELL_H;
+  }
+  return rows ? rows : 1;
+}
+
+/* Calcula a posicao (px, py) do icone idx no grid responsivo. */
 static void di_icon_position(uint32_t idx, int32_t *out_x, int32_t *out_y) {
-  /* Single column (x = PAD_LEFT). y avanca em CELL_H. */
-  *out_x = (int32_t)DESKTOP_ICON_PAD_LEFT;
-  *out_y = (int32_t)(DESKTOP_ICON_PAD_TOP + idx * DESKTOP_ICON_CELL_H);
+  uint32_t rows = di_rows_per_column();
+  uint32_t col = idx / rows;
+  uint32_t row = idx % rows;
+  *out_x = (int32_t)(DESKTOP_ICON_PAD_LEFT + col * DESKTOP_ICON_CELL_W);
+  *out_y = (int32_t)(DESKTOP_ICON_PAD_TOP + row * DESKTOP_ICON_CELL_H);
 }
 
 /* Detecta se um arquivo .txt/.md (heuristic case-insensitive). */
@@ -152,6 +293,13 @@ void desktop_icons_init(const char *path, uint32_t taskbar_height) {
   g_di.taskbar_h = taskbar_height;
   g_di.pending_action = 0;
   g_di.pending_target = -1;
+  g_di.drag_active = 0;
+  g_di.drag_source = -1;
+  g_di.drag_over = -1;
+  g_di.drag_open_on_release = 0;
+  g_di.drag_moved = 0;
+  g_di.drag_start_x = 0;
+  g_di.drag_start_y = 0;
   if (path) {
     di_strcpy(g_di.path, path, sizeof(g_di.path));
   } else {
@@ -171,83 +319,102 @@ void desktop_icons_paint(struct gui_surface *s) {
   g_di.screen_h = s->height;
   const struct gui_theme_palette *theme = compositor_theme();
   const struct font *f = font_default();
-  if (!f) return;
+  uint32_t usable_h = di_usable_height();
+  uint32_t usable_w = di_usable_width();
+  di_draw_wallpaper(s, theme);
+  if (!f || !theme || usable_h == 0u) return;
 
   for (uint32_t i = 0; i < g_di.count; i++) {
     int32_t x = 0, y = 0;
     di_icon_position(i, &x, &y);
-    if (y + (int32_t)DESKTOP_ICON_CELL_H >
-        (int32_t)(s->height - g_di.taskbar_h)) break;
+    if (x + (int32_t)DESKTOP_ICON_CELL_W > (int32_t)usable_w) break;
+    if (y + (int32_t)DESKTOP_ICON_CELL_H > (int32_t)usable_h) break;
 
     int sel = ((int)i == g_di.selected);
-    /* Highlight da selecao: caixa accent_alt semi-transparente
-     * simulada com solid fill. Cells ocupam 76x76 internos. */
-    if (sel) {
-      di_fill_rect(s, x - 2, y - 2, DESKTOP_ICON_CELL_W,
-                   DESKTOP_ICON_CELL_H, theme->accent_alt);
+    int drop = ((int)i == g_di.drag_over);
+    if (sel || drop) {
+      uint32_t sel_bg = drop ? di_mix_color(theme->accent, theme->wallpaper, 42u)
+                             : di_mix_color(theme->accent_alt, theme->wallpaper, 58u);
+      di_fill_rect(s, x - 3, y - 3, DESKTOP_ICON_CELL_W,
+                   DESKTOP_ICON_CELL_H - 2u, sel_bg);
+      di_fill_rect(s, x - 3, y - 3, DESKTOP_ICON_CELL_W, 1u,
+                   theme->accent);
+      di_fill_rect(s, x - 3, y + (int32_t)DESKTOP_ICON_CELL_H - 5,
+                   DESKTOP_ICON_CELL_W, 1u, theme->accent);
     }
 
-    /* Icone 32x32 centralizado horizontalmente na celula. */
-    int32_t ix = x + (int32_t)((DESKTOP_ICON_CELL_W - 32u) / 2u) - 2;
-    int32_t iy = y + 4;
+    int32_t ix = x + (int32_t)((DESKTOP_ICON_CELL_W - 32u) / 2u);
+    int32_t iy = y + 5;
     int is_dir = (g_di.entries[i].mode & VFS_MODE_DIR) != 0;
     uint32_t icon_bg = is_dir ? theme->accent : theme->accent_alt;
     uint32_t icon_border = theme->window_border;
+    uint32_t shadow = di_mix_color(theme->wallpaper, 0x00000000, 55u);
 
-    /* Fundo do icone. */
+    di_fill_rect(s, ix + 2, iy + 3, 32, 32, shadow);
     di_fill_rect(s, ix, iy, 32, 32, icon_bg);
-    /* Border 1 px. */
     di_fill_rect(s, ix, iy, 32, 1, icon_border);
     di_fill_rect(s, ix, iy + 31, 32, 1, icon_border);
     di_fill_rect(s, ix, iy, 1, 32, icon_border);
     di_fill_rect(s, ix + 31, iy, 1, 32, icon_border);
-    /* Pasta tem uma "aba" 8 px no topo (W7 folder feel). */
+    di_fill_rect(s, ix + 2, iy + 2, 28, 2,
+                 di_mix_color(icon_bg, 0x00FFFFFF, 58u));
+    di_fill_rect(s, ix + 2, iy + 28, 28, 2,
+                 di_mix_color(icon_bg, 0x00000000, 36u));
     if (is_dir) {
-      di_fill_rect(s, ix + 4, iy - 3, 12, 4, icon_bg);
+      di_fill_rect(s, ix + 4, iy - 3, 13, 4, icon_bg);
+      di_fill_rect(s, ix + 4, iy - 3, 13, 1, icon_border);
       di_fill_rect(s, ix + 4, iy - 3, 1, 4, icon_border);
-      di_fill_rect(s, ix + 16, iy - 3, 1, 4, icon_border);
-      di_fill_rect(s, ix + 4, iy - 3, 12, 1, icon_border);
+      di_fill_rect(s, ix + 17, iy - 2, 1, 3, icon_border);
     } else {
-      /* Arquivo: dobra de canto. */
       di_fill_rect(s, ix + 22, iy + 4, 6, 6, theme->window_bg);
       di_fill_rect(s, ix + 22, iy + 4, 6, 1, icon_border);
       di_fill_rect(s, ix + 22, iy + 4, 1, 6, icon_border);
     }
 
-    /* Nome (truncated). 2 linhas no max, GLYPH_W ~= 8 px. */
     char line1[16], line2[16];
     line1[0] = '\0'; line2[0] = '\0';
     uint32_t nlen = di_strlen(g_di.entries[i].name);
-    /* split em 9 chars (76/8 ~ 9). */
-    uint32_t split = (nlen <= 9u) ? nlen : 9u;
+    uint32_t gw = f->glyph_width ? f->glyph_width : 8u;
+    uint32_t text_area = DESKTOP_ICON_CELL_W - 10u;
+    uint32_t chars_per_line = text_area / gw;
+    if (chars_per_line < 3u) chars_per_line = 3u;
+    if (chars_per_line > 15u) chars_per_line = 15u;
+    uint32_t split = (nlen <= chars_per_line) ? nlen : chars_per_line;
     for (uint32_t k = 0; k < split && k < 15; k++)
       line1[k] = g_di.entries[i].name[k];
     line1[split < 15u ? split : 15u] = '\0';
-    if (nlen > 9u) {
-      uint32_t rem = nlen - 9u;
-      uint32_t rs = (rem <= 9u) ? rem : 9u;
+    if (nlen > chars_per_line) {
+      uint32_t rem = nlen - chars_per_line;
+      uint32_t rs = (rem <= chars_per_line) ? rem : chars_per_line;
       for (uint32_t k = 0; k < rs && k < 15; k++) {
-        line2[k] = g_di.entries[i].name[9u + k];
+        line2[k] = g_di.entries[i].name[chars_per_line + k];
       }
-      if (rem > 9u && rs >= 3u) {
-        /* trunca com "..." */
+      if (rem > chars_per_line && rs >= 3u) {
         line2[rs - 3u] = '.';
         line2[rs - 2u] = '.';
         line2[rs - 1u] = '.';
       }
       line2[rs < 15u ? rs : 15u] = '\0';
     }
-    int32_t name_y = y + 40;
-    /* Centraliza horizontalmente, glyph_width ~ 8 px. */
-    int32_t lw1 = (int32_t)(di_strlen(line1) * 8u);
-    int32_t name_x1 = x + (int32_t)((DESKTOP_ICON_CELL_W - 4u -
-                                      (uint32_t)lw1) / 2u);
+    int32_t name_y = y + 43;
+    uint32_t chip_h = line2[0] ? 27u : 15u;
+    if (sel) {
+      di_fill_rect(s, x + 4, name_y - 2, text_area, chip_h,
+                   di_mix_color(theme->accent_alt, theme->wallpaper, 38u));
+    }
+    int32_t lw1 = (int32_t)(di_strlen(line1) * gw);
+    int32_t name_x1 = x + 5;
+    if ((uint32_t)lw1 < text_area) {
+      name_x1 += (int32_t)((text_area - (uint32_t)lw1) / 2u);
+    }
     font_draw_string(s, f, name_x1, name_y, line1,
                      sel ? theme->accent_text : theme->text);
     if (line2[0]) {
-      int32_t lw2 = (int32_t)(di_strlen(line2) * 8u);
-      int32_t name_x2 = x + (int32_t)((DESKTOP_ICON_CELL_W - 4u -
-                                        (uint32_t)lw2) / 2u);
+      int32_t lw2 = (int32_t)(di_strlen(line2) * gw);
+      int32_t name_x2 = x + 5;
+      if ((uint32_t)lw2 < text_area) {
+        name_x2 += (int32_t)((text_area - (uint32_t)lw2) / 2u);
+      }
       font_draw_string(s, f, name_x2, name_y + 12, line2,
                        sel ? theme->accent_text : theme->text);
     }
@@ -255,15 +422,114 @@ void desktop_icons_paint(struct gui_surface *s) {
 }
 
 int desktop_icons_hit_test(int32_t sx, int32_t sy) {
+  uint32_t usable_h = di_usable_height();
+  uint32_t usable_w = di_usable_width();
+  if (usable_h == 0u || sx < 0 || sy < 0) return -1;
+  if ((uint32_t)sy >= usable_h) return -1;
   for (uint32_t i = 0; i < g_di.count; i++) {
     int32_t x = 0, y = 0;
     di_icon_position(i, &x, &y);
+    if (x + (int32_t)DESKTOP_ICON_CELL_W > (int32_t)usable_w) break;
+    if (y + (int32_t)DESKTOP_ICON_CELL_H > (int32_t)usable_h) break;
     if (sx >= x && sx < x + (int32_t)DESKTOP_ICON_CELL_W &&
         sy >= y && sy < y + (int32_t)DESKTOP_ICON_CELL_H) {
       return (int)i;
     }
   }
   return -1;
+}
+
+
+static void di_open_entry(int idx) {
+  char path[256];
+  if (idx < 0 || idx >= (int)g_di.count) return;
+  di_join(g_di.path, g_di.entries[idx].name, path, sizeof(path));
+  if (g_di.entries[idx].mode & VFS_MODE_DIR) {
+    file_manager_open_at(path);
+  } else if (di_is_text(g_di.entries[idx].name)) {
+    text_editor_open(path);
+  }
+}
+
+static int di_move_entry_to_dir(int src_idx, int dst_idx) {
+  char src[256];
+  char dst_dir[256];
+  char dst[256];
+  int rc = 0;
+  if (src_idx < 0 || src_idx >= (int)g_di.count ||
+      dst_idx < 0 || dst_idx >= (int)g_di.count || src_idx == dst_idx)
+    return 0;
+  if (!(g_di.entries[dst_idx].mode & VFS_MODE_DIR)) return 0;
+  di_join(g_di.path, g_di.entries[src_idx].name, src, sizeof(src));
+  di_join(g_di.path, g_di.entries[dst_idx].name, dst_dir, sizeof(dst_dir));
+  di_join(dst_dir, g_di.entries[src_idx].name, dst, sizeof(dst));
+  rc = vfs_rename(src, dst);
+  g_di.selected = -1;
+  g_di.drag_over = -1;
+  if (rc == 0) desktop_icons_refresh();
+  else compositor_invalidate_all();
+  return 1;
+}
+
+static int di_move_path_to_dir(const char *src_path, const char *dst_dir) {
+  char dst[256];
+  const char *name = di_basename(src_path);
+  int rc = 0;
+  if (!src_path || !src_path[0] || !dst_dir || !dst_dir[0] || !name[0])
+    return 0;
+  if (di_path_inside_or_same(dst_dir, src_path)) {
+    compositor_invalidate_all();
+    return 1;
+  }
+  di_join(dst_dir, name, dst, sizeof(dst));
+  if (di_streq(src_path, dst)) {
+    compositor_invalidate_all();
+    return 1;
+  }
+  rc = vfs_rename(src_path, dst);
+  if (rc == 0) desktop_icons_refresh();
+  else compositor_invalidate_all();
+  return 1;
+}
+
+static void di_delete_confirm_submit(const char *text, void *ctx) {
+  int rc = 0;
+  (void)ctx;
+  if (!text || !di_streq(text, "DELETE")) {
+    g_di_delete_path[0] = '\0';
+    g_di_delete_mode = 0;
+    compositor_invalidate_all();
+    return;
+  }
+  if (g_di_delete_mode & VFS_MODE_DIR) rc = vfs_rmdir_recursive(g_di_delete_path);
+  else rc = vfs_unlink(g_di_delete_path);
+  (void)rc;
+  g_di_delete_path[0] = '\0';
+  g_di_delete_mode = 0;
+  g_di.selected = -1;
+  desktop_icons_refresh();
+}
+
+static void di_request_delete_selected(void) {
+  int32_t ix = 0;
+  int32_t iy = 0;
+  if (g_di.selected < 0 || g_di.selected >= (int)g_di.count) return;
+  di_join(g_di.path, g_di.entries[g_di.selected].name, g_di_delete_path,
+          sizeof(g_di_delete_path));
+  g_di_delete_mode = g_di.entries[g_di.selected].mode;
+  if (!(g_di_delete_mode & VFS_MODE_DIR)) {
+    (void)vfs_unlink(g_di_delete_path);
+    g_di_delete_path[0] = '\0';
+    g_di_delete_mode = 0;
+    g_di.selected = -1;
+    desktop_icons_refresh();
+    return;
+  }
+  di_icon_position((uint32_t)g_di.selected, &ix, &iy);
+  (void)inline_prompt_show(APP_T("Digite DELETE", "Type DELETE",
+                                 "Escriba DELETE"),
+                           "", ix, iy + (int32_t)DESKTOP_ICON_CELL_H,
+                           di_delete_confirm_submit, NULL);
 }
 
 void desktop_icons_clear_selection(void) {
@@ -278,25 +544,139 @@ void desktop_icons_handle_click(int32_t sx, int32_t sy) {
   int prev = g_di.selected;
   if (hit < 0) {
     g_di.selected = -1;
+    g_di.drag_active = 0;
+    g_di.drag_source = -1;
+    g_di.drag_over = -1;
+    g_di.drag_open_on_release = 0;
+    g_di.drag_moved = 0;
+    g_di.drag_start_x = 0;
+    g_di.drag_start_y = 0;
     if (prev != -1) compositor_invalidate_all();
     return;
   }
-  /* Click no mesmo icone duas vezes -> abre.
-   * (Sem timer, "double-click" = qualquer click subsequente no
-   * mesmo icone enquanto ele estiver selecionado. Nao e ideal mas
-   * funciona sem framework de eventos temporais.) */
-  if (g_di.selected == hit) {
-    char path[256];
-    di_join(g_di.path, g_di.entries[hit].name, path, sizeof(path));
-    if (g_di.entries[hit].mode & VFS_MODE_DIR) {
-      file_manager_open_at(path);
-    } else if (di_is_text(g_di.entries[hit].name)) {
-      text_editor_open(path);
+  g_di.drag_active = 1;
+  g_di.drag_source = hit;
+  g_di.drag_over = -1;
+  g_di.drag_open_on_release = (g_di.selected == hit) ? 1 : 0;
+  g_di.drag_moved = 0;
+  g_di.drag_start_x = sx;
+  g_di.drag_start_y = sy;
+  g_di.selected = hit;
+  compositor_invalidate_all();
+}
+
+void desktop_icons_handle_drag_move(int32_t sx, int32_t sy, uint8_t buttons) {
+  int hit = -1;
+  int next_over = -1;
+  char src_path[256];
+  if (!g_di.drag_active) return;
+  if (!(buttons & 1)) {
+    (void)desktop_icons_handle_mouse_up(sx, sy);
+    return;
+  }
+  if (sx < g_di.drag_start_x - 2 || sx > g_di.drag_start_x + 2 ||
+      sy < g_di.drag_start_y - 2 || sy > g_di.drag_start_y + 2) {
+    g_di.drag_moved = 1;
+  }
+  hit = desktop_icons_hit_test(sx, sy);
+  if (hit >= 0 && hit != g_di.drag_source &&
+      (g_di.entries[hit].mode & VFS_MODE_DIR)) {
+    next_over = hit;
+  }
+  if (g_di.drag_source >= 0 && g_di.drag_source < (int)g_di.count) {
+    di_join(g_di.path, g_di.entries[g_di.drag_source].name, src_path,
+            sizeof(src_path));
+    if (file_manager_preview_drop_path_at(sx, sy, src_path)) {
+      next_over = -1;
     }
-    g_di.selected = -1;
-    compositor_invalidate_all();
   } else {
-    g_di.selected = hit;
+    file_manager_clear_external_drop();
+  }
+  if (next_over != g_di.drag_over) {
+    g_di.drag_over = next_over;
+    compositor_invalidate_all();
+  }
+}
+
+int desktop_icons_handle_mouse_up(int32_t sx, int32_t sy) {
+  int src = 0;
+  int dst = 0;
+  int open_on_release = 0;
+  int moved = 0;
+  char src_path[256];
+  src_path[0] = '\0';
+  if (!g_di.drag_active) return 0;
+  src = g_di.drag_source;
+  dst = g_di.drag_over;
+  open_on_release = g_di.drag_open_on_release;
+  moved = g_di.drag_moved;
+  if (src >= 0 && src < (int)g_di.count) {
+    di_join(g_di.path, g_di.entries[src].name, src_path, sizeof(src_path));
+  }
+  g_di.drag_active = 0;
+  g_di.drag_source = -1;
+  g_di.drag_over = -1;
+  g_di.drag_open_on_release = 0;
+  g_di.drag_moved = 0;
+  g_di.drag_start_x = 0;
+  g_di.drag_start_y = 0;
+  file_manager_clear_external_drop();
+  if (dst >= 0 && di_move_entry_to_dir(src, dst)) return 1;
+  if (moved && src_path[0] && file_manager_drop_path_at(sx, sy, src_path)) {
+    desktop_icons_refresh();
+    return 1;
+  }
+  if (open_on_release && !moved) {
+    di_open_entry(src);
+    g_di.selected = -1;
+  }
+  compositor_invalidate_all();
+  return 1;
+}
+
+int desktop_icons_preview_external_drop(int32_t sx, int32_t sy) {
+  int hit = -1;
+  int next_over = -1;
+  if (compositor_window_at(sx, sy)) {
+    desktop_icons_clear_external_drop();
+    return 0;
+  }
+  hit = desktop_icons_hit_test(sx, sy);
+  if (hit >= 0 && (g_di.entries[hit].mode & VFS_MODE_DIR)) {
+    next_over = hit;
+  }
+  if (next_over != g_di.drag_over) {
+    g_di.drag_over = next_over;
+    compositor_invalidate_all();
+  }
+  return 1;
+}
+
+int desktop_icons_drop_path_at(int32_t sx, int32_t sy, const char *src_path) {
+  int hit = -1;
+  char dst_dir[256];
+  if (!src_path || !src_path[0]) return 0;
+  if (compositor_window_at(sx, sy)) {
+    desktop_icons_clear_external_drop();
+    return 0;
+  }
+  if ((uint32_t)sy >= di_usable_height()) {
+    desktop_icons_clear_external_drop();
+    return 0;
+  }
+  hit = desktop_icons_hit_test(sx, sy);
+  if (hit >= 0 && (g_di.entries[hit].mode & VFS_MODE_DIR)) {
+    di_join(g_di.path, g_di.entries[hit].name, dst_dir, sizeof(dst_dir));
+  } else {
+    di_strcpy(dst_dir, g_di.path, sizeof(dst_dir));
+  }
+  g_di.drag_over = -1;
+  return di_move_path_to_dir(src_path, dst_dir);
+}
+
+void desktop_icons_clear_external_drop(void) {
+  if (g_di.drag_over != -1 && !g_di.drag_active) {
+    g_di.drag_over = -1;
     compositor_invalidate_all();
   }
 }
@@ -323,16 +703,7 @@ static void di_ctx_pick(uint16_t action_id, void *ctx) {
     }
     case DI_CTX_DELETE: {
       if (g_di.selected < 0 || g_di.selected >= (int)g_di.count) return;
-      char path[256];
-      di_join(g_di.path, g_di.entries[g_di.selected].name, path,
-              sizeof(path));
-      if (g_di.entries[g_di.selected].mode & VFS_MODE_DIR) {
-        vfs_rmdir(path);
-      } else {
-        vfs_unlink(path);
-      }
-      g_di.selected = -1;
-      desktop_icons_refresh();
+      di_request_delete_selected();
       break;
     }
     case DI_CTX_RENAME: {

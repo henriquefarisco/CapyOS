@@ -9,7 +9,7 @@
  *   - Owner registra um set de items (label + action_id) e chama
  *     `context_menu_show(items, count, screen_x, screen_y, on_pick)`.
  *   - O modulo cria/reusa uma janela compositor undecorada com
- *     corner_radius=4, border do tema, hover por linha.
+ *     corner_radius=4, border do tema, hover por linha e labels truncadas.
  *   - Click: invoca `on_pick(action_id, ctx)` e fecha o popup.
  *   - Click fora ou ESC: fecha sem callback.
  *   - Mouse-move: atualiza hover, repaint da linha.

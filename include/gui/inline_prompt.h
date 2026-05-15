@@ -6,12 +6,13 @@
  *
  * Design (segregado, singleton estatico):
  *   - inline_prompt_show(title, default_text, x, y, on_submit, ctx)
- *     cria a janela; Enter -> on_submit(text, ctx); Esc -> cancela.
+ *     cria a janela; inline_prompt_show_secret() mascara entradas sensiveis.
+ *     Enter -> on_submit(text, ctx); Esc -> cancela.
  *   - inline_prompt_handle_key(keycode, ch) consome teclas quando
  *     o popup esta aberto (chamar do desktop key dispatcher antes
  *     do focused window).
- *   - inline_prompt_handle_click consome cliques fora (cancela) e
- *     dentro (no-op por enquanto; futura focus-on-click).
+ *   - inline_prompt_handle_click consome cliques de mouse fora (cancela) e
+ *     dentro do campo move o caret, preservando prioridade modal.
  *
  * Limites:
  *   - 1 prompt aberto por vez.
@@ -39,6 +40,10 @@ int inline_prompt_show(const char *title, const char *default_text,
                        int32_t screen_x, int32_t screen_y,
                        inline_prompt_submit_fn on_submit, void *ctx);
 
+int inline_prompt_show_secret(const char *title, const char *default_text,
+                              int32_t screen_x, int32_t screen_y,
+                              inline_prompt_submit_fn on_submit, void *ctx);
+
 /* Fecha sem callback. Idempotente. */
 void inline_prompt_close(void);
 
@@ -46,8 +51,8 @@ void inline_prompt_close(void);
 int inline_prompt_is_open(void);
 
 /* Handler de tecla; retorna 1 se consumiu (caller deve interromper
- * o dispatch). Apenas Enter/Esc/Backspace/printable ASCII sao
- * consumidos. */
+ * o dispatch). Enter/Esc/Backspace/Delete/Home/End/Left/Right e
+ * printable ASCII sao consumidos. */
 int inline_prompt_handle_key(uint32_t keycode, char ch);
 
 /* Handler de click; retorna 1 se consumiu. Click fora -> fecha. */

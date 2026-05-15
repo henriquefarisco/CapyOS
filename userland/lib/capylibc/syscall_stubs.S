@@ -194,5 +194,111 @@ capy_pipe:
     ret
 .size capy_pipe, .-capy_pipe
 
+# int capy_close(int fd); (F4 seção c parte 2/2, 2026-05-08)
+#
+# Releases the underlying kernel resource backing the FD slot
+# (VFS file, pipe end, or socket -- dispatched by FD type) and
+# clears the slot. Required by libcapy-net to roll back a
+# half-open socket when capy_connect fails after capy_socket
+# succeeded. Pre-F4-seção-c, no caller in userland needed to
+# close a non-stdio FD, so the stub was never wired; landing
+# the socket family forced the gap.
+#
+# Returns 0 on success, -1 on failure (out-of-range fd, slot
+# already free, etc.).
+.global capy_close
+capy_close:
+    movq $SYS_CLOSE, %rax
+    syscall
+    ret
+.size capy_close, .-capy_close
+
+# === F4 seção c (2026-05-08) — userland socket family ============
+#
+# All seven entries follow the standard 3-arg / 4-arg shape. Calls
+# with at most 3 arguments need no register shuffle; the 4-arg
+# entries (capy_send, capy_recv) move %rcx into %r10 to satisfy the
+# SYSCALL ABI (the SYSCALL instruction itself clobbers %rcx).
+#
+# A handler returning -1 indicates either an invalid argument or a
+# missing kernel-side backend (the table-of-ops in syscall_net.c
+# is not populated until syscall_net_install_default_ops runs at
+# boot). Userland never sees a partially-completed FD: sys_socket
+# rolls back the kernel socket on FD-table OOM.
+
+# int capy_socket(int domain, int type, int protocol);
+.global capy_socket
+capy_socket:
+    movq $SYS_SOCKET, %rax
+    syscall
+    ret
+.size capy_socket, .-capy_socket
+
+# int capy_bind(int fd, const struct sockaddr_in *addr, unsigned int addrlen);
+.global capy_bind
+capy_bind:
+    movq $SYS_BIND, %rax
+    syscall
+    ret
+.size capy_bind, .-capy_bind
+
+# int capy_listen(int fd, int backlog);
+.global capy_listen
+capy_listen:
+    movq $SYS_LISTEN, %rax
+    syscall
+    ret
+.size capy_listen, .-capy_listen
+
+# int capy_accept(int fd, struct sockaddr_in *addr, unsigned int *addrlen);
+.global capy_accept
+capy_accept:
+    movq $SYS_ACCEPT, %rax
+    syscall
+    ret
+.size capy_accept, .-capy_accept
+
+# int capy_connect(int fd, const struct sockaddr_in *addr, unsigned int addrlen);
+.global capy_connect
+capy_connect:
+    movq $SYS_CONNECT, %rax
+    syscall
+    ret
+.size capy_connect, .-capy_connect
+
+# long capy_send(int fd, const void *buf, size_t len, int flags);
+# C ABI puts arg index 3 in %rcx; SYSCALL needs it in %r10.
+.global capy_send
+capy_send:
+    movq %rcx, %r10
+    movq $SYS_SEND, %rax
+    syscall
+    ret
+.size capy_send, .-capy_send
+
+# long capy_recv(int fd, void *buf, size_t len, int flags);
+.global capy_recv
+capy_recv:
+    movq %rcx, %r10
+    movq $SYS_RECV, %rax
+    syscall
+    ret
+.size capy_recv, .-capy_recv
+
+# === F4 seção c parte 3/3 (2026-05-08) — DNS resolver ============
+#
+# int capy_dns_resolve(const char *name, uint32_t *out_ip, int flags);
+#
+# 3-argument SYSCALL: name in %rdi, out_ip in %rsi, flags in %rdx.
+# Returns 0 on cache hit (and *out_ip is populated host-order),
+# -1 on miss / NULL args / no installed resolver / non-zero flags.
+# `flags` is reserved for future "blocking allowed?" hint; pass 0.
+.global capy_dns_resolve
+capy_dns_resolve:
+    movq $SYS_DNS_RESOLVE, %rax
+    syscall
+    ret
+.size capy_dns_resolve, .-capy_dns_resolve
+
 # Mark stack as non-executable to satisfy modern binutils hardening.
 .section .note.GNU-stack,"",@progbits

@@ -26,12 +26,14 @@ void dns_cache_init(void) {
     cache[i].ip = 0;
     cache[i].ttl = 0;
     cache[i].created_tick = 0;
+    cache[i].is_negative = 0;
   }
   cache_stats.entries = 0;
   cache_stats.hits = 0;
   cache_stats.misses = 0;
   cache_stats.evictions = 0;
   cache_stats.expired = 0;
+  cache_stats.negative_hits = 0;
 }
 
 static uint64_t dns_cache_current_tick(void) {
@@ -69,12 +71,41 @@ int dns_cache_lookup(const char *name, uint32_t *out_ip) {
         cache_stats.misses++;
         return -1;
       }
+      /* Sessão 44: negative entries are invisible to the
+       * positive lookup path. Callers that need them use
+       * `dns_cache_lookup_negative` explicitly. */
+      if (cache[i].is_negative) {
+        cache_stats.misses++;
+        return -1;
+      }
       *out_ip = cache[i].ip;
       cache_stats.hits++;
       return 0;
     }
   }
   cache_stats.misses++;
+  return -1;
+}
+
+/* Sessão 44 (2026-05-08): negative-cache aware lookup. The
+ * `valid && is_negative && !expired` predicate is intentionally
+ * disjoint from `dns_cache_lookup` so a wrapper that checks
+ * both gets exactly one of {positive hit, negative hit, miss}
+ * without double-counting cache_stats.misses. */
+int dns_cache_lookup_negative(const char *name) {
+  if (!name) return -1;
+  uint64_t now = dns_cache_current_tick();
+  for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
+    if (cache[i].valid && cache[i].is_negative &&
+        dns_streq(cache[i].name, name)) {
+      if (dns_cache_entry_expired(&cache[i], now)) {
+        dns_cache_expire_entry(i);
+        return -1;
+      }
+      cache_stats.negative_hits++;
+      return 0;
+    }
+  }
   return -1;
 }
 
@@ -86,6 +117,7 @@ void dns_cache_insert(const char *name, uint32_t ip, uint32_t ttl) {
       cache[i].ip = ip;
       cache[i].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
       cache[i].created_tick = dns_cache_current_tick();
+      cache[i].is_negative = 0;
       return;
     }
   }
@@ -97,6 +129,7 @@ void dns_cache_insert(const char *name, uint32_t ip, uint32_t ttl) {
       cache[i].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
       cache[i].created_tick = dns_cache_current_tick();
       cache[i].valid = 1;
+      cache[i].is_negative = 0;
       cache_stats.entries++;
       return;
     }
@@ -115,6 +148,57 @@ void dns_cache_insert(const char *name, uint32_t ip, uint32_t ttl) {
   cache[oldest_idx].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
   cache[oldest_idx].created_tick = dns_cache_current_tick();
   cache[oldest_idx].valid = 1;
+  cache[oldest_idx].is_negative = 0;
+  cache_stats.evictions++;
+}
+
+/* Sessão 44 (2026-05-08): mirrors dns_cache_insert but stamps
+ * the entry as negative (no IP, just "this name does not exist").
+ * If a positive entry for the same name already exists, the
+ * insert REPLACES it -- a positive answer arriving later (e.g.,
+ * after a DNS server restart) flips it back via dns_cache_insert.
+ * This is the correct precedence: positive answers always win
+ * over negative ones for the same name. */
+void dns_cache_insert_negative(const char *name, uint32_t ttl) {
+  if (!name) return;
+
+  for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
+    if (cache[i].valid && dns_streq(cache[i].name, name)) {
+      cache[i].ip = 0;
+      cache[i].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
+      cache[i].created_tick = dns_cache_current_tick();
+      cache[i].is_negative = 1;
+      return;
+    }
+  }
+
+  for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
+    if (!cache[i].valid) {
+      dns_strcpy(cache[i].name, name, DNS_CACHE_NAME_MAX);
+      cache[i].ip = 0;
+      cache[i].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
+      cache[i].created_tick = dns_cache_current_tick();
+      cache[i].valid = 1;
+      cache[i].is_negative = 1;
+      cache_stats.entries++;
+      return;
+    }
+  }
+
+  uint64_t oldest_tick = 0;
+  int oldest_idx = 0;
+  for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
+    if (cache[i].created_tick >= oldest_tick) {
+      oldest_tick = cache[i].created_tick;
+      oldest_idx = i;
+    }
+  }
+  dns_strcpy(cache[oldest_idx].name, name, DNS_CACHE_NAME_MAX);
+  cache[oldest_idx].ip = 0;
+  cache[oldest_idx].ttl = ttl > 0 ? ttl : DNS_CACHE_TTL_DEFAULT;
+  cache[oldest_idx].created_tick = dns_cache_current_tick();
+  cache[oldest_idx].valid = 1;
+  cache[oldest_idx].is_negative = 1;
   cache_stats.evictions++;
 }
 
@@ -130,7 +214,10 @@ void dns_cache_invalidate(const char *name) {
 }
 
 void dns_cache_flush(void) {
-  for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) cache[i].valid = 0;
+  for (int i = 0; i < DNS_CACHE_MAX_ENTRIES; i++) {
+    cache[i].valid = 0;
+    cache[i].is_negative = 0;
+  }
   cache_stats.entries = 0;
 }
 

@@ -14,5 +14,8 @@ void desktop_stop(void);
 
 /* Dispatch a shell command from the desktop terminal. */
 int kernel_desktop_dispatch_shell_command(char *line);
+struct session_context *kernel_desktop_shell_session(void);
+int kernel_desktop_shell_should_stop(void);
+int kernel_desktop_shell_should_logout(void);
 
 #endif /* GUI_DESKTOP_RUNTIME_H */

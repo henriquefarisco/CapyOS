@@ -118,6 +118,7 @@ long vfs_write(struct file *file, const void *buffer, size_t size);
 int vfs_listdir(const char *path, vfs_iter_cb cb, void *ctx);
 int vfs_unlink(const char *path);
 int vfs_rmdir(const char *path);
+int vfs_rmdir_recursive(const char *path);
 int vfs_rename(const char *src_path, const char *dst_path);
 int vfs_stat_path(const char *path, struct vfs_stat *out);
 int vfs_set_metadata(const char *path, const struct vfs_metadata *meta);

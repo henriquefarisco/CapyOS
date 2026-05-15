@@ -53,11 +53,22 @@ int cmd_update_status(struct shell_context *ctx, int argc, char **argv) {
     shell_print("remote=");
     shell_print(status.remote_manifest_url[0] ? status.remote_manifest_url : "-");
     shell_newline();
+    shell_print("payload=");
+    shell_print(status.payload_url[0] ? status.payload_url : "-");
+    shell_newline();
+    shell_print("payload-cache=");
+    shell_print(status.payload_cache_path[0] ? status.payload_cache_path : "-");
+    shell_print(" sha256=");
+    shell_print(status.payload_cache_sha256[0] ? status.payload_cache_sha256 : "-");
+    shell_newline();
 
     shell_print("staged=");
     shell_print(status.staged_version[0] ? status.staged_version : "-");
     shell_print(" staged-manifest=");
     shell_print(status.staged_manifest_path[0] ? status.staged_manifest_path : "-");
+    shell_newline();
+    shell_print("staged-payload=");
+    shell_print(status.staged_payload_url[0] ? status.staged_payload_url : "-");
     shell_newline();
 
     shell_print("summary=");

@@ -80,7 +80,8 @@ int net_stack_set_ipv4(uint32_t addr, uint32_t mask, uint32_t gateway,
                        uint32_t dns);
 int net_stack_dhcp_acquire(uint32_t timeout_ms);
 int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
-                          uint32_t *out_ip);
+                          uint32_t *out_ip, uint32_t *out_ttl,
+                          uint32_t *out_neg_ttl);
 int net_stack_status(struct net_stack_status *out);
 int net_stack_receive_frame(const uint8_t *frame, size_t len);
 int net_stack_poll(void);

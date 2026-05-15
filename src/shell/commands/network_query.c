@@ -23,7 +23,7 @@ static int net_query_lookup_target_ip(const char *language, const char *target,
   if (net_cli_parse_ipv4(target, out_ip) == 0) {
     return 0;
   }
-  if (net_stack_dns_resolve(target, 2500u, out_ip) == 0) {
+  if (net_stack_dns_resolve(target, 2500u, out_ip, NULL, NULL) == 0) {
     return 1;
   }
   (void)language;
@@ -118,7 +118,7 @@ int net_cmd_resolve(struct shell_context *ctx, int argc, char **argv) {
   }
 
   uint32_t resolved_ip = 0;
-  if (net_stack_dns_resolve(argv[1], 2500u, &resolved_ip) != 0) {
+  if (net_stack_dns_resolve(argv[1], 2500u, &resolved_ip, NULL, NULL) != 0) {
     shell_print_error(net_cli_text(language, NET_DNS_LOOKUP_FAILED));
     return -1;
   }
@@ -186,7 +186,7 @@ int net_cmd_fetch(struct shell_context *ctx, int argc, char **argv) {
   uint32_t resolved_ip = 0;
   char resolved_str[16];
   resolved_str[0] = '?'; resolved_str[1] = '\0';
-  if (net_stack_dns_resolve(host, 3000u, &resolved_ip) == 0)
+  if (net_stack_dns_resolve(host, 3000u, &resolved_ip, NULL, NULL) == 0)
     net_ipv4_format(resolved_ip, resolved_str);
 
   shell_print(">>> ");

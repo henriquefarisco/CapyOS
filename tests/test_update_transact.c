@@ -4,6 +4,17 @@
 #include "services/update_agent.h"
 #include "boot/boot_slot.h"
 
+#define UA_GOOD_SHA256 \
+    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+#define UA_OTHER_SHA256 \
+    "0011223344556677889900112233445566778899001122334455667788990011"
+#define UA_GOOD_SIGNATURE \
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+#define UA_PAYLOAD_URL_LINE \
+    "payload_url=https://github.com/henriquefarisco/CapyOS/releases/download/v2.0.0/kernel.bin\n"
+#define UA_SIGNATURE_LINE "signature_ed25519=" UA_GOOD_SIGNATURE "\n"
+
 #define UA_REPO_PATH    "/system/update/repository.ini"
 #define UA_CACHE_PATH   "/system/update/latest.ini"
 #define UA_STAGE_PATH   "/system/update/staged.ini"
@@ -79,24 +90,32 @@ static int stub_remove(const char *path) {
     return 0;
 }
 
+static int stub_manifest_verify(const char *signed_text, size_t signed_len,
+                                const char *signature_hex) {
+    return signed_text && signed_len > 0u && signature_hex &&
+           strstr(signed_text, "signature_ed25519=") == NULL &&
+           strcmp(signature_hex, UA_GOOD_SIGNATURE) == 0;
+}
+
 static void setup(void) {
     reset_files();
     update_agent_reset();
     update_agent_set_reader(stub_read);
     update_agent_set_writer(stub_write);
     update_agent_set_remover(stub_remove);
+    update_agent_set_manifest_verifier(stub_manifest_verify);
     update_agent_init("1.0.0");
     boot_slot_init();
 }
 
-/* Arm a staged update using the real update_agent API (write via stub_write).
- * Manifest key for version is "available_version" (not "version"). */
+/* Arm a staged update fixture directly. Manifest key for version is
+ * "available_version" (not "version"). */
 static void arm_staged_update(const char *version) {
     char manifest[256];
     snprintf(manifest, sizeof(manifest),
              "available_version=%s\nchannel=stable\nbranch=main\n"
              "source=github:henriquefarisco/CapyOS\n", version);
-    set_file(UA_CACHE_PATH, manifest);
+    set_file(UA_CACHE_PATH, NULL);
     set_file(UA_STAGE_PATH, manifest);
     /* State file key is "staged_manifest" (not "staged_manifest_path") */
     set_file(UA_STATE_PATH,
@@ -106,16 +125,51 @@ static void arm_staged_update(const char *version) {
 
 static void arm_staged_update_with_sha256(const char *version,
                                           const char *sha256_hex) {
-    char manifest[320];
+    char manifest[512];
     snprintf(manifest, sizeof(manifest),
              "available_version=%s\nchannel=stable\nbranch=main\n"
              "source=github:henriquefarisco/CapyOS\n"
-             "payload_sha256=%s\n", version, sha256_hex);
+             "payload_sha256=%s\n"
+             UA_PAYLOAD_URL_LINE
+             UA_SIGNATURE_LINE, version, sha256_hex);
     set_file(UA_CACHE_PATH, manifest);
     set_file(UA_STAGE_PATH, manifest);
     set_file(UA_STATE_PATH,
              "pending_activation=1\n"
              "staged_manifest=/system/update/staged.ini\n");
+}
+
+static void arm_staged_update_with_sha256_cache(const char *version,
+                                                const char *manifest_sha256,
+                                                const char *cache_sha256) {
+    char manifest[512];
+    char state[256];
+    snprintf(manifest, sizeof(manifest),
+             "available_version=%s\nchannel=stable\nbranch=main\n"
+             "source=github:henriquefarisco/CapyOS\n"
+             "payload_sha256=%s\n"
+             UA_PAYLOAD_URL_LINE
+             UA_SIGNATURE_LINE, version, manifest_sha256);
+    snprintf(state, sizeof(state),
+             "pending_activation=1\n"
+             "staged_manifest=/system/update/staged.ini\n"
+             "payload_cache=/system/update/payload.bin\n"
+             "payload_cache_sha256=%s\n", cache_sha256);
+    set_file(UA_CACHE_PATH, manifest);
+    set_file(UA_STAGE_PATH, manifest);
+    set_file(UA_STATE_PATH, state);
+}
+
+static void set_catalog_update_with_sha256(const char *version,
+                                           const char *sha256_hex) {
+    char manifest[512];
+    snprintf(manifest, sizeof(manifest),
+             "available_version=%s\nchannel=stable\nbranch=main\n"
+             "source=github:henriquefarisco/CapyOS\n"
+             "payload_sha256=%s\n"
+             UA_PAYLOAD_URL_LINE
+             UA_SIGNATURE_LINE, version, sha256_hex);
+    set_file(UA_CACHE_PATH, manifest);
 }
 
 static int test_apply_boot_slot_requires_stage(void) {
@@ -127,15 +181,26 @@ static int test_apply_boot_slot_requires_stage(void) {
     return fails;
 }
 
-static int test_apply_boot_slot_success(void) {
+static int test_direct_apply_refuses_hashed_stage(void) {
+    int fails = 0;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+
+    fails += expect_true(update_agent_poll() >= 0, "poll should succeed");
+    fails += expect_true(update_agent_apply_boot_slot() == -33,
+                         "direct apply should refuse hashed staged updates");
+    return fails;
+}
+
+static int test_apply_verified_success(void) {
     int fails = 0;
     struct boot_slot active;
     setup();
-    arm_staged_update("2.0.0");
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
 
     fails += expect_true(update_agent_poll() >= 0, "poll should succeed");
-    fails += expect_true(update_agent_apply_boot_slot() == 0,
-                         "apply_boot_slot should succeed with armed staged update");
+    fails += expect_true(update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
+                         "verified apply should succeed with matching digest");
 
     fails += expect_true(boot_slot_needs_rollback() != 0,
                          "rollback should be pending after activation");
@@ -149,23 +214,32 @@ static int test_apply_boot_slot_success(void) {
 
 static int test_confirm_health_clears_rollback(void) {
     int fails = 0;
+    struct system_update_status status;
     setup();
-    arm_staged_update("2.0.0");
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
 
     fails += expect_true(update_agent_poll() >= 0, "poll");
-    fails += expect_true(update_agent_apply_boot_slot() == 0, "apply_boot_slot");
+    fails += expect_true(update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
+                         "verified apply");
     fails += expect_true(boot_slot_needs_rollback() != 0, "rollback pending before confirm");
 
     fails += expect_true(update_agent_confirm_health() == 0,
                          "confirm_health should succeed");
     fails += expect_true(boot_slot_needs_rollback() == 0,
                          "rollback should not be pending after confirm_health");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == 0,
+                         "confirm_health success should expose last_result zero");
+    fails += expect_true(strcmp(status.summary,
+                                "boot health confirmed; update committed") == 0,
+                         "confirm_health success summary mismatch");
 
     return fails;
 }
 
 static int test_check_rollback_triggers_rollback(void) {
     int fails = 0;
+    struct system_update_status status;
     setup();
 
     /*
@@ -189,29 +263,34 @@ static int test_check_rollback_triggers_rollback(void) {
                          "check_rollback should return 1 (rollback happened)");
     fails += expect_true(boot_slot_needs_rollback() == 0,
                          "rollback_pending cleared after rollback");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == 1,
+                         "rollback completion should expose last_result one");
+    fails += expect_true(strcmp(status.summary,
+                                "boot rollback completed; staged update cleared") == 0,
+                         "rollback completion summary mismatch");
 
     return fails;
 }
 
 static int test_check_rollback_no_op_when_healthy(void) {
     int fails = 0;
+    struct system_update_status status;
     setup();
     /* No activation, so needs_rollback == 0 */
     fails += expect_true(update_agent_check_rollback() == 0,
                          "check_rollback should return 0 when no rollback needed");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == 0,
+                         "rollback no-op should expose last_result zero");
+    fails += expect_true(strcmp(status.summary, "no boot rollback pending") == 0,
+                         "rollback no-op summary mismatch");
     return fails;
 }
 
 /* M6.4 payload sha256 verification ------------------------------------ */
 
-#define UA_GOOD_SHA256 \
-    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-#define UA_OTHER_SHA256 \
-    "0011223344556677889900112233445566778899001122334455667788990011"
-
-static int test_apply_verified_legacy_path_no_digest(void) {
-    /* When the manifest does NOT declare payload_sha256, the verified
-     * variant must behave exactly like the legacy apply call. */
+static int test_apply_verified_refuses_missing_manifest_digest(void) {
     int fails = 0;
     setup();
     arm_staged_update("2.0.0");
@@ -220,13 +299,14 @@ static int test_apply_verified_legacy_path_no_digest(void) {
         update_agent_staged_requires_payload_verification() == 0,
         "manifest without payload_sha256 reports no verification required");
     fails += expect_true(
-        update_agent_apply_boot_slot_verified(NULL) == 0,
-        "verified apply with NULL digest succeeds when manifest is silent");
+        update_agent_apply_boot_slot_verified(NULL) == -27,
+        "verified apply refuses a staged manifest without payload sha256");
     return fails;
 }
 
 static int test_apply_verified_matching_digest(void) {
     int fails = 0;
+    struct system_update_status status;
     setup();
     arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
 
@@ -237,6 +317,12 @@ static int test_apply_verified_matching_digest(void) {
     fails += expect_true(
         update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
         "verified apply with matching digest succeeds");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == 0,
+                         "verified apply success should expose last_result zero");
+    fails += expect_true(strcmp(status.summary,
+                                "verified staged update applied to boot slot") == 0,
+                         "verified apply success summary mismatch");
 
     /* Case-insensitive comparison: same digest with upper-case hex must also
      * match so manifests in either case are accepted. */
@@ -306,18 +392,73 @@ static int test_apply_verified_malformed_digest_refuses(void) {
     return fails;
 }
 
+static int test_apply_cached_payload_matching_digest(void) {
+    int fails = 0;
+    struct system_update_status status;
+    setup();
+    arm_staged_update_with_sha256_cache("2.0.0", UA_GOOD_SHA256,
+                                        UA_GOOD_SHA256);
+
+    fails += expect_true(update_agent_apply_cached_payload() == 0,
+                         "cached payload apply with matching digest succeeds");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == 0,
+                         "cached apply success should expose last_result zero");
+    fails += expect_true(strcmp(status.summary,
+                                "verified staged update applied to boot slot") == 0,
+                         "cached apply success summary mismatch");
+    return fails;
+}
+
+static int test_apply_cached_payload_missing_cache_refuses(void) {
+    int fails = 0;
+    struct system_update_status status;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+
+    fails += expect_true(update_agent_apply_cached_payload() == -50,
+                         "cached payload apply refuses missing cache digest");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.summary,
+                                "payload cache sha256 missing; refusing cached apply") == 0,
+                         "missing cache apply summary mismatch");
+    return fails;
+}
+
+static int test_apply_cached_payload_catalog_changed_mismatch_refuses(void) {
+    int fails = 0;
+    struct system_update_status status;
+    setup();
+    arm_staged_update_with_sha256_cache("2.0.0", UA_GOOD_SHA256,
+                                        UA_OTHER_SHA256);
+    set_catalog_update_with_sha256("2.1.0", UA_OTHER_SHA256);
+
+    fails += expect_true(update_agent_apply_cached_payload() == -31,
+                         "cached payload apply refuses cache/staged mismatch");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == -31,
+                         "cached mismatch should expose last_result -31");
+    fails += expect_true(strstr(status.summary, "payload sha256 mismatch") != NULL,
+                         "cached mismatch summary mismatch");
+    return fails;
+}
+
 int run_update_transact_tests(void) {
     int fails = 0;
     fails += test_apply_boot_slot_requires_stage();
-    fails += test_apply_boot_slot_success();
+    fails += test_direct_apply_refuses_hashed_stage();
+    fails += test_apply_verified_success();
     fails += test_confirm_health_clears_rollback();
     fails += test_check_rollback_triggers_rollback();
     fails += test_check_rollback_no_op_when_healthy();
-    fails += test_apply_verified_legacy_path_no_digest();
+    fails += test_apply_verified_refuses_missing_manifest_digest();
     fails += test_apply_verified_matching_digest();
     fails += test_apply_verified_mismatched_digest_refuses();
     fails += test_apply_verified_missing_digest_refuses();
     fails += test_apply_verified_malformed_digest_refuses();
+    fails += test_apply_cached_payload_catalog_changed_mismatch_refuses();
+    fails += test_apply_cached_payload_missing_cache_refuses();
+    fails += test_apply_cached_payload_matching_digest();
     if (fails == 0) {
         printf("[tests] update_transact OK\n");
     }

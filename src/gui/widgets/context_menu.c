@@ -43,6 +43,46 @@ static void cm_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
   }
 }
 
+static void cm_fit_text(const struct font *f, const char *src,
+                        uint32_t max_width, char *out, uint32_t out_len) {
+  uint32_t len = 0;
+  uint32_t max_chars = 0;
+  if (!out || out_len == 0u) return;
+  out[0] = '\0';
+  if (!f || !src || max_width == 0u || f->glyph_width == 0u) return;
+  max_chars = max_width / f->glyph_width;
+  if (max_chars == 0u) return;
+  while (src[len]) len++;
+  if (len <= max_chars && len < out_len) {
+    cm_strcpy(out, src, out_len);
+    return;
+  }
+  if (max_chars <= 3u || out_len <= 4u) {
+    uint32_t n = max_chars;
+    if (n >= out_len) n = out_len - 1u;
+    for (uint32_t i = 0; i < n; i++) out[i] = '.';
+    out[n] = '\0';
+    return;
+  }
+  {
+    uint32_t copy = max_chars - 3u;
+    if (copy > out_len - 4u) copy = out_len - 4u;
+    for (uint32_t i = 0; i < copy; i++) out[i] = src[i];
+    out[copy] = '.';
+    out[copy + 1u] = '.';
+    out[copy + 2u] = '.';
+    out[copy + 3u] = '\0';
+  }
+}
+
+static void cm_draw_fit(struct gui_surface *s, const struct font *f,
+                        int32_t x, int32_t y, uint32_t max_width,
+                        const char *text, uint32_t color) {
+  char fitted[CONTEXT_MENU_LABEL_MAX];
+  cm_fit_text(f, text, max_width, fitted, sizeof(fitted));
+  if (fitted[0]) font_draw_string(s, f, x, y, fitted, color);
+}
+
 /* Mistura "para cima" cada canal RGB; identico ao tb_lighten do
  * taskbar mas duplicado deliberadamente para manter o modulo
  * autocontido (sem cross-include). */
@@ -75,10 +115,10 @@ static void cm_paint(struct gui_window *win) {
   const struct gui_theme_palette *theme = compositor_theme();
   const struct font *f = font_default();
   struct gui_surface *s = &win->surface;
-  if (!f) return;
 
   /* Background; cantos arredondados sao mascarados pelo compositor. */
   cm_fill_rect(s, 0, 0, s->width, s->height, theme->window_bg);
+  if (!f) return;
 
   int32_t ey = 2;
   for (uint32_t i = 0; i < g_ctx.count; i++) {
@@ -97,7 +137,9 @@ static void cm_paint(struct gui_window *win) {
         cm_fill_rect(s, 2, ey, 3, row_h, theme->accent);
         txt_color = theme->accent;
       }
-      font_draw_string(s, f, 12, ey + 4, g_ctx.items[i].label, txt_color);
+      cm_draw_fit(s, f, 12, ey + 4,
+                  (s->width > 24u) ? s->width - 24u : 0u,
+                  g_ctx.items[i].label, txt_color);
     }
     ey += (int32_t)row_h;
   }
@@ -123,15 +165,22 @@ int context_menu_show(const struct context_menu_item *items, uint32_t count,
 
   uint32_t h = cm_total_height();
   uint32_t w = CONTEXT_MENU_WIDTH;
+  uint32_t screen_w = 0u;
+  uint32_t screen_h = 0u;
 
-  /* Posicao: clampa para caber na tela (assumindo que
-   * compositor_window_at usa as dimensoes da tela; se nao tiver
-   * acessor publico, deixamos passar e o compositor clipa pixels
-   * fora-da-tela via put_pixel). */
   int32_t x = screen_x;
   int32_t y = screen_y;
+  compositor_screen_size(&screen_w, &screen_h);
   if (x < 0) x = 0;
   if (y < 0) y = 0;
+  if (screen_w > 0u) {
+    int32_t max_x = (screen_w > w) ? (int32_t)(screen_w - w) : 0;
+    if (x > max_x) x = max_x;
+  }
+  if (screen_h > 0u) {
+    int32_t max_y = (screen_h > h) ? (int32_t)(screen_h - h) : 0;
+    if (y > max_y) y = max_y;
+  }
 
   g_ctx.win = compositor_create_window("Context", x, y, w, h);
   if (!g_ctx.win) {

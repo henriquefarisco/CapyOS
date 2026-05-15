@@ -35,8 +35,6 @@
 #include "stub_arch_sched_hooks.h"
 #include "stub_context_switch.h"
 
-extern void task_set_current(struct task *t);
-
 static int tests_run = 0;
 static int tests_passed = 0;
 
@@ -571,6 +569,40 @@ static void test_scheduler_set_running_toggles_flag(void) {
     scheduler_set_running(0);
 }
 
+static void test_scheduler_yield_from_adopted_kernel_task_switches_to_engine(void) {
+    reset_world();
+    struct task *desktop = task_create("desktop-main", noop_entry,
+                                       (void *)0, TASK_PRIORITY_NORMAL);
+    struct task *engine = task_create("user-app", noop_entry,
+                                      (void *)0, TASK_PRIORITY_NORMAL);
+    scheduler_add(desktop);
+    desktop->state = TASK_STATE_RUNNING;
+    task_set_current(desktop);
+    scheduler_set_running(1);
+    scheduler_add(engine);
+
+    uint32_t cs_before = stub_context_switch_log_count();
+    scheduler_yield();
+
+    TEST("desktop scheduler_yield switches to user-app task");
+    if (stub_context_switch_log_count() == cs_before + 1u &&
+        task_current() == engine &&
+        desktop->state == TASK_STATE_READY &&
+        engine->state == TASK_STATE_RUNNING) PASS();
+    else FAIL("desktop did not yield into engine");
+
+    scheduler_yield();
+
+    TEST("engine scheduler_yield switches back to adopted desktop task");
+    if (stub_context_switch_log_count() == cs_before + 2u &&
+        task_current() == desktop &&
+        desktop->state == TASK_STATE_RUNNING &&
+        engine->state == TASK_STATE_READY) PASS();
+    else FAIL("engine did not yield back to desktop");
+
+    scheduler_set_running(0);
+}
+
 int test_context_switch_run(void) {
     printf("[test_context_switch]\n");
     tests_run = 0;
@@ -596,6 +628,7 @@ int test_context_switch_run(void) {
     test_arch_hook_does_not_fire_on_no_op_schedule();
     test_arch_hook_fires_before_context_switch();
     test_scheduler_set_running_toggles_flag();
+    test_scheduler_yield_from_adopted_kernel_task_switches_to_engine();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;
 }

@@ -25,6 +25,8 @@ struct settings_app {
   enum settings_tab active_tab;
   struct widget *tab_buttons[SETTINGS_TAB_COUNT];
   struct widget *content_panel;
+  char status_text[96];
+  uint32_t status_color;
 };
 
 void settings_open(void);

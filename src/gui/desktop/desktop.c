@@ -1,4 +1,5 @@
 #include "gui/desktop.h"
+#include "gui/desktop_runtime.h"
 #include "gui/compositor.h"
 #include "gui/taskbar.h"
 #include "gui/terminal.h"
@@ -16,12 +17,12 @@
 #include "apps/text_editor.h"
 #include "apps/settings.h"
 #include "apps/task_manager.h"
-#include "apps/browser_app.h"
 #include "gui/context_menu.h"
 #include "gui/desktop_icons.h"
 #include "gui/inline_prompt.h"
 #include "auth/session.h"
 #include "lang/app_language.h"
+#include "net/stack.h"
 #include "arch/x86_64/apic.h"
 #include <stddef.h>
 
@@ -45,6 +46,29 @@ static void desktop_shell_clear(void) {
   if (g_shell_output_term) {
     terminal_clear(g_shell_output_term);
   }
+}
+
+static void desktop_terminal_prompt(struct terminal *term) {
+  char prompt[128];
+  struct session_context *sess = kernel_desktop_shell_session();
+  const struct user_record *user = sess ? session_user(sess) : NULL;
+  const char *cwd = sess ? session_cwd(sess) : "/";
+  if (!term) return;
+  shell_build_prompt(user, g_menu_desktop ? g_menu_desktop->settings : NULL,
+                     cwd, prompt, sizeof(prompt));
+  terminal_write_string(term, prompt[0] ? prompt : "$ ");
+}
+
+static void desktop_shell_begin_terminal_output(struct terminal *term) {
+  g_shell_output_term = term;
+  shell_set_output_callbacks(desktop_shell_write, desktop_shell_putc);
+  shell_set_clear_callback(desktop_shell_clear);
+}
+
+static void desktop_shell_end_terminal_output(void) {
+  shell_set_output_callbacks(NULL, NULL);
+  shell_set_clear_callback(NULL);
+  g_shell_output_term = NULL;
 }
 
 static void desktop_terminal_paint(struct gui_window *win) {
@@ -91,8 +115,85 @@ static void desktop_terminal_on_close(struct gui_window *win) {
   }
   terminal_set_output_callback(&g_desktop_terminal, NULL, NULL);
   g_desktop_terminal.window = NULL;
-  if (g_shell_output_term == &g_desktop_terminal) g_shell_output_term = NULL;
+  if (g_shell_output_term == &g_desktop_terminal) desktop_shell_end_terminal_output();
   g_terminal_open = 0;
+}
+
+static int desktop_update_tray(struct desktop_session *ds) {
+  char tray[TASKBAR_TRAY_TEXT_MAX];
+  struct net_stack_status ns;
+  if (!ds) return 0;
+  if (net_stack_status(&ns) == 0) {
+    kstrcpy(tray, sizeof(tray), ns.ready ? "net-on" :
+            (ns.runtime_supported ? "net-wait" : "net-off"));
+  } else {
+    kstrcpy(tray, sizeof(tray), "net-off");
+  }
+  return taskbar_update_tray(&ds->taskbar, tray);
+}
+
+static int desktop_overlay_active(struct desktop_session *ds) {
+  return inline_prompt_is_open() || context_menu_is_open() ||
+         (ds && ds->taskbar.menu_open);
+}
+
+static void desktop_sample_dispatcher_health(struct desktop_session *ds) {
+  if (!ds) return;
+  if (gui_window_dispatcher_health_snapshot(&ds->dispatcher_health)) {
+    ds->dispatcher_health_samples++;
+  }
+}
+
+int desktop_session_health_snapshot(const struct desktop_session *ds,
+                                    struct desktop_session_health *out) {
+  struct gui_window *focused = NULL;
+  if (!ds || !out) return 0;
+  focused = compositor_focused_window();
+  out->active = ds->active ? 1 : 0;
+  out->framebuffer_ready = ds->framebuffer ? 1 : 0;
+  out->dimensions_ready = (ds->screen_w > 0u && ds->screen_h > 0u &&
+                           ds->pitch > 0u) ? 1 : 0;
+  out->mouse_initialized = ds->mouse_initialized ? 1 : 0;
+  out->cursor_valid = ds->cursor_valid ? 1 : 0;
+  out->taskbar_ready = ds->taskbar.window ? 1 : 0;
+  out->overlay_active = inline_prompt_is_open() || context_menu_is_open() ||
+                        ds->taskbar.menu_open;
+  out->taskbar_menu_open = ds->taskbar.menu_open ? 1 : 0;
+  out->window_manager_drag_active =
+      (ds->wm.drag_mode != WM_DRAG_NONE) ? 1 : 0;
+  out->focused_window_id = focused ? focused->id : 0;
+  out->dispatcher_health_samples = ds->dispatcher_health_samples;
+  out->dispatcher = ds->dispatcher_health;
+  out->dispatcher_health_ready =
+      gui_window_dispatcher_health_snapshot(&out->dispatcher) ? 1 : 0;
+  return 1;
+}
+
+int desktop_session_smoke_readiness_snapshot(
+    const struct desktop_session *ds,
+    struct desktop_session_smoke_readiness *out) {
+  struct desktop_session_health health;
+  if (!out) return 0;
+  if (!desktop_session_health_snapshot(ds, &health)) {
+    return desktop_session_smoke_readiness_from_health(NULL, out);
+  }
+  return desktop_session_smoke_readiness_from_health(&health, out);
+}
+
+static int desktop_handle_overlay_escape(struct desktop_session *ds,
+                                         uint32_t keycode, char ch) {
+  int closed = 0;
+  if (ch != 0x1B && keycode != 0x1B) return 0;
+  if (context_menu_is_open()) {
+    context_menu_close();
+    closed = 1;
+  }
+  if (ds && ds->taskbar.menu_open) {
+    taskbar_toggle_menu(&ds->taskbar);
+    closed = 1;
+  }
+  if (closed) compositor_invalidate_all();
+  return closed;
 }
 
 static void desktop_apply_theme(struct desktop_session *ds) {
@@ -170,18 +271,9 @@ static void menu_action_task_manager(void *user_data) {
   register_focused_in_taskbar("Task Manager", "Tasks");
 }
 
-/* F3.3f (2026-05-01): spawn ring-3 capybrowser + chrome runtime
- * + a compositor window that blits `chrome.last_frame`. The
- * whole lifecycle (spawn, initial navigate, close) lives in
- * `browser_app`; this menu entry is the single user-visible
- * entrypoint. */
-static void menu_action_browser(void *user_data) {
-  (void)user_data;
-  browser_app_open();
-  if (browser_app_is_open()) {
-    register_focused_in_taskbar("CapyBrowser", "Browser");
-  }
-}
+/* Browser menu entry erradicada na sessao 6 (2026-05-05). O
+ * capybrowser (engine custom) foi removido; o sucessor sera um
+ * port do Firefox. Ver docs/plans/active/firefox-port-roadmap.md. */
 
 static void menu_action_logout(void *user_data) {
   (void)user_data;
@@ -243,21 +335,18 @@ void desktop_init(struct desktop_session *ds, uint32_t *fb, uint32_t w,
    * idioma da sessao ativa. Note: o taskbar copia a string ao
    * adicionar -- mudancas de idioma em runtime so afetam a UI
    * apos relogin (re-init do desktop). */
-  taskbar_add_menu_entry(&ds->taskbar,
-                         APP_T("Terminal", "Terminal", "Terminal"),
-                         menu_action_terminal, ds);
-  taskbar_add_menu_entry(&ds->taskbar,
-                         APP_T("Arquivos", "Files", "Archivos"),
-                         menu_action_file_manager, ds);
-  taskbar_add_menu_entry(&ds->taskbar,
-                         APP_T("Editor", "Editor", "Editor"),
-                         menu_action_text_editor, ds);
-  taskbar_add_menu_entry(&ds->taskbar,
-                         APP_T("Calculadora", "Calculator", "Calculadora"),
-                         menu_action_calculator, ds);
-  taskbar_add_menu_entry(&ds->taskbar,
-                         APP_T("Navegador", "Browser", "Navegador"),
-                         menu_action_browser, ds);
+  taskbar_add_menu_entry_pinned(&ds->taskbar,
+                                APP_T("Terminal", "Terminal", "Terminal"),
+                                menu_action_terminal, ds);
+  taskbar_add_menu_entry_pinned(&ds->taskbar,
+                                APP_T("Arquivos", "Files", "Archivos"),
+                                menu_action_file_manager, ds);
+  taskbar_add_menu_entry_pinned(&ds->taskbar,
+                                APP_T("Editor", "Editor", "Editor"),
+                                menu_action_text_editor, ds);
+  taskbar_add_menu_entry_pinned(&ds->taskbar,
+                                APP_T("Calculadora", "Calculator", "Calculadora"),
+                                menu_action_calculator, ds);
   taskbar_add_menu_separator(&ds->taskbar);
   taskbar_add_menu_entry(&ds->taskbar,
                          APP_T("Configuracoes", "Settings", "Ajustes"),
@@ -276,6 +365,8 @@ void desktop_init(struct desktop_session *ds, uint32_t *fb, uint32_t w,
                          APP_T("Desligar", "Shutdown", "Apagar"),
                          menu_action_shutdown, ds);
 
+  desktop_update_tray(ds);
+
   mouse_set_bounds((int32_t)w, (int32_t)h);
   mouse_set_position((int32_t)(w / 2), (int32_t)(h / 2));
   ds->mouse_initialized = 1;
@@ -289,7 +380,7 @@ static void desktop_terminal_command(struct terminal *term, const char *data,
   if (!term || !data) return;
 
   if (data[0] == '\0') {
-    terminal_write_string(term, "$ ");
+    desktop_terminal_prompt(term);
     return;
   }
 
@@ -298,29 +389,37 @@ static void desktop_terminal_command(struct terminal *term, const char *data,
   line[len] = '\0';
 
   if (kstreq(line, "exit")) {
-    extern void desktop_stop(void);
     desktop_stop();
     return;
   }
 
   if (kstreq(line, "clear")) {
     terminal_clear(term);
-    terminal_write_string(term, "$ ");
+    desktop_terminal_prompt(term);
     return;
   }
 
-  extern int kernel_desktop_dispatch_shell_command(char *line);
-  g_shell_output_term = term;
-  shell_set_output_callbacks(desktop_shell_write, desktop_shell_putc);
-  shell_set_clear_callback(desktop_shell_clear);
+  desktop_shell_begin_terminal_output(term);
   if (!kernel_desktop_dispatch_shell_command(line)) {
+    desktop_shell_end_terminal_output();
     terminal_write_string(term, "[erro] comando desconhecido\n");
     terminal_write_string(term, "Use help-any para listar comandos.\n");
+    desktop_terminal_prompt(term);
+    return;
   }
-  shell_set_output_callbacks(NULL, NULL);
-  shell_set_clear_callback(NULL);
-  g_shell_output_term = NULL;
-  terminal_write_string(term, "$ ");
+  desktop_shell_end_terminal_output();
+  if (kernel_desktop_shell_should_stop()) {
+    desktop_stop();
+    return;
+  }
+  desktop_terminal_prompt(term);
+}
+
+void desktop_open_terminal_here(const char *target_path) {
+  struct session_context *sess = kernel_desktop_shell_session();
+  if (!sess) sess = session_active();
+  if (target_path && target_path[0] && sess) session_set_cwd(sess, target_path);
+  if (g_menu_desktop) desktop_open_terminal(g_menu_desktop);
 }
 
 void desktop_open_terminal(struct desktop_session *ds) {
@@ -361,8 +460,9 @@ void desktop_open_terminal(struct desktop_session *ds) {
                        compositor_theme()->terminal_bg);
     terminal_clear(&g_desktop_terminal);
     terminal_write_string(&g_desktop_terminal, "CapyOS Desktop Terminal\n");
-    terminal_write_string(&g_desktop_terminal, "Type 'exit' to return to CLI.\n\n");
-    terminal_write_string(&g_desktop_terminal, "$ ");
+    terminal_write_string(&g_desktop_terminal, "Type 'exit' to return to CLI.\n");
+    terminal_write_string(&g_desktop_terminal, "Type 'bye' to log out.\n\n");
+    desktop_terminal_prompt(&g_desktop_terminal);
     terminal_set_output_callback(&g_desktop_terminal, desktop_terminal_command, NULL);
     win->user_data = &g_desktop_terminal;
     win->on_paint = desktop_terminal_paint;
@@ -382,6 +482,14 @@ void desktop_handle_input(struct desktop_session *ds, uint32_t keycode,
   struct gui_window *focused = NULL;
   if (!ds) return;
 
+  if (keycode == KEY_SUPER) {
+    if (inline_prompt_is_open()) return;
+    if (context_menu_is_open()) context_menu_close();
+    taskbar_toggle_menu(&ds->taskbar);
+    compositor_invalidate_all();
+    return;
+  }
+
   /* Etapa UX W7-ish (2026-05-03): inline_prompt absorve teclas
    * antes do dispatch normal (Enter/Esc/Backspace/printable). Util
    * para Rename/New no desktop_icons + file_manager. */
@@ -391,16 +499,28 @@ void desktop_handle_input(struct desktop_session *ds, uint32_t keycode,
       return;
     }
   }
+  if (desktop_handle_overlay_escape(ds, keycode, ch)) return;
+  if (ds->taskbar.menu_open &&
+      taskbar_handle_menu_key(&ds->taskbar, keycode, ch)) {
+    return;
+  }
 
   focused = compositor_focused_window();
-  if (focused && focused->on_key) {
+  {
+    struct gui_event ev;
+    uint32_t wid = focused ? focused->id : 0;
     /* For printable characters pass the ASCII value as keycode so that
      * window handlers can treat it uniformly.  For special keys (arrows,
      * function keys etc.) keycode already carries the KEY_* constant and
      * ch is 0, so we pass keycode directly. */
     uint32_t kc = ch ? (uint32_t)(uint8_t)ch : keycode;
-    focused->on_key(focused, kc, 0);
-    compositor_invalidate(focused->id);
+    ev.type = GUI_EVENT_KEY_DOWN;
+    ev.window_id = wid;
+    ev.key.keycode = kc;
+    ev.key.modifiers = 0;
+    ev.key.ch = ch;
+    ev.timestamp = 0;
+    (void)gui_window_dispatch_event(&ev);
   }
 }
 
@@ -418,37 +538,38 @@ int desktop_handle_mouse(struct desktop_session *ds) {
     struct mouse_event mev;
     while (mouse_poll(&mev) == 0) {
       struct mouse_state ms;
-      struct gui_event ev;
-      kmemzero(&ev, sizeof(ev));
       mouse_get_state(&ms);
-      ev.timestamp = 0;
       handled = 1;
 
       if (mev.dx != 0 || mev.dy != 0) {
-        ev.type = GUI_EVENT_MOUSE_MOVE;
-        ev.mouse.x = ms.x;
-        ev.mouse.y = ms.y;
-        ev.mouse.dx = mev.dx;
-        ev.mouse.dy = mev.dy;
-        ev.mouse.buttons = mev.buttons;
-        gui_event_push(&ev);
         wm_handle_mouse_move(&ds->wm, ms.x, ms.y);
+        if ((mev.buttons & MOUSE_BUTTON_LEFT) &&
+            !desktop_overlay_active(ds) &&
+            ds->wm.drag_mode == WM_DRAG_NONE) {
+          desktop_icons_handle_drag_move(ms.x, ms.y, mev.buttons);
+        }
         /* Etapa UX W7-ish (2026-05-03): hover dispatch.
          *   - Se um context_menu esta aberto, ele tem prioridade
          *     (atualiza hover sobre o popup).
          *   - Senao, se o menu start esta aberto, atualiza hover_entry.
          *   - Senao, encaminha pro on_hover da janela sob o cursor.
          * Coordenadas locais sao calculadas pela window. */
-        if (context_menu_is_open()) {
-          context_menu_handle_hover(ms.x, ms.y);
-        } else if (ds->taskbar.menu_open) {
-          taskbar_handle_menu_hover(&ds->taskbar, ms.x, ms.y);
-        } else {
-          struct gui_window *hov = compositor_window_at(ms.x, ms.y);
-          if (hov && hov->on_hover &&
-              ms.y >= hov->frame.y &&
-              ms.y < hov->frame.y + (int32_t)hov->frame.height) {
-            hov->on_hover(hov, ms.x - hov->frame.x, ms.y - hov->frame.y);
+        if (!inline_prompt_is_open()) {
+          if (context_menu_is_open()) {
+            context_menu_handle_hover(ms.x, ms.y);
+          } else if (ds->taskbar.menu_open) {
+            taskbar_handle_menu_hover(&ds->taskbar, ms.x, ms.y);
+          } else {
+            struct gui_event ev;
+            ev.type = GUI_EVENT_MOUSE_MOVE;
+            ev.window_id = 0;
+            ev.mouse.x = ms.x;
+            ev.mouse.y = ms.y;
+            ev.mouse.dx = mev.dx;
+            ev.mouse.dy = mev.dy;
+            ev.mouse.buttons = mev.buttons;
+            ev.timestamp = 0;
+            (void)gui_window_dispatch_event(&ev);
           }
         }
         /* Etapa F4 cursors (2026-05-03): cursor kind dispatch
@@ -459,7 +580,9 @@ int desktop_handle_mouse(struct desktop_session *ds) {
          *   4. Default ARROW.
          * O compositor evita re-render se o kind nao mudou. */
         {
-          struct gui_window *cwin = compositor_window_at(ms.x, ms.y);
+          int overlay_active = desktop_overlay_active(ds);
+          struct gui_window *cwin = overlay_active ? NULL
+                                                   : compositor_window_at(ms.x, ms.y);
           enum comp_cursor_kind ck = COMP_CURSOR_ARROW;
           if (cwin) {
             int32_t fx0 = cwin->frame.x;
@@ -489,14 +612,9 @@ int desktop_handle_mouse(struct desktop_session *ds) {
 
       if (mev.changed & MOUSE_BUTTON_LEFT) {
         struct gui_window *win = NULL;
-        ev.type = (mev.buttons & MOUSE_BUTTON_LEFT) ? GUI_EVENT_MOUSE_DOWN
-                                                    : GUI_EVENT_MOUSE_UP;
-        ev.mouse.x = ms.x;
-        ev.mouse.y = ms.y;
-        ev.mouse.buttons = mev.buttons;
-        gui_event_push(&ev);
+        int left_down = (mev.buttons & MOUSE_BUTTON_LEFT) ? 1 : 0;
 
-        if (ev.type == GUI_EVENT_MOUSE_DOWN) {
+        if (left_down) {
           /* Etapa UX W7-ish (2026-05-03): inline_prompt tem maior
            * prioridade. Click fora do popup -> cancela; click
            * dentro -> mantem (sem agir). */
@@ -552,12 +670,19 @@ int desktop_handle_mouse(struct desktop_session *ds) {
                 compositor_focus_window(win->id);
                 taskbar_set_focused(&ds->taskbar, win->id);
                 wm_handle_mouse_down(&ds->wm, ms.x, ms.y, mev.buttons);
-                if (win->on_mouse &&
+                if (ds->wm.drag_mode == WM_DRAG_NONE &&
                     ms.y >= win->frame.y &&
                     ms.y < win->frame.y + (int32_t)win->frame.height) {
-                  win->on_mouse(win, ms.x - win->frame.x, ms.y - win->frame.y,
-                                mev.buttons);
-                  compositor_invalidate(win->id);
+                  struct gui_event ev;
+                  ev.type = GUI_EVENT_MOUSE_DOWN;
+                  ev.window_id = win->id;
+                  ev.mouse.x = ms.x;
+                  ev.mouse.y = ms.y;
+                  ev.mouse.dx = 0;
+                  ev.mouse.dy = 0;
+                  ev.mouse.buttons = mev.buttons;
+                  ev.timestamp = 0;
+                  (void)gui_window_dispatch_event(&ev);
                 }
               }
             } else {
@@ -569,52 +694,82 @@ int desktop_handle_mouse(struct desktop_session *ds) {
             }
           }
         } else {
+          int was_wm_drag = (ds->wm.drag_mode != WM_DRAG_NONE);
           wm_handle_mouse_up(&ds->wm);
+          if (!was_wm_drag && !desktop_overlay_active(ds)) {
+            struct gui_event ev;
+            ev.type = GUI_EVENT_MOUSE_UP;
+            ev.window_id = 0;
+            ev.mouse.x = ms.x;
+            ev.mouse.y = ms.y;
+            ev.mouse.dx = 0;
+            ev.mouse.dy = 0;
+            ev.mouse.buttons = mev.buttons;
+            ev.timestamp = 0;
+            (void)gui_window_dispatch_event(&ev);
+            (void)desktop_icons_handle_mouse_up(ms.x, ms.y);
+          }
         }
       }
 
       /* Etapa UX W7-ish (2026-05-03): right-click dispatch.
        *   - Fecha popups abertos antes (start menu / context menu)
        *     para que o novo right-click sempre crie um menu fresco.
-       *   - Janela sob o cursor com `on_context_menu` -> chama com
-       *     coords locais.
+       *   - Janela sob o cursor com `on_context_menu` -> dispatcher central.
        *   - Sem janela (desktop vazio) e fora do taskbar -> roteia
        *     pra desktop_icons (Open/Rename/Delete sobre icone, ou
        *     New File/Folder/Refresh sobre area vazia). */
       if ((mev.changed & MOUSE_BUTTON_RIGHT) &&
           (mev.buttons & MOUSE_BUTTON_RIGHT)) {
-        struct gui_window *rwin = NULL;
-        if (context_menu_is_open()) context_menu_close();
-        if (ds->taskbar.menu_open) {
-          taskbar_toggle_menu(&ds->taskbar);
-        }
-        rwin = compositor_window_at(ms.x, ms.y);
-        if (rwin && rwin->on_context_menu &&
-            ms.y >= rwin->frame.y &&
-            ms.y < rwin->frame.y + (int32_t)rwin->frame.height) {
-          rwin->on_context_menu(rwin, ms.x - rwin->frame.x,
-                                 ms.y - rwin->frame.y);
-        } else if (!rwin && ms.y < (int32_t)(ds->screen_h - TASKBAR_HEIGHT)) {
-          desktop_icons_handle_context(ms.x, ms.y);
+        if (inline_prompt_is_open()) {
+          if (context_menu_is_open()) context_menu_close();
+          if (ds->taskbar.menu_open) {
+            taskbar_toggle_menu(&ds->taskbar);
+          }
+          if (inline_prompt_handle_click(ms.x, ms.y)) {
+            compositor_invalidate_all();
+          }
+        } else {
+          struct gui_window *rwin = NULL;
+          if (context_menu_is_open()) context_menu_close();
+          if (ds->taskbar.menu_open) {
+            taskbar_toggle_menu(&ds->taskbar);
+          }
+          rwin = compositor_window_at(ms.x, ms.y);
+          if (rwin && rwin->on_context_menu &&
+              ms.y >= rwin->frame.y &&
+              ms.y < rwin->frame.y + (int32_t)rwin->frame.height) {
+            struct gui_event ev;
+            ev.type = GUI_EVENT_MOUSE_DOWN;
+            ev.window_id = rwin->id;
+            ev.mouse.x = ms.x;
+            ev.mouse.y = ms.y;
+            ev.mouse.dx = 0;
+            ev.mouse.dy = 0;
+            ev.mouse.buttons = mev.buttons;
+            ev.timestamp = 0;
+            (void)gui_window_dispatch_event(&ev);
+          } else if (!rwin && ms.y < (int32_t)(ds->screen_h - TASKBAR_HEIGHT)) {
+            desktop_icons_handle_context(ms.x, ms.y);
+          }
         }
       }
 
       if (mev.dz != 0) {
-        struct gui_window *scroll_win = NULL;
-        ev.type = GUI_EVENT_MOUSE_SCROLL;
-        ev.mouse.x = ms.x;
-        ev.mouse.y = ms.y;
-        ev.mouse.dy = (int16_t)mev.dz;
-        gui_event_push(&ev);
-
-        scroll_win = compositor_focused_window();
-        if (scroll_win && scroll_win->on_scroll) {
-          scroll_win->on_scroll(scroll_win, (int32_t)mev.dz);
-          compositor_invalidate(scroll_win->id);
-        } else if (ds->active_terminal &&
-                   ds->active_terminal->window == scroll_win) {
-          terminal_handle_mouse_scroll(ds->active_terminal, mev.dz);
-          compositor_invalidate(ds->active_terminal->window->id);
+        if (ds->taskbar.menu_open &&
+            taskbar_handle_menu_scroll(&ds->taskbar, ms.x, ms.y, mev.dz)) {
+        } else if (!desktop_overlay_active(ds)) {
+          struct gui_event ev;
+          struct gui_window *scroll_win = compositor_focused_window();
+          ev.type = GUI_EVENT_MOUSE_SCROLL;
+          ev.window_id = scroll_win ? scroll_win->id : 0;
+          ev.mouse.x = ms.x;
+          ev.mouse.y = ms.y;
+          ev.mouse.dx = 0;
+          ev.mouse.dy = (int16_t)mev.dz;
+          ev.mouse.buttons = mev.buttons;
+          ev.timestamp = 0;
+          (void)gui_window_dispatch_event(&ev);
         }
       }
     }
@@ -635,13 +790,17 @@ int desktop_run_frame(struct desktop_session *ds) {
   }
 
   if (desktop_handle_mouse(ds)) work_done = 1;
+  desktop_sample_dispatcher_health(ds);
 
   {
     struct rtc_time rtc;
     char clock_buf[16];
+    int clock_changed = 0;
     rtc_read(&rtc);
     rtc_format_time(&rtc, clock_buf, sizeof(clock_buf));
-    if (taskbar_update_clock(&ds->taskbar, clock_buf)) work_done = 1;
+    clock_changed = taskbar_update_clock(&ds->taskbar, clock_buf);
+    if (clock_changed) work_done = 1;
+    if (clock_changed && desktop_update_tray(ds)) work_done = 1;
   }
 
   /* Post-M5 W2: Task Manager auto-refresh tick. Cheap when the
@@ -651,19 +810,29 @@ int desktop_run_frame(struct desktop_session *ds) {
    * exited) reflect in the row list within ~0.5s on real hw. */
   task_manager_tick();
 
-  /* F3.3f: ring-3 browser per-frame tick. Drena eventos IPC do
-   * engine (NAVIGATE stages, fetch requests, frames), blita o
-   * framebuffer BGRA na superficie da janela quando chega
-   * EVENT_FRAME e dispara PING/kill do watchdog. No-op quando
-   * a janela do browser esta fechada. */
-  browser_app_tick(apic_timer_ticks());
-
-  compositor_render();
+  /* Browser per-frame tick erradicado na sessao 6 (2026-05-05).
+   * Quando o port do Firefox aterrissar, o tick voltara como uma
+   * chamada para `firefox_app_tick(...)`. */
 
   {
     struct mouse_state ms;
+    int scene_dirty = compositor_needs_render();
+    int cursor_changed = 0;
     mouse_get_state(&ms);
-    compositor_render_cursor(ms.x, ms.y);
+    cursor_changed = !ds->cursor_valid || ds->cursor_x != ms.x ||
+                     ds->cursor_y != ms.y ||
+                     compositor_cursor_needs_render(ms.x, ms.y);
+    if (scene_dirty) {
+      compositor_render();
+      work_done = 1;
+    }
+    if (scene_dirty || cursor_changed) {
+      compositor_render_cursor(ms.x, ms.y);
+      ds->cursor_valid = 1;
+      ds->cursor_x = ms.x;
+      ds->cursor_y = ms.y;
+      if (cursor_changed) work_done = 1;
+    }
   }
 
   return work_done;
@@ -676,6 +845,7 @@ void desktop_shutdown(struct desktop_session *ds) {
   ds->taskbar.menu_popup = NULL;
   ds->taskbar.menu_open = 0;
   ds->taskbar.menu_entry_count = 0;
+  ds->taskbar.recent_count = 0;
   ds->taskbar.item_count = 0;
   ds->taskbar.window = NULL;
   ds->active_terminal = NULL;

@@ -279,6 +279,8 @@ static int shell_bootstrap_filesystem(
                              ? state->handoff->boot_language
                              : "en";
       int splash = system_installer_splash_enabled();
+      uint32_t admin_uid = USER_UID_FIRST_REGULAR;
+      uint32_t admin_gid = USER_GID_FIRST_REGULAR;
       if (!hostname || !hostname[0]) hostname = "capyos-node";
       if (!theme || !theme[0]) theme = "capyos";
       if (!admin_user || !admin_user[0]) admin_user = "admin";
@@ -296,9 +298,9 @@ static int shell_bootstrap_filesystem(
         }
         admin_home[base] = '\0';
       }
-      if (user_home_prepare(admin_home, 1000, 1000) != 0) {
+      if (userdb_next_ids(&admin_uid, &admin_gid) != 0) {
         io_print(io,
-                 "[setup] Aviso: falha ao preparar diretorio pessoal do "
+                 "[setup] Aviso: falha ao reservar UID/GID do "
                  "administrador.\n");
         provision_ok = 0;
       }
@@ -307,8 +309,10 @@ static int shell_bootstrap_filesystem(
         struct user_record admin;
         struct user_record verify_admin;
         int admin_record_ready = 0;
+        user_record_clear(&admin);
+        user_record_clear(&verify_admin);
         if (userdb_find(admin_user, &admin) == 0) {
-          if (admin.home[0]) {
+          if (admin.home[0] == '/') {
             local_copy(admin_home, sizeof(admin_home), admin.home);
           }
           if (user_home_prepare(admin_home, admin.uid, admin.gid) != 0) {
@@ -322,8 +326,14 @@ static int shell_bootstrap_filesystem(
                      "reutilizando registro atual.\n");
             admin_record_ready = 1;
           }
+        } else if (user_home_prepare(admin_home, admin_uid, admin_gid) != 0) {
+          io_print(io,
+                   "[setup] Aviso: falha ao preparar diretorio pessoal do "
+                   "administrador.\n");
+          provision_ok = 0;
         } else if (user_record_init(admin_user, admin_pass, "admin",
-                                    1000, 1000, admin_home, &admin) == 0) {
+                                    admin_uid, admin_gid, admin_home,
+                                    &admin) == 0) {
           if (userdb_add(&admin) == 0) {
             io_print(io,
                      "[setup] Usuario administrador criado com sucesso.\n");
@@ -365,6 +375,8 @@ static int shell_bootstrap_filesystem(
                      "administrador.\n");
           }
         }
+        user_record_clear(&admin);
+        user_record_clear(&verify_admin);
         system_installer_clear_password();
       } else if (!admin_pass || !admin_pass[0]) {
         io_print(io,

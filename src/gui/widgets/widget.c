@@ -127,6 +127,39 @@ static void draw_border(struct gui_surface *s, int32_t x, int32_t y,
   fill_rect(s, x + (int32_t)w - width, y, width, h, color);
 }
 
+static void fit_text_for_width(const struct font *f, const char *src,
+                               uint32_t max_width, char *out,
+                               size_t out_len) {
+  size_t len = 0;
+  size_t max_chars = 0;
+  if (!out || out_len == 0) return;
+  out[0] = '\0';
+  if (!f || !src || max_width == 0 || f->glyph_width == 0) return;
+  max_chars = max_width / f->glyph_width;
+  if (max_chars == 0) return;
+  while (src[len]) len++;
+  if (len <= max_chars) {
+    kstrcpy(out, out_len, src);
+    return;
+  }
+  if (max_chars <= 3) {
+    size_t n = max_chars;
+    if (n >= out_len) n = out_len - 1;
+    for (size_t i = 0; i < n; i++) out[i] = '.';
+    out[n] = '\0';
+    return;
+  }
+  {
+    size_t copy = max_chars - 3;
+    if (copy > out_len - 4) copy = out_len - 4;
+    for (size_t i = 0; i < copy; i++) out[i] = src[i];
+    out[copy] = '.';
+    out[copy + 1] = '.';
+    out[copy + 2] = '.';
+    out[copy + 3] = '\0';
+  }
+}
+
 void widget_paint(struct widget *w, struct gui_surface *surface) {
   if (!w || !surface || !w->visible) return;
 
@@ -144,17 +177,25 @@ void widget_paint(struct widget *w, struct gui_surface *surface) {
 
   const struct font *f = font_default();
   if (f && w->text[0]) {
+    char fitted[WIDGET_MAX_TEXT];
+    uint32_t text_area = 0;
     int32_t tx = x + w->style.padding + w->style.border_width;
     int32_t ty = y + (int32_t)(bh / 2) - (int32_t)(f->glyph_height / 2);
+    const char *label = w->text;
+    if (bw > (uint32_t)(2 * w->style.border_width + 4)) {
+      text_area = bw - (uint32_t)(2 * w->style.border_width + 4);
+    }
+    fit_text_for_width(f, w->text, text_area, fitted, sizeof(fitted));
+    if (fitted[0]) label = fitted;
     if (w->type == WIDGET_BUTTON) {
-      uint32_t tw = font_string_width(f, w->text);
+      uint32_t tw = font_string_width(f, label);
       if (tw < bw) {
         tx = x + (int32_t)((bw - tw) / 2);
       } else {
         tx = x + 2;
       }
     }
-    font_draw_string(surface, f, tx, ty, w->text, w->style.text_color);
+    font_draw_string(surface, f, tx, ty, label, w->style.text_color);
   }
 
   if (w->type == WIDGET_CHECKBOX) {

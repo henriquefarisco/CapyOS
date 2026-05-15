@@ -1,5 +1,7 @@
 #include "internal/kernel_volume_runtime_internal.h"
 
+#include "security/volume_provider.h"
+
 static int fs_read_text_file(const char *path, char *out, size_t out_size) {
   if (!path || !out || out_size < 2) return -1;
   struct file *f = vfs_open(path, VFS_OPEN_READ);
@@ -18,6 +20,14 @@ int compute_volume_key_hash(const char *normalized_key,
   sha256_init(&ctx);
   sha256_update(&ctx, (const uint8_t *)normalized_key, local_strlen(normalized_key));
   sha256_final(&ctx, out_hash);
+  /* The volume password digest is the actual secret used to gate
+   * decryption of the encrypted root volume. After `sha256_final`,
+   * `ctx.state[]` mirrors `out_hash` and `ctx.data[]` carries the
+   * padded last block derived from the user's normalized password.
+   * Wiping the context before return prevents the freed stack frame
+   * from retaining either the hash or material derived from the
+   * password itself across to other kernel paths. */
+  sha256_clear(&ctx);
   return 0;
 }
 
@@ -55,30 +65,29 @@ int append_key_candidate(const char **list, size_t *count, size_t cap,
 struct block_device *open_crypt_volume_with_password(
     const struct x64_kernel_volume_runtime_state *state,
     struct block_device *data_dev, const char *password) {
-  uint8_t key1[CRYPT_KEY_SIZE];
-  uint8_t key2[CRYPT_KEY_SIZE];
   struct block_device *crypt_dev = NULL;
   if (!state || !data_dev || !password || !password[0] || !state->disk_salt ||
       state->disk_salt_size == 0) {
     return NULL;
   }
-  secure_memzero(key1, sizeof(key1));
-  secure_memzero(key2, sizeof(key2));
-  crypt_derive_xts_keys(password, state->disk_salt, state->disk_salt_size,
-                        state->kdf_iterations, key1, key2);
-  dbg_puts("[kvr] kdf salt=");
-  dbg_hex32(dbg_be32_local(state->disk_salt));
-  dbg_puts(" iter=");
-  dbg_hex32(state->kdf_iterations);
-  dbg_puts(" key1=");
-  dbg_hex32(dbg_be32_local(key1));
-  dbg_puts(" key2=");
-  dbg_hex32(dbg_be32_local(key2));
-  dbg_putc('\n');
-  crypt_dev = crypt_init(data_dev, key1, key2);
-  secure_memzero(key1, sizeof(key1));
-  secure_memzero(key2, sizeof(key2));
-  if (!crypt_dev || crypt_dev == data_dev) return NULL;
+  /*
+   * alpha.222: try the on-disk volume header first; fall back to the
+   * legacy PBKDF2 + g_disk_salt path when no header is present. The
+   * provider wipes its scratch key material on both paths; we do not
+   * see the derived keys here. The two-tier flow makes legacy volumes
+   * (installed pre-alpha.222) keep mounting after the kernel upgrade
+   * while every fresh install lands on the modern, per-volume-salt
+   * Argon2id path. See `include/security/volume_provider.h` for the
+   * detailed threat model.
+   */
+  if (volume_provider_open(data_dev, password, state->disk_salt,
+                           state->disk_salt_size, state->kdf_iterations,
+                           &crypt_dev) != 0) {
+    return NULL;
+  }
+  if (!crypt_dev || crypt_dev == data_dev) {
+    return NULL;
+  }
   return crypt_dev;
 }
 

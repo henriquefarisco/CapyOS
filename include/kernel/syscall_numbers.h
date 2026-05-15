@@ -62,6 +62,20 @@
 #define SYS_SETGID    38
 #define SYS_TIME      39
 #define SYS_IOCTL     40
-#define SYSCALL_COUNT 41
+/* F4 seção c parte 3/3 (2026-05-08): hostname -> IPv4 resolver.
+ * Userland passes a NUL-terminated DNS name (`rdi`), a pointer to
+ * a `uint32_t *out_ip` (`rsi`) populated host-order on success, and
+ * a flags slot (`rdx`, reserved, must be 0). Returns 0 on hit, -1
+ * on miss / invalid args / no installed resolver backend.
+ *
+ * Backend dispatch lives in `src/kernel/syscall_net.c`; production
+ * routes to the in-kernel `dns_cache_lookup` from
+ * `src/net/services/dns_cache.c`. A miss is NOT auto-promoted to
+ * an active DNS query in this iteration: the cache must already
+ * contain the entry (seeded via `dns_cache_insert` from a future
+ * resolver service or via the initial DHCP exchange). The active
+ * resolver lands together with the libcapy-net DNS client. */
+#define SYS_DNS_RESOLVE 41
+#define SYSCALL_COUNT   42
 
 #endif /* KERNEL_SYSCALL_NUMBERS_H */

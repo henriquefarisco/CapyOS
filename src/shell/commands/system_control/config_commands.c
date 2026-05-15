@@ -71,6 +71,11 @@ static const char *theme_name_or_null(const char *name) {
   if (shell_string_equal(name, "capyos")) {
     return "capyos";
   }
+  if (shell_string_equal(name, "classic-modern") ||
+      shell_string_equal(name, "classic") ||
+      shell_string_equal(name, "ubuntu7")) {
+    return "classic-modern";
+  }
   if (shell_string_equal(name, "ocean")) {
     return "ocean";
   }
@@ -155,6 +160,10 @@ int cmd_config_theme(struct shell_context *ctx, int argc, char **argv) {
                                     " - capyos : padrao verde/escuro do sistema\n",
                                     " - capyos : default green/dark system theme\n",
                                     " - capyos : tema verde/oscuro predeterminado del sistema\n"));
+    shell_print(localization_select(language,
+                                    " - classic-modern : visual Ubuntu/Windows 7\n",
+                                    " - classic-modern : Ubuntu/Windows 7 look\n",
+                                    " - classic-modern : visual Ubuntu/Windows 7\n"));
     shell_print(localization_select(language,
                                     " - ocean  : variante azul/ciano\n",
                                     " - ocean  : blue/cyan variant\n",

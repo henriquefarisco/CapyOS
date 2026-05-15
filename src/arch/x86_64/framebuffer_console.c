@@ -21,6 +21,7 @@
 fbcon_t g_con;
 int g_serial_mirror = 0;
 int g_com1_ready = 0;
+void login_render_window_layout(void);
 
 static int fbcon_range_ok(uint64_t addr, uint64_t size) {
   if (addr == 0 || size == 0) {
@@ -84,6 +85,18 @@ void system_platform_apply_theme(const char *theme) {
     g_theme_splash_bar_border = 0x00213A31;
     g_theme_splash_bar_bg = 0x0012221C;
     g_theme_splash_bar_fill = 0x0000C364;
+    return;
+  }
+
+  if (streq(theme, "classic-modern") || streq(theme, "classic") ||
+      streq(theme, "ubuntu7")) {
+    g_con.bg = 0x000F172A;
+    g_con.fg = 0x00F8FAFC;
+    g_theme_splash_bg = 0x002D123A;
+    g_theme_splash_icon = 0x00E95420;
+    g_theme_splash_bar_border = 0x0060A5FA;
+    g_theme_splash_bar_bg = 0x00101824;
+    g_theme_splash_bar_fill = 0x00E95420;
     return;
   }
 
@@ -220,6 +233,93 @@ void fbcon_putch_at(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg) {
   fbcon_putch_px(x, y, c);
   g_con.fg = saved_fg;
   g_con.bg = saved_bg;
+}
+
+static void login_window_layout_text(uint32_t x, uint32_t y, const char *text,
+                                     uint32_t fg, uint32_t bg) {
+  uint32_t i = 0;
+  if (!text) {
+    return;
+  }
+  while (text[i] && x + (i + 1u) * CELL_W <= g_con.width) {
+    fbcon_putch_at(x + i * CELL_W, y, text[i], fg, bg);
+    ++i;
+  }
+}
+
+void login_render_window_layout(void) {
+  uint32_t panel_w = g_con.width / 2u;
+  uint32_t panel_h = g_con.height / 3u;
+  uint32_t panel_x = 0;
+  uint32_t panel_y = 0;
+  uint32_t content_x = 0;
+  uint32_t content_y = 0;
+  uint32_t content_w = 0;
+  uint32_t input_x = 0;
+  uint32_t input_y = 0;
+  uint32_t input_w = 0;
+  const uint32_t border = 0x0000C364;
+  const uint32_t panel = 0x0013221C;
+  const uint32_t title = 0x000A3A29;
+  const uint32_t input = 0x00081218;
+  const uint32_t text = 0x00F0F0F0;
+  const uint32_t dim = 0x0098A7A0;
+
+  if (!g_con.fb || g_con.width < 320u || g_con.height < 240u) {
+    return;
+  }
+  if (panel_w < 260u) {
+    panel_w = 260u;
+  }
+  if (panel_w > 640u) {
+    panel_w = 640u;
+  }
+  if (panel_h < 140u) {
+    panel_h = 140u;
+  }
+  if (panel_h > 480u) {
+    panel_h = 480u;
+  }
+  if (panel_w >= g_con.width || panel_h >= g_con.height) {
+    return;
+  }
+
+  panel_x = (g_con.width - panel_w) / 2u;
+  panel_y = (g_con.height - panel_h) / 2u;
+  content_x = panel_x + 2u;
+  content_y = panel_y + 20u;
+  content_w = panel_w - 4u;
+
+  fbcon_fill_rect_px(panel_x, panel_y, panel_w, panel_h, border);
+  fbcon_fill_rect_px(content_x, content_y, content_w, panel_h - 22u, panel);
+  fbcon_fill_rect_px(panel_x + 2u, panel_y + 2u, panel_w - 4u, 18u, title);
+
+  login_window_layout_text(content_x + 16u, panel_y + 5u, "CapyOS", text,
+                           title);
+  login_window_layout_text(content_x + 16u, content_y + 24u, "Loginwindow",
+                           text, panel);
+  login_window_layout_text(content_x + 16u, content_y + 24u + CELL_H + 6u,
+                           "Text login remains authoritative", dim, panel);
+
+  g_con.col = 0;
+  g_con.row = (panel_y + panel_h + CELL_H - 1u) / CELL_H;
+  if (g_con.row >= g_con.rows) {
+    g_con.row = g_con.rows - 1u;
+  }
+
+  if (content_w <= 48u) {
+    return;
+  }
+  input_x = content_x + 24u;
+  input_y = content_y + 24u + 2u * CELL_H + 24u;
+  input_w = content_w - 48u;
+  if (input_y + 28u >= panel_y + panel_h) {
+    return;
+  }
+  fbcon_fill_rect_px(input_x, input_y, input_w, 28u, border);
+  fbcon_fill_rect_px(input_x + 2u, input_y + 2u, input_w - 4u, 24u, input);
+  login_window_layout_text(input_x + 10u, input_y + 6u, "password reserved",
+                           dim, input);
 }
 
 /* ── visual muting helpers ───────────────────────────────────────────── */

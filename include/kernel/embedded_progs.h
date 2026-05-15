@@ -19,7 +19,10 @@
  *   "/bin/hello"        -> userland/bin/hello/hello.elf
  *   "/bin/exectarget"   -> userland/bin/exectarget/exectarget.elf
  *   "/bin/capysh"       -> userland/bin/capysh/capysh.elf
- *   "/bin/capybrowser"  -> userland/bin/capybrowser/capybrowser.elf  (F3.3b)
+ *
+ * (Sessao 6, 2026-05-05: `/bin/capybrowser` removido junto com o
+ * navegador legacy. Sera substituido por `/bin/firefox` em uma
+ * fase futura -- ver docs/plans/active/firefox-port-roadmap.md.)
  *
  * Adding a binary:
  *

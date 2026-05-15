@@ -47,6 +47,8 @@ struct x64_input_runtime {
   int native_confirmed;
   int firmware_retired;
   int shift_active;
+  int ctrl_active;
+  int alt_active;
   int ps2_extended_prefix;
   int hyperv_extended_prefix;
   char dead_accent;

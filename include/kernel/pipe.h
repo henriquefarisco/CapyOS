@@ -15,6 +15,10 @@
  * fds (PIPE_MAX < 256 obrigatorio). */
 #define PIPE_BUF_SIZE (64u * 1024u)
 #define PIPE_MAX 32
+#define PIPE_POLLIN  0x00000001u
+#define PIPE_POLLOUT 0x00000004u
+#define PIPE_POLLERR 0x00000008u
+#define PIPE_POLLHUP 0x00000010u
 
 struct pipe {
   uint8_t buffer[PIPE_BUF_SIZE];
@@ -32,5 +36,7 @@ int pipe_read(int pipe_id, void *buf, size_t len);
 int pipe_write(int pipe_id, const void *buf, size_t len);
 int pipe_close_read(int pipe_id);
 int pipe_close_write(int pipe_id);
+int pipe_read_end_open(int pipe_id);
+uint32_t pipe_poll_events(int fd);
 
 #endif /* KERNEL_PIPE_H */

@@ -288,11 +288,20 @@ def login(
     )
     if allow_desktop:
         found = session.wait_for_any(
-            [f"{user}@smoke-node>~> ", "[desktop] session started"],
+            [
+                f"{user}@smoke-node>~> ",
+                "[smoke] mouse-events ready",
+                "[smoke] gui-session ready",
+                "[desktop] session started",
+            ],
             timeout=timeout,
             start_at=mk,
         )
-        return "desktop" if found == "[desktop] session started" else "shell"
+        return "desktop" if found in (
+            "[smoke] mouse-events ready",
+            "[smoke] gui-session ready",
+            "[desktop] session started",
+        ) else "shell"
     session.wait_for(f"{user}@smoke-node>~> ", timeout=timeout, start_at=mk)
     return "shell"
 

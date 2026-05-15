@@ -389,21 +389,6 @@ int system_login(struct session_context *session,
           system_ui_text(language, SYS_UI_LOGIN_CREDENTIALS_REQUIRED));
       continue;
     }
-    if (!auth_policy_check_allowed(username)) {
-      memory_zero(password, sizeof(password));
-      config_print_line(localization_select(
-          language,
-          "Conta temporariamente bloqueada. Tente novamente mais tarde.",
-          "Account temporarily locked. Try again later.",
-          "Cuenta temporalmente bloqueada. Intenta nuevamente mas tarde."));
-      char locked_msg[160];
-      locked_msg[0] = '\0';
-      config_buffer_append(locked_msg, sizeof(locked_msg),
-                           "Login bloqueado por politica: usuario=");
-      config_buffer_append(locked_msg, sizeof(locked_msg), username);
-      config_log_event(locked_msg);
-      continue;
-    }
     char attempt_msg[160];
     attempt_msg[0] = '\0';
     config_buffer_append(attempt_msg, sizeof(attempt_msg),
@@ -411,9 +396,9 @@ int system_login(struct session_context *session,
     config_buffer_append(attempt_msg, sizeof(attempt_msg), username);
     config_log_event(attempt_msg);
 
-    if (userdb_authenticate(username, password, &record) == 0) {
-      memory_zero(password, sizeof(password));
-      auth_policy_record_success(username);
+    int auth_rc = userdb_authenticate_with_policy(username, password, &record);
+    memory_zero(password, sizeof(password));
+    if (auth_rc == USERDB_AUTH_OK) {
       session_begin(session, &record, language);
       char welcome[160];
       language = session_language(session);
@@ -436,8 +421,20 @@ int system_login(struct session_context *session,
       config_log_process_finalize_success(proc_login);
       return 0;
     }
-    memory_zero(password, sizeof(password));
-    auth_policy_record_failure(username);
+    if (auth_rc == USERDB_AUTH_LOCKED) {
+      config_print_line(localization_select(
+          language,
+          "Conta temporariamente bloqueada. Tente novamente mais tarde.",
+          "Account temporarily locked. Try again later.",
+          "Cuenta temporalmente bloqueada. Intenta nuevamente mas tarde."));
+      char locked_msg[160];
+      locked_msg[0] = '\0';
+      config_buffer_append(locked_msg, sizeof(locked_msg),
+                           "Login bloqueado por politica: usuario=");
+      config_buffer_append(locked_msg, sizeof(locked_msg), username);
+      config_log_event(locked_msg);
+      continue;
+    }
     config_print_line(system_ui_text(language, SYS_UI_LOGIN_INVALID));
     char fail_msg[160];
     fail_msg[0] = '\0';

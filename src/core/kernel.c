@@ -17,6 +17,7 @@
 #include "fs/ramdisk.h"
 #include "fs/storage/partition.h"
 #include "fs/vfs.h"
+#include "kernel/stdin_buf.h"
 #include "memory/kmem.h"
 #include "security/crypt.h"
 #include "shell/shell.h"
@@ -376,12 +377,14 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
       // Fluxo de volume cifrado existente: obrigatorio autenticar, sem formatar
       vga_write("Volume cifrado detectado. Informe a senha do CAPYFS.\n");
       while (!fs_ready) {
+        stdin_buf_discard_all();
         tty_set_prompt("Senha: ");
         tty_set_echo_mask('*');
         tty_show_prompt();
         size_t pass_len = tty_readline(line, sizeof(line));
         tty_set_echo(1);
         tty_set_echo_mask('\0');
+        stdin_buf_discard_all();
         if (pass_len == 0) {
           vga_write("Senha obrigatoria.\n");
           continue;

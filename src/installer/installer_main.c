@@ -24,6 +24,7 @@
 #include "boot/boot_writer.h"
 
 #include "core/system_init.h"
+#include "kernel/stdin_buf.h"
 
 // Capy Guided Installation System - instalador dedicado
 
@@ -422,22 +423,26 @@ void kernel_main(uint32_t mb_magic, uint32_t mb_info_ptr) {
   char pass1[128], pass2[128];
   while (1) {
     vga_write("Defina a senha do volume cifrado CAPYFS.\n");
+    stdin_buf_discard_all();
     tty_set_prompt("Nova senha: ");
     tty_set_echo_mask('*');
     tty_show_prompt();
     size_t l1 = tty_readline(pass1, sizeof(pass1));
     tty_set_echo(1);
     tty_set_echo_mask('\0');
+    stdin_buf_discard_all();
     if (l1 == 0) {
       vga_write("Senha vazia nao permitida.\n");
       continue;
     }
     tty_set_prompt("Confirmar senha: ");
+    stdin_buf_discard_all();
     tty_set_echo_mask('*');
     tty_show_prompt();
     size_t l2 = tty_readline(pass2, sizeof(pass2));
     tty_set_echo(1);
     tty_set_echo_mask('\0');
+    stdin_buf_discard_all();
     if (l2 != l1) {
       vga_write("Senhas nao conferem.\n");
       continue;

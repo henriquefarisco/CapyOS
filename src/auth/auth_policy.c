@@ -62,6 +62,22 @@ void auth_policy_set_config(const struct auth_policy_config *cfg) {
   }
 }
 
+/* Read-only lookup. Returns NULL when the username is not tracked. Used
+ * by every entry point that does not need to create a new tracking slot
+ * (`check_allowed`, `is_locked`, `record_success`, `unlock`). Keeping
+ * these paths non-allocating closes a denial-of-security where an
+ * attacker could exhaust `g_attempts[AUTH_MAX_TRACKED_USERS]` by simply
+ * probing many forged usernames via `check_allowed`, blocking lockouts
+ * from being installed for legitimate users. */
+static struct auth_attempt *find_existing(const char *username) {
+  if (!username) return NULL;
+  for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
+    if (g_attempts[i].username[0] && ap_streq(g_attempts[i].username, username))
+      return &g_attempts[i];
+  }
+  return NULL;
+}
+
 static struct auth_attempt *find_or_alloc(const char *username) {
   if (!username) return NULL;
   for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
@@ -74,12 +90,37 @@ static struct auth_attempt *find_or_alloc(const char *username) {
       return &g_attempts[i];
     }
   }
-  return NULL;
+
+  /* Table full. Reclaim naturally-expired lockouts first, then evict
+   * the least-recently-active non-locked entry. Locked entries are
+   * sticky -- evicting one would let an attacker reset their own
+   * lockout by spraying fresh usernames, so we refuse (return NULL)
+   * when every slot is currently locked. */
+  int lru_idx = -1;
+  uint64_t lru_tick = ~(uint64_t)0;
+  uint64_t now = ap_ticks();
+  for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
+    if (g_attempts[i].locked && now >= g_attempts[i].lockout_until_tick) {
+      g_attempts[i].locked = 0;
+      g_attempts[i].failed_count = 0;
+    }
+    if (g_attempts[i].locked) continue;
+    if (g_attempts[i].last_fail_tick < lru_tick) {
+      lru_tick = g_attempts[i].last_fail_tick;
+      lru_idx = i;
+    }
+  }
+  if (lru_idx < 0) {
+    return NULL;
+  }
+  ap_memset(&g_attempts[lru_idx], 0, sizeof(g_attempts[lru_idx]));
+  ap_strcpy(g_attempts[lru_idx].username, username, AUTH_USERNAME_MAX);
+  return &g_attempts[lru_idx];
 }
 
 int auth_policy_check_allowed(const char *username) {
   if (!g_initialized || !username) return 1;
-  struct auth_attempt *a = find_or_alloc(username);
+  struct auth_attempt *a = find_existing(username);
   if (!a) return 1;
 
   if (a->locked) {
@@ -96,12 +137,15 @@ int auth_policy_check_allowed(const char *username) {
 
 void auth_policy_record_success(const char *username) {
   if (!g_initialized || !username) return;
-  struct auth_attempt *a = find_or_alloc(username);
+  if (g_config.audit_enabled)
+    klog(KLOG_INFO, "[auth] Login success.");
+  /* Use the non-allocating lookup so a fresh successful login does not
+   * pollute the tracking table with a new entry. The function only
+   * needs to clear failure state when an entry already exists. */
+  struct auth_attempt *a = find_existing(username);
   if (!a) return;
   a->failed_count = 0;
   a->locked = 0;
-  if (g_config.audit_enabled)
-    klog(KLOG_INFO, "[auth] Login success.");
 }
 
 void auth_policy_record_failure(const char *username) {
@@ -124,7 +168,7 @@ void auth_policy_record_failure(const char *username) {
 
 int auth_policy_is_locked(const char *username) {
   if (!g_initialized || !username) return 0;
-  struct auth_attempt *a = find_or_alloc(username);
+  struct auth_attempt *a = find_existing(username);
   if (!a) return 0;
   if (a->locked) {
     uint64_t now = ap_ticks();
@@ -140,7 +184,7 @@ int auth_policy_is_locked(const char *username) {
 
 void auth_policy_unlock(const char *username) {
   if (!g_initialized || !username) return;
-  struct auth_attempt *a = find_or_alloc(username);
+  struct auth_attempt *a = find_existing(username);
   if (a) { a->locked = 0; a->failed_count = 0; }
 }
 
@@ -178,19 +222,59 @@ static void ap_print_u32(void (*print)(const char *), uint32_t v) {
   buf[p] = 0; print(buf);
 }
 
+uint32_t auth_policy_tracked_count(void) {
+  uint32_t count = 0;
+  for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
+    if (g_attempts[i].username[0]) count++;
+  }
+  return count;
+}
+
+uint32_t auth_policy_locked_count(void) {
+  uint32_t count = 0;
+  for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
+    if (g_attempts[i].username[0] && g_attempts[i].locked) count++;
+  }
+  return count;
+}
+
+#if defined(UNIT_TEST)
+int auth_policy_is_tracked(const char *username) {
+  return find_existing(username) != NULL ? 1 : 0;
+}
+#endif
+
 void auth_policy_status(void (*print)(const char *)) {
+  /*
+   * PRIVACY: This function used to iterate over every tracked
+   * `g_attempts[i]` slot and print the `username` of each user with at
+   * least one failed login, alongside their failure count and lockout
+   * state. It is reachable from the shell `auth-status` command (see
+   * `src/shell/commands/extended.c::cmd_auth_status`), which has NO
+   * privilege check today, so any local shell session — including
+   * non-admin users and guests — could enumerate:
+   *   - the list of every account that ever failed a login on this
+   *     machine (user enumeration);
+   *   - the exact failure count for each (timing/strategy signal);
+   *   - which accounts are currently locked out (lets an attacker
+   *     wait for the lockout window to lapse before resuming
+   *     credential stuffing against a specific target).
+   * That is a PII/security disclosure regardless of how few users a
+   * single machine has. The remediation collapses the per-account
+   * detail into aggregate counters that carry no identifying
+   * information. Internal callers that need to assert specific
+   * tracking state (unit tests) use `auth_policy_is_tracked` instead,
+   * which is only exposed under `UNIT_TEST` builds.
+   */
   if (!print) return;
   print("Auth policy: max_attempts=");
   ap_print_u32(print, g_config.max_attempts);
   print(" min_password_length=");
   ap_print_u32(print, g_config.min_password_length);
   print(" audit="); print(g_config.audit_enabled ? "on" : "off");
-  print("\nTracked accounts:\n");
-  for (int i = 0; i < AUTH_MAX_TRACKED_USERS; i++) {
-    if (!g_attempts[i].username[0]) continue;
-    print("  "); print(g_attempts[i].username);
-    print(" fails="); ap_print_u32(print, g_attempts[i].failed_count);
-    print(g_attempts[i].locked ? " LOCKED" : " ok");
-    print("\n");
-  }
+  print("\nTracked accounts: ");
+  ap_print_u32(print, auth_policy_tracked_count());
+  print(" (locked: ");
+  ap_print_u32(print, auth_policy_locked_count());
+  print(")\n");
 }

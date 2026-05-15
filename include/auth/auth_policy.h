@@ -35,4 +35,19 @@ void auth_policy_unlock(const char *username);
 int auth_policy_validate_password(const char *password, const char **reason);
 void auth_policy_status(void (*print)(const char *));
 
+/* Aggregate counters used by the privacy-preserving status output and
+ * by callers (tests, debug consoles) that need a non-identifying view
+ * of the in-memory tracking table. Neither counter discloses any
+ * username. */
+uint32_t auth_policy_tracked_count(void);
+uint32_t auth_policy_locked_count(void);
+
+#if defined(UNIT_TEST)
+/* Test-only hook. Returns 1 if the supplied username currently has a
+ * tracking slot allocated in `g_attempts`, 0 otherwise. Not exposed in
+ * production builds so the privacy posture of `auth_policy_status` is
+ * not bypassed via this entry point from shells/services. */
+int auth_policy_is_tracked(const char *username);
+#endif
+
 #endif /* CORE_AUTH_POLICY_H */

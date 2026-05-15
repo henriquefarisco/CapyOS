@@ -27,6 +27,8 @@
 #define KEY_F10         0x99
 #define KEY_F11         0x9A
 #define KEY_F12         0x9B
+#define KEY_SUPER       0x9C
+#define KEY_TTY_FALLBACK 0x9D
 
 struct keyboard_layout {
     const char *name;

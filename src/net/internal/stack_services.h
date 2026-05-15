@@ -35,8 +35,11 @@ struct net_dns_state {
   uint8_t waiting_reply;
   uint8_t response_ready;
   uint8_t response_failed;
+  uint8_t response_is_negative;
   uint16_t query_id;
   uint32_t answer_ip;
+  uint32_t answer_ttl;
+  uint32_t answer_negative_ttl;
 };
 
 typedef int (*net_service_send_ipv4_fn)(uint8_t protocol, uint32_t dst_ip,

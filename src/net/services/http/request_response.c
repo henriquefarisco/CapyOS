@@ -40,8 +40,9 @@ int http_request(const struct http_request *req, struct http_response *resp) {
   http_memset(resp, 0, sizeof(*resp));
 
   if (dns_cache_lookup(req->host, &ip) != 0) {
-    if (net_stack_dns_resolve(req->host, 3000, &ip) != 0) return http_fail(HTTP_ERR_DNS);
-    dns_cache_insert(req->host, ip, 300);
+    uint32_t resolved_ttl = 0;
+    if (net_stack_dns_resolve(req->host, 3000, &ip, &resolved_ttl, NULL) != 0) return http_fail(HTTP_ERR_DNS);
+    dns_cache_insert(req->host, ip, resolved_ttl);
   }
 
   http_transport_reset(&transport);

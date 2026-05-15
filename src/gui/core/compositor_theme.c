@@ -23,6 +23,30 @@ void compositor_apply_theme(const char *theme, uint32_t screen_w,
                             uint32_t screen_h) {
   uint8_t scale = (screen_w >= 1280 || screen_h >= 900) ? 2 : 1;
 
+  if (theme && (comp_streq(theme, "classic-modern") ||
+                comp_streq(theme, "classic") ||
+                comp_streq(theme, "ubuntu7"))) {
+    g_theme.wallpaper = 0x002D123A;
+    g_theme.window_bg = 0x001B2535;
+    g_theme.window_border = 0x0060A5FA;
+    g_theme.title_active = 0x00E95420;
+    g_theme.title_inactive = 0x003B4A60;
+    g_theme.text = 0x00F8FAFC;
+    g_theme.text_muted = 0x00CBD5E1;
+    g_theme.accent = 0x00E95420;
+    g_theme.accent_alt = 0x003B82F6;
+    g_theme.accent_text = 0x00FFFFFF;
+    g_theme.taskbar_bg = 0x00101824;
+    g_theme.taskbar_fg = 0x00F8FAFC;
+    g_theme.taskbar_highlight = 0x003B82F6;
+    g_theme.terminal_bg = 0x000F172A;
+    g_theme.terminal_fg = 0x00F8FAFC;
+    g_theme.ui_scale = scale;
+    comp_wallpaper = g_theme.wallpaper;
+    comp_request_scene_redraw();
+    return;
+  }
+
   if (theme && comp_streq(theme, "ocean")) {
     g_theme.wallpaper = 0x00041024;
     g_theme.window_bg = 0x000C213A;

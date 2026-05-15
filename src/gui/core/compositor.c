@@ -20,6 +20,7 @@
  */
 
 #include "internal/compositor_internal.h"
+#include "gui/event.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 
@@ -102,6 +103,15 @@ int comp_window_pixel_inside(uint32_t col, uint32_t row,
   return (dx * dx + dy * dy) < (int32_t)(r * r);
 }
 
+int compositor_needs_render(void) {
+  return comp_scene_dirty ? 1 : 0;
+}
+
+int compositor_cursor_needs_render(int32_t x, int32_t y) {
+  if (!comp_cursor_valid) return 1;
+  return (comp_cursor_x != x || comp_cursor_y != y) ? 1 : 0;
+}
+
 void comp_request_scene_redraw(void) {
   comp_scene_dirty = 1;
   comp_full_presented = 0;
@@ -165,6 +175,7 @@ static void reset_window_slot(struct gui_window *win) {
   win->saved_frame.width = 0;
   win->saved_frame.height = 0;
   win->loading = 0;
+  win->capture_mouse = 0;
   win->corner_radius = 0;
   win->bg_color = 0;
   win->border_color = 0;
@@ -172,9 +183,13 @@ static void reset_window_slot(struct gui_window *win) {
   win->on_paint = NULL;
   win->on_close = NULL;
   win->on_resize = NULL;
+  win->on_focus = NULL;
+  win->on_blur = NULL;
   win->on_key = NULL;
+  win->on_key_up = NULL;
   win->on_mouse = NULL;
   win->on_scroll = NULL;
+  win->on_timer = NULL;
   win->on_hover = NULL;
   win->on_context_menu = NULL;
   win->on_cursor_hint = NULL;
@@ -295,9 +310,13 @@ struct gui_window *compositor_create_window(const char *title, int32_t x,
       win->on_paint = NULL;
       win->on_close = NULL;
       win->on_resize = NULL;
+      win->on_focus = NULL;
+      win->on_blur = NULL;
       win->on_key = NULL;
+      win->on_key_up = NULL;
       win->on_mouse = NULL;
       win->on_scroll = NULL;
+      win->on_timer = NULL;
       win->on_hover = NULL;
       win->on_context_menu = NULL;
       win->on_cursor_hint = NULL;
@@ -311,6 +330,9 @@ struct gui_window *compositor_create_window(const char *title, int32_t x,
 void compositor_destroy_window(uint32_t window_id) {
   struct gui_window *win = comp_find_window(window_id);
   if (!win) return;
+  gui_event_discard_window(window_id);
+  if (win->focused) gui_event_push_window_blur(window_id, 0);
+  gui_event_push_window_close(window_id, 0);
   /* Notify the app so it can clean up widgets and state. This is a
    * safety net — the desktop click handler already calls on_close
    * before reaching here, but direct callers might skip it. */
@@ -352,13 +374,19 @@ void compositor_hide_window(uint32_t window_id) {
   if (!win || !win->visible) return;
   win->visible = 0;
   if (comp_stats.visible_count > 0) comp_stats.visible_count--;
+  if (win->focused) {
+    win->focused = 0;
+    gui_event_push_window_blur(window_id, 0);
+  }
   comp_request_scene_redraw();
 }
 
 void compositor_focus_window(uint32_t window_id) {
   struct gui_window *target = comp_find_window(window_id);
+  uint32_t previous_focused = 0;
   uint32_t top_z = 0;
   if (!target) return;
+  if (!target->visible || target->minimized) return;
 
   for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
     if (!comp_windows[i].id || window_is_overlay(&comp_windows[i])) continue;
@@ -375,9 +403,20 @@ void compositor_focus_window(uint32_t window_id) {
   }
 
   for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
+    if (comp_windows[i].id && comp_windows[i].focused) {
+      previous_focused = comp_windows[i].id;
+      break;
+    }
+  }
+
+  for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
     comp_windows[i].focused = (comp_windows[i].id == window_id) ? 1 : 0;
   }
 
+  if (previous_focused != window_id) {
+    if (previous_focused) gui_event_push_window_blur(previous_focused, 0);
+    gui_event_push_window_focus(window_id, 0);
+  }
   comp_request_scene_redraw();
 }
 
@@ -405,6 +444,7 @@ void compositor_resize_window(uint32_t window_id, uint32_t w, uint32_t h) {
   win->surface.height = h;
   win->surface.pitch = w * 4;
   win->surface.pixels = pixels;
+  gui_event_push_window_resize(window_id, (int32_t)w, (int32_t)h, 0);
   if (win->on_resize) win->on_resize(win, w, h);
   comp_request_scene_redraw();
 }
@@ -418,6 +458,7 @@ void compositor_set_title(uint32_t window_id, const char *title) {
 
 void compositor_invalidate(uint32_t window_id) {
   if (!comp_find_window(window_id)) return;
+  gui_event_push_paint(window_id, 0);
   comp_request_scene_redraw();
 }
 
@@ -461,8 +502,21 @@ struct gui_window *compositor_focused_window(void) {
   return NULL;
 }
 
+struct gui_window *compositor_get_window(uint32_t window_id) {
+  return comp_find_window(window_id);
+}
+
+int compositor_window_exists(uint32_t window_id) {
+  return comp_find_window(window_id) ? 1 : 0;
+}
+
 void compositor_stats_get(struct compositor_stats *out) {
   if (out) *out = comp_stats;
+}
+
+void compositor_screen_size(uint32_t *out_w, uint32_t *out_h) {
+  if (out_w) *out_w = comp_width;
+  if (out_h) *out_h = comp_height;
 }
 
 void compositor_set_wallpaper(uint32_t color) {
@@ -521,6 +575,10 @@ void compositor_minimize_window(uint32_t window_id) {
   if (win->visible) {
     win->visible = 0;
     if (comp_stats.visible_count > 0) comp_stats.visible_count--;
+  }
+  if (win->focused) {
+    win->focused = 0;
+    gui_event_push_window_blur(window_id, 0);
   }
   comp_request_scene_redraw();
 }

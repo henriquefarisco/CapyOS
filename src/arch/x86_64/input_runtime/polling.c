@@ -29,6 +29,21 @@ static int emit_arrow_escape(struct x64_input_runtime *runtime, uint8_t sc,
   return 1;
 }
 
+static int emit_super_key(uint8_t sc, char *out_char) {
+  if (!out_char) return 0;
+  if (sc != 0x5Bu && sc != 0x5Cu) return 0;
+  *out_char = (char)KEY_SUPER;
+  return 1;
+}
+
+static int emit_tty_fallback_key(const struct x64_input_runtime *runtime,
+                                 uint8_t sc, int extended, char *out_char) {
+  if (!runtime || !out_char || extended || sc != 0x3Bu) return 0;
+  if (!runtime->ctrl_active || !runtime->alt_active) return 0;
+  *out_char = (char)KEY_TTY_FALLBACK;
+  return 1;
+}
+
 int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
   char c = 0;
   uint8_t sc = 0;
@@ -84,10 +99,26 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
           runtime->shift_active = key_break ? 0 : 1;
           break;
         }
+        if (sc == 0x1D) {
+          runtime->ctrl_active = key_break ? 0 : 1;
+          break;
+        }
+        if (!was_extended && sc == 0x38) {
+          runtime->alt_active = key_break ? 0 : 1;
+          break;
+        }
         if (key_break) {
           break;
         }
-        /* Arrow keys on extended scancodes → VT100 escape sequence. */
+        if (emit_tty_fallback_key(runtime, sc, was_extended, out_char)) {
+          x64_input_note_backend(runtime, backend);
+          return 1;
+        }
+        /* Extended scancode hotkeys before VT100 arrow fallback. */
+        if (was_extended && emit_super_key(sc, out_char)) {
+          x64_input_note_backend(runtime, backend);
+          return 1;
+        }
         if (was_extended && emit_arrow_escape(runtime, sc, out_char)) {
           x64_input_note_backend(runtime, backend);
           return 1;
@@ -135,10 +166,26 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
               runtime->shift_active = hv_break ? 0 : 1;
               break;
             }
+            if (hv_sc == 0x1D) {
+              runtime->ctrl_active = hv_break ? 0 : 1;
+              break;
+            }
+            if (!hv_extended && hv_sc == 0x38) {
+              runtime->alt_active = hv_break ? 0 : 1;
+              break;
+            }
             if (hv_break) {
               break;
             }
-            /* Arrow keys on extended scancodes → VT100 escape sequence. */
+            if (emit_tty_fallback_key(runtime, hv_sc, hv_extended, out_char)) {
+              x64_input_note_backend(runtime, backend);
+              return 1;
+            }
+            /* Extended scancode hotkeys before VT100 arrow fallback. */
+            if (hv_extended && emit_super_key(hv_sc, out_char)) {
+              x64_input_note_backend(runtime, backend);
+              return 1;
+            }
             if (hv_extended && emit_arrow_escape(runtime, hv_sc, out_char)) {
               x64_input_note_backend(runtime, backend);
               return 1;

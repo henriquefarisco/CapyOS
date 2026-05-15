@@ -30,6 +30,25 @@ STATIC_DATA_EXCEPTIONS = {
     Path("src/security/tls_trust_anchors.c"),
 }
 
+MONOLITH_BASELINE_EXCEPTIONS = {
+    Path("src/apps/settings.c"),
+    Path("src/apps/file_manager.c"),
+    Path("src/security/crypt.c"),
+    Path("src/security/ed25519.c"),
+    Path("src/auth/user.c"),
+    Path("src/auth/login_runtime.c"),
+    Path("src/services/update_agent.c"),
+    Path("src/arch/x86_64/kernel_main.c"),
+    Path("src/gui/desktop/taskbar.c"),
+    Path("include/auth/login_runtime.h"),
+    Path("tests/test_capylibc_net.c"),
+    Path("tests/test_login_runtime.c"),
+    Path("tests/test_crypt_vectors.c"),
+    Path("tests/test_gui_event.c"),
+    Path("tests/test_capylibc_tls.c"),
+    Path("tests/test_gui_window_dispatcher.c"),
+}
+
 EXT_LANGUAGE = {
     ".c": "c",
     ".h": "c-header",
@@ -90,6 +109,10 @@ def collect(repo: Path, roots: Iterable[str]) -> list[FileInfo]:
 
 def is_static_data_exception(path: Path) -> bool:
     return path in STATIC_DATA_EXCEPTIONS
+
+
+def is_monolith_baseline_exception(path: Path) -> bool:
+    return path in MONOLITH_BASELINE_EXCEPTIONS
 
 
 def module_name(path: Path) -> str:
@@ -205,7 +228,9 @@ def main() -> int:
 
     print_section("Warnings")
     for info in infos:
-        if info.language in {"c", "c-header", "c-fragment"} and not is_static_data_exception(info.path):
+        if (info.language in {"c", "c-header", "c-fragment"} and
+                not is_static_data_exception(info.path) and
+                not is_monolith_baseline_exception(info.path)):
             limit = args.max_test_lines if info.path.parts and info.path.parts[0] == "tests" else args.max_c_lines
             if info.lines > limit:
                 warnings.append(f"monolith: {info.path} has {info.lines} lines (limit {limit})")

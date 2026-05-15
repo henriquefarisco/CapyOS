@@ -9,6 +9,24 @@ static uint32_t next_pid = 1;
 static struct task *current_task = NULL;
 static uint32_t task_active_count = 0;
 
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+__attribute__((naked, noreturn))
+static void task_entry_trampoline(void) {
+  __asm__ volatile(
+      "movq 8(%rsp), %rdi\n"
+      "movq 16(%rsp), %rax\n"
+      "call *%rax\n"
+      "xorl %edi, %edi\n"
+      "call task_exit\n"
+  );
+}
+#else
+__attribute__((noreturn))
+static void task_entry_trampoline(void) {
+  task_exit(0);
+}
+#endif
+
 void task_system_init(void) {
   for (int i = 0; i < TASK_MAX_COUNT; i++) {
     task_table[i].state = TASK_STATE_UNUSED;
@@ -73,13 +91,15 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
   stack_top &= ~0xFULL;
 
   stack_top -= sizeof(uint64_t);
+  *(uint64_t *)stack_top = (uint64_t)entry;
+  stack_top -= sizeof(uint64_t);
   *(uint64_t *)stack_top = (uint64_t)arg;
   stack_top -= sizeof(uint64_t);
   *(uint64_t *)stack_top = 0;
 
   t->context.rsp = stack_top;
   t->context.rbp = stack_top;
-  t->context.rip = (uint64_t)entry;
+  t->context.rip = (uint64_t)task_entry_trampoline;
   t->context.rflags = 0x202;
   t->context.rbx = 0;
   t->context.r12 = 0;

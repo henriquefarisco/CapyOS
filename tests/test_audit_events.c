@@ -9,6 +9,15 @@
 #define UPDATE_AGENT_STAGE_PATH "/system/update/staged.ini"
 #define UPDATE_AGENT_STATE_PATH "/system/update/state.ini"
 #define UPDATE_AGENT_IMPORT_PATH "/tmp/update-import.ini"
+#define UPDATE_AGENT_GOOD_SHA256 \
+  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+#define UPDATE_AGENT_GOOD_SIGNATURE \
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+#define UPDATE_AGENT_PAYLOAD_URL_LINE \
+  "payload_url=https://github.com/test/CapyOS/releases/download/v1.0.0/kernel.bin\n"
+#define UPDATE_AGENT_SIGNATURE_LINE \
+  "signature_ed25519=" UPDATE_AGENT_GOOD_SIGNATURE "\n"
 
 static char g_klog_capture[4096];
 static size_t g_klog_capture_len;
@@ -110,12 +119,20 @@ static int stub_remove(const char *path) {
   return 0;
 }
 
+static int stub_manifest_verify(const char *signed_text, size_t signed_len,
+                                const char *signature_hex) {
+  return signed_text && signed_len > 0u && signature_hex &&
+         strstr(signed_text, "signature_ed25519=") == NULL &&
+         strcmp(signature_hex, UPDATE_AGENT_GOOD_SIGNATURE) == 0;
+}
+
 static void setup_agent(void) {
   reset_files();
   update_agent_reset();
   update_agent_set_reader(stub_read);
   update_agent_set_writer(stub_write);
   update_agent_set_remover(stub_remove);
+  update_agent_set_manifest_verifier(stub_manifest_verify);
   update_agent_init("0.8.0-alpha.0+20260305");
 }
 
@@ -127,10 +144,17 @@ int run_audit_events_tests(void) {
   set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
                 "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
   set_file_text(UPDATE_AGENT_CACHE_PATH,
-                "available_version=0.9.0-alpha.1\nchannel=stable\npublished_at=2026-04-08\n");
+                "available_version=0.9.0-alpha.1\nchannel=stable\npublished_at=2026-04-08\n"
+                "payload_sha256=" UPDATE_AGENT_GOOD_SHA256 "\n"
+                UPDATE_AGENT_PAYLOAD_URL_LINE
+                UPDATE_AGENT_SIGNATURE_LINE);
+  set_file_text(UPDATE_AGENT_STATE_PATH,
+                "pending_activation=0\nstaged_manifest=/system/update/staged.ini\n"
+                "payload_cache=/system/update/payload.bin\npayload_cache_sha256="
+                UPDATE_AGENT_GOOD_SHA256 "\n");
   reset_capture();
   fails += expect_true(update_agent_stage_latest() == 0,
-                       "stage should succeed with valid cache");
+                       "stage should succeed with valid verified cache");
   flush_capture();
   fails += expect_true(strstr(g_klog_capture, "[update] Update staged.") != NULL,
                        "stage success should emit audit event");
@@ -165,7 +189,10 @@ int run_audit_events_tests(void) {
                 "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
   set_file_text(UPDATE_AGENT_IMPORT_PATH,
                 "available_version=1.0.0-alpha.1\nchannel=stable\nbranch=main\n"
-                "source=github:test/CapyOS\npublished_at=2026-04-09\n");
+                "source=github:test/CapyOS\npublished_at=2026-04-09\n"
+                "payload_sha256=" UPDATE_AGENT_GOOD_SHA256 "\n"
+                UPDATE_AGENT_PAYLOAD_URL_LINE
+                UPDATE_AGENT_SIGNATURE_LINE);
   reset_capture();
   fails += expect_true(update_agent_import_manifest_path(UPDATE_AGENT_IMPORT_PATH) == 0,
                        "import should succeed with matching manifest");

@@ -9,6 +9,7 @@
 #include "core/system_init.h"
 #include "services/update_agent.h"
 #include "auth/user.h"
+#include "auth/user_home.h"
 #include "auth/user_prefs.h"
 #include "auth/session.h"
 #include "core/version.h"
@@ -50,8 +51,16 @@ int cmd_config_language(struct shell_context *ctx, int argc, char **argv);
 /* jobs_updates */
 int cmd_job_run(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_check(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_fetch(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_download_payload(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_prepare(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_prepare_dry_run(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_prepare_explain(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_stage(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_arm(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_apply(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_confirm_health(struct shell_context *ctx, int argc, char **argv);
+int cmd_update_rollback_check(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_clear(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_import_manifest(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_channel(struct shell_context *ctx, int argc, char **argv);

@@ -10,6 +10,8 @@
 #include "auth/session.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
 #include "arch/x86_64/kernel_runtime_control.h"
+#include "kernel/scheduler.h"
+#include "kernel/task.h"
 #include "net/stack.h"
 #include <stddef.h>
 
@@ -24,6 +26,9 @@ static int g_desktop_active = 0;
 static struct shell_context *g_desktop_shell_ctx = NULL;
 static int g_reboot_requested = 0;
 static int g_shutdown_requested = 0;
+static struct task *g_desktop_task = (struct task *)0;
+static int g_desktop_gui_session_smoke_announced = 0;
+static int g_desktop_mouse_events_smoke_announced = 0;
 
 int desktop_is_active(void) { return g_desktop_active; }
 
@@ -38,6 +43,22 @@ int kernel_desktop_dispatch_shell_command(char *line) {
   handled = x64_kernel_try_shell_command(g_desktop_shell_ctx, 1, line);
   session_set_active(previous_session);
   return handled;
+}
+
+struct session_context *kernel_desktop_shell_session(void) {
+  if (!g_desktop_shell_ctx) return NULL;
+  return shell_context_session(g_desktop_shell_ctx);
+}
+
+int kernel_desktop_shell_should_logout(void) {
+  if (!g_desktop_shell_ctx) return 0;
+  return shell_context_should_logout(g_desktop_shell_ctx);
+}
+
+int kernel_desktop_shell_should_stop(void) {
+  if (!g_desktop_shell_ctx) return 0;
+  return !shell_context_running(g_desktop_shell_ctx) ||
+         shell_context_should_logout(g_desktop_shell_ctx);
 }
 
 void desktop_stop(void) {
@@ -60,13 +81,88 @@ void kernel_request_shutdown(void) {
   g_shutdown_requested = 1;
 }
 
-static inline void desktop_frame_delay(void) {
+static inline int desktop_scheduler_tick_observed(void) {
+  struct scheduler_stats stats;
+  scheduler_stats_get(&stats);
+  return stats.total_ticks != 0;
+}
+
+static inline void desktop_idle_wait_cpu(void) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  if (desktop_scheduler_tick_observed()) {
+    __asm__ volatile("sti; hlt" ::: "memory");
+    return;
+  }
+#endif
   uint64_t start = pit_ticks();
   uint32_t spins = 0;
-  while (pit_ticks() == start && spins++ < 200000u) {
+  while (pit_ticks() == start && spins++ < 1024u) {
     if (mouse_pending()) break;
     __asm__ volatile("pause");
   }
+}
+
+static inline void desktop_frame_delay(void) {
+  if (scheduler_can_sleep_current()) {
+    task_sleep(1);
+    return;
+  }
+  if (!mouse_pending()) desktop_idle_wait_cpu();
+}
+
+static void desktop_scheduler_entry(void *arg) {
+  (void)arg;
+  for (;;) task_yield();
+}
+
+static int desktop_scheduler_adopt_current(void) {
+  if (task_current()) {
+    scheduler_set_running(1);
+    return 0;
+  }
+  if (!g_desktop_task) {
+    g_desktop_task = task_create_kernel("desktop-main",
+                                        desktop_scheduler_entry,
+                                        (void *)0);
+    if (!g_desktop_task) return -1;
+    scheduler_add(g_desktop_task);
+  }
+  g_desktop_task->state = TASK_STATE_RUNNING;
+  task_set_current(g_desktop_task);
+  scheduler_set_running(1);
+  return 0;
+}
+
+static void desktop_gui_session_smoke_emit_once(void) {
+  struct desktop_session_smoke_readiness readiness;
+  struct desktop_gui_session_smoke_gate gate;
+  if (g_desktop_gui_session_smoke_announced) return;
+  if (desktop_session_smoke_readiness_snapshot(&g_desktop, &readiness) != 1) {
+    return;
+  }
+  if (desktop_gui_session_smoke_gate_from_readiness(&readiness, &gate) != 1) {
+    return;
+  }
+  if (!gate.smoke_ready) return;
+  fbcon_print(desktop_gui_session_smoke_marker());
+  fbcon_print("\n");
+  g_desktop_gui_session_smoke_announced = 1;
+}
+
+static void desktop_mouse_events_smoke_emit_once(void) {
+  struct desktop_session_smoke_readiness readiness;
+  struct desktop_mouse_events_smoke_gate gate;
+  if (g_desktop_mouse_events_smoke_announced) return;
+  if (desktop_session_smoke_readiness_snapshot(&g_desktop, &readiness) != 1) {
+    return;
+  }
+  if (desktop_mouse_events_smoke_gate_from_readiness(&readiness, &gate) != 1) {
+    return;
+  }
+  if (!gate.smoke_ready) return;
+  fbcon_print(desktop_mouse_events_smoke_marker());
+  fbcon_print("\n");
+  g_desktop_mouse_events_smoke_announced = 1;
 }
 
 int desktop_runtime_start(struct shell_context *ctx) {
@@ -79,12 +175,18 @@ int desktop_runtime_start(struct shell_context *ctx) {
   if (!fb || w == 0 || h == 0) { fbcon_print("Error: no framebuffer.\n"); return -1; }
 
   mouse_ps2_init();
+  g_desktop_gui_session_smoke_announced = 0;
+  g_desktop_mouse_events_smoke_announced = 0;
   g_desktop_shell_ctx = ctx;
   if (ctx && shell_context_session(ctx)) {
     session_set_active(shell_context_session(ctx));
   }
   desktop_init(&g_desktop, fb, w, h, pitch, ctx ? ctx->settings : NULL);
   desktop_open_terminal(&g_desktop);
+  if (desktop_scheduler_adopt_current() != 0) {
+    fbcon_print("Error: desktop scheduler unavailable.\n");
+    return -1;
+  }
   net_stack_set_yield_hook(desktop_net_yield);
   sync_and_flush_desktop();
   fbcon_print("[desktop] session started\n");
@@ -122,6 +224,15 @@ int desktop_runtime_start(struct shell_context *ctx) {
         desktop_handle_input(&g_desktop, (uint32_t)(uint8_t)ch, ch);
         continue;
       }
+      if ((uint8_t)ch == KEY_SUPER) {
+        desktop_handle_input(&g_desktop, KEY_SUPER, 0);
+        continue;
+      }
+      if ((uint8_t)ch == KEY_TTY_FALLBACK) {
+        fbcon_print("[desktop] CTRL+ALT+F1 fallback requested\n");
+        desktop_stop();
+        break;
+      }
       if (ch == 0x1B) { escape_state = 1; continue; }
       desktop_handle_input(&g_desktop, (uint32_t)(uint8_t)ch, ch);
     }
@@ -145,6 +256,9 @@ int desktop_runtime_start(struct shell_context *ctx) {
     }
     if (!g_desktop_active) break;
     if (desktop_run_frame(&g_desktop)) had_activity = 1;
+    desktop_gui_session_smoke_emit_once();
+    desktop_mouse_events_smoke_emit_once();
+    task_yield();
     if (!had_activity && !mouse_pending()) desktop_frame_delay();
   }
 
