@@ -39,7 +39,7 @@ jobs:
           VALIDATE_YAML: true
           VALIDATE_JSON: true
           VALIDATE_MARKDOWN: true
-          FILTER_REGEX_EXCLUDE: "(README\\.md$|VERSION\\.yaml$|docs/plans/historical/|docs/plans/active/|docs/plans/STATUS\\.md$|docs/releases/|docs/reference/cli-reference\\.md$)"
+          FILTER_REGEX_EXCLUDE: "(README\\.md$|VERSION\\.yaml$|docs/|userland/lib/musl/.*\\.md$)"
 
   release-gates:
     name: Release gates
