@@ -130,6 +130,7 @@ make test
 make layout-audit
 make version-audit
 make boot-perf-baseline-selftest
+make smoke-marker-policy-selftest
 make all64
 make iso-uefi
 make verify-release-checksums TOOLCHAIN64=host

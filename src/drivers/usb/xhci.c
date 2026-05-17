@@ -155,14 +155,16 @@ int xhci_init(struct xhci_controller *xhci) {
   for (uint32_t i = 0; i <= xhci->max_slots; i++)
     xhci->dcbaa[i] = 0;
 
-  /* Allocate Command Ring (256 TRBs, 64-byte aligned) */
+  /* Allocate Command Ring (XHCI_CMD_RING_TRBS TRBs, 64-byte aligned).
+   * The last TRB is reserved for a Link TRB that wraps to index 0 with
+   * cycle toggled. Usable command slots: indices 0..(XHCI_CMD_RING_TRBS-2). */
   xhci->cmd_ring =
-      (struct xhci_trb *)kmalloc_aligned(256 * sizeof(struct xhci_trb), 64);
+      (struct xhci_trb *)kmalloc_aligned(XHCI_CMD_RING_TRBS * sizeof(struct xhci_trb), 64);
   if (!xhci->cmd_ring) {
     kfree(xhci->dcbaa);
     return -4;
   }
-  for (int i = 0; i < 256; i++) {
+  for (int i = 0; i < XHCI_CMD_RING_TRBS; i++) {
     xhci->cmd_ring[i].param = 0;
     xhci->cmd_ring[i].status = 0;
     xhci->cmd_ring[i].control = 0;
@@ -170,22 +172,23 @@ int xhci_init(struct xhci_controller *xhci) {
   xhci->cmd_ring_idx = 0;
   xhci->cmd_ring_cycle = 1;
 
-  /* Set up link TRB at end of command ring */
-  xhci->cmd_ring[255].param = (uint64_t)(uintptr_t)xhci->cmd_ring;
-  xhci->cmd_ring[255].status = 0;
-  xhci->cmd_ring[255].control =
+  /* Set up link TRB at the last entry of the command ring */
+  xhci->cmd_ring[XHCI_CMD_RING_TRBS - 1].param = (uint64_t)(uintptr_t)xhci->cmd_ring;
+  xhci->cmd_ring[XHCI_CMD_RING_TRBS - 1].status = 0;
+  xhci->cmd_ring[XHCI_CMD_RING_TRBS - 1].control =
       (TRB_TYPE_LINK << 10) | (1 << 1) | 1; /* Toggle cycle */
 
-  /* Allocate Event Ring Segment Table and Event Ring */
-  /* For simplicity, single segment with 256 TRBs */
+  /* Allocate Event Ring (single segment, XHCI_EVT_RING_TRBS entries).
+   * ERST programming is deferred to a later slice; current code polls
+   * the ring directly via evt_ring_idx. */
   xhci->evt_ring =
-      (struct xhci_trb *)kmalloc_aligned(256 * sizeof(struct xhci_trb), 64);
+      (struct xhci_trb *)kmalloc_aligned(XHCI_EVT_RING_TRBS * sizeof(struct xhci_trb), 64);
   if (!xhci->evt_ring) {
     kfree(xhci->cmd_ring);
     kfree(xhci->dcbaa);
     return -5;
   }
-  for (int i = 0; i < 256; i++) {
+  for (int i = 0; i < XHCI_EVT_RING_TRBS; i++) {
     xhci->evt_ring[i].param = 0;
     xhci->evt_ring[i].status = 0;
     xhci->evt_ring[i].control = 0;
@@ -311,7 +314,11 @@ int xhci_enable_slot(struct xhci_controller *xhci, uint8_t *slot_id) {
   trb.control = (TRB_TYPE_ENABLE_SLOT << 10) | (xhci->cmd_ring_cycle & 1);
   uint32_t idx = xhci->cmd_ring_idx;
   xhci->cmd_ring[idx] = trb;
-  xhci->cmd_ring_idx = (idx + 1) % 64;
+  /* Advance the command ring index. The last index is the Link TRB which
+   * must not be overwritten by software; full link-aware wrap belongs to a
+   * later slice. For now wrap on the full ring size to remove the prior
+   * off-by-one (the literal was `% 64` against a 256-entry ring). */
+  xhci->cmd_ring_idx = (idx + 1) % XHCI_CMD_RING_TRBS;
   /* Ring doorbell 0 (command) */
   volatile uint32_t *db = (volatile uint32_t *)(xhci->db_base);
   mmio_write32(db, 0);
@@ -322,7 +329,7 @@ int xhci_enable_slot(struct xhci_controller *xhci, uint8_t *slot_id) {
     if ((ctrl >> 10 & 0x3F) == TRB_TYPE_CMD_COMPLETE) {
       uint32_t cc = (mmio_read32((volatile uint32_t *)&evt->status) >> 24) & 0xFF;
       *slot_id = (uint8_t)((ctrl >> 24) & 0xFF);
-      xhci->evt_ring_idx = (xhci->evt_ring_idx + 1) % 64;
+      xhci->evt_ring_idx = (xhci->evt_ring_idx + 1) % XHCI_EVT_RING_TRBS;
       return (cc == 1) ? 0 : -2; /* 1 = success */
     }
     cpu_relax();

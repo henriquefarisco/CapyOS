@@ -56,6 +56,7 @@ Para release local mais completa:
 make layout-audit
 make version-audit
 make boot-perf-baseline-selftest
+make smoke-marker-policy-selftest
 make verify-release-checksums TOOLCHAIN64=host
 ```
 

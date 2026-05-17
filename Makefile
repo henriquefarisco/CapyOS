@@ -46,7 +46,7 @@ else
   $(info [build] Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
   $(info [build] Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
-CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
+CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -Isrc -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
 # Bug fix critico (2026-05-05 sessao 4b): habilita preemptive
 # scheduler por default. Sem essa flag, `scheduler_set_running(1)`
 # nunca e chamado, `task_yield()` vira no-op, e tasks adicionadas
@@ -150,6 +150,71 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/lang/localization.o \
 	$(BUILD)/x86_64/lang/app_language.o \
 	$(BUILD)/x86_64/auth/login_runtime.o \
+	$(BUILD)/x86_64/auth/login_runtime/contract_policy.o \
+	$(BUILD)/x86_64/auth/login_runtime/credential_buffer.o \
+	$(BUILD)/x86_64/auth/login_runtime/credential_input.o \
+	$(BUILD)/x86_64/auth/login_runtime/credential_interaction.o \
+	$(BUILD)/x86_64/auth/login_runtime/credential_view_model.o \
+	$(BUILD)/x86_64/auth/login_runtime/session_pipeline.o \
+	$(BUILD)/x86_64/auth/login_runtime/render_action_ui_event.o \
+	$(BUILD)/x86_64/auth/login_runtime/route_controller.o \
+	$(BUILD)/x86_64/auth/login_runtime/presenter_binding.o \
+	$(BUILD)/x86_64/auth/login_runtime/mount_commit.o \
+	$(BUILD)/x86_64/auth/login_runtime/handoff_dispatch.o \
+	$(BUILD)/x86_64/auth/login_runtime/queue_activation.o \
+	$(BUILD)/x86_64/auth/login_runtime/frame_surface.o \
+	$(BUILD)/x86_64/auth/login_runtime/compositor_damage.o \
+	$(BUILD)/x86_64/auth/login_runtime/present_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/schedule_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/vsync_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/scanout_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/display_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/output_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/blit_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/framebuffer_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/flush_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/barrier_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/fence_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/timeline_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/sync_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/deadline_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/completion_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/ack_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/retire_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/cleanup_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/seal_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/audit_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/record_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/receipt_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/ledger_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/journal_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/archive_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/retention_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/expiry_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/purge_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/tombstone_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/compaction_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/reclaim_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/release_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/gui_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_surface_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_compositor_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_damage_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_present_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_schedule_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_vsync_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_scanout_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_display_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_output_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_blit_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_commit_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_flip_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_vblank_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_event_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/window_input_plan.o \
+	$(BUILD)/x86_64/auth/login_runtime/pipeline_safety.o \
+	$(BUILD)/x86_64/auth/login_runtime/view_model.o \
 	$(BUILD)/x86_64/auth/loginwindow_auth_submit.o \
 	$(BUILD)/x86_64/auth/loginwindow_auth_submit_userdb.o \
 	$(BUILD)/x86_64/auth/loginwindow_recovery_decision.o \
@@ -165,8 +230,14 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/config/first_boot/storage_users.o \
 	$(BUILD)/x86_64/config/first_boot/program.o \
 	$(BUILD)/x86_64/services/update_agent.o \
+	$(BUILD)/x86_64/services/update_agent_parse.o \
+	$(BUILD)/x86_64/services/update_agent_apply.o \
+	$(BUILD)/x86_64/services/update_agent_prepare.o \
 	$(BUILD)/x86_64/services/update_agent_transact.o \
 	$(BUILD)/x86_64/auth/user.o \
+	$(BUILD)/x86_64/auth/user_helpers.o \
+	$(BUILD)/x86_64/auth/userdb_io.o \
+	$(BUILD)/x86_64/auth/userdb_auth.o \
 	$(BUILD)/x86_64/auth/user_password_hash.o \
 	$(BUILD)/x86_64/auth/user_prefs.o \
 	$(BUILD)/x86_64/kernel/log/klog.o \
@@ -240,9 +311,14 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_check.o \
 	$(BUILD)/x86_64/fs/vfs/vfs.o \
 	$(BUILD)/x86_64/security/crypt.o \
+	$(BUILD)/x86_64/security/crypt_kdf.o \
+	$(BUILD)/x86_64/security/crypt_aes_xts.o \
+	$(BUILD)/x86_64/security/crypt_hkdf.o \
 	$(BUILD)/x86_64/security/volume_header.o \
 	$(BUILD)/x86_64/security/volume_provider.o \
+	$(BUILD)/x86_64/security/volume_provider_rekey.o \
 	$(BUILD)/x86_64/security/volume_provider_rekey_execute.o \
+	$(BUILD)/x86_64/security/volume_provider_rekey_copy.o \
 	$(BUILD)/x86_64/security/volume_provider_rekey_commit.o \
 	$(BUILD)/x86_64/security/volume_provider_rekey_recovery.o \
 	$(BUILD)/x86_64/security/volume_provider_rekey_orchestrator.o \
@@ -271,6 +347,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/system_control/service_helpers.o \
 	$(BUILD)/x86_64/shell/commands/system_control/config_commands.o \
 	$(BUILD)/x86_64/shell/commands/system_control/jobs_updates.o \
+	$(BUILD)/x86_64/shell/commands/system_control/updates_arm.o \
 	$(BUILD)/x86_64/shell/commands/system_control/service_target_resume.o \
 	$(BUILD)/x86_64/shell/commands/system_control/recovery_login_verify.o \
 	$(BUILD)/x86_64/shell/commands/system_control/recovery_storage.o \
@@ -421,6 +498,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/third_party/tinf/adler32.o \
 	$(BUILD)/x86_64/third_party/tinf/crc32.o \
 	$(BUILD)/x86_64/security/ed25519.o \
+	$(BUILD)/x86_64/security/ed25519_group.o \
+	$(BUILD)/x86_64/security/ed25519_encode.o \
+	$(BUILD)/x86_64/security/ed25519_scalar.o \
 	$(BUILD)/x86_64/security/fe25519.o \
 	$(BUILD)/x86_64/security/sha256.o \
 	$(BUILD)/x86_64/security/blake2b.o \
@@ -454,16 +534,24 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
 	$(BUILD)/x86_64/drivers/serial/serial_com1.o \
 	$(BUILD)/x86_64/gui/desktop/taskbar.o \
+	$(BUILD)/x86_64/gui/desktop/taskbar_menu.o \
+	$(BUILD)/x86_64/gui/desktop/taskbar_menu_input.o \
 	$(BUILD)/x86_64/security/sha512.o \
 	$(BUILD)/x86_64/gui/desktop/desktop.o \
+	$(BUILD)/x86_64/gui/desktop/desktop_mouse.o \
 	$(BUILD)/x86_64/gui/desktop/desktop_smoke_readiness.o \
 	$(BUILD)/x86_64/gui/desktop/desktop_icons.o \
+	$(BUILD)/x86_64/gui/desktop/desktop_icons_context.o \
 	$(BUILD)/x86_64/gui/desktop/desktop_runtime.o \
 	$(BUILD)/x86_64/apps/calculator.o \
 	$(BUILD)/x86_64/apps/file_manager.o \
+	$(BUILD)/x86_64/apps/file_manager_view.o \
+	$(BUILD)/x86_64/apps/file_manager_dnd.o \
 	$(BUILD)/x86_64/apps/text_editor.o \
 	$(BUILD)/x86_64/apps/task_manager.o \
 	$(BUILD)/x86_64/apps/settings.o \
+	$(BUILD)/x86_64/apps/settings_view.o \
+	$(BUILD)/x86_64/apps/settings_actions.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
 	$(BUILD)/x86_64/gui/window/window_manager.o \
 	$(BUILD)/x86_64/gui/window/window_dispatcher.o \
@@ -798,6 +886,12 @@ verify-release-signature:
 verify-release-signature-selftest:
 	python3 tools/scripts/verify_release_signature.py --self-test $(RELEASE_VERIFY_SELFTEST_ARGS)
 
+.PHONY: smoke-marker-policy-selftest
+smoke-marker-policy-selftest:
+	python3 tools/scripts/smoke_marker_policy.py
+	python3 tools/scripts/smoke_x64_vmware.py --self-test
+	python3 tools/scripts/release_ci_smoke_evidence.py --self-test
+
 .PHONY: release-public-key-fingerprint
 release-public-key-fingerprint:
 	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
@@ -1114,151 +1208,121 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Isrc -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
 TEST_BIN    := $(BUILD)/tests/unit_tests
-TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partition.c tests/test_keyboard_layouts.c tests/test_grub_cfg_builder.c tests/test_boot_manifest.c tests/test_boot_writer.c tests/test_gen_boot_config.c tests/test_user_home.c tests/test_http_encoding.c tests/stub_kmem.c tests/stub_context_switch.c src/kernel/scheduler.c tests/test_csprng.c tests/test_localization.c tests/test_klog.c tests/test_auth_policy.c tests/test_login_runtime.c tests/test_loginwindow_auth_submit.c tests/test_loginwindow_recovery_decision.c tests/test_loginwindow_session_handoff.c tests/test_capyfs_check.c tests/test_service_manager.c tests/test_service_boot_policy.c tests/test_work_queue.c tests/test_update_agent.c tests/test_audit_events.c tests/test_journal.c tests/test_capyfs_journal_cause.c tests/test_update_transact.c \
-               tests/stub_vga.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
-               src/fs/capyfs/capyfs_check.c src/fs/capyfs/capyfs_journal_integration.c \
+# --- Host test sources, organized by domain to mirror the
+#     tests/<domain>/ folder layout introduced on 2026-05-15.
+TEST_SRCS   := \
+               tests/test_runner.c \
+               \
+               tests/stubs/stub_kmem.c \
+               tests/stubs/stub_context_switch.c \
+               tests/stubs/stub_vga.c \
+               tests/stubs/stub_usb_core.c \
+               tests/stubs/stub_vmm.c \
+               tests/stubs/stub_syscall_deps.c \
+               tests/stubs/stub_arch_sched_hooks.c \
+               \
+               tests/auth/test_auth_policy.c \
+               tests/auth/test_login_runtime.c \
+               tests/auth/test_login_runtime_credential_pre_pipeline.c \
+               tests/auth/test_login_runtime_credential_input_view.c \
+               tests/auth/test_login_runtime_credential_input_view_panel.c \
+               tests/auth/test_login_runtime_credential_audit_view.c \
+               tests/auth/test_login_runtime_credential_ui_session.c \
+               tests/auth/test_login_runtime_credential_screen.c \
+               tests/auth/test_login_runtime_credential_screen_view_model.c \
+               tests/auth/test_login_runtime_credential_action_event.c \
+               tests/auth/test_login_runtime_credential_route_controller.c \
+               tests/auth/test_login_runtime_credential_presenter_binding.c \
+               tests/auth/test_login_runtime_credential_mount_commit.c \
+               tests/auth/test_login_runtime_credential_handoff_dispatch.c \
+               tests/auth/test_login_runtime_credential_queue_activation.c \
+               tests/auth/test_login_runtime_credential_frame_surface.c \
+               tests/auth/test_login_runtime_credential_compositor_damage.c \
+               tests/auth/test_login_runtime_credential_present_plan.c \
+               tests/auth/test_login_runtime_credential_schedule_vsync.c \
+               tests/auth/test_login_runtime_credential_scanout_display.c \
+               tests/auth/test_login_runtime_credential_output_blit.c \
+               tests/auth/test_login_runtime_credential_framebuffer_flush.c \
+               tests/auth/test_login_runtime_credential_barrier_fence.c \
+               tests/auth/test_login_runtime_credential_timeline_sync.c \
+               tests/auth/test_login_runtime_credential_deadline_completion.c \
+               tests/auth/test_login_runtime_credential_ack_retire.c \
+               tests/auth/test_login_runtime_credential_cleanup_seal.c \
+               tests/auth/test_login_runtime_credential_audit_record.c \
+               tests/auth/test_login_runtime_credential_receipt_ledger.c \
+               tests/auth/test_login_runtime_credential_journal_archive.c \
+               tests/auth/test_login_runtime_credential_retention_expiry.c \
+               tests/auth/test_login_runtime_credential_expiry_plan.c \
+               tests/auth/test_login_runtime_credential_purge.c \
+               tests/auth/test_login_runtime_credential_tombstone.c \
+               tests/auth/test_login_runtime_credential_compaction_reclaim.c \
+               tests/auth/test_login_runtime_credential_release_gui.c \
+               tests/auth/test_login_runtime_credential_window_surface.c \
+               tests/auth/test_login_runtime_credential_window_compositor_damage.c \
+               tests/auth/test_login_runtime_credential_window_present.c \
+               tests/auth/test_login_runtime_credential_window_schedule.c \
+               tests/auth/test_login_runtime_credential_window_vsync.c \
+               tests/auth/test_login_runtime_credential_window_scanout.c \
+               tests/auth/test_login_runtime_credential_window_display.c \
+               tests/auth/test_login_runtime_credential_window_output.c \
+               tests/auth/test_login_runtime_credential_window_blit.c \
+               tests/auth/test_login_runtime_credential_window_commit.c \
+               tests/auth/test_login_runtime_credential_window_flip.c \
+               tests/auth/test_login_runtime_credential_window_vblank.c \
+               tests/auth/test_login_runtime_credential_window_event.c \
+               tests/auth/test_login_runtime_credential_window_input.c \
+               tests/auth/test_login_runtime_credential_pipeline_safety_report.c \
+               tests/auth/test_loginwindow_auth_submit.c \
+               tests/auth/test_loginwindow_recovery_decision.c \
+               tests/auth/test_loginwindow_session_handoff.c \
+               tests/auth/test_audit_events.c \
+               tests/auth/test_user_home.c \
+               tests/auth/test_user_password_hash.c src/auth/user_password_hash.c \
+               tests/auth/test_user_task_init.c src/kernel/user_task_init.c \
+               tests/auth/test_user_init.c src/kernel/user_init.c \
+               tests/auth/test_privilege.c src/auth/privilege.c \
+               src/auth/login_runtime.c src/auth/login_runtime/contract_policy.c src/auth/login_runtime/credential_buffer.c src/auth/login_runtime/credential_input.c src/auth/login_runtime/credential_interaction.c src/auth/login_runtime/credential_view_model.c src/auth/login_runtime/session_pipeline.c src/auth/login_runtime/render_action_ui_event.c src/auth/login_runtime/route_controller.c src/auth/login_runtime/presenter_binding.c src/auth/login_runtime/mount_commit.c src/auth/login_runtime/handoff_dispatch.c src/auth/login_runtime/queue_activation.c src/auth/login_runtime/frame_surface.c src/auth/login_runtime/compositor_damage.c src/auth/login_runtime/present_plan.c src/auth/login_runtime/schedule_plan.c src/auth/login_runtime/vsync_plan.c src/auth/login_runtime/scanout_plan.c src/auth/login_runtime/display_plan.c src/auth/login_runtime/output_plan.c src/auth/login_runtime/blit_plan.c src/auth/login_runtime/framebuffer_plan.c src/auth/login_runtime/flush_plan.c src/auth/login_runtime/barrier_plan.c src/auth/login_runtime/fence_plan.c src/auth/login_runtime/timeline_plan.c src/auth/login_runtime/sync_plan.c src/auth/login_runtime/deadline_plan.c src/auth/login_runtime/completion_plan.c src/auth/login_runtime/ack_plan.c src/auth/login_runtime/retire_plan.c src/auth/login_runtime/cleanup_plan.c src/auth/login_runtime/seal_plan.c src/auth/login_runtime/audit_plan.c src/auth/login_runtime/record_plan.c src/auth/login_runtime/receipt_plan.c src/auth/login_runtime/ledger_plan.c src/auth/login_runtime/journal_plan.c src/auth/login_runtime/archive_plan.c src/auth/login_runtime/retention_plan.c src/auth/login_runtime/expiry_plan.c src/auth/login_runtime/purge_plan.c src/auth/login_runtime/tombstone_plan.c src/auth/login_runtime/compaction_plan.c src/auth/login_runtime/reclaim_plan.c src/auth/login_runtime/release_plan.c src/auth/login_runtime/gui_plan.c src/auth/login_runtime/window_plan.c src/auth/login_runtime/window_surface_plan.c src/auth/login_runtime/window_compositor_plan.c src/auth/login_runtime/window_damage_plan.c src/auth/login_runtime/window_present_plan.c src/auth/login_runtime/window_schedule_plan.c src/auth/login_runtime/window_vsync_plan.c src/auth/login_runtime/window_scanout_plan.c src/auth/login_runtime/window_display_plan.c src/auth/login_runtime/window_output_plan.c src/auth/login_runtime/window_blit_plan.c src/auth/login_runtime/window_commit_plan.c src/auth/login_runtime/window_flip_plan.c src/auth/login_runtime/window_vblank_plan.c src/auth/login_runtime/window_event_plan.c src/auth/login_runtime/window_input_plan.c src/auth/login_runtime/pipeline_safety.c src/auth/login_runtime/view_model.c src/auth/loginwindow_auth_submit.c src/auth/loginwindow_recovery_decision.c src/auth/loginwindow_session_handoff.c src/auth/user_home.c src/auth/auth_policy.c \
+               \
+               tests/security/test_csprng.c \
+               tests/security/test_crypt_vectors.c tests/security/test_crypt_vectors_aead.c tests/security/test_crypt_vectors_kdf.c \
+               tests/security/test_volume_header.c src/security/volume_header.c \
+               tests/security/test_volume_provider.c tests/security/test_volume_provider_rekey.c tests/security/test_volume_provider_execute.c tests/security/test_volume_provider_rekey_execute.c tests/security/test_volume_provider_rekey_copy.c tests/security/test_volume_provider_rekey_commit.c tests/security/test_volume_provider_rekey_recovery.c tests/security/test_volume_provider_rekey_orchestrator.c src/security/volume_provider.c src/security/volume_provider_rekey.c src/security/volume_provider_rekey_execute.c src/security/volume_provider_rekey_copy.c src/security/volume_provider_rekey_commit.c src/security/volume_provider_rekey_recovery.c src/security/volume_provider_rekey_orchestrator.c \
+               tests/security/test_tls_hostname.c src/security/tls_hostname.c \
+               src/security/csprng.c src/security/crypt.c src/security/crypt_kdf.c src/security/crypt_aes_xts.c src/security/crypt_hkdf.c src/security/ed25519.c src/security/ed25519_group.c src/security/ed25519_encode.c src/security/ed25519_scalar.c src/security/fe25519.c src/security/sha256.c src/security/sha512.c src/security/blake2b.c src/security/argon2.c src/security/chacha20_poly1305.c src/security/x25519.c \
+               \
+               tests/boot/test_boot_manifest.c tests/boot/test_boot_writer.c \
+               tests/boot/test_grub_cfg_builder.c tests/boot/test_gen_boot_config.c \
+               tests/boot/test_efi_block.c src/drivers/storage/efi_block.c \
+               tests/boot/test_boot_slot.c src/boot/boot_slot.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
-               tests/test_efi_block.c src/drivers/storage/efi_block.c \
-               tests/test_net_dns.c src/net/services/dns.c \
-               tests/test_net_probe.c src/drivers/net/net_probe.c src/drivers/net/netvsc.c \
-               src/auth/login_runtime.c src/auth/loginwindow_auth_submit.c src/auth/loginwindow_recovery_decision.c src/auth/loginwindow_session_handoff.c src/auth/user_home.c src/services/service_boot_policy.c \
-               tests/test_hyperv_runtime.c src/net/hyperv/hyperv_runtime.c \
-               tests/test_input_hyperv_gate.c src/arch/x86_64/hyperv_input_gate.c \
-               tests/test_hyperv_runtime_gate.c src/net/hyperv/hyperv_runtime_gate.c \
-               tests/test_hyperv_runtime_policy.c src/net/hyperv/hyperv_runtime_policy.c \
-               tests/test_native_runtime_gate.c src/arch/x86_64/native_runtime_gate.c \
-               tests/test_netvsc_backend.c src/drivers/net/netvsc_backend.c \
-               tests/test_netvsc_runtime.c src/drivers/net/netvsc_runtime.c \
-               tests/test_netvsc_session.c src/drivers/net/netvsc_session.c \
-               tests/test_netvsp.c src/drivers/net/netvsp.c \
-               tests/test_netvsc_control.c \
-               tests/test_rndis.c src/drivers/net/rndis.c \
-               tests/test_storvsp.c src/drivers/storage/storvsp.c \
-               tests/test_storvsc_session.c src/drivers/storage/storvsc_session.c \
-               tests/test_storvsc_backend.c src/drivers/storage/storvsc_backend.c \
-               tests/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
-               tests/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
-               tests/test_crypt_vectors.c \
-               tests/test_volume_header.c src/security/volume_header.c \
-               tests/test_volume_provider.c tests/test_volume_provider_execute.c tests/test_volume_provider_rekey_execute.c tests/test_volume_provider_rekey_commit.c tests/test_volume_provider_rekey_recovery.c tests/test_volume_provider_rekey_orchestrator.c src/security/volume_provider.c src/security/volume_provider_rekey_execute.c src/security/volume_provider_rekey_commit.c src/security/volume_provider_rekey_recovery.c src/security/volume_provider_rekey_orchestrator.c \
-               tests/test_user_password_hash.c src/auth/user_password_hash.c \
-               src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
-	               src/security/csprng.c src/security/crypt.c src/security/ed25519.c src/security/fe25519.c src/security/sha256.c src/security/sha512.c src/security/blake2b.c src/security/argon2.c src/security/chacha20_poly1305.c src/security/x25519.c src/lang/localization.c src/kernel/log/klog.c src/auth/auth_policy.c src/services/service_manager.c src/core/work_queue.c src/services/update_agent.c src/services/update_agent_transact.c src/net/services/http_encoding.c src/gui/core/png_loader.c src/gui/core/jpeg_loader.c third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c \
-               src/util/kstring.c src/fs/journal/journal.c \
-               tests/test_pmm.c src/memory/pmm.c \
-               tests/test_task.c src/kernel/task.c \
-               tests/test_task_iter.c src/kernel/task_iter.c \
-               tests/test_task_stats.c \
-               tests/test_process_iter.c src/kernel/process.c src/kernel/process_iter.c tests/stub_vmm.c src/memory/vmm_regions.c \
-               tests/test_process_destroy.c \
-               tests/test_vmm_anon_regions.c \
-               tests/test_service_runner.c src/services/service_runner.c \
-               tests/test_context_switch.c tests/stub_arch_sched_hooks.c \
-               tests/test_syscall_msr.c \
-               tests/test_fault_classify.c src/arch/x86_64/fault_classify.c \
-               tests/test_pmm_refcount.c src/memory/pmm_refcount.c \
-               tests/test_vmm_cow.c src/memory/vmm_cow.c \
-               tests/test_tss_layout.c src/arch/x86_64/tss.c \
-               tests/test_user_task_init.c src/kernel/user_task_init.c \
-               tests/test_cpu_local.c src/arch/x86_64/cpu/cpu_local.c \
-               tests/test_enter_user_mode.c src/arch/x86_64/process_user_mode.c \
-               tests/test_capylibc_abi.c \
-               tests/test_hello_program.c \
-               tests/test_user_init.c src/kernel/user_init.c \
-               tests/test_embedded_progs.c src/kernel/embedded_progs.c \
-               tests/test_pipe.c src/kernel/pipe.c \
-               tests/test_linux_clock.c src/kernel/linux_compat/linux_clock.c \
-               tests/test_linux_syscall.c src/kernel/linux_compat/linux_syscall.c \
-               tests/test_linux_random.c src/kernel/linux_compat/linux_random.c \
-               tests/test_linux_devfs.c src/kernel/linux_compat/linux_devfs.c \
-               tests/test_linux_process.c src/kernel/linux_compat/linux_process.c \
-               tests/test_linux_cpuinfo.c src/kernel/linux_compat/linux_cpuinfo.c \
-               tests/test_linux_proc.c src/kernel/linux_compat/linux_proc.c \
-               tests/test_linux_fd.c src/kernel/linux_compat/linux_fd.c \
-               tests/test_linux_mmap.c src/kernel/linux_compat/linux_mmap.c \
-               tests/test_linux_futex.c src/kernel/linux_compat/linux_futex.c \
-               tests/test_linux_eventfd.c src/kernel/linux_compat/linux_eventfd.c \
-               tests/test_linux_net.c src/kernel/linux_compat/linux_net.c \
-               tests/test_linux_epoll.c src/kernel/linux_compat/linux_epoll.c \
-               tests/test_linux_signal.c src/kernel/linux_compat/linux_signal.c \
-               tests/test_linux_memfd.c src/kernel/linux_compat/linux_memfd.c \
-               tests/test_linux_inotify.c src/kernel/linux_compat/linux_inotify.c \
-               tests/test_linux_clone.c src/kernel/linux_compat/linux_clone.c \
-               tests/test_linux_shm.c src/kernel/linux_compat/linux_shm.c \
-               tests/test_linux_vfs.c src/kernel/linux_compat/linux_vfs.c \
-               tests/test_linux_vfs_router.c src/kernel/linux_compat/linux_vfs_router.c \
-               tests/test_linux_procfs.c src/kernel/linux_compat/linux_procfs.c \
-               tests/test_linux_tmpfs.c src/kernel/linux_compat/linux_tmpfs.c \
-               tests/test_linux_brk.c src/kernel/linux_compat/linux_brk.c \
-               tests/test_linux_arch_prctl.c src/kernel/linux_compat/linux_arch_prctl.c \
-               tests/test_linux_exit.c src/kernel/linux_compat/linux_exit.c \
-               tests/test_linux_ioctl.c src/kernel/linux_compat/linux_ioctl.c \
-               tests/test_linux_fcntl.c src/kernel/linux_compat/linux_fcntl.c \
-               tests/test_linux_io.c src/kernel/linux_compat/linux_io.c \
-               tests/test_linux_stat.c src/kernel/linux_compat/linux_stat.c \
-               tests/test_linux_path.c src/kernel/linux_compat/linux_path.c \
-               tests/test_linux_statx.c src/kernel/linux_compat/linux_statx.c \
-               tests/test_linux_dirent.c src/kernel/linux_compat/linux_dirent.c \
-               tests/test_linux_at.c src/kernel/linux_compat/linux_at.c \
-               tests/test_linux_dup.c src/kernel/linux_compat/linux_dup.c \
-               tests/test_linux_umask.c src/kernel/linux_compat/linux_umask.c \
-               tests/test_linux_wait.c src/kernel/linux_compat/linux_wait.c \
-               tests/test_linux_kill.c src/kernel/linux_compat/linux_kill.c \
-               tests/test_linux_trunc.c src/kernel/linux_compat/linux_trunc.c \
-               tests/test_linux_sysinfo.c src/kernel/linux_compat/linux_sysinfo.c \
-               tests/test_linux_priority.c src/kernel/linux_compat/linux_priority.c \
-               tests/test_linux_pgrp.c src/kernel/linux_compat/linux_pgrp.c \
-               tests/test_linux_fs_mut.c src/kernel/linux_compat/linux_fs_mut.c \
-               tests/test_linux_mlock.c src/kernel/linux_compat/linux_mlock.c \
-               tests/test_linux_creds.c src/kernel/linux_compat/linux_creds.c \
-               tests/test_linux_fs_meta.c src/kernel/linux_compat/linux_fs_meta.c \
-               tests/test_linux_link.c src/kernel/linux_compat/linux_link.c \
-               tests/test_linux_sync.c src/kernel/linux_compat/linux_sync.c \
-               tests/test_linux_utime.c src/kernel/linux_compat/linux_utime.c \
-               tests/test_linux_setid.c src/kernel/linux_compat/linux_setid.c \
-               tests/test_linux_chdir.c src/kernel/linux_compat/linux_chdir.c \
-               tests/test_linux_xattr.c src/kernel/linux_compat/linux_xattr.c \
-               tests/test_linux_statfs.c src/kernel/linux_compat/linux_statfs.c \
-               tests/test_linux_advise.c src/kernel/linux_compat/linux_advise.c \
-               tests/test_linux_rlimit_legacy.c src/kernel/linux_compat/linux_rlimit_legacy.c \
-               tests/test_linux_caps.c src/kernel/linux_compat/linux_caps.c \
-               tests/test_linux_itimer.c src/kernel/linux_compat/linux_itimer.c \
-               tests/test_linux_lock.c src/kernel/linux_compat/linux_lock.c \
-               tests/test_linux_sched_prio.c src/kernel/linux_compat/linux_sched_prio.c \
-               tests/test_linux_posix_timer.c src/kernel/linux_compat/linux_posix_timer.c \
-               tests/test_linux_time_legacy.c src/kernel/linux_compat/linux_time_legacy.c \
-               tests/test_linux_sandbox.c src/kernel/linux_compat/linux_sandbox.c \
-               tests/test_linux_mincore.c src/kernel/linux_compat/linux_mincore.c \
-               tests/test_linux_numa.c src/kernel/linux_compat/linux_numa.c \
-               tests/test_linux_settod.c src/kernel/linux_compat/linux_settod.c \
-               tests/test_linux_jit_aux.c src/kernel/linux_compat/linux_jit_aux.c \
-               tests/test_linux_namespace.c src/kernel/linux_compat/linux_namespace.c \
-               tests/test_linux_exec_ext.c src/kernel/linux_compat/linux_exec_ext.c \
-               tests/test_linux_pipe_zero.c src/kernel/linux_compat/linux_pipe_zero.c \
-               tests/test_linux_proc_vm.c src/kernel/linux_compat/linux_proc_vm.c \
-               tests/test_linux_openat2.c src/kernel/linux_compat/linux_openat2.c \
-               tests/test_linux_pkey.c src/kernel/linux_compat/linux_pkey.c \
-               tests/test_linux_landlock.c src/kernel/linux_compat/linux_landlock.c \
-               tests/test_linux_seccomp.c src/kernel/linux_compat/linux_seccomp.c \
-               tests/test_linux_fanotify.c src/kernel/linux_compat/linux_fanotify.c \
-               tests/test_linux_io_uring.c src/kernel/linux_compat/linux_io_uring.c \
-               tests/test_linux_modern_misc.c src/kernel/linux_compat/linux_modern_misc.c \
-               tests/test_stdin_buf.c src/kernel/stdin_buf.c \
-               tests/test_gui_event.c src/gui/core/event.c \
-               tests/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_theme.c \
-               tests/test_gui_window_dispatcher.c src/gui/window/window_dispatcher.c \
-               tests/test_desktop_smoke_readiness.c src/gui/desktop/desktop_smoke_readiness.c \
-               tests/test_dns_cache.c src/net/services/dns_cache.c \
-               tests/test_tls_hostname.c src/security/tls_hostname.c \
-               tests/test_boot_slot.c src/boot/boot_slot.c \
-               tests/test_op_budget.c src/util/op_budget.c \
-               tests/test_privilege.c src/auth/privilege.c \
-               tests/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
-               tests/test_syscall_pipe_priority.c src/kernel/syscall.c tests/stub_syscall_deps.c \
-               tests/test_syscall_net.c src/kernel/syscall_net.c \
-               tests/test_capylibc_net.c \
+               tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
+               \
+               tests/fs/test_block_wrappers.c \
+               tests/fs/test_partition.c src/fs/storage/block_device.c src/fs/storage/chunk_wrapper.c src/fs/storage/offset_wrapper.c src/fs/storage/partition.c \
+               tests/fs/test_capyfs_check.c src/fs/capyfs/capyfs_check.c \
+               tests/fs/test_capyfs_journal_cause.c src/fs/capyfs/capyfs_journal_integration.c \
+               tests/fs/test_journal.c src/fs/journal/journal.c \
+               tests/fs/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
+               \
+               tests/gui/test_gui_event.c tests/gui/test_gui_event_helpers.c src/gui/core/event.c \
+               tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_theme.c \
+               tests/gui/test_gui_window_dispatcher.c tests/gui/test_gui_window_dispatcher_lifecycle.c src/gui/window/window_dispatcher.c \
+               tests/gui/test_desktop_smoke_readiness.c src/gui/desktop/desktop_smoke_readiness.c \
+               src/gui/core/png_loader.c src/gui/core/jpeg_loader.c \
+               \
+               tests/net/test_http_encoding.c src/net/services/http_encoding.c \
+               tests/net/test_net_dns.c src/net/services/dns.c \
+               tests/net/test_net_probe.c src/drivers/net/net_probe.c src/drivers/net/netvsc.c \
+               tests/net/test_dns_cache.c src/net/services/dns_cache.c \
+               tests/net/test_syscall_net.c src/kernel/syscall_net.c \
+               tests/net/test_syscall_net_init.c src/kernel/syscall_net_init.c \
+               \
+               tests/userland/test_capylibc_abi.c \
+               tests/userland/test_capylibc_net.c \
+               tests/userland/test_capylibc_net_url.c \
+               tests/userland/test_capylibc_net_http.c \
                    userland/lib/capylibc-net/capy_net_endian.c \
                    userland/lib/capylibc-net/capy_net_inet.c \
                    userland/lib/capylibc-net/capy_net_tcp.c \
@@ -1267,7 +1331,9 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                    userland/lib/capylibc-net/capy_net_url.c \
                    userland/lib/capylibc-net/capy_net_tls.c \
                    userland/lib/capylibc-net/capy_net_http.c \
-               tests/test_capylibc_tls.c \
+               tests/userland/test_capylibc_tls.c \
+               tests/userland/test_capylibc_tls_trust.c \
+               tests/userland/test_capylibc_tls_backend.c \
                    userland/lib/capylibc-tls/capy_tls_config.c \
                    userland/lib/capylibc-tls/capy_tls_context.c \
                    userland/lib/capylibc-tls/capy_tls_trust.c \
@@ -1277,8 +1343,139 @@ TEST_SRCS   := tests/test_runner.c tests/test_block_wrappers.c tests/test_partit
                    userland/lib/capylibc-tls/capy_tls_bearssl_adapter.c \
                    userland/lib/capylibc-tls/capy_tls_backend.c \
                    userland/lib/capylibc-tls/capy_tls.c \
-               tests/test_syscall_net_init.c src/kernel/syscall_net_init.c \
-               tests/test_process_current_dynamic.c
+               \
+               tests/drivers/test_keyboard_layouts.c src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c \
+               tests/drivers/test_hyperv_runtime.c src/net/hyperv/hyperv_runtime.c \
+               tests/drivers/test_input_hyperv_gate.c src/arch/x86_64/hyperv_input_gate.c \
+               tests/drivers/test_hyperv_runtime_gate.c src/net/hyperv/hyperv_runtime_gate.c \
+               tests/drivers/test_hyperv_runtime_policy.c src/net/hyperv/hyperv_runtime_policy.c \
+               tests/drivers/test_native_runtime_gate.c src/arch/x86_64/native_runtime_gate.c \
+               tests/drivers/test_netvsc_backend.c src/drivers/net/netvsc_backend.c \
+               tests/drivers/test_netvsc_runtime.c src/drivers/net/netvsc_runtime.c \
+               tests/drivers/test_netvsc_session.c src/drivers/net/netvsc_session.c \
+               tests/drivers/test_netvsp.c src/drivers/net/netvsp.c \
+               tests/drivers/test_netvsc_control.c \
+               tests/drivers/test_rndis.c src/drivers/net/rndis.c \
+               tests/drivers/test_storvsp.c src/drivers/storage/storvsp.c \
+               tests/drivers/test_storvsc_session.c src/drivers/storage/storvsc_session.c \
+               tests/drivers/test_storvsc_backend.c src/drivers/storage/storvsc_backend.c \
+               tests/drivers/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
+               tests/drivers/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
+               tests/drivers/test_usb_hid_init.c src/drivers/usb/usb_hid.c \
+               \
+               tests/kernel/test_klog.c src/kernel/log/klog.c \
+               tests/kernel/test_pmm.c src/memory/pmm.c \
+               tests/kernel/test_task.c src/kernel/task.c \
+               tests/kernel/test_task_iter.c src/kernel/task_iter.c \
+               tests/kernel/test_task_stats.c \
+               tests/kernel/test_process_iter.c src/kernel/process.c src/kernel/process_iter.c src/memory/vmm_regions.c \
+               tests/kernel/test_process_destroy.c \
+               tests/kernel/test_vmm_anon_regions.c \
+               tests/kernel/test_context_switch.c src/kernel/scheduler.c \
+               tests/kernel/test_syscall_msr.c \
+               tests/kernel/test_fault_classify.c src/arch/x86_64/fault_classify.c \
+               tests/kernel/test_pmm_refcount.c src/memory/pmm_refcount.c \
+               tests/kernel/test_vmm_cow.c src/memory/vmm_cow.c \
+               tests/kernel/test_tss_layout.c src/arch/x86_64/tss.c \
+               tests/kernel/test_cpu_local.c src/arch/x86_64/cpu/cpu_local.c \
+               tests/kernel/test_enter_user_mode.c src/arch/x86_64/process_user_mode.c \
+               tests/kernel/test_pipe.c src/kernel/pipe.c \
+               tests/kernel/test_op_budget.c src/util/op_budget.c \
+               tests/kernel/test_syscall_pipe_priority.c src/kernel/syscall.c \
+               tests/kernel/test_stdin_buf.c src/kernel/stdin_buf.c \
+               tests/kernel/test_process_current_dynamic.c \
+               src/util/kstring.c \
+               \
+               tests/kernel/linux_compat/test_linux_clock.c src/kernel/linux_compat/linux_clock.c \
+               tests/kernel/linux_compat/test_linux_syscall.c src/kernel/linux_compat/linux_syscall.c \
+               tests/kernel/linux_compat/test_linux_random.c src/kernel/linux_compat/linux_random.c \
+               tests/kernel/linux_compat/test_linux_devfs.c src/kernel/linux_compat/linux_devfs.c \
+               tests/kernel/linux_compat/test_linux_process.c src/kernel/linux_compat/linux_process.c \
+               tests/kernel/linux_compat/test_linux_cpuinfo.c src/kernel/linux_compat/linux_cpuinfo.c \
+               tests/kernel/linux_compat/test_linux_proc.c src/kernel/linux_compat/linux_proc.c \
+               tests/kernel/linux_compat/test_linux_fd.c src/kernel/linux_compat/linux_fd.c \
+               tests/kernel/linux_compat/test_linux_mmap.c src/kernel/linux_compat/linux_mmap.c \
+               tests/kernel/linux_compat/test_linux_futex.c src/kernel/linux_compat/linux_futex.c \
+               tests/kernel/linux_compat/test_linux_eventfd.c src/kernel/linux_compat/linux_eventfd.c \
+               tests/kernel/linux_compat/test_linux_net.c src/kernel/linux_compat/linux_net.c \
+               tests/kernel/linux_compat/test_linux_epoll.c src/kernel/linux_compat/linux_epoll.c \
+               tests/kernel/linux_compat/test_linux_signal.c src/kernel/linux_compat/linux_signal.c \
+               tests/kernel/linux_compat/test_linux_memfd.c src/kernel/linux_compat/linux_memfd.c \
+               tests/kernel/linux_compat/test_linux_inotify.c src/kernel/linux_compat/linux_inotify.c \
+               tests/kernel/linux_compat/test_linux_clone.c src/kernel/linux_compat/linux_clone.c \
+               tests/kernel/linux_compat/test_linux_shm.c src/kernel/linux_compat/linux_shm.c \
+               tests/kernel/linux_compat/test_linux_vfs.c src/kernel/linux_compat/linux_vfs.c \
+               tests/kernel/linux_compat/test_linux_vfs_router.c tests/kernel/linux_compat/test_linux_vfs_router_specialfd.c src/kernel/linux_compat/linux_vfs_router.c \
+               tests/kernel/linux_compat/test_linux_procfs.c src/kernel/linux_compat/linux_procfs.c \
+               tests/kernel/linux_compat/test_linux_tmpfs.c src/kernel/linux_compat/linux_tmpfs.c \
+               tests/kernel/linux_compat/test_linux_brk.c src/kernel/linux_compat/linux_brk.c \
+               tests/kernel/linux_compat/test_linux_arch_prctl.c src/kernel/linux_compat/linux_arch_prctl.c \
+               tests/kernel/linux_compat/test_linux_exit.c src/kernel/linux_compat/linux_exit.c \
+               tests/kernel/linux_compat/test_linux_ioctl.c src/kernel/linux_compat/linux_ioctl.c \
+               tests/kernel/linux_compat/test_linux_fcntl.c src/kernel/linux_compat/linux_fcntl.c \
+               tests/kernel/linux_compat/test_linux_io.c src/kernel/linux_compat/linux_io.c \
+               tests/kernel/linux_compat/test_linux_stat.c src/kernel/linux_compat/linux_stat.c \
+               tests/kernel/linux_compat/test_linux_path.c src/kernel/linux_compat/linux_path.c \
+               tests/kernel/linux_compat/test_linux_statx.c src/kernel/linux_compat/linux_statx.c \
+               tests/kernel/linux_compat/test_linux_dirent.c src/kernel/linux_compat/linux_dirent.c \
+               tests/kernel/linux_compat/test_linux_at.c src/kernel/linux_compat/linux_at.c \
+               tests/kernel/linux_compat/test_linux_dup.c src/kernel/linux_compat/linux_dup.c \
+               tests/kernel/linux_compat/test_linux_umask.c src/kernel/linux_compat/linux_umask.c \
+               tests/kernel/linux_compat/test_linux_wait.c src/kernel/linux_compat/linux_wait.c \
+               tests/kernel/linux_compat/test_linux_kill.c src/kernel/linux_compat/linux_kill.c \
+               tests/kernel/linux_compat/test_linux_trunc.c src/kernel/linux_compat/linux_trunc.c \
+               tests/kernel/linux_compat/test_linux_sysinfo.c src/kernel/linux_compat/linux_sysinfo.c \
+               tests/kernel/linux_compat/test_linux_priority.c src/kernel/linux_compat/linux_priority.c \
+               tests/kernel/linux_compat/test_linux_pgrp.c src/kernel/linux_compat/linux_pgrp.c \
+               tests/kernel/linux_compat/test_linux_fs_mut.c src/kernel/linux_compat/linux_fs_mut.c \
+               tests/kernel/linux_compat/test_linux_mlock.c src/kernel/linux_compat/linux_mlock.c \
+               tests/kernel/linux_compat/test_linux_creds.c src/kernel/linux_compat/linux_creds.c \
+               tests/kernel/linux_compat/test_linux_fs_meta.c src/kernel/linux_compat/linux_fs_meta.c \
+               tests/kernel/linux_compat/test_linux_link.c src/kernel/linux_compat/linux_link.c \
+               tests/kernel/linux_compat/test_linux_sync.c src/kernel/linux_compat/linux_sync.c \
+               tests/kernel/linux_compat/test_linux_utime.c src/kernel/linux_compat/linux_utime.c \
+               tests/kernel/linux_compat/test_linux_setid.c src/kernel/linux_compat/linux_setid.c \
+               tests/kernel/linux_compat/test_linux_chdir.c src/kernel/linux_compat/linux_chdir.c \
+               tests/kernel/linux_compat/test_linux_xattr.c src/kernel/linux_compat/linux_xattr.c \
+               tests/kernel/linux_compat/test_linux_statfs.c src/kernel/linux_compat/linux_statfs.c \
+               tests/kernel/linux_compat/test_linux_advise.c src/kernel/linux_compat/linux_advise.c \
+               tests/kernel/linux_compat/test_linux_rlimit_legacy.c src/kernel/linux_compat/linux_rlimit_legacy.c \
+               tests/kernel/linux_compat/test_linux_caps.c src/kernel/linux_compat/linux_caps.c \
+               tests/kernel/linux_compat/test_linux_itimer.c src/kernel/linux_compat/linux_itimer.c \
+               tests/kernel/linux_compat/test_linux_lock.c src/kernel/linux_compat/linux_lock.c \
+               tests/kernel/linux_compat/test_linux_sched_prio.c src/kernel/linux_compat/linux_sched_prio.c \
+               tests/kernel/linux_compat/test_linux_posix_timer.c src/kernel/linux_compat/linux_posix_timer.c \
+               tests/kernel/linux_compat/test_linux_time_legacy.c src/kernel/linux_compat/linux_time_legacy.c \
+               tests/kernel/linux_compat/test_linux_sandbox.c src/kernel/linux_compat/linux_sandbox.c \
+               tests/kernel/linux_compat/test_linux_mincore.c src/kernel/linux_compat/linux_mincore.c \
+               tests/kernel/linux_compat/test_linux_numa.c src/kernel/linux_compat/linux_numa.c \
+               tests/kernel/linux_compat/test_linux_settod.c src/kernel/linux_compat/linux_settod.c \
+               tests/kernel/linux_compat/test_linux_jit_aux.c src/kernel/linux_compat/linux_jit_aux.c \
+               tests/kernel/linux_compat/test_linux_namespace.c src/kernel/linux_compat/linux_namespace.c \
+               tests/kernel/linux_compat/test_linux_exec_ext.c src/kernel/linux_compat/linux_exec_ext.c \
+               tests/kernel/linux_compat/test_linux_pipe_zero.c src/kernel/linux_compat/linux_pipe_zero.c \
+               tests/kernel/linux_compat/test_linux_proc_vm.c src/kernel/linux_compat/linux_proc_vm.c \
+               tests/kernel/linux_compat/test_linux_openat2.c src/kernel/linux_compat/linux_openat2.c \
+               tests/kernel/linux_compat/test_linux_pkey.c src/kernel/linux_compat/linux_pkey.c \
+               tests/kernel/linux_compat/test_linux_landlock.c src/kernel/linux_compat/linux_landlock.c \
+               tests/kernel/linux_compat/test_linux_seccomp.c src/kernel/linux_compat/linux_seccomp.c \
+               tests/kernel/linux_compat/test_linux_fanotify.c src/kernel/linux_compat/linux_fanotify.c \
+               tests/kernel/linux_compat/test_linux_io_uring.c src/kernel/linux_compat/linux_io_uring.c \
+               tests/kernel/linux_compat/test_linux_modern_misc.c src/kernel/linux_compat/linux_modern_misc.c \
+               \
+               tests/services/test_service_manager.c src/services/service_manager.c \
+               tests/services/test_service_boot_policy.c src/services/service_boot_policy.c \
+               tests/services/test_service_runner.c src/services/service_runner.c \
+               tests/services/test_work_queue.c src/core/work_queue.c \
+               tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
+               tests/services/test_update_transact.c src/services/update_agent_transact.c \
+               \
+               tests/apps/test_hello_program.c \
+               tests/apps/test_embedded_progs.c src/kernel/embedded_progs.c \
+               \
+               tests/lang/test_localization.c src/lang/localization.c \
+               \
+               third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools
@@ -1345,6 +1542,7 @@ release-check:
 	$(MAKE) version-audit
 	$(MAKE) boot-perf-baseline-selftest
 	$(MAKE) verify-release-signature-selftest
+	$(MAKE) smoke-marker-policy-selftest
 	$(MAKE) all64 TOOLCHAIN64=elf
 	$(MAKE) iso-uefi TOOLCHAIN64=elf
 	$(MAKE) verify-release-checksums TOOLCHAIN64=elf

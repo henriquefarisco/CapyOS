@@ -1,5 +1,7 @@
 # CapyOS — Prontidão oficial do smoke VMware F2
 
+> **Runbook completo da Etapa 2:** [`etapa-2-external-validation-playbook.md`](etapa-2-external-validation-playbook.md) (Fase C1).
+
 ## Objetivo
 
 `tools/scripts/release_ci_smoke_readiness.py` valida a prontidão pública do smoke VMware oficial antes de ligar a VM real.
@@ -10,7 +12,7 @@ O gate consome o manifesto oficial de handoff CI/release e `SMOKE_X64_VMWARE_ARG
 
 ```bash
 make release-ci-smoke-readiness \
-  RELEASE_TAG=0.8.0-alpha.93+20260510 \
+  RELEASE_TAG=0.8.0-alpha.237+20260514 \
   SMOKE_X64_VMWARE_ARGS="--provider govc --vm-name CapyOS-Release-Smoke --govc-serial-log '[datastore1] CapyOS/serial.log' --serial-log build/ci/smoke_x64_vmware.serial.log"
 ```
 
@@ -42,6 +44,7 @@ Por padrão o alvo lê `build/release-official-handoff.manifest`. Para trocar o 
 Ordem recomendada quando a infraestrutura oficial estiver provisionada:
 
 ```bash
+make smoke-marker-policy-selftest
 make release-ci-official-provisioning-contract RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
 make release-ci-tag-gate RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
 make release-official-handoff-manifest RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...

@@ -26,7 +26,8 @@ Escopo atual:
   - roteiro de validacao do boot, login, CLI e persistencia
 - `testing/pr-and-release-checklist.md`
   - checklist humano de PR/release que complementa os gates automaticos
-    (`make test`, `make layout-audit`, `make release-check`)
+    (`make test`, `make layout-audit`, `make release-check` e
+    `make smoke-marker-policy-selftest` quando aplicavel)
 - `security/release-signing.md`
   - procedimento operacional de assinatura Ed25519 de checksums de release,
     chave offline, publicacao e rotacao
@@ -99,9 +100,13 @@ Escopo atual:
   - contrato de hostname do TLS kernel-side legado
 - `architecture/tls-hostname-shared-policy.md`
   - política compartilhada de hostname TLS entre kernel e userland
+- `architecture/etapa-3-driver-foundation-plan.md`
+  - plano de slice da Etapa 3 (XHCI + USB HID + storage); preparação técnica subordinada ao master plan
+- `architecture/monolith-refactor-roadmap.md`
+  - roadmap ativo de divisão dos arquivos C de runtime e teste acima de 900 LOC; rastreia splits feitos e pendentes
 - `plans/active/capyos-master-plan.md`
   - plano-mestre ativo e sequencial do CapyOS, com execução bloqueante da
-    Etapa 1 ate a Etapa 15
+    Etapa 1 ate a Etapa 16 (reorganizado por ROI ao usuário desktop comum em 2026-05-15)
 - `plans/STATUS.md`
   - visão executiva da próxima etapa permitida e das etapas bloqueadas
 - `plans/historical/implementation-delivered-through-alpha93.md`

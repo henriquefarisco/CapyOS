@@ -17,7 +17,7 @@ Last updated: 2026-04-28
 
 | Plataforma | Modo de boot | Status | Notas |
 |------------|-------------|--------|-------|
-| VMware Workstation/ESXi | UEFI | **Suportado** | Caminho oficial de release; `make release-check` valida neste ambiente |
+| VMware Workstation/ESXi | UEFI | **Suportado** | Caminho oficial de release; exige `make release-check` e smoke VMware oficial |
 | QEMU/OVMF | UEFI | **Laboratorio** | Usado em smoke CI (`make smoke-x64-*`); nao e caminho obrigatorio de release |
 | Hyper-V (Generation 2) | UEFI | **Fora de suporte** | Backend VMBus presente para investigacao tecnica; nao use em smoke ou release oficial |
 
@@ -76,7 +76,7 @@ Last updated: 2026-04-28
 
 ## Notas Gerais
 
-- O caminho oficial de release e **VMware + UEFI + E1000**. Qualquer mudanca nessa trilha requer re-validacao em `make release-check`.
+- O caminho oficial de release e **VMware + UEFI + E1000**. Qualquer mudanca nessa trilha requer re-validacao em `make release-check` e no smoke VMware oficial.
 - Drivers marcados como **Experimental** podem ser promovidos a **Laboratorio** ou **Suportado** mediante validacao em smoke oficial com evidencia documentada.
 - Drivers **Fora de suporte** nao devem ser usados em releases; o codigo e mantido para referencia tecnica e investigacao futura.
 - Atualizar esta tabela sempre que o status de um driver mudar ou um novo driver for adicionado.

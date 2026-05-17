@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,14 @@ def maybe_generate_manifest(args: argparse.Namespace) -> Path | None:
     if not args.kernel:
         print("[err] --auto-manifest requires --kernel")
         sys.exit(1)
-    tmp_manifest = Path(tempfile.mktemp(prefix="manifest_", suffix=".bin"))
+    # Use mkstemp instead of mktemp to avoid the TOCTOU race window that
+    # py/insecure-temporary-file flags: mktemp only returns a candidate
+    # name and races with concurrent processes, while mkstemp opens the
+    # file atomically and returns an fd we close immediately because the
+    # gen_manifest.py invocation below truncates+writes the same path.
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="manifest_", suffix=".bin")
+    os.close(tmp_fd)
+    tmp_manifest = Path(tmp_path)
     run(
         [
             "python3",

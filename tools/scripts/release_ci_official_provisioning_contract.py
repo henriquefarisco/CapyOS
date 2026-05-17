@@ -339,7 +339,12 @@ def validate_smoke_args(raw_args: str | None) -> int:
     rc, serial_log = singleton_option(tokens, "--serial-log", True)
     if rc != 0:
         return rc
-    assert serial_log is not None
+    # singleton_option(required=True) returns 0 only when value is set.
+    # Use explicit check so `python -O` cannot strip it (py/assert-stmt).
+    if serial_log is None:
+        raise RuntimeError(
+            "internal: singleton_option(--serial-log) returned 0 but value is None"
+        )
     if not ci_log_path_safe(serial_log):
         return fail("smoke oficial exige --serial-log relativo em build/ci/*.log")
     rc, summary_log = singleton_option(tokens, "--summary-log", False)
@@ -366,17 +371,29 @@ def validate_smoke_args(raw_args: str | None) -> int:
         rc, vmx = singleton_option(tokens, "--vmx", True)
         if rc != 0:
             return rc
-        assert vmx is not None
+        if vmx is None:  # required=True invariant (py/assert-stmt)
+            raise RuntimeError(
+                "internal: singleton_option(--vmx) returned 0 but value is None"
+            )
+        _ = vmx  # keep referenced; consumed by the smoke runner downstream
         ok("contrato oficial VMware vmrun conferido")
         return 0
     rc, vm_name = singleton_option(tokens, "--vm-name", True)
     if rc != 0:
         return rc
-    assert vm_name is not None
+    if vm_name is None:  # required=True invariant (py/assert-stmt)
+        raise RuntimeError(
+            "internal: singleton_option(--vm-name) returned 0 but value is None"
+        )
+    _ = vm_name  # consumed downstream
     rc, govc_serial_log = singleton_option(tokens, "--govc-serial-log", True)
     if rc != 0:
         return rc
-    assert govc_serial_log is not None
+    if govc_serial_log is None:  # required=True invariant (py/assert-stmt)
+        raise RuntimeError(
+            "internal: singleton_option(--govc-serial-log) returned 0 but value is None"
+        )
+    _ = govc_serial_log  # consumed downstream
     missing_env = [name for name in ("GOVC_URL", "GOVC_USERNAME", "GOVC_DATACENTER") if not os.environ.get(name)]
     if not os.environ.get("GOVC_PASSWORD") and not os.environ.get("GOVC_PASSWORD_FILE"):
         missing_env.append("GOVC_PASSWORD ou GOVC_PASSWORD_FILE")

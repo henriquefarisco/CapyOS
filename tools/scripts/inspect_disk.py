@@ -31,7 +31,11 @@ def _cat_esp(img: mmap.mmap, path: str) -> int:
         sys.stdout.buffer.write(data)
         if data and not data.endswith(b"\n"):
             sys.stdout.buffer.write(b"\n")
-    except Exception as exc:
+    except (OSError, ValueError, struct.error, IndexError, KeyError) as exc:
+        # Narrowed from `Exception` to satisfy py/catch-too-general-exception.
+        # Covers disk I/O (OSError), FAT32 parse failures (ValueError /
+        # struct.error from invalid binary layout) and missing entries
+        # (IndexError / KeyError from corrupted directory tables).
         log(f"[erro] Falha ao ler ESP:{path}: {exc}")
         return 1
     return 0
@@ -57,7 +61,8 @@ def _ls_esp(img: mmap.mmap, path: str) -> int:
                 f"    {tag} {full:<12} "
                 f"size={entry['size']} cl={entry['cluster']}"
             )
-    except Exception as exc:
+    except (OSError, ValueError, struct.error, IndexError, KeyError) as exc:
+        # See _cat_esp for narrowing rationale (py/catch-too-general-exception).
         log(f"[erro] Falha ao listar ESP:{path}: {exc}")
         return 1
     return 0
@@ -90,7 +95,9 @@ def _write_log_file(path: str) -> None:
     try:
         Path(path).write_text("\n".join(LOG_LINES), encoding="utf-8")
         log(f"[info] Log salvo em {path}")
-    except Exception as exc:
+    except OSError as exc:
+        # Narrowed from `Exception` to satisfy py/catch-too-general-exception.
+        # write_text only ever raises OSError under the utf-8 codec.
         log(f"[erro] Falha ao salvar log em {path}: {exc}")
 
 

@@ -68,6 +68,12 @@
 #define TRB_TYPE_CMD_COMPLETE 33
 #define TRB_TYPE_PORT_STATUS 34
 
+/* Ring sizes. Each ring is allocated as a single segment of TRBs.
+ * cmd_ring has a Link TRB at the last index that toggles cycle.
+ * evt_ring has no Link TRB (event ring uses ERST). */
+#define XHCI_CMD_RING_TRBS 256
+#define XHCI_EVT_RING_TRBS 256
+
 /* Transfer Request Block (TRB) - 16 bytes */
 struct xhci_trb {
   uint64_t param;

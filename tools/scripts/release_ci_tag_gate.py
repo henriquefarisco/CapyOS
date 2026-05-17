@@ -322,8 +322,13 @@ def main() -> int:
     rc, expected = require_public_inputs(public_key, args.expected_public_key_sha256, args.smoke_vmware_args)
     if rc != 0:
         return rc
-    assert public_key is not None
-    assert args.smoke_vmware_args is not None
+    # require_public_inputs returns 0 only when both public_key and
+    # smoke_vmware_args are populated. Use explicit checks so
+    # `python -O` cannot strip the invariant (py/assert-stmt).
+    if public_key is None or args.smoke_vmware_args is None:
+        raise RuntimeError(
+            "internal: require_public_inputs returned 0 but inputs are None"
+        )
     script_dir = Path(__file__).resolve().parent
     python = sys.executable or "python3"
     artifact_root = args.artifact_root.expanduser()

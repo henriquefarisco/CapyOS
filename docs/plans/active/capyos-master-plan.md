@@ -1,13 +1,19 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-05-14
+**Data de referência:** 2026-05-15
 **Versão atual:** `0.8.0-alpha.237+20260514`
 **Plataforma oficial:** `VMware + UEFI + E1000`
-**Status:** Etapa 2 tecnicamente fechada por código/docs; 1/15 etapas oficialmente fechadas; validação externa final pendente antes de liberar a Etapa 3.
+**Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
+**Status:** Etapa 2 tecnicamente fechada por código/docs; 1/16 etapas oficialmente fechadas; validação externa final pendente antes de liberar a Etapa 3.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
 [`../historical/implementation-delivered-through-alpha93.md`](../historical/implementation-delivered-through-alpha93.md).
+
+> **Reorganização em 2026-05-15:** as Etapas 3-15 foram **reordenadas por ROI ao usuário desktop comum** e expandidas para 14 etapas (3-16) sem violar a regra sequencial estrita. A sequência antiga foi preservada em
+> [`../historical/capyos-master-plan-pre-roi-reorder.md`](../historical/capyos-master-plan-pre-roi-reorder.md).
+> Etapas 1-2 não foram afetadas pela reorganização. Resumo das mudanças principais:
+> drivers/USB HID antecipados; scheduler/multithread incorporado ao CapyDisplay 2D; apps básicos antecipados; browser usável explícito; áudio e WiFi/power management promovidos a etapas próprias; CapyLX unificado e adiado; Mesa/Vulkan e CapyLang rebaixados para Etapa 15 nova.
 
 ## 1. Regra de execução
 
@@ -43,19 +49,20 @@ Detalhes vivem no documento histórico de implementação finalizada.
 |---|---|---|---|---|
 | 1 | CapyUI Shell Polish v1 | Concluída | base alpha.93 | desktop familiar Ubuntu/Windows 7-like |
 | 2 | Sessão gráfica operacional | Concluída por escopo técnico | Etapa 1 | login GUI real e smokes `gui-session`/`mouse-events` |
-| 3 | CapyDisplay 2D | Bloqueada até validação externa da Etapa 2 | Etapa 2 | camada 2D com damage, double buffer e primitives |
-| 4 | Driver framework + VM drivers | Bloqueada | Etapa 3 | drivers previsíveis para VM, storage, USB e vídeo inicial |
+| 3 | Driver framework + entrada USB HID + storage estável | Bloqueada até validação externa da Etapa 2 | Etapa 2 | XHCI/USB HID maduro, AHCI/NVMe estáveis, VirtIO opcional, política fail-safe de driver |
+| 4 | CapyDisplay 2D + scheduler/multithread runtime | Bloqueada | Etapa 3 | camada 2D com damage/double buffer, scheduler cooperativo, multithread runtime |
 | 5 | TLS userland real | Bloqueada | Etapa 4 | BearSSL userland com handshake real validado |
-| 6 | Release/update gate oficial | Bloqueada | Etapa 5 | smoke VMware+E1000 e update HTTPS oficiais |
-| 7 | Apps básicos do desktop | Bloqueada | Etapa 6 | apps essenciais ring-3 usáveis sem CLI |
-| 8 | Package manager + SDK + ABI estável | Bloqueada | Etapa 7 | ecossistema instalável e ABI documentada |
-| 9 | CapyLX L0-L2: CLI estático | Bloqueada | Etapa 8 | binários Linux estáticos simples rodam |
-| 10 | CapyLX L3-L5: POSIX amplo | Bloqueada | Etapa 9 | threads, sinais, rede e bundles dinâmicos |
-| 11 | Wayland bridge | Bloqueada | Etapa 10 | apps Linux GUI via Wayland mínimo |
-| 12 | Mesa/Vulkan path | Bloqueada | Etapa 11 | lavapipe/virgl/Venus como rota gráfica aberta |
-| 13 | JS engine sandboxed | Bloqueada | Etapa 12 | JavaScript isolado no browser/runtime web |
-| 14 | CapyLang | Bloqueada | Etapa 13 | linguagem própria para automação e apps |
-| 15 | Plataforma 1.0 hardening | Bloqueada | Etapa 14 | Secure Boot, SMP, firewall, multimídia e polish final |
+| 6 | Apps básicos do desktop maduros | Bloqueada | Etapa 5 | apps essenciais (file/text/image/calc/notes/media simples), libcapy-ui inicial e localização PT-BR/ES |
+| 7 | Browser usável com web moderna | Bloqueada | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms |
+| 8 | Release/update gate oficial + instalador polido | Bloqueada | Etapa 7 | smoke VMware+E1000 oficial, update HTTPS, instalador wizard amigável |
+| 9 | Package manager + SDK + ABI estável | Bloqueada | Etapa 8 | ecossistema instalável e ABI documentada |
+| 10 | Áudio + multimídia básica | Bloqueada | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist |
+| 11 | WiFi + power management + suspend/resume | Bloqueada | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
+| 12 | JS engine sandboxed | Bloqueada | Etapa 11 | JavaScript isolado no browser com bridge DOM controlada |
+| 13 | CapyLX L0-L5 unificado | Bloqueada | Etapa 12 | binários Linux estáticos + POSIX amplo + threads/futex/sockets |
+| 14 | Wayland bridge + apps Linux GUI | Bloqueada | Etapa 13 | apps Linux GUI via Wayland mínimo integrados ao compositor CapyOS |
+| 15 | Mesa/Vulkan path + CapyLang | Bloqueada | Etapa 14 | lavapipe/virgl/Venus + linguagem própria com VM bytecode e bindings seguros |
+| 16 | Plataforma 1.0 hardening | Bloqueada | Etapa 15 | Secure Boot, SMP, firewall, polish final |
 
 ## 4. Etapa 1 — CapyUI Shell Polish v1
 
@@ -156,12 +163,12 @@ cursor e rotas de mouse estão prontos, adiciona o alvo
 
 | Gate externo | Evidência obrigatória | Critério para considerar aceito |
 |---|---|---|
-| `alpha.237` | Execução fora desta máquina dos gates finais | CI/operador executa `make test`, `make layout-audit`, `make all64`, `make smoke-x64-vmware-mouse-events` e os gates de readiness/evidência/aceitação/promoção com `RELEASE_TAG=0.8.0-alpha.237+20260514`. Falhas encontradas entram como bugs da Etapa 2 antes de liberar a Etapa 3. |
+| `alpha.237` | Execução fora desta máquina dos gates finais | CI/operador executa `make test`, `make layout-audit`, `make all64`, `make release-check`, `make smoke-x64-vmware-mouse-events` e os gates de readiness/evidência/aceitação/promoção com `RELEASE_TAG=0.8.0-alpha.237+20260514`. Falhas encontradas entram como bugs da Etapa 2 antes de liberar a Etapa 3. |
 
 **Fora do escopo de fechamento da Etapa 2.**
 CapyDisplay 2D avançado, framework de drivers, TLS userland real, apps básicos,
 package manager, CapyLX, Wayland, Mesa/Vulkan, JavaScript, CapyLang e hardening
-1.0 pertencem às Etapas 3-15 e continuam bloqueados até a Etapa 2 fechar.
+1.0 pertencem às Etapas 3-16 e continuam bloqueados até a Etapa 2 fechar.
 
 `0.8.0-alpha.101+20260510` iniciou a etapa com frame pacing
 cooperativo no caminho ocioso do desktop.
@@ -2461,9 +2468,39 @@ fora de TLS).
 - [ ] Mouse e teclado passam pelo dispatcher sem perda crítica.
 - [x] Frame pacing reduz uso de CPU quando o desktop está ocioso.
 
-## 6. Etapa 3 — CapyDisplay 2D
+## 6. Etapa 3 — Driver framework + entrada USB HID + storage estável
 
-**Objetivo:** criar uma camada gráfica própria antes de drivers complexos.
+**Objetivo:** garantir que o hardware básico de um desktop comum funcione de forma previsível antes de qualquer trilha gráfica avançada ou de apps maduros. Hardware funcionar é pré-requisito de UX.
+
+**ROI:** alto — teclado USB e storage confiável são base; sem isso o usuário não usa o sistema.
+
+### Entregáveis
+
+- Device manager com enumeração PCI/PCIe, IRQ, MSI/MSI-X, DMA API e logs.
+- XHCI enumeration + USB HID class completo (fecha lacuna em `system-overview.md §9`).
+- AHCI maduro + NVMe básico estável + tratamento de erros de I/O recuperável.
+- VirtIO-net e VirtIO-block como prioridade VM (preserva foco VMware).
+- VMware SVGA II como backend secundário para resoluções estáveis.
+- Política de fallback: falha de driver não derruba kernel, registra diagnóstico.
+
+### Critérios de aceite
+
+- [ ] VM oficial sobe com storage/rede/vídeo previsíveis.
+- [ ] Teclado USB funcional fora do `EFI ConIn` em VMware + UEFI.
+- [ ] Falha de driver não derruba o kernel sem diagnóstico.
+- [ ] Driver framework documenta ownership, DMA e teardown.
+
+### Gates externos recomendados
+
+- `make smoke-x64-vmware-usb-hid-keyboard` (novo).
+- `make smoke-x64-iso TOOLCHAIN64=host` continua passando.
+- `make all64` + `make release-check` continuam passando.
+
+## 7. Etapa 4 — CapyDisplay 2D + scheduler/multithread runtime
+
+**Objetivo:** criar uma camada gráfica 2D sólida e introduzir scheduler/multithread cooperativo no runtime — pré-requisito para apps que precisam de paralelismo previsível e UI fluida.
+
+**ROI:** médio-alto — UI fluida sem travar é base de qualquer experiência polida; scheduler fecha uma lacuna conhecida em `project-overview.md`.
 
 ### Entregáveis
 
@@ -2471,34 +2508,27 @@ fora de TLS).
 - Double buffering, clipping, damage tracking e blits otimizados.
 - Cache de glyph/fontes e primitives 2D estáveis.
 - API interna para compositor não depender diretamente do framebuffer bruto.
+- Scheduler cooperativo + multithread runtime (incorporação do gap listado em `project-overview.md`).
+- Política de panic/oops controlada quando thread de app falha.
 
 ### Critérios de aceite
 
 - [ ] Compositor redesenha somente regiões danificadas quando possível.
 - [ ] Cursor e texto não piscam sob resize/move de janela.
 - [ ] Fallback framebuffer continua funcionando.
+- [ ] Apps single-threaded existentes continuam funcionais como regressão.
+- [ ] Thread de app crashando não derruba kernel nem desktop.
 
-## 7. Etapa 4 — Driver framework + VM drivers
+### Gates externos recomendados
 
-**Objetivo:** aumentar compatibilidade e preparar vídeo/storage/rede mais reais.
-
-### Entregáveis
-
-- Device manager com enumeração PCI/PCIe, IRQ, MSI/MSI-X, DMA API e logs.
-- VirtIO-net, VirtIO-block e VirtIO-gpu como prioridade de VM.
-- VMware SVGA II para desenvolvimento oficial.
-- AHCI, NVMe básico, USB HID e USB mass storage.
-- Política de recoverability para falhas de driver.
-
-### Critérios de aceite
-
-- [ ] VM oficial sobe com storage/rede/vídeo previsíveis.
-- [ ] Falha de driver não derruba o kernel sem diagnóstico.
-- [ ] Driver framework documenta ownership, DMA e teardown.
+- `make smoke-x64-vmware-compositor-damage-track` (novo).
+- `make smoke-x64-vmware-scheduler-fairness` (novo).
 
 ## 8. Etapa 5 — TLS userland real
 
-**Objetivo:** avançar `libcapy-tls` de metadata-only para handshake real.
+**Objetivo:** avançar `libcapy-tls` de metadata-only para handshake real. Pré-requisito direto para browser HTTPS (Etapa 7) e release/update HTTPS (Etapa 8).
+
+**ROI:** alto — sem HTTPS real, nada moderno funciona (web, update, sync, qualquer serviço).
 
 ### Entregáveis
 
@@ -2514,9 +2544,68 @@ fora de TLS).
 - [ ] HTTPS em `libcapy-net` deixa de retornar unsupported para caso válido.
 - [ ] Certificado inválido falha fechado.
 
-## 9. Etapa 6 — Release/update gate oficial
+### Gates externos recomendados
 
-**Objetivo:** fechar a release operacional com CI/smoke oficial e update real.
+- `make smoke-x64-vmware-tls-handshake` (novo).
+- `make release-check` continua passando.
+
+## 9. Etapa 6 — Apps básicos do desktop maduros
+
+**Objetivo:** entregar o primeiro conjunto de apps verdadeiramente usáveis sem CLI, com toolkit estável, ícones oficiais e localização nativa. Esta é a etapa onde o usuário comum começa a perceber valor real.
+
+**ROI:** muito alto — primeiro valor visível ao usuário final.
+
+### Entregáveis
+
+- File Manager, Text Editor, Settings, Image Viewer (consome decoders existentes em `src/gui/core/{png,jpeg,bmp}_loader.c`), Calculator, Log Viewer, Notes/Calendar simples, Media Player de áudio e imagem (sem vídeo ainda — vídeo entra na Etapa 10).
+- Toolkit `libcapy-ui` inicial: button, list, textbox, dialog, menu.
+- Ícones oficiais e integração com launcher/taskbar.
+- Acessibilidade básica: atalhos de teclado consistentes, contraste mínimo.
+- Localização nativa: PT-BR e ES como targets de release; EN continua default obrigatório.
+
+### Critérios de aceite
+
+- [ ] Cada app abre, executa função primária e fecha sem crash.
+- [ ] Falha de um app não derruba desktop.
+- [ ] Apps usam o tema da Etapa 1.
+- [ ] Strings de UI dos apps estão localizadas em PT-BR e ES com fallback EN.
+
+### Gates externos recomendados
+
+- `make smoke-x64-vmware-apps-basic-roundtrip` (novo): abre cada app, executa função primária, fecha sem leak/crash.
+
+## 10. Etapa 7 — Browser usável com web moderna
+
+**Objetivo:** transformar o `html_viewer` atual em browser usável para sites HTTPS estáticos modernos. JavaScript fica fora desta etapa (entra na Etapa 12); o foco é HTTPS, decode robusto, streaming render, cache e formulários.
+
+**ROI:** muito alto — abre acesso à internet real para o usuário.
+
+### Entregáveis
+
+- HTTPS funcional via TLS Etapa 5.
+- HTML parser robusto + CSS subset estável.
+- Streaming render para páginas grandes (fecha gap `feature/browser-internet-improvements` em `system-overview.md §10`).
+- Image decode JPEG/PNG/WebP em produção (decoders já existem, falta wiring com o renderer).
+- HTTP cache em memória + persistência simples em disco.
+- Cookies básicos com escopo por domínio.
+- Formulários simples (login, busca).
+
+### Critérios de aceite
+
+- [ ] Páginas alvo (wikipedia, blog estático, docs, search engine simples, news estático) carregam e renderizam sem travar a UI.
+- [ ] HTTPS válido carrega; HTTPS inválido falha fechado com mensagem clara.
+- [ ] Imagens JPEG/PNG aparecem inline.
+- [ ] Cache acelera segunda visita observavelmente.
+
+### Gates externos recomendados
+
+- `make smoke-x64-vmware-browser-https-static` (novo) com lista alvo de 5 sites.
+
+## 11. Etapa 8 — Release/update gate oficial + instalador polido
+
+**Objetivo:** fechar a release operacional com CI/smoke oficial, update HTTPS real e wizard de instalação amigável. Os blocos cripto (Ed25519 real em `alpha.217`) já estão prontos; falta wiring operacional.
+
+**ROI:** médio-alto — confiança e manutenção contínua para o usuário final.
 
 ### Entregáveis
 
@@ -2524,115 +2613,97 @@ fora de TLS).
 - CI executa smoke VMware+E1000 com DHCP/DNS/HTTP/HTTPS.
 - `update-fetch` e payload HTTPS passam em ambiente controlado.
 - Release gate promove artefatos somente com evidência pública válida.
+- Instalador wizard amigável: seleção de disco, criação de usuário, idioma, fuso, política de senha.
+- Migration de volume legacy → header-managed transparente (orquestrador já entregue em `alpha.232`).
 
 ### Critérios de aceite
 
 - [ ] Smoke VMware+E1000 real passa em CI provisionada.
 - [ ] Update HTTPS baixa, valida, prepara e aplica payload assinado.
 - [ ] Evidência pública permite auditoria sem chave privada.
+- [ ] Instalador wizard completa fresh install + reboot + login + persistência.
 
-## 10. Etapa 7 — Apps básicos do desktop
+### Gates externos recomendados
 
-**Objetivo:** tornar o sistema utilizável sem CLI.
+- `make smoke-x64-vmware-installer-wizard` (novo).
+- `make release-check` com payload assinado.
 
-### Entregáveis
+## 12. Etapa 9 — Package manager + SDK + ABI estável
 
-- File Manager, Text Editor, Settings, Image Viewer, Calculator e Log Viewer.
-- Toolkit `libcapy-ui` inicial com button, list, textbox e dialog.
-- Ícones oficiais e integração com launcher/taskbar.
+**Objetivo:** permitir apps fora da imagem base e que terceiros publiquem software para CapyOS.
 
-### Critérios de aceite
-
-- [ ] Cada app abre, executa função primária e fecha sem crash.
-- [ ] Falha de um app não derruba desktop.
-- [ ] Apps usam o tema da Etapa 1.
-
-## 11. Etapa 8 — Package manager + SDK + ABI estável
-
-**Objetivo:** permitir apps fora da imagem base.
+**ROI:** alto (médio-prazo) — ecossistema cresce sem releases monolíticas.
 
 ### Entregáveis
 
-- Formato `.capypkg` com manifest, assinatura e rollback.
-- `pkgd`, CLI `pkg` e app Software Center.
-- ABI estável documentada.
+- Formato `.capypkg` com manifest, assinatura Ed25519 e rollback.
+- `pkgd`, CLI `pkg` e app Software Center gráfico.
+- ABI estável documentada em `include/`.
 - SDK headers, samples e guia de build.
 
 ### Critérios de aceite
 
 - [ ] Instalar, listar, atualizar e remover pacote sobrevive reboot.
 - [ ] ABI pública tem versionamento e política de compatibilidade.
+- [ ] App Software Center instala um pacote via UI sem CLI.
 
-## 12. Etapa 9 — CapyLX L0-L2: Linux ABI CLI estático
+### Gates externos recomendados
 
-**Objetivo:** iniciar compatibilidade Linux estilo WSL1, sem kernel Linux.
+- `make smoke-x64-vmware-pkg-install` (novo).
 
-### Entregáveis
+## 13. Etapa 10 — Áudio + multimídia básica
 
-- `linux_personality` por processo.
-- Loader ELF64 Linux com stack `argc/argv/envp/auxv`.
-- Dispatcher Linux syscall auditável.
-- Syscalls mínimas: read/write/openat/close/fstat/lseek/mmap/munmap/brk,
-  exit/exit_group/getpid/clock_gettime/uname/getrandom.
-- `/dev`, `/proc`, `/tmp` e `/etc` mínimos.
+**Objetivo:** habilitar áudio de sistema e ampliar Media Player para playlist e reprodução real. Vídeo software simples entra aqui como bônus opcional.
 
-### Critérios de aceite
-
-- [ ] Binário Linux estático simples executa e retorna código correto.
-- [ ] Syscall desconhecida retorna `-ENOSYS` de forma previsível.
-- [ ] Processo CapyLX não acessa APIs internas fora da tradução.
-
-## 13. Etapa 10 — CapyLX L3-L5: POSIX amplo
-
-**Objetivo:** ampliar CapyLX para ferramentas Linux reais.
+**ROI:** alto — multimídia é uso diário do desktop comum (música, calls leves, vídeos curtos).
 
 ### Entregáveis
 
-- `clone`, `futex`, sinais, `wait4`, `execve`, `pipe2`, `dup3`, poll/epoll.
-- Sockets Linux ABI traduzidos para a rede CapyOS.
-- App bundles com bibliotecas empacotadas.
-- Rootfs Linux-like opcional e isolado.
+- Driver Intel HDA + AC97 + USB Audio class (ao menos um deles validado em VMware).
+- Mixer de sistema + controle por app.
+- Decoders de áudio: WAV nativo, OGG/Vorbis ou MP3 via library vendorizada.
+- App Media Player evolui para suportar playlist e visualização básica.
+- Vídeo software simples (decode 1 codec leve em resolução baixa) opcional.
 
 ### Critérios de aceite
 
-- [ ] Ferramentas CLI Linux dinâmicas simples rodam em app bundle.
-- [ ] Threads/futex funcionam para libc/pthread comum.
-- [ ] CapyLX permanece módulo de compatibilidade, não base do sistema.
+- [ ] Reprodução de WAV/OGG sem stutter perceptível em VM oficial.
+- [ ] Mixer permite ajuste de volume global e por app.
+- [ ] Falha de driver de áudio não derruba o sistema.
 
-## 14. Etapa 11 — Wayland bridge
+### Gates externos recomendados
 
-**Objetivo:** rodar apps gráficos Linux modernos sem X11 inicial.
+- `make smoke-x64-vmware-audio-playback-roundtrip` (novo).
+
+## 14. Etapa 11 — WiFi + power management + suspend/resume
+
+**Objetivo:** habilitar uso real fora da VM oficial: WiFi, ACPI battery, suspend/resume. Sem isso o sistema não roda em laptops/desktops modernos.
+
+**ROI:** muito alto — exigência para uso fora do laboratório.
 
 ### Entregáveis
 
-- Servidor/proxy Wayland mínimo: `wl_compositor`, `wl_shm`, input e
-  `xdg_shell` básico.
-- Ponte entre Wayland surfaces e compositor CapyOS.
-- Clipboard e resize/focus básicos.
+- Stack 802.11 mínimo: ao menos um driver WiFi popular (RTL8821CE ou Intel iwlwifi se viável).
+- WPA2/WPA3 supplicant userland.
+- ACPI battery + thermal monitoring básico.
+- Suspend-to-RAM (S3) inicial em VMware e máquina real onde viável.
 
 ### Critérios de aceite
 
-- [ ] App Wayland simples abre janela, recebe input e fecha.
-- [ ] Falha do app Linux não derruba compositor.
+- [ ] WiFi conecta a rede WPA2 com DHCP funcional.
+- [ ] ACPI battery aparece no system tray com nível atualizando.
+- [ ] Suspend/resume preserva sessão em VMware.
 
-## 15. Etapa 12 — Mesa/Vulkan path
+### Gates externos recomendados
 
-**Objetivo:** criar rota gráfica open source sem prometer Vulkan nativo cedo.
+- `make smoke-x64-vmware-wifi-dhcp-roundtrip` (novo) com WiFi via passthrough quando disponível.
+- `make smoke-x64-vmware-acpi-battery-readout` (novo).
 
-### Entregáveis
+## 15. Etapa 12 — JS engine sandboxed
 
-- Mesa software/lavapipe para Vulkan software inicial.
-- VirGL/Venus sobre VirtIO-gpu quando disponível.
-- Política clara: Vulkan real exige driver/memory manager/sync antes.
+**Objetivo:** habilitar web dinâmica sem comprometer isolamento. Browser da Etapa 7 ganha JavaScript com bridge DOM controlada e budget de execução.
 
-### Critérios de aceite
-
-- [ ] Demo gráfica software roda via caminho Mesa controlado.
-- [ ] Fallback 2D continua estável quando aceleração indisponível.
-
-## 16. Etapa 13 — JS engine sandboxed
-
-**Objetivo:** habilitar web dinâmica sem comprometer isolamento.
+**ROI:** alto — abre a web realmente moderna; sem JS muitos sites úteis não funcionam.
 
 ### Entregáveis
 
@@ -2644,40 +2715,117 @@ fora de TLS).
 
 - [ ] Script básico altera título/DOM permitido.
 - [ ] Loop infinito é interrompido por budget.
+- [ ] Página com JS hostil não escapa do sandbox.
 
-## 17. Etapa 14 — CapyLang
+### Gates externos recomendados
 
-**Objetivo:** linguagem própria para automação e apps CapyOS.
+- `make smoke-x64-vmware-browser-js-dom` (novo) em página de teste com DOM mutável.
+
+## 16. Etapa 13 — CapyLX L0-L5 unificado
+
+**Objetivo:** iniciar e expandir compatibilidade Linux estilo WSL1, sem kernel Linux. Une os antigos níveis L0-L2 (CLI estático) e L3-L5 (POSIX amplo) em uma etapa única, agora rebaixada para depois das prioridades do desktop comum.
+
+**ROI:** médio — público power user e ferramentas Linux; não é exigência do desktop comum.
 
 ### Entregáveis
 
-- Parser, VM bytecode e `.capyscript`.
-- Bindings FS/config/shell seguros.
-- Módulos, FFI controlada, formatter e LSP em ondas posteriores.
+- `linux_personality` por processo.
+- Loader ELF64 Linux com stack `argc/argv/envp/auxv`.
+- Dispatcher Linux syscall auditável.
+- Syscalls mínimas: read/write/openat/close/fstat/lseek/mmap/munmap/brk, exit/exit_group/getpid/clock_gettime/uname/getrandom.
+- `clone`, `futex`, sinais, `wait4`, `execve`, `pipe2`, `dup3`, poll/epoll.
+- Sockets Linux ABI traduzidos para a rede CapyOS.
+- App bundles com bibliotecas empacotadas.
+- `/dev`, `/proc`, `/tmp` e `/etc` mínimos.
+- Rootfs Linux-like opcional e isolado.
 
 ### Critérios de aceite
 
-- [ ] Script de automação roda em ring 3.
+- [ ] Binário Linux estático simples executa e retorna código correto.
+- [ ] Ferramentas CLI Linux dinâmicas simples rodam em app bundle.
+- [ ] Threads/futex funcionam para libc/pthread comum.
+- [ ] Syscall desconhecida retorna `-ENOSYS` de forma previsível.
+- [ ] CapyLX permanece módulo de compatibilidade, não base do sistema.
+
+### Gates externos recomendados
+
+- `make smoke-x64-vmware-capylx-binary-static` (novo).
+- `make smoke-x64-vmware-capylx-pthread` (novo).
+
+## 17. Etapa 14 — Wayland bridge + apps Linux GUI
+
+**Objetivo:** rodar apps gráficos Linux modernos sem X11 inicial, integrados ao compositor CapyOS.
+
+**ROI:** médio-alto — expande ecossistema gráfico para milhares de apps Linux já existentes.
+
+### Entregáveis
+
+- Servidor/proxy Wayland mínimo: `wl_compositor`, `wl_shm`, input e `xdg_shell` básico.
+- Ponte entre Wayland surfaces e compositor CapyOS.
+- Clipboard e resize/focus básicos.
+
+### Critérios de aceite
+
+- [ ] App Wayland simples abre janela, recebe input e fecha.
+- [ ] Falha do app Linux não derruba compositor.
+
+### Gates externos recomendados
+
+- `make smoke-x64-vmware-wayland-roundtrip` (novo).
+
+## 18. Etapa 15 — Mesa/Vulkan path + CapyLang
+
+**Objetivo:** abrir rota gráfica software via Mesa/lavapipe e introduzir CapyLang como linguagem própria de automação e apps. CapyLang foi rebaixada nesta reorganização por ter baixo ROI direto ao desktop comum, ainda que seja identidade de longo prazo do projeto.
+
+**ROI:** médio — gráficos software permitem demos; CapyLang é identidade do projeto.
+
+### Entregáveis
+
+- Mesa software/lavapipe para Vulkan software inicial.
+- VirGL/Venus sobre VirtIO-gpu quando disponível.
+- Política clara: Vulkan real exige driver/memory manager/sync antes.
+- CapyLang: parser, VM bytecode e `.capyscript`.
+- Bindings FS/config/shell seguros.
+- Módulos, FFI controlada, formatter e LSP em ondas posteriores (não bloqueiam a etapa).
+
+### Critérios de aceite
+
+- [ ] Demo gráfica software roda via caminho Mesa controlado.
+- [ ] Fallback 2D continua estável quando aceleração indisponível.
+- [ ] Script CapyLang de automação roda em ring 3.
 - [ ] Bindings respeitam permissões do usuário.
 
-## 18. Etapa 15 — Plataforma 1.0 hardening
+### Gates externos recomendados
 
-**Objetivo:** consolidar CapyOS como sistema sólido para uso contínuo.
+- `make smoke-x64-vmware-mesa-software-demo` (novo).
+- `make smoke-x64-vmware-capylang-automation` (novo).
+
+## 19. Etapa 16 — Plataforma 1.0 hardening
+
+**Objetivo:** consolidar CapyOS como sistema sólido para uso contínuo. É o fechamento de release 1.0.
+
+**ROI:** alto (qualidade de produção) — auditável e estável para uso real prolongado.
 
 ### Entregáveis
 
 - Secure Boot e measured boot.
 - SMP/multicore.
 - Firewall mínimo.
-- USB completo, áudio, multimídia, suíte Office/IDE e polish final.
+- USB completo, polish final.
+- Suíte Office/IDE opcional via package manager.
 
 ### Critérios de aceite
 
 - [ ] Plataforma tem boot/update/rollback/GUI/apps/compatibilidade auditáveis.
 - [ ] Segurança e performance têm gates regressivos documentados.
+- [ ] SMP roda sob workload sintético sem regressão observável.
 
-## 19. Próximo comando esperado
+### Gates externos recomendados
 
-A próxima implementação, quando autorizada, deve continuar somente a
-**Etapa 1 — CapyUI Shell Polish v1**. Nenhuma etapa posterior deve começar
-antes dela fechar 100%.
+- `make release-check` em pipeline CI oficial.
+- `make smoke-x64-vmware-smp-stress` (novo).
+- `make smoke-x64-vmware-firewall-block` (novo).
+
+## 20. Próximo comando esperado
+
+A próxima implementação, quando autorizada pela conclusão operacional externa da Etapa 2, deve continuar somente a **Etapa 3 — Driver framework + entrada USB HID + storage estável** conforme a nova sequência reorganizada por ROI. Nenhuma etapa posterior deve começar antes dela fechar 100%.

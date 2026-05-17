@@ -1,7 +1,8 @@
 # Checklist de PR e release - CapyOS
 
 Esta lista executa o gate humano que complementa os gates automaticos
-(`make test`, `make layout-audit`, `make release-check`). Ela garante que cada
+(`make test`, `make layout-audit`, `make release-check` e
+`make smoke-marker-policy-selftest` quando aplicavel). Ela garante que cada
 mudanca relevante atualize a fonte de verdade da robustez do sistema.
 
 ## Como usar
@@ -36,6 +37,9 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
       para iteracao rapida.
 - [ ] `make release-check` passou local quando o PR afeta release, build,
       seguranca, FS, rede, browser ou performance.
+- [ ] Se a mudanca toca markers de smoke, `tools/scripts/smoke_x64_vmware.py`,
+      `tools/scripts/release_ci_smoke_evidence.py` ou evidencias VMware,
+      `make smoke-marker-policy-selftest` passou e a saida foi anexada.
 - [ ] Quando aplicavel, `make smoke-x64-cli SMOKE_X64_CLI_ARGS='--require-shell'`
       ou outro smoke especifico foi executado e o log anexado ao PR.
 

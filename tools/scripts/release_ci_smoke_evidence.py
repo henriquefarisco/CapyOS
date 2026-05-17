@@ -24,18 +24,18 @@ from release_ci_smoke_readiness import (
     smoke_summary,
     validate_handoff,
 )
+from smoke_marker_policy import (
+    first_failure_marker,
+    markers_in_order,
+    self_test as marker_policy_self_test,
+    unique_markers,
+)
 
 EVIDENCE_FORMAT = "capyos-release-smoke-evidence-manifest-v1"
 DEFAULT_MARKERS = (
     "[net] DHCP: lease acquired.",
     "[smoke] gui-session ready",
     "[smoke] mouse-events ready",
-)
-FAILURE_MARKERS = (
-    "kernel panic",
-    "panic:",
-    "triple fault",
-    "general protection fault",
 )
 PRIVATE_KEY_MARKERS = (
     "-----BEGIN PRIVATE KEY-----",
@@ -61,9 +61,9 @@ def marker_values(raw_args: str) -> tuple[int, tuple[str, ...]]:
     except ValueError as exc:
         return fail(f"SMOKE_X64_VMWARE_ARGS invalido: {exc}"), ()
     extra_markers = tuple(option_values(tokens, "--marker"))
-    markers = DEFAULT_MARKERS + tuple(
+    markers = unique_markers(DEFAULT_MARKERS + tuple(
         marker for marker in extra_markers if marker not in DEFAULT_MARKERS
-    )
+    ))
     if any(not marker for marker in markers):
         return fail("SMOKE_X64_VMWARE_ARGS contem --marker vazio"), ()
     return 0, markers
@@ -106,13 +106,35 @@ def validate_no_private_material(texts: tuple[tuple[str, str], ...]) -> int:
 
 
 def validate_markers(text: str, markers: tuple[str, ...], label: str) -> int:
-    low = text.lower()
-    missing = [marker for marker in markers if marker.lower() not in low]
-    if missing:
-        return fail(f"{label} sem markers obrigatorios: " + ", ".join(missing))
-    for marker in FAILURE_MARKERS:
-        if marker in low:
-            return fail(f"{label} contem marker de falha: {marker}")
+    if not markers_in_order(text, markers):
+        return fail(f"{label} sem markers obrigatorios em ordem: " + ", ".join(markers))
+    failure_marker = first_failure_marker(text)
+    if failure_marker:
+        return fail(f"{label} contem marker de falha: {failure_marker}")
+    return 0
+
+
+def run_self_test() -> int:
+    policy_ok, policy_message = marker_policy_self_test()
+    if not policy_ok:
+        return fail("self-test smoke_marker_policy: " + policy_message)
+    markers = ("alpha", "beta", "gamma")
+    if validate_markers("ALPHA\nnoise\nbeta\ngamma", markers, "self-test") != 0:
+        return fail("self-test: markers em ordem foram rejeitados")
+    if markers_in_order("beta\nalpha\ngamma", markers):
+        return fail("self-test: markers fora de ordem foram aceitos")
+    if markers_in_order("alpha\ngamma", markers):
+        return fail("self-test: marker ausente foi aceito")
+    if first_failure_marker("alpha\npanic:\nbeta\ngamma") != "panic:":
+        return fail("self-test: marker de falha nao foi detectado")
+    rc, deduped = marker_values("--marker capysh --marker capysh")
+    if rc != 0 or deduped[-1:] != ("capysh",) or deduped.count("capysh") != 1:
+        return fail("self-test: markers duplicados nao foram deduplicados em ordem")
+    if not markers_in_order("ready\nnoise\nready", ("ready", "ready")):
+        return fail("self-test: markers repetidos em ordem foram rejeitados")
+    if markers_in_order("ready", ("ready", "ready")):
+        return fail("self-test: marker repetido sem segunda ocorrencia foi aceito")
+    ok("self-test release_ci_smoke_evidence markers-in-order passed")
     return 0
 
 
@@ -217,6 +239,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-summary-bytes", type=int, default=1048576)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
 
@@ -301,6 +324,8 @@ def expected_manifest(args: argparse.Namespace) -> tuple[int, str]:
 
 def main() -> int:
     args = parse_args()
+    if args.self_test:
+        return run_self_test()
     rc = reject_private_key_env()
     if rc != 0:
         return rc

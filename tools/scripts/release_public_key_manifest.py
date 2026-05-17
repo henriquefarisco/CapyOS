@@ -136,7 +136,12 @@ def main() -> int:
     rc = require_ed25519_public_der(der)
     if rc != 0:
         return rc
-    assert der is not None
+    # require_ed25519_public_der returns 0 only when der is populated.
+    # Use explicit check so `python -O` cannot strip it (py/assert-stmt).
+    if der is None:
+        raise RuntimeError(
+            "internal: require_ed25519_public_der returned 0 but der is None"
+        )
     actual = hashlib.sha256(der).hexdigest()
     if actual != expected:
         return fail(f"fingerprint SHA-256 da chave publica inesperado: {actual}")

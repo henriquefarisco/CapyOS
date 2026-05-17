@@ -1,13 +1,12 @@
 # Indice de planos CapyOS
 
-> **Atualizado em 2026-05-10** — reorganização do plano ativo para uma
-> sequência bloqueante. Entregas concluídas até `0.8.0-alpha.93+20260510`
-> foram movidas para documentação histórica.
+> **Atualizado em 2026-05-15** — Etapas 3-15 reorganizadas por ROI ao usuário desktop comum e expandidas para 14 etapas (3-16) sem violar a regra sequencial estrita. Sequência antiga preservada em [`historical/capyos-master-plan-pre-roi-reorder.md`](historical/capyos-master-plan-pre-roi-reorder.md).
+>
+> **Histórico anterior (2026-05-10):** reorganização do plano ativo para uma sequência bloqueante. Entregas concluídas até `0.8.0-alpha.93+20260510` foram movidas para documentação histórica.
 >
 > A pasta `active/` continua com **um único plano vivo**.
 >
-> **Visão executiva:** [`STATUS.md`](STATUS.md) mostra a próxima etapa permitida
-> e as etapas bloqueadas.
+> **Visão executiva:** [`STATUS.md`](STATUS.md) mostra a próxima etapa permitida e as etapas bloqueadas.
 
 ## Estrutura de pastas
 
@@ -32,7 +31,7 @@ docs/plans/
 
 | Documento | Papel atual |
 |---|---|
-| [`capyos-master-plan.md`](active/capyos-master-plan.md) | Fonte de verdade única. Define a sequência bloqueante Etapa 1 → Etapa 15: CapyUI polish, sessão gráfica, CapyDisplay, drivers, TLS real, release/update, apps, package manager/SDK, CapyLX, Wayland, Mesa/Vulkan, JS, CapyLang e hardening 1.0. |
+| [`capyos-master-plan.md`](active/capyos-master-plan.md) | Fonte de verdade única. Define a sequência bloqueante Etapa 1 → Etapa 16 reorganizada por ROI ao usuário desktop comum em 2026-05-15: CapyUI polish (1), sessão gráfica (2), drivers+USB HID+storage (3), CapyDisplay 2D+scheduler (4), TLS real (5), apps maduros (6), browser usável (7), release+instalador (8), package manager+SDK (9), áudio+multimídia (10), WiFi+power (11), JS engine (12), CapyLX unificado (13), Wayland (14), Mesa+CapyLang (15) e hardening 1.0 (16). |
 
 ## Entregas históricas consolidadas
 
@@ -41,6 +40,7 @@ docs/plans/
 | [`implementation-delivered-through-alpha93.md`](historical/implementation-delivered-through-alpha93.md) | Implementação finalizada até `0.8.0-alpha.93+20260510`; substitui checklists concluídos no plano ativo. | 2026-05-10 |
 | [`capyos-master-plan-legacy-through-alpha93.md`](historical/capyos-master-plan-legacy-through-alpha93.md) | Snapshot do master plan antes da reorganização sequencial. | 2026-05-10 |
 | [`capyos-status-legacy-through-alpha93.md`](historical/capyos-status-legacy-through-alpha93.md) | Snapshot do STATUS antes da remoção de itens concluídos do plano ativo. | 2026-05-10 |
+| [`capyos-master-plan-pre-roi-reorder.md`](historical/capyos-master-plan-pre-roi-reorder.md) | Snapshot da sequência Etapas 3-15 do master plan antes da reordenação por ROI ao usuário desktop comum. | 2026-05-15 |
 | [`f3-browser-delivered.md`](historical/f3-browser-delivered.md) | F3 browser ring-3 histórico. | 2026-05-03 |
 | [`ux-w7-ish-delivered.md`](historical/ux-w7-ish-delivered.md) | UX W7-ish histórica entregue. | 2026-05-03 |
 | [`f3-3c-html-viewer-userland-slicing.md`](historical/f3-3c-html-viewer-userland-slicing.md) | Fatiamento da migração parser/render/raster/fetch para ring 3. | 2026-05-03 |

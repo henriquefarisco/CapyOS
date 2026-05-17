@@ -1,11 +1,13 @@
 # CapyOS — Smoke VMware+E1000 mouse-events
 
+> **Runbook completo da Etapa 2:** [`../operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md) (Fase C2 — este é o smoke real).
+
 ## Objetivo
 
 Este smoke cobre a trilha oficial de release VMware + UEFI + E1000. O harness
 `tools/scripts/smoke_x64_vmware.py` orquestra uma VM externa via `vmrun` ou
 `govc`, observa o log serial/debugcon e valida markers de rede/DHCP e sessão
-gráfica pronta.
+gráfica pronta em ordem.
 
 A automação é intencionalmente fina: a infraestrutura VMware, a VM template e a
 configuração de serial file pertencem ao operador ou à CI privada.
@@ -41,8 +43,8 @@ e demais variáveis de ambiente já configuradas.
 
 ## Markers
 
-O alvo `smoke-x64-vmware-mouse-events` exige três markers reais em comparação
-case-insensitive:
+O alvo `smoke-x64-vmware-mouse-events` exige três markers reais em ordem, com
+comparação case-insensitive:
 
 - `[net] DHCP: lease acquired.`
 - `[smoke] gui-session ready`
@@ -55,6 +57,9 @@ mantém os markers obrigatórios e repassa os extras ao harness:
 SMOKE_X64_VMWARE_ARGS="--provider vmrun --vmx /path/to/CapyOS.vmx --serial-log build/ci/smoke_x64_vmware.serial.log --marker capysh"
 make smoke-x64-vmware-mouse-events SMOKE_X64_VMWARE_ARGS="$SMOKE_X64_VMWARE_ARGS"
 ```
+
+O harness reprova imediatamente se o serial contiver `kernel panic`, `panic:`,
+`triple fault` ou `general protection fault`.
 
 ## Evidencia publica pos-smoke
 
@@ -69,7 +74,7 @@ make release-ci-smoke-promotion RELEASE_TAG=... SMOKE_X64_VMWARE_ARGS="$SMOKE_X6
 make verify-release-ci-smoke-promotion RELEASE_TAG=... SMOKE_X64_VMWARE_ARGS="$SMOKE_X64_VMWARE_ARGS"
 ```
 
-O manifesto registra hashes SHA-256 e tamanhos do serial log e do summary log em `build/ci/*.log`, alem dos markers obrigatorios. O marker `[smoke] gui-session ready` só é emitido após o contrato `desktop_gui_session_smoke_gate_from_readiness()` aprovar framebuffer, dimensões, taskbar, dispatcher essencial, fila saudável e ausência de overlays/drag; o marker `[smoke] mouse-events ready` só é emitido após `desktop_mouse_events_smoke_gate_from_readiness()` também aprovar mouse, cursor e rotas de mouse. O manifesto de aceitacao final amarra essas evidencias ao handoff oficial antes da promocao publica. O manifesto de promocao final amarra publicacao, handoff e aceitacao.
+O manifesto registra hashes SHA-256 e tamanhos do serial log e do summary log em `build/ci/*.log`, alem dos markers obrigatorios em ordem. O marker `[smoke] gui-session ready` só é emitido após o contrato `desktop_gui_session_smoke_gate_from_readiness()` aprovar framebuffer, dimensões, taskbar, dispatcher essencial, fila saudável e ausência de overlays/drag; o marker `[smoke] mouse-events ready` só é emitido após `desktop_mouse_events_smoke_gate_from_readiness()` também aprovar mouse, cursor e rotas de mouse. O manifesto de aceitacao final amarra essas evidencias ao handoff oficial antes da promocao publica. O manifesto de promocao final amarra publicacao, handoff e aceitacao.
 
 ## Troubleshooting
 
@@ -79,6 +84,8 @@ O manifesto registra hashes SHA-256 e tamanhos do serial log e do summary log em
   investigar DHCP.
 - Se DHCP não aparecer, confirmar que a NIC é E1000 e que a rede bridged/portgroup
   oferece lease para guests novos.
+- Se o harness falhar por marker grave, preservar o serial completo e abrir bug
+  de Etapa 2 antes de repetir o smoke.
 - Para validar só wiring de argumentos sem ligar a VM, usar `--dry-run`.
 
 ## Preflight CI
@@ -88,6 +95,8 @@ validar a chave pública/fingerprint de release e os argumentos VMware sem ligar
 a VM. Na esteira oficial, use também `make release-ci-official-provisioning-contract`
 para exigir tag, chave pública oficial, manifesto e logs em `build/ci/*.log`, e
 `make release-official-handoff-manifest` para registrar o handoff antes do smoke real.
+Para validar só a política de markers sem VM, execute
+`make smoke-marker-policy-selftest` em CI externa.
 O procedimento completo fica em `docs/operations/release-ci-preflight.md`.
 
 ## Status atual

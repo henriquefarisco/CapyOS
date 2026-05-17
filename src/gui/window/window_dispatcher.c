@@ -244,6 +244,14 @@ static int dispatch_window_focus(const struct gui_event *ev) {
 static int dispatch_window_blur(const struct gui_event *ev) {
   struct gui_window *win = dispatcher_target_window(ev, 0);
   uint32_t window_id = 0;
+  /* INVARIANT (do NOT replace with `!window_can_receive_event(win)`):
+   * blur events are pushed during compositor_destroy_window,
+   * compositor_minimize_window and compositor_focus_window AFTER the
+   * window has been marked invisible / minimized. The callbacks here
+   * release focus-owned resources (caret blinking, IME state, input
+   * capture). Rejecting blur on !visible / minimized would leak those
+   * resources and break the alpha.235 session handoff chain that
+   * requires clean focus release before activating a new session. */
   if (!win) {
     dispatcher_stats.missing_target_total++;
     return 0;

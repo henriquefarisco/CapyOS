@@ -10,8 +10,10 @@ int run_csprng_tests(void);
 int run_crypt_vector_tests(void);
 int run_volume_header_tests(void);
 int run_volume_provider_tests(void);
+int run_volume_provider_rekey_tests(void);
 int run_volume_provider_execute_tests(void);
 int run_volume_provider_rekey_execute_tests(void);
+int run_volume_provider_rekey_copy_tests(void);
 int run_volume_provider_rekey_commit_tests(void);
 int run_volume_provider_rekey_recovery_tests(void);
 int run_volume_provider_rekey_orchestrator_tests(void);
@@ -54,6 +56,7 @@ int run_storvsc_session_tests(void);
 int run_storvsc_backend_tests(void);
 int run_storvsc_runtime_tests(void);
 int run_storage_runtime_hyperv_plan_tests(void);
+int run_usb_hid_init_tests(void);
 
 int test_pmm_run(void);
 int test_task_run(void);
@@ -97,6 +100,7 @@ int test_linux_clone_run(void);
 int test_linux_shm_run(void);
 int test_linux_vfs_run(void);
 int test_linux_vfs_router_run(void);
+int test_linux_vfs_router_specialfd_run(void);
 int test_linux_procfs_run(void);
 int test_linux_tmpfs_run(void);
 int test_linux_brk_run(void);
@@ -182,8 +186,10 @@ int main(void) {
     failures += run_csprng_tests();
     failures += run_crypt_vector_tests();
     failures += run_volume_provider_tests();
+    failures += run_volume_provider_rekey_tests();
     failures += run_volume_provider_execute_tests();
     failures += run_volume_provider_rekey_execute_tests();
+    failures += run_volume_provider_rekey_copy_tests();
     failures += run_volume_provider_rekey_commit_tests();
     failures += run_volume_provider_rekey_recovery_tests();
     failures += run_volume_provider_rekey_orchestrator_tests();
@@ -227,6 +233,7 @@ int main(void) {
     failures += run_storvsc_backend_tests();
     failures += run_storvsc_runtime_tests();
     failures += run_storage_runtime_hyperv_plan_tests();
+    failures += run_usb_hid_init_tests();
 
     failures += test_pmm_run();
     failures += test_task_run();
@@ -270,6 +277,7 @@ int main(void) {
     failures += test_linux_shm_run();
     failures += test_linux_vfs_run();
     failures += test_linux_vfs_router_run();
+    failures += test_linux_vfs_router_specialfd_run();
     failures += test_linux_procfs_run();
     failures += test_linux_tmpfs_run();
     failures += test_linux_brk_run();

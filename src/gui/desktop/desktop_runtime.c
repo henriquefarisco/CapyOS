@@ -29,6 +29,14 @@ static int g_shutdown_requested = 0;
 static struct task *g_desktop_task = (struct task *)0;
 static int g_desktop_gui_session_smoke_announced = 0;
 static int g_desktop_mouse_events_smoke_announced = 0;
+/* Blocked-state diagnostic emitted at most once per gate, only after the
+ * boot has stabilized (DESKTOP_SMOKE_DIAG_DELAY_ITERATIONS main-loop
+ * iterations). Gives the external smoke operator a serial breadcrumb
+ * pointing at the first persistent blocker without spamming the log. */
+#define DESKTOP_SMOKE_DIAG_DELAY_ITERATIONS 1000u
+static int g_desktop_gui_session_smoke_diag_emitted = 0;
+static int g_desktop_mouse_events_smoke_diag_emitted = 0;
+static uint32_t g_desktop_smoke_diag_iter_count = 0;
 
 int desktop_is_active(void) { return g_desktop_active; }
 
@@ -165,6 +173,55 @@ static void desktop_mouse_events_smoke_emit_once(void) {
   g_desktop_mouse_events_smoke_announced = 1;
 }
 
+/*
+ * Blocked-state diagnostics for external smoke operators.
+ *
+ * Each gate has a matching "blocked diagnostic" emitter that runs on the
+ * main loop alongside the ready marker emitter. When the boot has
+ * passed DESKTOP_SMOKE_DIAG_DELAY_ITERATIONS iterations and the gate
+ * is still not ready, we emit exactly ONE line of the form:
+ *
+ *   [smoke-diag] gui-session blocked: <first_blocker_name>
+ *   [smoke-diag] mouse-events blocked: <first_blocker_name>
+ *
+ * The `[smoke-diag]` prefix is deliberately distinct from `[smoke]` so
+ * the official smoke parser's substring matching on the mandatory
+ * markers cannot collide. This is observability only and does not
+ * change any gate logic or change which markers are mandatory.
+ *
+ * Bounded total messages: at most 2 (one per gate) over the entire
+ * desktop runtime lifetime, so the serial log is never flooded.
+ */
+static void desktop_gui_session_smoke_emit_blocked_diagnostic_once(void) {
+  struct desktop_session_smoke_readiness readiness;
+  struct desktop_gui_session_smoke_gate gate;
+  if (g_desktop_gui_session_smoke_announced) return;
+  if (g_desktop_gui_session_smoke_diag_emitted) return;
+  if (g_desktop_smoke_diag_iter_count < DESKTOP_SMOKE_DIAG_DELAY_ITERATIONS) return;
+  if (desktop_session_smoke_readiness_snapshot(&g_desktop, &readiness) != 1) return;
+  if (desktop_gui_session_smoke_gate_from_readiness(&readiness, &gate) != 1) return;
+  if (gate.smoke_ready) return;
+  fbcon_print("[smoke-diag] gui-session blocked: ");
+  fbcon_print(gate.first_blocker_name ? gate.first_blocker_name : "unknown");
+  fbcon_print("\n");
+  g_desktop_gui_session_smoke_diag_emitted = 1;
+}
+
+static void desktop_mouse_events_smoke_emit_blocked_diagnostic_once(void) {
+  struct desktop_session_smoke_readiness readiness;
+  struct desktop_mouse_events_smoke_gate gate;
+  if (g_desktop_mouse_events_smoke_announced) return;
+  if (g_desktop_mouse_events_smoke_diag_emitted) return;
+  if (g_desktop_smoke_diag_iter_count < DESKTOP_SMOKE_DIAG_DELAY_ITERATIONS) return;
+  if (desktop_session_smoke_readiness_snapshot(&g_desktop, &readiness) != 1) return;
+  if (desktop_mouse_events_smoke_gate_from_readiness(&readiness, &gate) != 1) return;
+  if (gate.smoke_ready) return;
+  fbcon_print("[smoke-diag] mouse-events blocked: ");
+  fbcon_print(gate.first_blocker_name ? gate.first_blocker_name : "unknown");
+  fbcon_print("\n");
+  g_desktop_mouse_events_smoke_diag_emitted = 1;
+}
+
 int desktop_runtime_start(struct shell_context *ctx) {
   struct session_context *previous_session = session_active();
   if (g_desktop_active) { fbcon_print("Desktop already running.\n"); return 0; }
@@ -177,6 +234,9 @@ int desktop_runtime_start(struct shell_context *ctx) {
   mouse_ps2_init();
   g_desktop_gui_session_smoke_announced = 0;
   g_desktop_mouse_events_smoke_announced = 0;
+  g_desktop_gui_session_smoke_diag_emitted = 0;
+  g_desktop_mouse_events_smoke_diag_emitted = 0;
+  g_desktop_smoke_diag_iter_count = 0;
   g_desktop_shell_ctx = ctx;
   if (ctx && shell_context_session(ctx)) {
     session_set_active(shell_context_session(ctx));
@@ -256,8 +316,13 @@ int desktop_runtime_start(struct shell_context *ctx) {
     }
     if (!g_desktop_active) break;
     if (desktop_run_frame(&g_desktop)) had_activity = 1;
+    if (g_desktop_smoke_diag_iter_count < DESKTOP_SMOKE_DIAG_DELAY_ITERATIONS) {
+      g_desktop_smoke_diag_iter_count++;
+    }
     desktop_gui_session_smoke_emit_once();
     desktop_mouse_events_smoke_emit_once();
+    desktop_gui_session_smoke_emit_blocked_diagnostic_once();
+    desktop_mouse_events_smoke_emit_blocked_diagnostic_once();
     task_yield();
     if (!had_activity && !mouse_pending()) desktop_frame_delay();
   }

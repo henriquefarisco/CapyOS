@@ -64,7 +64,10 @@ class SmokeSession:
         if self.sock is not None:
             try:
                 self.sock.close()
-            except Exception:
+            except OSError:
+                # Best-effort cleanup; narrowed from `Exception` to satisfy
+                # py/catch-too-general-exception. socket.close raises OSError
+                # on shutdown races; nothing else escapes from the C layer.
                 pass
             self.sock = None
 
@@ -100,9 +103,14 @@ class SmokeSession:
         raise RuntimeError(f"failed to connect serial tcp port {self.serial_port}: {last_exc}")
 
     def _read_proc_output(self) -> None:
-        assert self.proc is not None
-        assert self.proc.stdout is not None
-        assert self._logf is not None
+        # Explicit checks instead of `assert` so `python -O` cannot strip
+        # them (py/assert-stmt). Reader threads are only spawned by
+        # `start()` after these attributes are populated, so reaching
+        # this point with any of them None indicates an internal bug.
+        if self.proc is None or self.proc.stdout is None or self._logf is None:
+            raise RuntimeError(
+                "smoke session reader started before proc/stdout/logf were ready"
+            )
         while True:
             data = self.proc.stdout.read(1)
             if not data:
@@ -110,8 +118,11 @@ class SmokeSession:
             self._logf.write(data)
 
     def _read_serial(self) -> None:
-        assert self.sock is not None
-        assert self._logf is not None
+        # See _read_proc_output: keep checks live under `python -O`.
+        if self.sock is None or self._logf is None:
+            raise RuntimeError(
+                "smoke session serial reader started before sock/logf were ready"
+            )
         while True:
             try:
                 data = self.sock.recv(4096)

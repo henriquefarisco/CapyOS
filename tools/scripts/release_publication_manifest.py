@@ -306,7 +306,13 @@ def main() -> int:
     if rc != 0:
         return rc
     expected_public_key_sha256 = normalize_sha256_hex(args.expected_public_key_sha256)
-    assert expected_public_key_sha256 is not None and expected_public_key_sha256 != ""
+    # By contract `require_*` upstream rejected None/empty fingerprints
+    # before reaching here. Use explicit checks instead of `assert` so
+    # `python -O` cannot silently strip the invariant (py/assert-stmt).
+    if expected_public_key_sha256 is None or expected_public_key_sha256 == "":
+        raise RuntimeError(
+            "internal: expected_public_key_sha256 missing after upstream validation"
+        )
     manifest = build_manifest(checksums, signature, public_key, public_key_sha256, expected_public_key_sha256, key_manifest, entries, args.release_id)
     rc = atomic_write_text(args.output, manifest, args.force)
     if rc != 0:

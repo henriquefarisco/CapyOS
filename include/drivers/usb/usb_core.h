@@ -13,6 +13,25 @@
 #define USB_PROTOCOL_MOUSE 2
 #define USB_CLASS_STORAGE  8
 
+/* USB device state machine.
+ *
+ * Contract for upper layers (e.g. usb_hid):
+ *   - DISCONNECTED: slot is empty; do not consume.
+ *   - ATTACHED:     port has device, reset done, slot not yet assigned.
+ *                   No class/subclass/protocol info is populated yet.
+ *                   Upper layers must not try to claim the device.
+ *   - ADDRESSED:    xhci slot enabled, Address Device command completed.
+ *                   class_code/subclass/protocol MAY be populated only if
+ *                   the device descriptor was already read. Upper layers
+ *                   may probe the device only when class_code != 0.
+ *   - CONFIGURED:   configuration descriptor parsed, endpoints populated,
+ *                   Configure Endpoint command issued. Polling is safe.
+ *   - ERROR:        the device hit an unrecoverable error; ignore.
+ *
+ * Slices that own each transition:
+ *   ATTACHED -> ADDRESSED:  slice 3B (xhci_address_device + enumerate).
+ *   ADDRESSED -> CONFIGURED: slice 3C (descriptor parsing + Configure EP).
+ */
 enum usb_device_state {
   USB_DEV_DISCONNECTED = 0,
   USB_DEV_ATTACHED,

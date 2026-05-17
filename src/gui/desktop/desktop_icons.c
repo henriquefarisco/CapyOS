@@ -15,6 +15,7 @@
  *   - Right-click em area vazia: New File/New Folder/Refresh.
  */
 #include "gui/desktop_icons.h"
+#include "gui/desktop/internal/desktop_icons_internal.h"
 #include "gui/compositor.h"
 #include "lang/app_language.h"
 #include "lang/localization.h"
@@ -27,42 +28,12 @@
 #include "auth/session.h"
 #include <stddef.h>
 
-/* Estado global. */
-struct di_entry {
-  char     name[DESKTOP_ICONS_NAME_MAX];
-  uint16_t mode;
-  uint8_t  reserved[2];
-};
-
-static struct {
-  struct di_entry entries[DESKTOP_ICONS_MAX];
-  uint32_t        count;
-  char            path[256];
-  uint32_t        taskbar_h;
-  int             selected;          /* idx ou -1 */
-  uint32_t        screen_w;
-  uint32_t        screen_h;
-  /* Contexto da operacao (rename/new) em curso. */
-  int             pending_action;    /* DI_CTX_* */
-  int             pending_target;    /* idx do icone alvo, ou -1 */
-  int             drag_active;
-  int             drag_source;
-  int             drag_over;
-  int             drag_open_on_release;
-  int             drag_moved;
-  int32_t         drag_start_x;
-  int32_t         drag_start_y;
-} g_di = {0};
+/* Estado global compartilhado com desktop_icons_context.c via
+ * src/gui/desktop/internal/desktop_icons_internal.h. */
+struct di_state g_di = {0};
 
 static char g_di_delete_path[256];
 static uint16_t g_di_delete_mode;
-
-#define DI_CTX_OPEN     1u
-#define DI_CTX_DELETE   2u
-#define DI_CTX_RENAME   3u
-#define DI_CTX_NEW_FILE 4u
-#define DI_CTX_NEW_DIR  5u
-#define DI_CTX_REFRESH  6u
 
 static void di_sort_entries(void);
 
@@ -73,7 +44,7 @@ static uint32_t di_strlen(const char *s) {
   return n;
 }
 
-static void di_strcpy(char *d, const char *s, uint32_t max) {
+void di_strcpy(char *d, const char *s, uint32_t max) {
   uint32_t i = 0;
   if (!d || max == 0u) return;
   if (s) while (i + 1u < max && s[i]) { d[i] = s[i]; i++; }
@@ -108,8 +79,8 @@ static int di_path_inside_or_same(const char *dir, const char *path) {
   return dir[plen] == '/';
 }
 
-static void di_join(const char *dir, const char *name, char *out,
-                     uint32_t max) {
+void di_join(const char *dir, const char *name, char *out,
+             uint32_t max) {
   uint32_t i = 0, j = 0;
   if (!out || max == 0u) return;
   if (dir) while (j + 1u < max && dir[i]) { out[j++] = dir[i++]; }
@@ -262,7 +233,7 @@ static uint32_t di_rows_per_column(void) {
 }
 
 /* Calcula a posicao (px, py) do icone idx no grid responsivo. */
-static void di_icon_position(uint32_t idx, int32_t *out_x, int32_t *out_y) {
+void di_icon_position(uint32_t idx, int32_t *out_x, int32_t *out_y) {
   uint32_t rows = di_rows_per_column();
   uint32_t col = idx / rows;
   uint32_t row = idx % rows;
@@ -271,7 +242,7 @@ static void di_icon_position(uint32_t idx, int32_t *out_x, int32_t *out_y) {
 }
 
 /* Detecta se um arquivo .txt/.md (heuristic case-insensitive). */
-static int di_is_text(const char *name) {
+int di_is_text(const char *name) {
   uint32_t n = di_strlen(name);
   if (n >= 4 && name[n - 4] == '.' &&
       (name[n - 3] == 't' || name[n - 3] == 'T') &&
@@ -510,7 +481,7 @@ static void di_delete_confirm_submit(const char *text, void *ctx) {
   desktop_icons_refresh();
 }
 
-static void di_request_delete_selected(void) {
+void di_request_delete_selected(void) {
   int32_t ix = 0;
   int32_t iy = 0;
   if (g_di.selected < 0 || g_di.selected >= (int)g_di.count) return;
@@ -681,143 +652,8 @@ void desktop_icons_clear_external_drop(void) {
   }
 }
 
-/* === Context menu callbacks ============================================ */
-
-static void di_rename_submit(const char *new_name, void *ctx);
-static void di_create_submit(const char *new_name, void *ctx);
-
-static void di_ctx_pick(uint16_t action_id, void *ctx) {
-  (void)ctx;
-  switch (action_id) {
-    case DI_CTX_OPEN: {
-      if (g_di.selected < 0 || g_di.selected >= (int)g_di.count) return;
-      char path[256];
-      di_join(g_di.path, g_di.entries[g_di.selected].name, path,
-              sizeof(path));
-      if (g_di.entries[g_di.selected].mode & VFS_MODE_DIR) {
-        file_manager_open_at(path);
-      } else if (di_is_text(g_di.entries[g_di.selected].name)) {
-        text_editor_open(path);
-      }
-      break;
-    }
-    case DI_CTX_DELETE: {
-      if (g_di.selected < 0 || g_di.selected >= (int)g_di.count) return;
-      di_request_delete_selected();
-      break;
-    }
-    case DI_CTX_RENAME: {
-      if (g_di.selected < 0 || g_di.selected >= (int)g_di.count) return;
-      g_di.pending_action = DI_CTX_RENAME;
-      g_di.pending_target = g_di.selected;
-      /* Posiciona o prompt no canto inferior do icone. */
-      int32_t ix = 0, iy = 0;
-      di_icon_position((uint32_t)g_di.selected, &ix, &iy);
-      inline_prompt_show(APP_T("Renomear:", "Rename:", "Renombrar:"),
-                         g_di.entries[g_di.selected].name,
-                         ix, iy + (int32_t)DESKTOP_ICON_CELL_H,
-                         di_rename_submit, NULL);
-      break;
-    }
-    case DI_CTX_NEW_FILE:
-      g_di.pending_action = DI_CTX_NEW_FILE;
-      g_di.pending_target = -1;
-      inline_prompt_show(APP_T("Nome do arquivo:", "New file name:",
-                                "Nombre del archivo:"),
-                         "untitled.txt",
-                         (int32_t)DESKTOP_ICON_PAD_LEFT,
-                         (int32_t)DESKTOP_ICON_PAD_TOP,
-                         di_create_submit, NULL);
-      break;
-    case DI_CTX_NEW_DIR:
-      g_di.pending_action = DI_CTX_NEW_DIR;
-      g_di.pending_target = -1;
-      inline_prompt_show(APP_T("Nome da pasta:", "New folder name:",
-                                "Nombre de la carpeta:"),
-                         "new_folder",
-                         (int32_t)DESKTOP_ICON_PAD_LEFT,
-                         (int32_t)DESKTOP_ICON_PAD_TOP,
-                         di_create_submit, NULL);
-      break;
-    case DI_CTX_REFRESH:
-      desktop_icons_refresh();
-      break;
-    default: break;
-  }
-}
-
-static void di_rename_submit(const char *new_name, void *ctx) {
-  (void)ctx;
-  if (g_di.pending_target < 0 || g_di.pending_target >= (int)g_di.count)
-    return;
-  if (!new_name || new_name[0] == '\0') return;
-  char src[256], dst[256];
-  di_join(g_di.path, g_di.entries[g_di.pending_target].name, src,
-          sizeof(src));
-  di_join(g_di.path, new_name, dst, sizeof(dst));
-  vfs_rename(src, dst);
-  g_di.pending_action = 0;
-  g_di.pending_target = -1;
-  g_di.selected = -1;
-  desktop_icons_refresh();
-}
-
-static void di_create_submit(const char *new_name, void *ctx) {
-  (void)ctx;
-  if (!new_name || new_name[0] == '\0') return;
-  char path[256];
-  di_join(g_di.path, new_name, path, sizeof(path));
-  if (g_di.pending_action == DI_CTX_NEW_FILE) {
-    vfs_create(path, VFS_MODE_FILE, NULL);
-  } else if (g_di.pending_action == DI_CTX_NEW_DIR) {
-    vfs_create(path, VFS_MODE_DIR, NULL);
-  }
-  g_di.pending_action = 0;
-  g_di.pending_target = -1;
-  desktop_icons_refresh();
-}
-
-void desktop_icons_handle_context(int32_t sx, int32_t sy) {
-  int hit = desktop_icons_hit_test(sx, sy);
-  if (hit >= 0) g_di.selected = hit;
-  else g_di.selected = -1;
-
-  struct context_menu_item items[CONTEXT_MENU_MAX_ITEMS];
-  for (uint32_t i = 0; i < CONTEXT_MENU_MAX_ITEMS; ++i) {
-    items[i].label[0] = '\0';
-    items[i].action_id = 0;
-    items[i].enabled = 1;
-    items[i].reserved = 0;
-  }
-  uint32_t n = 0;
-  /* Etapa F4 i18n (2026-05-03): labels do context menu localizados. */
-  if (hit >= 0) {
-    di_strcpy(items[n].label, APP_T("Abrir", "Open", "Abrir"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_OPEN;
-    di_strcpy(items[n].label, APP_T("Renomear", "Rename", "Renombrar"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_RENAME;
-    di_strcpy(items[n].label, APP_T("Apagar", "Delete", "Borrar"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_DELETE;
-    items[n++].label[0] = '\0';
-    di_strcpy(items[n].label, APP_T("Atualizar", "Refresh", "Actualizar"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_REFRESH;
-  } else {
-    di_strcpy(items[n].label,
-              APP_T("Novo arquivo", "New File", "Nuevo archivo"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_NEW_FILE;
-    di_strcpy(items[n].label,
-              APP_T("Nova pasta", "New Folder", "Nueva carpeta"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_NEW_DIR;
-    items[n++].label[0] = '\0';
-    di_strcpy(items[n].label, APP_T("Atualizar", "Refresh", "Actualizar"),
-              CONTEXT_MENU_LABEL_MAX);
-    items[n++].action_id = DI_CTX_REFRESH;
-  }
-  context_menu_show(items, n, sx, sy, di_ctx_pick, NULL);
-}
+/* Context menu callbacks (di_ctx_pick, di_rename_submit, di_create_submit)
+ * and `desktop_icons_handle_context` now live in
+ * `src/gui/desktop/desktop_icons_context.c`. Shared state and the
+ * promoted helpers are declared in
+ * `src/gui/desktop/internal/desktop_icons_internal.h`. */

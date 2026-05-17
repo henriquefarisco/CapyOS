@@ -1,5 +1,7 @@
 # CapyOS — Promoção pública pós-smoke VMware F2
 
+> **Runbook completo da Etapa 2:** [`etapa-2-external-validation-playbook.md`](etapa-2-external-validation-playbook.md) (Fase E).
+
 ## Objetivo
 
 `tools/scripts/release_ci_smoke_promotion.py` gera ou verifica um manifesto público de promoção pós-smoke VMware oficial.
@@ -10,13 +12,13 @@ O gate consome `release-publication.manifest`, `release-official-handoff.manifes
 
 ```bash
 SMOKE_X64_VMWARE_ARGS="--provider govc --vm-name CapyOS-Release-Smoke --govc-serial-log '[datastore1] CapyOS/serial.log' --serial-log build/ci/smoke_x64_vmware.serial.log"
-make release-ci-smoke-promotion RELEASE_TAG=0.8.0-alpha.93+20260510 SMOKE_X64_VMWARE_ARGS="$SMOKE_X64_VMWARE_ARGS"
+make release-ci-smoke-promotion RELEASE_TAG=0.8.0-alpha.237+20260514 SMOKE_X64_VMWARE_ARGS="$SMOKE_X64_VMWARE_ARGS"
 ```
 
 Para conferir um manifesto de promoção já publicado:
 
 ```bash
-make verify-release-ci-smoke-promotion RELEASE_TAG=0.8.0-alpha.93+20260510 SMOKE_X64_VMWARE_ARGS="$SMOKE_X64_VMWARE_ARGS"
+make verify-release-ci-smoke-promotion RELEASE_TAG=0.8.0-alpha.237+20260514 SMOKE_X64_VMWARE_ARGS="$SMOKE_X64_VMWARE_ARGS"
 ```
 
 ## Entradas conferidas
@@ -46,6 +48,7 @@ make verify-release-ci-smoke-promotion RELEASE_TAG=0.8.0-alpha.93+20260510 SMOKE
 Ordem recomendada quando a infraestrutura oficial estiver provisionada:
 
 ```bash
+make smoke-marker-policy-selftest
 make release-ci-official-provisioning-contract RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
 make release-ci-tag-gate RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
 make release-official-handoff-manifest RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...

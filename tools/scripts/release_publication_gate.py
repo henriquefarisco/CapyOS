@@ -86,7 +86,13 @@ def main() -> int:
     rc, expected = require_public_inputs(public_key, args.expected_public_key_sha256)
     if rc != 0:
         return rc
-    assert public_key is not None
+    # require_public_inputs returns 0 only when public_key is set. Use
+    # explicit check so `python -O` cannot strip the invariant
+    # (py/assert-stmt).
+    if public_key is None:
+        raise RuntimeError(
+            "internal: require_public_inputs returned 0 but public_key is None"
+        )
     script_dir = Path(__file__).resolve().parent
     python = sys.executable or "python3"
     stages = [

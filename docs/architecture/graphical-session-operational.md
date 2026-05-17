@@ -4372,15 +4372,136 @@ gráfico real e fallback seguro para TTY.
   (passados, presentes e futuros) sem mudar a forma como sao
   chamados.
 
+## Sumário consolidado `alpha.221`-`alpha.237` — fechamento técnico da Etapa 2
+
+Os 17 incrementos abaixo encerraram o escopo técnico da Etapa 2.
+Para diminuir drift e manter o histórico denso compacto, cada
+incremento é resumido em uma linha aqui. O detalhe completo de cada
+um vive em `docs/plans/STATUS.md` e
+`docs/plans/active/capyos-master-plan.md`.
+
+**Storage/security — header on-disk + motor de migração transacional (alphas 221-232)**
+
+- `alpha.221+20260514` — On-disk volume header module
+  (`include/security/volume_header.h` + `src/security/volume_header.c`,
+  ~290+~620 LOC): magic CAPYVHDR, version, kdf_algo_id, salt_len,
+  data_offset_lba, reserved_lba_count, kdf_check_tag HMAC-SHA256,
+  CRC32 IEEE 802.3 reflected, threat-model two-tier inline.
+- `alpha.222+20260514` — Header-managed encrypted volumes em produção
+  (`include/security/volume_provider.h` + `src/security/volume_provider.c`):
+  `volume_provider_install` (fresh boot pós-install, Argon2id),
+  `volume_provider_open` (boots subsequentes, header autoritário sem
+  fallback para downgrade), 9 funções de teste host-side.
+- `alpha.223+20260514` — Preflight seguro read-only de re-key /
+  migração legacy: gates de shrink, scratch ausente e ranges
+  source/target determinísticos.
+- `alpha.224+20260514` — Planner transacional read-only que só marca
+  migração como `READY` quando há scratch após o range alvo, cópia
+  reversa segura e ranges determinísticos.
+- `alpha.225+20260514` — Executor transacional como contrato
+  guardado / dry-run: valida plano, reporta fases
+  checkpoint/cópia/commit/verify e recusa writes reais com
+  `WRITES_DISABLED`.
+- `alpha.226+20260514` — Checkpoint persistente da migração: record
+  little-endian de 128 bytes, CRC32, reserved-zero e validação
+  semântica de progresso para resume/rollback/abort.
+- `alpha.227+20260514` — Primeira escrita guardada do executor:
+  grava só o checkpoint no bloco scratch com flag explícita,
+  verifica por read/parse, bloqueia copy/re-encrypt destrutivo e
+  commit de header.
+- `alpha.228+20260514` — Executor prepara identidade criptográfica
+  do destino no scratch: checkpoint + header Argon2id com salt
+  CSPRNG + manifest com CRCs, verificados por read-back antes de
+  qualquer cópia destrutiva.
+- `alpha.229+20260514` — Executor aplica primeiro passo real de
+  copy/re-encrypt reverso: copia um bloco legacy para o domínio
+  header-managed Argon2id, verifica plaintext no destino, atualiza
+  checkpoint+manifest no scratch.
+- `alpha.230+20260514` — Executor comita LBA0 por último: exige
+  cópia completa, grava header staged, verifica read-back, abre
+  pelo caminho header-managed e valida o superbloco CAPYFS antes
+  de marcar checkpoint como `COMPLETED`.
+- `alpha.231+20260514` — Recovery operacional do executor:
+  rollback/abort antes do commit restaura um bloco por chamada e
+  zera o scratch ao completar; cleanup pós-commit abre
+  header-managed, valida CAPYFS, localiza o scratch por geometria,
+  rejeita estado estranho.
+- `alpha.232+20260514` — Orquestrador automático de passo único da
+  migração cifrada: detecta legacy / header-managed, lê scratch
+  checkpoint+manifest, delega
+  stage/copy/commit/cleanup/rollback ao próximo passo seguro.
+
+**Loginwindow GUI real — submit, recovery e handoff (alphas 233-235)**
+
+- `alpha.233+20260514` — Submit/autenticação real do loginwindow:
+  política explícita habilita submit só com runtime pronto, a ponte
+  `login_window_credential_auth_submit_userdb_consume()` chama
+  `userdb_authenticate_with_policy`, preserva `OK`/`FAILED`/`LOCKED`,
+  zera o buffer de credencial em todos os caminhos.
+- `alpha.234+20260514` — Decisão segura de recuperação:
+  `login_window_credential_recovery_decision_build()` consolida
+  controller GUI + submit autenticado, aceita apenas rotas
+  `stay`/`recovery`/`resume`/`text-login`, bloqueia bypass de
+  lockout, bloqueia recovery após autenticação, exige reset+rerender
+  no resume.
+- `alpha.235+20260514` — Handoff loginwindow → sessão gráfica:
+  `login_window_credential_session_handoff_build()` aceita apenas
+  submit GUI autenticado, recovery decision segura, usuário desktop
+  elegível e auditoria redigida antes de liberar `session_begin`,
+  ativação de sessão, init do shell context e desktop autostart.
+
+**Gates externos determinísticos — `gui-session` e `mouse-events` (alphas 236-237)**
+
+- `alpha.236+20260514` — Gate determinístico `gui-session`:
+  `desktop_gui_session_smoke_gate_from_readiness()` separa prontidão
+  de sessão gráfica de `mouse-events`; runtime emite uma única vez
+  `[smoke] gui-session ready` quando framebuffer, dimensões,
+  taskbar, dispatcher essencial, fila saudável e ausência de
+  overlays/drag estão prontos; alvo `smoke-x64-vmware-gui-session`
+  adicionado.
+- `alpha.237+20260514` — Gate externo final `mouse-events`:
+  `desktop_mouse_events_smoke_gate_from_readiness()` exige
+  `gui-session` + mouse + cursor + rotas de mouse prontas; runtime
+  emite uma única vez `[smoke] mouse-events ready`; alvo
+  `smoke-x64-vmware-mouse-events` adicionado; esteira de release
+  exige DHCP + `gui-session` + `mouse-events`.
+
+**Observabilidade defensiva (sem bump de alpha, 2026-05-16):** Após
+`alpha.237`, o desktop runtime ganhou dois emissores simétricos de
+diagnóstico complementares aos markers de `ready`. Cada gate emite
+**no máximo uma vez** uma linha
+`[smoke-diag] <gate> blocked: <first_blocker_name>` no serial log
+quando passou 1000 iterações do main loop (~1-10s reais, variando
+entre o caminho ativo de ~1ms/iter e o idle de ~10ms/iter sob PIT
+a 100 Hz) e o gate continua bloqueado. O prefixo `[smoke-diag]` é
+deliberadamente distinto de `[smoke]` para evitar colisão de
+substring com o parser oficial. Bounded: no máximo 2 linhas
+adicionais por execução do runtime; em boot saudável (gates prontos
+antes do delay), zero linhas. Detalhes operacionais no playbook
+[`../operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md)
+seção "Marcadores de diagnóstico (não-obrigatórios)".
+
 ## Limites
 
-- Não implementa desenho real do loginwindow GUI.
-- Não altera ABI pública de userland.
-- Não inicia CapyDisplay, drivers gráficos, Wayland, Mesa/Vulkan ou CapyLX.
-- Não substitui os smokes reais de GUI; este patch foi validado por revisão
-  estática.
+- Não implementa CapyDisplay 2D, drivers gráficos avançados,
+  Wayland, Mesa/Vulkan ou CapyLX — fora do escopo da Etapa 2.
+- Não substitui execução real dos smokes oficiais: a Etapa 2
+  permanece pendente da execução externa final dos gates
+  documentada em
+  [`../operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md).
+- Não altera ABI pública de userland fora do escopo dos contratos
+  declarativos descritos acima.
 
 ## Próximos slices
 
-- Preparar e executar futuramente os smokes reais `gui-session` e `mouse-events` com a trilha VMware oficial.
-- Evoluir o preview para janela GUI real quando o dispatcher de input estiver consolidado.
+- **Execução externa final dos gates da Etapa 2.** O playbook
+  consolidado em
+  [`../operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md)
+  orquestra fases A-E (build gates, provisionamento, smoke real
+  `mouse-events`, evidência, aceitação e promoção). O aceite
+  operacional da Etapa 2 fica condicionado a essa execução em
+  VMware + UEFI + E1000 fora desta máquina.
+- **Etapa 3** (Driver framework + entrada USB HID + storage estável,
+  reorganizada por ROI em 2026-05-15) fica desbloqueada após o
+  aceite operacional da Etapa 2 e segue a regra sequencial estrita
+  (`../plans/active/capyos-master-plan.md:18-31`).

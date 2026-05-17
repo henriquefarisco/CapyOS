@@ -441,7 +441,13 @@ def expected_manifest(args: argparse.Namespace) -> tuple[int, str]:
     rc = validate_smoke_args(args.smoke_vmware_args)
     if rc != 0:
         return rc, ""
-    assert args.smoke_vmware_args is not None
+    # validate_smoke_args returns 0 only when args.smoke_vmware_args is
+    # populated. Use an explicit RuntimeError instead of `assert` so
+    # `python -O` cannot silently strip the invariant (py/assert-stmt).
+    if args.smoke_vmware_args is None:
+        raise RuntimeError(
+            "internal: validate_smoke_args returned 0 but smoke_vmware_args is None"
+        )
     rc, smoke = smoke_summary(args.smoke_vmware_args)
     if rc != 0:
         return rc, ""

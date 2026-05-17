@@ -126,7 +126,13 @@ def run_self_test(openssl: str) -> int:
         rc = require_ed25519_public_der(public_key_der)
         if rc != 0:
             return rc
-        assert public_key_der is not None
+        # require_ed25519_public_der returns 0 only when DER bytes are
+        # populated. Use explicit check so `python -O` cannot strip it
+        # (py/assert-stmt).
+        if public_key_der is None:
+            raise RuntimeError(
+                "internal: require_ed25519_public_der returned 0 but DER is None (self-test)"
+            )
         good_fingerprint = public_key_sha256_hex(public_key_der)
         colon_fingerprint = ":".join(good_fingerprint[i:i + 2] for i in range(0, len(good_fingerprint), 2))
         if not public_key_sha256_matches(public_key_der, good_fingerprint):
@@ -204,7 +210,13 @@ def main() -> int:
     rc = require_ed25519_public_der(public_key_der)
     if rc != 0:
         return rc
-    assert public_key_der is not None
+    # require_ed25519_public_der returns 0 only when DER bytes are
+    # populated. Use explicit check so `python -O` cannot strip it
+    # (py/assert-stmt).
+    if public_key_der is None:
+        raise RuntimeError(
+            "internal: require_ed25519_public_der returned 0 but DER is None"
+        )
 
     rc = require_expected_public_key_sha256(public_key_der, args.expected_public_key_sha256)
     if rc != 0:

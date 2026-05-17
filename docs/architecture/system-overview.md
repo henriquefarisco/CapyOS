@@ -164,9 +164,14 @@ Current runtime rule:
 
 ## 10. Immediate architecture priorities
 
-1. Browser/internet stability: streaming render, image decode, heavy-page handling
-   (`feature/browser-internet-improvements`).
-2. Remove the remaining hybrid boot dependency and complete native x64 input.
-3. Continue broadening hardware coverage for the official `ISO -> install -> HDD boot -> login` path.
-4. Continue removing residual BIOS/x86 legacy code from the repository.
-4. Harden CAPYFS for integrity, recovery and scalability.
+Reordered on 2026-05-15 to match the ROI-driven sequence in `docs/plans/active/capyos-master-plan.md` (target audience: common desktop user). Etapa 2 external validation must complete before Etapa 3 work begins.
+
+1. **Stage 3 (Driver framework + USB HID + storage):** complete XHCI enumeration + USB HID class so keyboard works outside `EFI ConIn`; mature AHCI/NVMe error handling; add device-manager fallback policy so driver failures don't crash kernel.
+2. **Stage 4 (CapyDisplay 2D + scheduler):** introduce damage-tracked 2D layer and cooperative scheduler/multithread runtime (closes the gap listed in `project-overview.md`).
+3. **Stage 5 (TLS userland real):** advance `libcapy-tls` from metadata-only to real BearSSL handshake with SNI + hostname verification + timeout.
+4. **Stage 6 (Apps maduros) and Stage 7 (Browser usável):** wire existing image decoders (`src/gui/core/{png,jpeg,bmp}_loader.c`) into the renderer, add HTTP cache, streaming render and basic forms. Closes `feature/browser-internet-improvements`.
+5. **Continued architectural hygiene (cross-stage):**
+   - Remove remaining hybrid boot dependency and complete native x64 input.
+   - Broaden hardware coverage for the official `ISO -> install -> HDD boot -> login` path.
+   - Remove residual BIOS/x86 legacy code from the repository.
+   - Harden CAPYFS for integrity, recovery and scalability.

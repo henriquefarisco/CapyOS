@@ -72,7 +72,13 @@ int usb_hid_init(void) {
 
   for (int i = 0; i < dev_count; i++) {
     if (usb_get_device(i, &dev) != 0) continue;
-    if (dev.state != USB_DEV_CONFIGURED) continue;
+    /* Accept either ADDRESSED or CONFIGURED. ADDRESSED is allowed because
+     * the slice that populates class info from the device descriptor may
+     * leave the device in ADDRESSED state until Configure Endpoint runs.
+     * Reject anything without a class code so we never treat a bare
+     * port-reset device as a HID. */
+    if (dev.state != USB_DEV_ADDRESSED && dev.state != USB_DEV_CONFIGURED) continue;
+    if (dev.class_code == 0) continue;
 
     if (usb_device_is_hid_keyboard(&dev) && g_hid.kbd_slot < 0) {
       g_hid.kbd_slot = i;

@@ -1,0 +1,168 @@
+#ifndef AUTH_LOGIN_RUNTIME_WINDOW_DAMAGE_PLAN_H
+#define AUTH_LOGIN_RUNTIME_WINDOW_DAMAGE_PLAN_H
+
+/*
+ * include/auth/login_runtime/window_damage_plan.h
+ *
+ * Standalone partial header for the
+ *   struct login_window_credential_screen_window_damage_plan
+ * extracted byte-for-byte from `window_display.h` during PR 11b
+ * (per-struct split to satisfy the 900-line audit rule). See
+ * `docs/plans/active/monolith-residual-dedicated-plan.md`.
+ */
+
+#include <stddef.h>
+
+struct login_window_credential_screen_window_damage_plan {
+  int version;
+  int window_compositor_plan_available;
+  int window_surface_plan_available;
+  int window_surface_plan_safe;
+  int window_compositor_plan_safe;
+  int window_damage_plan_safe;
+  int requested_action;
+  int route_selected;
+  int route_blocked;
+  int action_allowed;
+  int action_blocked;
+  int input_focus_allowed;
+  int compaction_required;
+  int compaction_allowed;
+  int compaction_submitted;
+  int compaction_ticket_selected;
+  int compaction_target_selected;
+  int compaction_storage_write_allowed;
+  int compaction_storage_written;
+  int compaction_resource_release_allowed;
+  int compaction_resource_released;
+  int compaction_cpu_gpu_sync_allowed;
+  int compaction_cpu_gpu_sync_submitted;
+  int reclaim_required;
+  int reclaim_allowed;
+  int reclaim_submitted;
+  int reclaim_ticket_selected;
+  int reclaim_target_selected;
+  int reclaim_storage_prune_allowed;
+  int reclaim_storage_pruned;
+  int reclaim_resource_release_allowed;
+  int reclaim_resource_released;
+  int reclaim_cpu_gpu_sync_allowed;
+  int reclaim_cpu_gpu_sync_submitted;
+  int release_required;
+  int release_allowed;
+  int release_submitted;
+  int release_ticket_selected;
+  int release_target_selected;
+  int release_storage_prune_allowed;
+  int release_storage_pruned;
+  int release_resource_release_allowed;
+  int release_resource_released;
+  int release_cpu_gpu_sync_allowed;
+  int release_cpu_gpu_sync_submitted;
+  int gui_required;
+  int gui_allowed;
+  int gui_submitted;
+  int gui_ticket_selected;
+  int gui_target_selected;
+  int gui_pixels_write_allowed;
+  int gui_pixels_written;
+  int gui_auth_submit_allowed;
+  int gui_auth_attempt_allowed;
+  int window_required;
+  int window_allowed;
+  int window_created;
+  int window_ticket_selected;
+  int window_target_selected;
+  int window_surface_bound;
+  int window_input_bound;
+  int window_auth_submit_allowed;
+  int window_auth_attempt_allowed;
+  int surface_required;
+  int surface_allowed;
+  int surface_bound;
+  int surface_ticket_selected;
+  int surface_target_selected;
+  int surface_memory_mapped;
+  int surface_pixels_written;
+  int surface_compositor_submit_allowed;
+  int surface_compositor_submitted;
+  int surface_auth_submit_allowed;
+  int surface_auth_attempt_allowed;
+  int compositor_required;
+  int compositor_allowed;
+  int compositor_submitted;
+  int compositor_ticket_selected;
+  int compositor_target_selected;
+  int compositor_surface_allowed;
+  int compositor_surface_submitted;
+  int compositor_damage_planned;
+  int compositor_damage_allowed;
+  int compositor_damage_submitted;
+  int compositor_auth_submit_allowed;
+  int compositor_auth_attempt_allowed;
+  int damage_required;
+  int damage_allowed;
+  int damage_submitted;
+  int damage_ticket_selected;
+  int damage_target_selected;
+  int damage_incremental_allowed;
+  int full_damage_required;
+  int damage_cache_allowed;
+  int damage_cache_hit;
+  int damage_reuse_allowed;
+  int damage_auth_submit_allowed;
+  int damage_auth_attempt_allowed;
+  int damage_credential_panel;
+  int damage_credential_input;
+  int damage_credential_focus;
+  int damage_text_recovery;
+  int damage_text_login;
+  int damage_text_login_resume;
+  int damage_text_login_fallback;
+  int damage_error;
+  int submit_callback_bound;
+  int auth_callback_bound;
+  int recovery_text_session_required;
+  int session_reset_required;
+  int login_screen_rerender_required;
+  int credential_session_safe;
+  int credential_storage_wiped;
+  int credential_redacted;
+  int length_redacted;
+  int raw_secret_exposed;
+  int masked_text_exposed;
+  int submit_requested;
+  int submit_blocked;
+  int submit_enabled;
+  int auth_attempt_allowed;
+  int text_login_authoritative;
+  const char *view;
+  const char *widget_tree;
+  const char *compaction_ticket;
+  const char *reclaim_ticket;
+  const char *release_ticket;
+  const char *gui_ticket;
+  const char *window_ticket;
+  const char *surface_ticket;
+  const char *compositor_ticket;
+  const char *damage_ticket;
+  const char *focus_target;
+  const char *primary_action;
+  const char *route;
+  const char *compositor_target;
+  const char *compaction_policy;
+  const char *reclaim_policy;
+  const char *release_policy;
+  const char *gui_policy;
+  const char *window_policy;
+  const char *surface_policy;
+  const char *compositor_policy;
+  const char *damage_policy;
+  const char *cache_policy;
+  const char *event_type;
+  const char *state;
+  const char *message;
+  const char *blocked_reason;
+};
+
+#endif /* AUTH_LOGIN_RUNTIME_WINDOW_DAMAGE_PLAN_H */

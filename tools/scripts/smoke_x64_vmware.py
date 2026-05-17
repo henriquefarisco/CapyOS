@@ -16,6 +16,13 @@ import sys
 import time
 from pathlib import Path
 
+from smoke_marker_policy import (
+    first_failure_marker,
+    markers_in_order,
+    self_test as marker_policy_self_test,
+    unique_markers,
+)
+
 DEFAULT_MARKERS = (
     "[net] DHCP: lease acquired.",
 )
@@ -88,17 +95,41 @@ def write_tail(path: Path, text: str) -> None:
     path.write_text(text[-12000:], encoding="utf-8")
 
 
-def wait_for_markers(log_path: Path, markers: tuple[str, ...], timeout: float, poll: float) -> tuple[bool, str]:
+def run_self_test() -> int:
+    policy_ok, policy_message = marker_policy_self_test()
+    if not policy_ok:
+        return fail("self-test smoke_marker_policy: " + policy_message)
+    markers = ("alpha", "beta", "gamma")
+    if not markers_in_order("ALPHA\nnoise\nbeta\ngamma", markers):
+        return fail("self-test: markers em ordem foram rejeitados")
+    if markers_in_order("beta\nalpha\ngamma", markers):
+        return fail("self-test: markers fora de ordem foram aceitos")
+    if markers_in_order("alpha\ngamma", markers):
+        return fail("self-test: marker ausente foi aceito")
+    if not markers_in_order("ready\nnoise\nready", ("ready", "ready")):
+        return fail("self-test: markers repetidos em ordem foram rejeitados")
+    if markers_in_order("ready", ("ready", "ready")):
+        return fail("self-test: marker repetido sem segunda ocorrencia foi aceito")
+    if unique_markers(("alpha", "beta", "alpha", "gamma")) != markers:
+        return fail("self-test: markers duplicados nao foram deduplicados em ordem")
+    if first_failure_marker("alpha\npanic:\nbeta\ngamma") != "panic:":
+        return fail("self-test: marker de falha nao foi detectado")
+    print("[ok] self-test smoke_x64_vmware markers-in-order passed")
+    return 0
+
+
+def wait_for_markers(log_path: Path, markers: tuple[str, ...], timeout: float, poll: float) -> tuple[bool, str, str]:
     deadline = time.monotonic() + timeout
     last = ""
-    lowered_markers = tuple(marker.lower() for marker in markers)
     while time.monotonic() < deadline:
         last = read_log(log_path)
-        low = last.lower()
-        if all(marker in low for marker in lowered_markers):
-            return True, last
+        failure_marker = first_failure_marker(last)
+        if failure_marker:
+            return False, last, failure_marker
+        if markers_in_order(last, markers):
+            return True, last, ""
         time.sleep(poll)
-    return False, last
+    return False, last, ""
 
 
 def wait_for_govc_markers(
@@ -108,10 +139,9 @@ def wait_for_govc_markers(
     markers: tuple[str, ...],
     timeout: float,
     poll: float,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str]:
     deadline = time.monotonic() + timeout
     last = ""
-    lowered_markers = tuple(marker.lower() for marker in markers)
     local_log.parent.mkdir(parents=True, exist_ok=True)
     while time.monotonic() < deadline:
         proc = run_command([govc, "datastore.download", remote_serial_log, str(local_log)])
@@ -119,11 +149,13 @@ def wait_for_govc_markers(
             last = proc.stderr + proc.stdout
         else:
             last = read_log(local_log)
-            low = last.lower()
-            if all(marker in low for marker in lowered_markers):
-                return True, last
+            failure_marker = first_failure_marker(last)
+            if failure_marker:
+                return False, last, failure_marker
+            if markers_in_order(last, markers):
+                return True, last, ""
         time.sleep(poll)
-    return False, last
+    return False, last, ""
 
 
 def vmrun_start(vmrun: str, vmx: Path, nogui: bool) -> int:
@@ -170,6 +202,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-poweroff", action="store_true")
     parser.add_argument("--gui", action="store_true", help="Use vmrun gui mode instead of nogui")
     parser.add_argument("--dry-run", action="store_true", help="Validate arguments and print the selected orchestration without powering on")
+    parser.add_argument("--self-test", action="store_true")
     args, unknown = parser.parse_known_args()
     if "..." in unknown:
         parser.error("SMOKE_X64_VMWARE_ARGS contem placeholder '...'; informe argumentos reais de VMware")
@@ -180,18 +213,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.self_test:
+        return run_self_test()
     repo_root = Path(__file__).resolve().parents[2]
     serial_log = (repo_root / args.serial_log).resolve() if not args.serial_log.is_absolute() else args.serial_log
     summary_log = (repo_root / args.summary_log).resolve() if not args.summary_log.is_absolute() else args.summary_log
     iso = (repo_root / args.iso).resolve() if args.iso and not args.iso.is_absolute() else args.iso
     disk = (repo_root / args.disk).resolve() if args.disk and not args.disk.is_absolute() else args.disk
-    markers = tuple(args.markers) if args.markers else DEFAULT_MARKERS
+    markers = unique_markers(tuple(args.markers) if args.markers else DEFAULT_MARKERS)
+    if any(not marker for marker in markers):
+        return fail("--marker vazio nao e permitido")
 
     if not args.no_artifact_check:
         rc = require_artifacts(repo_root, iso, disk)
         if rc != 0:
             return rc
 
+    failure_marker = ""
     if args.provider == "vmrun":
         if not args.vmx:
             return fail("--vmx e obrigatorio para provider vmrun")
@@ -210,7 +248,7 @@ def main() -> int:
             rc = vmrun_start(vmrun, vmx, not args.gui)
             if rc != 0:
                 return rc
-            ok, log = wait_for_markers(serial_log, markers, args.timeout, args.poll)
+            ok, log, failure_marker = wait_for_markers(serial_log, markers, args.timeout, args.poll)
         finally:
             if not args.no_poweroff:
                 vmrun_stop(vmrun, vmx)
@@ -229,17 +267,21 @@ def main() -> int:
             rc = govc_power_on(govc, args.vm_name)
             if rc != 0:
                 return rc
-            ok, log = wait_for_govc_markers(govc, args.govc_serial_log, serial_log, markers, args.timeout, args.poll)
+            ok, log, failure_marker = wait_for_govc_markers(govc, args.govc_serial_log, serial_log, markers, args.timeout, args.poll)
         finally:
             if not args.no_poweroff:
                 govc_power_off(govc, args.vm_name)
 
     write_tail(summary_log, log)
-    if not ok:
-        print(f"[err] markers nao encontrados antes do timeout: {', '.join(markers)}", file=sys.stderr)
+    if failure_marker:
+        print(f"[err] marker de falha encontrado no serial: {failure_marker}", file=sys.stderr)
         print(f"[err] tail gravado em {summary_log}", file=sys.stderr)
         return 1
-    print(f"[ok] VMware+E1000 DHCP smoke markers encontrados: {', '.join(markers)}")
+    if not ok:
+        print(f"[err] markers nao encontrados em ordem antes do timeout: {', '.join(markers)}", file=sys.stderr)
+        print(f"[err] tail gravado em {summary_log}", file=sys.stderr)
+        return 1
+    print(f"[ok] VMware+E1000 DHCP smoke markers encontrados em ordem: {', '.join(markers)}")
     print(f"[ok] resumo gravado em {summary_log}")
     return 0
 

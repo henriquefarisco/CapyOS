@@ -48,6 +48,12 @@ int cmd_config_theme(struct shell_context *ctx, int argc, char **argv);
 int cmd_config_splash(struct shell_context *ctx, int argc, char **argv);
 int cmd_config_language(struct shell_context *ctx, int argc, char **argv);
 
+/* jobs_updates shared helpers (definitions in jobs_updates.c) */
+int update_runtime_writer(const char *path, const char *text);
+int refresh_update_agent_service_state(int rc,
+                                       struct system_update_status *status);
+const char *update_channel_name_or_null(const char *value);
+
 /* jobs_updates */
 int cmd_job_run(struct shell_context *ctx, int argc, char **argv);
 int cmd_update_check(struct shell_context *ctx, int argc, char **argv);
