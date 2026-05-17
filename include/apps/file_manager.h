@@ -29,6 +29,7 @@ struct file_manager_app {
   int drag_moved;
   int32_t drag_start_x;
   int32_t drag_start_y;
+  int mouse_left_down;
   int external_drag_over;
 };
 

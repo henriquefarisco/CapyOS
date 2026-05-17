@@ -30,8 +30,8 @@
 /* Cursor sprite metrics. Used by `compositor_render.c::draw_cursor_on_front`
  * and by `compositor.c::reset_window_slot` to size the cursor backup
  * region. */
-#define COMP_CURSOR_WIDTH  8
-#define COMP_CURSOR_HEIGHT 12
+#define COMP_CURSOR_WIDTH  16
+#define COMP_CURSOR_HEIGHT 16
 
 /* Window corner radius (px). The title bar's TOP corners and the
  * body's BOTTOM corners are masked to this radius in
@@ -64,6 +64,7 @@ extern int32_t  comp_cursor_y;
  * draw_cursor_on_front em compositor_render.c para escolher a
  * bitmap apropriada. */
 extern uint8_t  comp_cursor_kind_active;
+extern uint8_t  comp_cursor_kind_rendered;
 
 /* === Shared helpers =================================================== */
 /* All implemented in `compositor.c`. Definitions stay there (the

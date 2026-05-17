@@ -101,6 +101,7 @@ int file_manager_handle_mouse_up(struct gui_window *win, int32_t screen_x,
   app->drag_moved = 0;
   app->drag_start_x = 0;
   app->drag_start_y = 0;
+  app->mouse_left_down = 0;
   desktop_icons_clear_external_drop();
   if (dst >= 0 && fm_move_entry_to_dir(app, src, dst)) return 1;
   if (moved && src_path[0] &&

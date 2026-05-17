@@ -27,6 +27,21 @@ def require_contains(text: str, needle: str, label: str) -> None:
         raise RuntimeError(f"{label} nao contem {needle!r}")
 
 
+def require_channel_field(version_yaml: str, channel: str, field: str) -> str:
+    pattern = (
+        rf"^  {re.escape(channel)}:\n"
+        rf"(?P<body>(?:    .*\n)+?)(?=^  [A-Za-z0-9_-]+:|\Z)"
+    )
+    match = re.search(pattern, version_yaml, flags=re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"canal ausente: channels.{channel}")
+    return require_match(
+        rf"^\s*{re.escape(field)}:\s*([^\s]+)\s*$",
+        match.group("body"),
+        f"channels.{channel}.{field}",
+    )
+
+
 def main() -> int:
     repo = Path(__file__).resolve().parents[2]
 
@@ -34,8 +49,13 @@ def main() -> int:
     header = read_text(repo / "include/core/version.h")
     readme = read_text(repo / "README.md")
 
-    current = require_match(r"^\s*current:\s*([^\s]+)\s*$", version_yaml, "channels.alpha.current")
-    extended = require_match(r"^\s*extended:\s*([^\s]+)\s*$", version_yaml, "channels.alpha.extended")
+    header_channel = require_match(
+        r'^\s*#define\s+CAPYOS_VERSION_CHANNEL\s+"([^"]+)"',
+        header,
+        "CAPYOS_VERSION_CHANNEL",
+    )
+    current = require_channel_field(version_yaml, header_channel, "current")
+    extended = require_channel_field(version_yaml, header_channel, "extended")
 
     header_extended = require_match(
         r'^\s*#define\s+CAPYOS_VERSION_EXTENDED\s+"([^"]+)"',
@@ -52,14 +72,29 @@ def main() -> int:
         header,
         "CAPYOS_VERSION_ALPHA",
     )
+    header_stable = require_match(
+        r'^\s*#define\s+CAPYOS_VERSION_STABLE\s+"([^"]+)"',
+        header,
+        "CAPYOS_VERSION_STABLE",
+    )
 
     errors: list[str] = []
     if header_extended != current:
-        errors.append(f"CAPYOS_VERSION_EXTENDED={header_extended} difere de alpha.current={current}")
+        errors.append(
+            f"CAPYOS_VERSION_EXTENDED={header_extended} difere de "
+            f"{header_channel}.current={current}"
+        )
     if header_alpha != current:
-        errors.append(f"CAPYOS_VERSION_ALPHA={header_alpha} difere de alpha.current={current}")
+        if header_channel == "alpha":
+            errors.append(f"CAPYOS_VERSION_ALPHA={header_alpha} difere de alpha.current={current}")
+    if header_stable != current:
+        if header_channel == "stable":
+            errors.append(f"CAPYOS_VERSION_STABLE={header_stable} difere de stable.current={current}")
     if header_full != extended:
-        errors.append(f"CAPYOS_VERSION_FULL={header_full} difere de alpha.extended={extended}")
+        errors.append(
+            f"CAPYOS_VERSION_FULL={header_full} difere de "
+            f"{header_channel}.extended={extended}"
+        )
 
     try:
         require_contains(readme, f"Versao de referencia: `{current}`", "README.md")
@@ -85,7 +120,10 @@ def main() -> int:
             print(f"- {error}")
         return 1
 
-    print(f"[ok] versao alpha alinhada: current={current} extended={extended}")
+    print(
+        f"[ok] versao {header_channel} alinhada: "
+        f"current={current} extended={extended}"
+    )
     return 0
 
 

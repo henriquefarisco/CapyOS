@@ -147,6 +147,67 @@ static uint32_t di_mix_color(uint32_t color, uint32_t target,
   return ((uint32_t)nr << 16) | ((uint32_t)ng << 8) | (uint32_t)nb;
 }
 
+static void di_draw_hline(struct gui_surface *s, int32_t x, int32_t y,
+                          uint32_t w, uint32_t color) {
+  di_fill_rect(s, x, y, w, 1u, color);
+}
+
+static void di_draw_vline(struct gui_surface *s, int32_t x, int32_t y,
+                          uint32_t h, uint32_t color) {
+  di_fill_rect(s, x, y, 1u, h, color);
+}
+
+static void di_draw_folder_icon(struct gui_surface *s, int32_t x, int32_t y,
+                                const struct gui_theme_palette *theme) {
+  uint32_t fill = di_mix_color(theme->accent, theme->wallpaper, 18u);
+  uint32_t lip = di_mix_color(theme->accent, 0x00FFFFFF, 38u);
+  uint32_t outline = theme->window_border;
+  uint32_t shade = di_mix_color(theme->accent, 0x00000000, 34u);
+
+  di_fill_rect(s, x + 3, y + 5, 10u, 4u, lip);
+  di_fill_rect(s, x + 13, y + 7, 16u, 2u, lip);
+  di_fill_rect(s, x + 2, y + 9, 28u, 18u, fill);
+  di_fill_rect(s, x + 4, y + 24, 24u, 2u, shade);
+  di_fill_rect(s, x + 5, y + 11, 22u, 2u,
+               di_mix_color(fill, 0x00FFFFFF, 62u));
+
+  di_draw_hline(s, x + 3, y + 4, 10u, outline);
+  di_draw_hline(s, x + 13, y + 6, 16u, outline);
+  di_draw_hline(s, x + 2, y + 8, 28u, outline);
+  di_draw_hline(s, x + 2, y + 27, 28u, outline);
+  di_draw_vline(s, x + 2, y + 9, 19u, outline);
+  di_draw_vline(s, x + 30, y + 9, 18u, outline);
+  di_draw_vline(s, x + 13, y + 5, 3u, outline);
+}
+
+static void di_draw_file_icon(struct gui_surface *s, int32_t x, int32_t y,
+                              const struct gui_theme_palette *theme) {
+  uint32_t fill = di_mix_color(theme->window_bg, theme->accent_alt, 14u);
+  uint32_t fold = di_mix_color(theme->accent_alt, theme->window_bg, 34u);
+  uint32_t outline = theme->window_border;
+  uint32_t ink = di_mix_color(theme->accent_alt, theme->text, 64u);
+
+  di_fill_rect(s, x + 6, y + 2, 16u, 27u, fill);
+  di_fill_rect(s, x + 22, y + 8, 4u, 21u, fill);
+  di_fill_rect(s, x + 22, y + 3, 1u, 5u, fold);
+  di_fill_rect(s, x + 23, y + 4, 1u, 4u, fold);
+  di_fill_rect(s, x + 24, y + 5, 1u, 3u, fold);
+  di_fill_rect(s, x + 25, y + 6, 1u, 2u, fold);
+  di_fill_rect(s, x + 9, y + 14, 14u, 2u, ink);
+  di_fill_rect(s, x + 9, y + 19, 12u, 2u, ink);
+  di_fill_rect(s, x + 9, y + 24, 9u, 2u, ink);
+
+  di_draw_hline(s, x + 7, y + 2, 15u, outline);
+  di_draw_hline(s, x + 6, y + 29, 20u, outline);
+  di_draw_vline(s, x + 6, y + 3, 26u, outline);
+  di_draw_vline(s, x + 26, y + 8, 21u, outline);
+  di_draw_hline(s, x + 22, y + 8, 5u, outline);
+  di_draw_vline(s, x + 22, y + 3, 5u, outline);
+  di_draw_hline(s, x + 23, y + 4, 1u, outline);
+  di_draw_hline(s, x + 24, y + 5, 1u, outline);
+  di_draw_hline(s, x + 25, y + 6, 1u, outline);
+}
+
 static char di_lower(char c) {
   if (c >= 'A' && c <= 'Z') return (char)(c - 'A' + 'a');
   return c;
@@ -317,29 +378,13 @@ void desktop_icons_paint(struct gui_surface *s) {
     int32_t ix = x + (int32_t)((DESKTOP_ICON_CELL_W - 32u) / 2u);
     int32_t iy = y + 5;
     int is_dir = (g_di.entries[i].mode & VFS_MODE_DIR) != 0;
-    uint32_t icon_bg = is_dir ? theme->accent : theme->accent_alt;
-    uint32_t icon_border = theme->window_border;
     uint32_t shadow = di_mix_color(theme->wallpaper, 0x00000000, 55u);
 
     di_fill_rect(s, ix + 2, iy + 3, 32, 32, shadow);
-    di_fill_rect(s, ix, iy, 32, 32, icon_bg);
-    di_fill_rect(s, ix, iy, 32, 1, icon_border);
-    di_fill_rect(s, ix, iy + 31, 32, 1, icon_border);
-    di_fill_rect(s, ix, iy, 1, 32, icon_border);
-    di_fill_rect(s, ix + 31, iy, 1, 32, icon_border);
-    di_fill_rect(s, ix + 2, iy + 2, 28, 2,
-                 di_mix_color(icon_bg, 0x00FFFFFF, 58u));
-    di_fill_rect(s, ix + 2, iy + 28, 28, 2,
-                 di_mix_color(icon_bg, 0x00000000, 36u));
     if (is_dir) {
-      di_fill_rect(s, ix + 4, iy - 3, 13, 4, icon_bg);
-      di_fill_rect(s, ix + 4, iy - 3, 13, 1, icon_border);
-      di_fill_rect(s, ix + 4, iy - 3, 1, 4, icon_border);
-      di_fill_rect(s, ix + 17, iy - 2, 1, 3, icon_border);
+      di_draw_folder_icon(s, ix, iy, theme);
     } else {
-      di_fill_rect(s, ix + 22, iy + 4, 6, 6, theme->window_bg);
-      di_fill_rect(s, ix + 22, iy + 4, 6, 1, icon_border);
-      di_fill_rect(s, ix + 22, iy + 4, 1, 6, icon_border);
+      di_draw_file_icon(s, ix, iy, theme);
     }
 
     char line1[16], line2[16];

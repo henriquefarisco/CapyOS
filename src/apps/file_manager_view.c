@@ -82,29 +82,128 @@ void fm_fill_rect(struct gui_surface *s, int32_t x, int32_t y, uint32_t w,
 
 void fm_toolbar_layout(uint32_t width, int32_t *out_x, int32_t *out_w,
                        int32_t *out_gap) {
-  int32_t button_w = 60;
+  int32_t button_w = 28;
   int32_t gap = 5;
   int32_t toolbar_x = (int32_t)width - button_w * 6 - gap * 5 - 8;
-  if (toolbar_x < 36) {
-    button_w = (((int32_t)width - 36) - gap * 5) / 6;
-    if (button_w < 24) button_w = 24;
-    toolbar_x = 36;
+  if (toolbar_x < 8) {
+    button_w = (((int32_t)width - 16) - gap * 5) / 6;
+    if (button_w < 22) button_w = 22;
+    toolbar_x = 8;
   }
   if (out_x) *out_x = toolbar_x;
   if (out_w) *out_w = button_w;
   if (out_gap) *out_gap = gap;
 }
 
+enum fm_button_icon {
+  FM_ICON_BACK = 0,
+  FM_ICON_UP = 1,
+  FM_ICON_NEW_FILE = 2,
+  FM_ICON_NEW_FOLDER = 3,
+  FM_ICON_REFRESH = 4,
+  FM_ICON_DELETE = 5
+};
+
+static uint32_t fm_mix_color(uint32_t color, uint32_t target,
+                             uint8_t amount) {
+  int r = (int)((color >> 16) & 0xFFu);
+  int g = (int)((color >> 8) & 0xFFu);
+  int b = (int)(color & 0xFFu);
+  int tr = (int)((target >> 16) & 0xFFu);
+  int tg = (int)((target >> 8) & 0xFFu);
+  int tb = (int)(target & 0xFFu);
+  r += ((tr - r) * (int)amount) / 255;
+  g += ((tg - g) * (int)amount) / 255;
+  b += ((tb - b) * (int)amount) / 255;
+  return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+static void fm_icon_h(struct gui_surface *s, int32_t x, int32_t y,
+                      int32_t w, uint32_t color) {
+  fm_fill_rect(s, x, y, (uint32_t)w, 2u, color);
+}
+
+static void fm_icon_v(struct gui_surface *s, int32_t x, int32_t y,
+                      int32_t h, uint32_t color) {
+  fm_fill_rect(s, x, y, 2u, (uint32_t)h, color);
+}
+
+static void fm_icon_box(struct gui_surface *s, int32_t x, int32_t y,
+                        int32_t w, int32_t h, uint32_t color) {
+  fm_icon_h(s, x, y, w, color);
+  fm_icon_h(s, x, y + h - 2, w, color);
+  fm_icon_v(s, x, y, h, color);
+  fm_icon_v(s, x + w - 2, y, h, color);
+}
+
+static void fm_draw_button_icon(struct gui_surface *s, int32_t x, int32_t y,
+                                int32_t w, uint32_t color,
+                                enum fm_button_icon icon) {
+  int32_t cx = x + w / 2;
+  int32_t cy = y + FM_BUTTON_H / 2;
+  if (!s) return;
+  if (icon == FM_ICON_BACK) {
+    fm_icon_h(s, cx - 6, cy - 1, 12, color);
+    fm_fill_rect(s, cx - 6, cy - 2, 2u, 2u, color);
+    fm_fill_rect(s, cx - 4, cy - 4, 2u, 2u, color);
+    fm_fill_rect(s, cx - 2, cy - 6, 2u, 2u, color);
+    fm_fill_rect(s, cx - 4, cy + 1, 2u, 2u, color);
+    fm_fill_rect(s, cx - 2, cy + 3, 2u, 2u, color);
+  } else if (icon == FM_ICON_UP) {
+    fm_icon_v(s, cx - 1, cy - 5, 12, color);
+    fm_icon_h(s, cx - 6, cy - 1, 12, color);
+    fm_fill_rect(s, cx - 5, cy - 3, 3u, 2u, color);
+    fm_fill_rect(s, cx + 2, cy - 3, 3u, 2u, color);
+  } else if (icon == FM_ICON_NEW_FILE) {
+    fm_icon_box(s, cx - 7, cy - 7, 10, 14, color);
+    fm_icon_h(s, cx - 5, cy - 3, 6, color);
+    fm_icon_h(s, cx - 5, cy + 1, 5, color);
+    fm_icon_h(s, cx + 3, cy, 8, color);
+    fm_icon_v(s, cx + 6, cy - 3, 8, color);
+  } else if (icon == FM_ICON_NEW_FOLDER) {
+    fm_icon_h(s, cx - 8, cy - 5, 7, color);
+    fm_icon_v(s, cx - 8, cy - 5, 4, color);
+    fm_icon_box(s, cx - 8, cy - 2, 16, 10, color);
+    fm_icon_h(s, cx - 2, cy + 2, 8, color);
+    fm_icon_v(s, cx + 1, cy - 1, 8, color);
+  } else if (icon == FM_ICON_REFRESH) {
+    fm_icon_h(s, cx - 4, cy - 6, 8, color);
+    fm_icon_v(s, cx - 7, cy - 3, 6, color);
+    fm_icon_h(s, cx - 5, cy + 5, 9, color);
+    fm_icon_v(s, cx + 5, cy - 2, 6, color);
+    fm_fill_rect(s, cx + 3, cy - 7, 4u, 2u, color);
+    fm_fill_rect(s, cx + 5, cy - 5, 2u, 4u, color);
+    fm_fill_rect(s, cx - 8, cy + 3, 2u, 4u, color);
+    fm_fill_rect(s, cx - 8, cy + 5, 4u, 2u, color);
+  } else {
+    fm_icon_h(s, cx - 7, cy - 5, 14, color);
+    fm_icon_h(s, cx - 4, cy - 8, 8, color);
+    fm_icon_box(s, cx - 5, cy - 3, 10, 11, color);
+    fm_icon_v(s, cx - 1, cy - 1, 7, color);
+  }
+}
+
 void fm_paint_button(struct gui_surface *s, const struct font *f, int32_t x,
                      int32_t y, int32_t w, const char *label, uint32_t bg,
                      uint32_t fg, uint32_t border) {
+  enum fm_button_icon icon = FM_ICON_BACK;
   if (!s) return;
-  fm_fill_rect(s, x, y, (uint32_t)w, FM_TOOLBAR_H - 8u, bg);
+  (void)f;
+  if (label && label[0] == '1') icon = FM_ICON_UP;
+  else if (label && label[0] == '2') icon = FM_ICON_NEW_FILE;
+  else if (label && label[0] == '3') icon = FM_ICON_NEW_FOLDER;
+  else if (label && label[0] == '4') icon = FM_ICON_REFRESH;
+  else if (label && label[0] == '5') icon = FM_ICON_DELETE;
+  fm_fill_rect(s, x, y, (uint32_t)w, FM_BUTTON_H, bg);
   fm_fill_rect(s, x, y, (uint32_t)w, 1u, border);
-  fm_fill_rect(s, x, y + FM_TOOLBAR_H - 9, (uint32_t)w, 1u, border);
-  fm_fill_rect(s, x, y, 1u, FM_TOOLBAR_H - 8u, border);
-  fm_fill_rect(s, x + w - 1, y, 1u, FM_TOOLBAR_H - 8u, border);
-  if (label) fm_draw_fit(s, f, x + 4, y + 5, (uint32_t)w - 8, label, fg);
+  fm_fill_rect(s, x, y + FM_BUTTON_H - 1, (uint32_t)w, 1u, border);
+  fm_fill_rect(s, x, y, 1u, FM_BUTTON_H, border);
+  fm_fill_rect(s, x + w - 1, y, 1u, FM_BUTTON_H, border);
+  if (w > 4) {
+    fm_fill_rect(s, x + 2, y + 2, (uint32_t)w - 4u, 1u,
+                 fm_mix_color(bg, 0x00FFFFFF, 72u));
+  }
+  fm_draw_button_icon(s, x, y, w, fg, icon);
 }
 
 int fm_row_at(struct file_manager_app *app, int32_t x, int32_t y) {
@@ -140,33 +239,35 @@ void file_manager_paint(struct file_manager_app *app) {
     for (uint32_t x = 0; x < s->width; x++) line[x] = theme->window_bg;
   }
 
-  /* Toolbar */
-  fm_fill_rect(s, 0, 0, s->width, FM_TOOLBAR_H - 1u, theme->taskbar_bg);
-  font_draw_string(s, f, 8, 9, "<-", theme->accent_alt);
-  fm_draw_fit(s, f, 28, 9,
-              (toolbar_x > 36) ? (uint32_t)(toolbar_x - 36) : 0u,
+  /* Path line + toolbar. */
+  fm_fill_rect(s, 0, 0, s->width, FM_PATHBAR_H, theme->taskbar_bg);
+  fm_fill_rect(s, 8, 5, s->width > 16u ? s->width - 16u : 0u, 15u,
+               fm_mix_color(theme->window_bg, theme->taskbar_bg, 45u));
+  fm_draw_fit(s, f, 14, 8, s->width > 28u ? s->width - 28u : 0u,
               app->current_path, theme->accent);
+  fm_fill_rect(s, 0, FM_PATHBAR_H, s->width,
+               FM_TOOLBAR_H - FM_PATHBAR_H - 1u, theme->window_bg);
   {
-    uint32_t btn_bg = theme->accent_alt;
-    fm_paint_button(s, f, toolbar_x, 4, button_w,
-                    APP_T("Voltar", "Back", "Volver"),
-                    app->previous_path[0] ? btn_bg : theme->window_border,
-                    app->previous_path[0] ? theme->text : theme->text_muted,
+    uint32_t btn_bg = fm_mix_color(theme->accent_alt, theme->window_bg, 30u);
+    uint32_t disabled_bg = fm_mix_color(theme->window_border, theme->window_bg, 70u);
+    fm_paint_button(s, f, toolbar_x, FM_BUTTON_Y, button_w, "0",
+                    app->previous_path[0] ? btn_bg : disabled_bg,
+                    app->previous_path[0] ? theme->accent_text : theme->text_muted,
                     theme->window_border);
-    fm_paint_button(s, f, toolbar_x + button_w + button_gap, 4, button_w,
-                    APP_T("Subir", "Up", "Subir"),
-                    btn_bg, theme->text, theme->window_border);
-    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 2, 4,
-                    button_w, APP_T("Arquivo", "File", "Archivo"),
-                    btn_bg, theme->text, theme->window_border);
-    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 3, 4,
-                    button_w, APP_T("Pasta", "Folder", "Carpeta"),
-                    btn_bg, theme->text, theme->window_border);
-    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 4, 4,
-                    button_w, APP_T("Atual", "Refresh", "Actual"),
-                    btn_bg, theme->text, theme->window_border);
-    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 5, 4,
-                    button_w, APP_T("Apagar", "Delete", "Borrar"),
+    fm_paint_button(s, f, toolbar_x + button_w + button_gap, FM_BUTTON_Y,
+                    button_w, "1", btn_bg, theme->accent_text,
+                    theme->window_border);
+    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 2,
+                    FM_BUTTON_Y, button_w, "2", btn_bg, theme->accent_text,
+                    theme->window_border);
+    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 3,
+                    FM_BUTTON_Y, button_w, "3", btn_bg, theme->accent_text,
+                    theme->window_border);
+    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 4,
+                    FM_BUTTON_Y, button_w, "4", btn_bg, theme->accent_text,
+                    theme->window_border);
+    fm_paint_button(s, f, toolbar_x + (button_w + button_gap) * 5,
+                    FM_BUTTON_Y, button_w, "5",
                     (app->selected >= 0) ? 0x00CC3333 : theme->window_border,
                     (app->selected >= 0) ? 0x00FFFFFF : theme->text_muted,
                     theme->window_border);

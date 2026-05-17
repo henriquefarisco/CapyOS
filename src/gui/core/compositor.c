@@ -47,6 +47,7 @@ int32_t  comp_cursor_x = 0;
 int32_t  comp_cursor_y = 0;
 /* Etapa F4 cursors (2026-05-03): kind atual do cursor. */
 uint8_t  comp_cursor_kind_active = (uint8_t)COMP_CURSOR_ARROW;
+uint8_t  comp_cursor_kind_rendered = (uint8_t)COMP_CURSOR_ARROW;
 
 /* Private to this TU: monotonically incremented allocator for
  * window IDs. Resets on `compositor_init`/`shutdown`. */
@@ -109,6 +110,7 @@ int compositor_needs_render(void) {
 
 int compositor_cursor_needs_render(int32_t x, int32_t y) {
   if (!comp_cursor_valid) return 1;
+  if (comp_cursor_kind_rendered != comp_cursor_kind_active) return 1;
   return (comp_cursor_x != x || comp_cursor_y != y) ? 1 : 0;
 }
 
@@ -628,9 +630,6 @@ void compositor_set_cursor(enum comp_cursor_kind kind) {
   }
   if ((uint8_t)kind == comp_cursor_kind_active) return;
   comp_cursor_kind_active = (uint8_t)kind;
-  /* Forca re-draw do cursor na proxima call de
-   * compositor_render_cursor: invalida o cache xy. */
-  comp_cursor_valid = 0;
 }
 
 enum comp_cursor_kind compositor_cursor_kind(void) {

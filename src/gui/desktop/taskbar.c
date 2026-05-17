@@ -185,6 +185,38 @@ static int32_t tb_items_right_edge(struct taskbar *tb, const struct font *f,
   return right;
 }
 
+static uint32_t tb_mix_color(uint32_t color, uint32_t target,
+                             uint8_t amount) {
+  uint32_t r = (color >> 16) & 0xFFu;
+  uint32_t g = (color >> 8) & 0xFFu;
+  uint32_t b = color & 0xFFu;
+  uint32_t tr = (target >> 16) & 0xFFu;
+  uint32_t tg = (target >> 8) & 0xFFu;
+  uint32_t tb = target & 0xFFu;
+  r = r + ((tr > r) ? ((tr - r) * amount) / 255u
+                    : -((r - tr) * amount) / 255u);
+  g = g + ((tg > g) ? ((tg - g) * amount) / 255u
+                    : -((g - tg) * amount) / 255u);
+  b = b + ((tb > b) ? ((tb - b) * amount) / 255u
+                    : -((b - tb) * amount) / 255u);
+  return (r << 16) | (g << 8) | b;
+}
+
+static void tb_draw_launcher_mark(struct gui_surface *s, int32_t x,
+                                  int32_t y, uint32_t bg, uint32_t fg) {
+  uint32_t shadow = tb_mix_color(bg, 0x00000000, 72u);
+  if (!s) return;
+  tb_fill_rect(s, x + 1, y + 2, 15u, 15u, shadow);
+  tb_fill_rect(s, x, y, 7u, 7u, fg);
+  tb_fill_rect(s, x + 9, y, 7u, 7u, fg);
+  tb_fill_rect(s, x, y + 9, 7u, 7u, fg);
+  tb_fill_rect(s, x + 9, y + 9, 7u, 7u, fg);
+  tb_fill_rect(s, x + 2, y + 2, 3u, 3u, bg);
+  tb_fill_rect(s, x + 11, y + 2, 3u, 3u, bg);
+  tb_fill_rect(s, x + 2, y + 11, 3u, 3u, bg);
+  tb_fill_rect(s, x + 11, y + 11, 3u, 3u, bg);
+}
+
 static void taskbar_window_paint(struct gui_window *win) {
   if (!win || !win->user_data) return;
   taskbar_paint((struct taskbar *)win->user_data);
@@ -352,9 +384,12 @@ void taskbar_paint(struct taskbar *tb) {
   uint32_t menu_btn_bg = tb->menu_open ? theme->accent_alt : theme->accent;
   tb_fill_rect(s, x, 4, menu_w, TASKBAR_HEIGHT - 8, menu_btn_bg);
   tb_fill_rect(s, x, 4, menu_w, 1, theme->accent_text);
-  tb_fill_rect(s, x + 6, 10, 10, 10, theme->accent_text);
-  tb_fill_rect(s, x + 8, 12, 6, 6, menu_btn_bg);
-  tb_draw_fit(s, f, x + 22, 8, (menu_w > 28u) ? menu_w - 28u : 0u,
+  tb_fill_rect(s, x, TASKBAR_HEIGHT - 5, menu_w, 1,
+               tb_mix_color(menu_btn_bg, 0x00000000, 88u));
+  tb_fill_rect(s, x, 4, 1, TASKBAR_HEIGHT - 8,
+               tb_mix_color(menu_btn_bg, 0x00000000, 72u));
+  tb_draw_launcher_mark(s, x + 8, 8, menu_btn_bg, theme->accent_text);
+  tb_draw_fit(s, f, x + 30, 8, (menu_w > 36u) ? menu_w - 36u : 0u,
               "Capy", theme->accent_text);
   x += (int32_t)menu_w + 8;
 

@@ -435,6 +435,115 @@ static uint32_t tb_lighten(uint32_t color, uint8_t amount) {
   return a | (r << 16) | (g << 8) | b;
 }
 
+static uint32_t tb_darken(uint32_t color, uint8_t amount) {
+  uint32_t r = (color >> 16) & 0xFFu;
+  uint32_t g = (color >> 8) & 0xFFu;
+  uint32_t b = color & 0xFFu;
+  uint32_t a = color & 0xFF000000u;
+  r = r - (r * amount) / 255u;
+  g = g - (g * amount) / 255u;
+  b = b - (b * amount) / 255u;
+  return a | (r << 16) | (g << 8) | b;
+}
+
+static void taskbar_draw_menu_symbol(struct gui_surface *s, int32_t x,
+                                     int32_t y, uint32_t bg, uint32_t fg,
+                                     int symbol) {
+  if (!s) return;
+  tb_fill_rect(s, x, y, 16u, 16u, bg);
+  tb_fill_rect(s, x, y, 16u, 1u, tb_lighten(bg, 90u));
+  tb_fill_rect(s, x, y + 15, 16u, 1u, tb_darken(bg, 96u));
+  tb_fill_rect(s, x, y, 1u, 16u, tb_darken(bg, 72u));
+  tb_fill_rect(s, x + 15, y, 1u, 16u, tb_darken(bg, 72u));
+  if (symbol == 1) {
+    tb_fill_rect(s, x + 4, y + 4, 3u, 3u, fg);
+    tb_fill_rect(s, x + 9, y + 4, 3u, 3u, fg);
+    tb_fill_rect(s, x + 4, y + 9, 3u, 3u, fg);
+    tb_fill_rect(s, x + 9, y + 9, 3u, 3u, fg);
+  } else if (symbol == 2) {
+    tb_fill_rect(s, x + 4, y + 3, 8u, 10u, fg);
+    tb_fill_rect(s, x + 6, y + 5, 4u, 1u, bg);
+    tb_fill_rect(s, x + 6, y + 8, 4u, 1u, bg);
+    tb_fill_rect(s, x + 6, y + 11, 3u, 1u, bg);
+  } else if (symbol == 3) {
+    tb_fill_rect(s, x + 3, y + 6, 10u, 2u, fg);
+    tb_fill_rect(s, x + 6, y + 3, 2u, 10u, fg);
+    tb_fill_rect(s, x + 4, y + 4, 2u, 2u, fg);
+    tb_fill_rect(s, x + 9, y + 9, 2u, 2u, fg);
+  } else if (symbol == 4) {
+    tb_fill_rect(s, x + 4, y + 7, 8u, 2u, fg);
+    tb_fill_rect(s, x + 9, y + 4, 2u, 2u, fg);
+    tb_fill_rect(s, x + 11, y + 6, 2u, 2u, fg);
+    tb_fill_rect(s, x + 9, y + 9, 2u, 2u, fg);
+  } else if (symbol == 5) {
+    tb_fill_rect(s, x + 3, y + 4, 10u, 8u, fg);
+    tb_fill_rect(s, x + 5, y + 6, 6u, 4u, bg);
+    tb_fill_rect(s, x + 4, y + 12, 8u, 1u, fg);
+  } else if (symbol == 6) {
+    tb_fill_rect(s, x + 5, y + 3, 7u, 10u, fg);
+    tb_fill_rect(s, x + 7, y + 5, 3u, 1u, bg);
+    tb_fill_rect(s, x + 7, y + 8, 3u, 1u, bg);
+    tb_fill_rect(s, x + 7, y + 11, 2u, 1u, bg);
+  } else if (symbol == 7) {
+    tb_fill_rect(s, x + 4, y + 10, 8u, 3u, fg);
+    tb_fill_rect(s, x + 3, y + 7, 10u, 3u, fg);
+    tb_fill_rect(s, x + 4, y + 4, 3u, 3u, fg);
+    tb_fill_rect(s, x + 9, y + 4, 3u, 3u, fg);
+  } else if (symbol == 8) {
+    tb_fill_rect(s, x + 4, y + 3, 8u, 2u, fg);
+    tb_fill_rect(s, x + 3, y + 6, 10u, 2u, fg);
+    tb_fill_rect(s, x + 3, y + 9, 10u, 4u, fg);
+    tb_fill_rect(s, x + 5, y + 10, 6u, 1u, bg);
+  } else if (symbol == 9) {
+    tb_fill_rect(s, x + 7, y + 3, 2u, 6u, fg);
+    tb_fill_rect(s, x + 4, y + 6, 2u, 5u, fg);
+    tb_fill_rect(s, x + 10, y + 6, 2u, 5u, fg);
+    tb_fill_rect(s, x + 5, y + 11, 6u, 2u, fg);
+  } else if (symbol == 10) {
+    tb_fill_rect(s, x + 3, y + 4, 8u, 9u, fg);
+    tb_fill_rect(s, x + 5, y + 6, 4u, 5u, bg);
+    tb_fill_rect(s, x + 9, y + 7, 5u, 2u, fg);
+    tb_fill_rect(s, x + 12, y + 5, 2u, 6u, fg);
+  } else if (symbol == 11) {
+    tb_fill_rect(s, x + 3, y + 7, 9u, 2u, fg);
+    tb_fill_rect(s, x + 10, y + 4, 2u, 2u, fg);
+    tb_fill_rect(s, x + 12, y + 6, 2u, 2u, fg);
+    tb_fill_rect(s, x + 10, y + 9, 2u, 2u, fg);
+  } else {
+    tb_fill_rect(s, x + 5, y + 3, 6u, 2u, fg);
+    tb_fill_rect(s, x + 3, y + 6, 10u, 2u, fg);
+    tb_fill_rect(s, x + 3, y + 9, 10u, 4u, fg);
+    tb_fill_rect(s, x + 5, y + 10, 6u, 1u, bg);
+  }
+}
+
+static int taskbar_menu_row_symbol(struct taskbar *tb, int row) {
+  const char *label = NULL;
+  if (row == TASKBAR_MENU_ROW_RECENT_TOGGLE) return 4;
+  if (taskbar_row_is_recent(row)) return 2;
+  if (!tb || row < 0 || row >= (int)tb->menu_entry_count) return 1;
+  label = tb->menu_entries[row].label;
+  if (tb_contains_ci(label, "Terminal")) return 5;
+  if (tb_contains_ci(label, "Arquivo") || tb_contains_ci(label, "Files") ||
+      tb_contains_ci(label, "Archivos")) return 0;
+  if (tb_contains_ci(label, "Editor")) return 6;
+  if (tb_contains_ci(label, "Calcul")) return 7;
+  if (tb_contains_ci(label, "Config") || tb_contains_ci(label, "Settings"))
+    return 3;
+  if (tb_contains_ci(label, "Tarefas") || tb_contains_ci(label, "Tasks"))
+    return 8;
+  if (tb_contains_ci(label, "Logoff") || tb_contains_ci(label, "Logout") ||
+      tb_contains_ci(label, "Sair")) return 10;
+  if (tb_contains_ci(label, "Rein") || tb_contains_ci(label, "Restart") ||
+      tb_contains_ci(label, "Reboot")) return 11;
+  if (tb_contains_ci(label, "Deslig") || tb_contains_ci(label, "Shutdown") ||
+      tb_contains_ci(label, "Power")) return 9;
+  if (tb->menu_entries[row].pinned) return 1;
+  if (taskbar_menu_entry_is_session(tb, (uint32_t)row)) return 3;
+  if (taskbar_menu_entry_group(tb, (uint32_t)row) == 1u) return 3;
+  return 0;
+}
+
 static void taskbar_draw_menu_row(struct taskbar *tb, struct gui_surface *s,
                                   const struct font *f, int row,
                                   int32_t ey, const char *label) {
@@ -451,9 +560,11 @@ static void taskbar_draw_menu_row(struct taskbar *tb, struct gui_surface *s,
     }
     tb_fill_rect(s, 4, ey, 4, TASKBAR_MENU_ENTRY_HEIGHT, theme->accent);
   }
-  tb_fill_rect(s, 16, ey + 8, 10, 10,
-               active ? theme->accent : theme->window_border);
-  tb_draw_fit(s, f, 34, ey + 6, (s->width > 44u) ? s->width - 44u : 0u,
+  taskbar_draw_menu_symbol(s, 14, ey + 5,
+                           active ? theme->accent : theme->taskbar_bg,
+                           active ? theme->accent_text : theme->text,
+                           taskbar_menu_row_symbol(tb, row));
+  tb_draw_fit(s, f, 40, ey + 6, (s->width > 50u) ? s->width - 50u : 0u,
               label, active ? theme->accent : theme->text);
 }
 
@@ -577,28 +688,27 @@ static void taskbar_draw_session_icon(struct gui_surface *s, int32_t bx,
   int32_t y = by + 8;
   if (!s || button_w < 18u) return;
   if (slot == 0u) {
-    tb_fill_rect(s, cx - 8, y + 4, 7u, 14u, fg);
-    tb_fill_rect(s, cx - 6, y + 6, 3u, 10u, 0x00111B18u);
-    tb_fill_rect(s, cx - 1, y + 10, 10u, 2u, fg);
-    tb_fill_rect(s, cx + 6, y + 7, 2u, 2u, fg);
-    tb_fill_rect(s, cx + 8, y + 9, 2u, 2u, fg);
-    tb_fill_rect(s, cx + 6, y + 12, 2u, 2u, fg);
+    tb_fill_rect(s, cx - 8, y + 5, 8u, 12u, fg);
+    tb_fill_rect(s, cx - 6, y + 7, 4u, 8u, 0x00111B18u);
+    tb_fill_rect(s, cx, y + 10, 12u, 2u, fg);
+    tb_fill_rect(s, cx + 8, y + 7, 2u, 2u, fg);
+    tb_fill_rect(s, cx + 10, y + 9, 2u, 2u, fg);
+    tb_fill_rect(s, cx + 8, y + 12, 2u, 2u, fg);
   } else if (slot == 1u) {
-    tb_fill_rect(s, cx - 8, y + 5, 13u, 2u, fg);
-    tb_fill_rect(s, cx + 3, y + 3, 2u, 5u, fg);
-    tb_fill_rect(s, cx + 5, y + 5, 3u, 2u, fg);
-    tb_fill_rect(s, cx - 5, y + 14, 13u, 2u, fg);
-    tb_fill_rect(s, cx - 5, y + 12, 2u, 5u, fg);
-    tb_fill_rect(s, cx - 8, y + 14, 3u, 2u, fg);
-    tb_fill_rect(s, cx + 6, y + 7, 2u, 7u, fg);
-    tb_fill_rect(s, cx - 8, y + 7, 2u, 7u, fg);
+    tb_fill_rect(s, cx - 8, y + 6, 11u, 2u, fg);
+    tb_fill_rect(s, cx - 8, y + 8, 2u, 6u, fg);
+    tb_fill_rect(s, cx - 6, y + 14, 11u, 2u, fg);
+    tb_fill_rect(s, cx + 3, y + 12, 2u, 4u, fg);
+    tb_fill_rect(s, cx + 4, y + 5, 4u, 2u, fg);
+    tb_fill_rect(s, cx + 6, y + 7, 2u, 4u, fg);
+    tb_fill_rect(s, cx + 4, y + 10, 4u, 2u, fg);
   } else {
     tb_fill_rect(s, cx - 1, y + 3, 3u, 9u, fg);
-    tb_fill_rect(s, cx - 8, y + 9, 3u, 8u, fg);
-    tb_fill_rect(s, cx + 6, y + 9, 3u, 8u, fg);
-    tb_fill_rect(s, cx - 6, y + 16, 13u, 3u, fg);
-    tb_fill_rect(s, cx - 5, y + 7, 3u, 3u, fg);
-    tb_fill_rect(s, cx + 3, y + 7, 3u, 3u, fg);
+    tb_fill_rect(s, cx - 7, y + 9, 3u, 7u, fg);
+    tb_fill_rect(s, cx + 5, y + 9, 3u, 7u, fg);
+    tb_fill_rect(s, cx - 5, y + 15, 11u, 3u, fg);
+    tb_fill_rect(s, cx - 4, y + 6, 3u, 3u, fg);
+    tb_fill_rect(s, cx + 2, y + 6, 3u, 3u, fg);
   }
 }
 
@@ -633,6 +743,12 @@ static void taskbar_draw_session_footer(struct taskbar *tb,
       bg = tb_lighten(bg, 44u);
     }
     tb_fill_rect(s, bx, y + 8, button_w, 24u, bg);
+    if (button_w > 4u) {
+      tb_fill_rect(s, bx + 2, y + 10, button_w - 4u, 1u,
+                   tb_lighten(bg, 95u));
+      tb_fill_rect(s, bx + 2, y + 29, button_w - 4u, 1u,
+                   tb_darken(bg, 95u));
+    }
     tb_fill_rect(s, bx, y + 8, button_w, 1u, theme->window_border);
     tb_fill_rect(s, bx, y + 31, button_w, 1u, theme->window_border);
     tb_fill_rect(s, bx, y + 8, 1u, 24u, theme->window_border);

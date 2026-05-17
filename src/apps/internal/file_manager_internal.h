@@ -27,7 +27,10 @@
 #include "gui/compositor.h"
 
 /* Toolbar height in pixels — referenced from view + dnd. */
-#define FM_TOOLBAR_H 34
+#define FM_PATHBAR_H 24
+#define FM_TOOLBAR_H 58
+#define FM_BUTTON_Y 30
+#define FM_BUTTON_H 22
 
 /* ── globals defined in file_manager.c ───────────────────────────────── */
 

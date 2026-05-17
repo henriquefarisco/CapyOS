@@ -177,13 +177,55 @@ static void render_fit_title(const struct font *f, const char *src,
   }
 }
 
+enum window_button_kind {
+  WINDOW_BUTTON_CLOSE = 0,
+  WINDOW_BUTTON_MAXIMIZE = 1,
+  WINDOW_BUTTON_RESTORE = 2,
+  WINDOW_BUTTON_MINIMIZE = 3
+};
+
+static void render_window_button_stroke(uint32_t *buf, uint32_t buf_stride,
+                                        int32_t x, int32_t y, int32_t w,
+                                        int32_t h, uint32_t color) {
+  if (w <= 0 || h <= 0) return;
+  render_fill_rect_clip(buf, buf_stride, x, y, (uint32_t)w, 1u, color);
+  render_fill_rect_clip(buf, buf_stride, x, y + h - 1, (uint32_t)w, 1u, color);
+  render_fill_rect_clip(buf, buf_stride, x, y, 1u, (uint32_t)h, color);
+  render_fill_rect_clip(buf, buf_stride, x + w - 1, y, 1u, (uint32_t)h, color);
+}
+
+static void render_window_button_icon(uint32_t *buf, uint32_t buf_stride,
+                                      int32_t x, int32_t y, int32_t size,
+                                      uint32_t color,
+                                      enum window_button_kind kind) {
+  int32_t cx = x + size / 2;
+  int32_t cy = y + size / 2;
+  int32_t r = size >= 18 ? 5 : 4;
+  if (kind == WINDOW_BUTTON_CLOSE) {
+    for (int32_t i = -r; i <= r; i++) {
+      render_fill_rect_clip(buf, buf_stride, cx + i, cy + i, 1u, 1u, color);
+      render_fill_rect_clip(buf, buf_stride, cx + i, cy - i, 1u, 1u, color);
+    }
+    return;
+  }
+  if (kind == WINDOW_BUTTON_MINIMIZE) {
+    render_fill_rect_clip(buf, buf_stride, cx - r, cy + r - 1,
+                          (uint32_t)(r * 2 + 1), 2u, color);
+    return;
+  }
+  if (kind == WINDOW_BUTTON_RESTORE) {
+    render_window_button_stroke(buf, buf_stride, cx - 3, cy - 5, 8, 8, color);
+    render_window_button_stroke(buf, buf_stride, cx - 6, cy - 2, 8, 8, color);
+    return;
+  }
+  render_window_button_stroke(buf, buf_stride, cx - r, cy - r,
+                              r * 2 + 1, r * 2 + 1, color);
+}
+
 static void render_window_button(uint32_t *buf, uint32_t buf_stride,
-                                 struct gui_surface *title_surf,
-                                 const struct font *f, int32_t x, int32_t y,
-                                 int32_t size, uint32_t bg,
-                                 uint32_t fg, const char *label) {
-  int label_w = 0;
-  const char *lp = label;
+                                 int32_t x, int32_t y, int32_t size,
+                                 uint32_t bg, uint32_t fg,
+                                 enum window_button_kind kind) {
   if (size <= 0) return;
   render_fill_rect_clip(buf, buf_stride, x, y, (uint32_t)size,
                         (uint32_t)size, render_mix_color(bg, 0x00000000, 80u));
@@ -196,12 +238,7 @@ static void render_window_button(uint32_t *buf, uint32_t buf_stride,
                           (uint32_t)(size - 4), 1u,
                           render_mix_color(bg, 0x00FFFFFF, 70u));
   }
-  if (f && title_surf && label) {
-    while (lp && *lp) { label_w += (int)f->glyph_width; lp++; }
-    font_draw_string(title_surf, f, x + (size - label_w) / 2,
-                     y + (size / 2) - (int32_t)(f->glyph_height / 2),
-                     label, fg);
-  }
+  render_window_button_icon(buf, buf_stride, x, y, size, fg, kind);
 }
 
 static void render_window_decoration(struct gui_window *win, uint32_t *buf,
@@ -292,28 +329,30 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
       const struct {
         int32_t offset;
         uint32_t bg;
-        const char *label;
+        enum window_button_kind kind;
       } btns[3] = {
         { 1, win->focused ? 0x00B91C1C
                           : render_mix_color(g_theme.title_inactive,
-                                             0x00000000, 44u), "X" },
+                                             0x00000000, 44u),
+          WINDOW_BUTTON_CLOSE },
         { 2, win->focused ? g_theme.accent_alt
                           : render_mix_color(g_theme.title_inactive,
                                              g_theme.window_bg, 80u),
-          win->maximized ? "][" : "[]" },
+          win->maximized ? WINDOW_BUTTON_RESTORE : WINDOW_BUTTON_MAXIMIZE },
         { 3, win->focused ? g_theme.accent_alt
                           : render_mix_color(g_theme.title_inactive,
-                                             g_theme.window_bg, 80u), "_" }
+                                             g_theme.window_bg, 80u),
+          WINDOW_BUTTON_MINIMIZE }
       };
       for (int b = 0; b < 3; b++) {
         int32_t btn_x = x + (int32_t)w
                          - btns[b].offset * btn_size
                          - btns[b].offset * 4;
-        render_window_button(buf, buf_stride, &title_surf, f, btn_x, btn_y,
-                             btn_size, btns[b].bg,
+        render_window_button(buf, buf_stride, btn_x, btn_y, btn_size,
+                             btns[b].bg,
                              win->focused ? g_theme.accent_text
                                           : g_theme.text_muted,
-                             btns[b].label);
+                             btns[b].kind);
       }
     }
   }
@@ -455,42 +494,82 @@ static void copy_backbuffer_rect_to_front(int32_t x, int32_t y,
   }
 }
 
-/* Etapa F4 cursors (2026-05-03): tabela de bitmasks 8x12 por kind.
- * Cada bit ON = pixel a desenhar; o pixel da borda externa (col=0
- * ou row=0) e desenhado em preto, os internos em theme->text para
- * ficar visivel sobre qualquer fundo.
+/* Etapa F4 cursors (2026-05-03): tabela de bitmasks 16x16 por kind.
+ * Cada cursor tem contorno e preenchimento separados, inspirado no
+ * tema X.Org Whiteglass, para ficar legivel sobre fundos claros e escuros.
  *
  * Layout dos bitmaps (1 = pixel; bit mais significativo no col 0):
- *   ARROW  : seta padrao (mesmo do antigo cursor_mask)
+ *   ARROW  : seta padrao
  *   TEXT   : I-beam (linhas verticais + topo/base)
  *   RES H  : <-> setas horizontais
  *   RES V  : ^v setas verticais
  *   RES_DG : diagonal (top-left <-> bottom-right)
  *   LOAD   : ampulheta minimalista */
-static const uint8_t k_cursor_masks[COMP_CURSOR_KIND_COUNT][COMP_CURSOR_HEIGHT] = {
+struct cursor_mask {
+  uint16_t outline[COMP_CURSOR_HEIGHT];
+  uint16_t fill[COMP_CURSOR_HEIGHT];
+};
+
+static const struct cursor_mask k_cursor_masks[COMP_CURSOR_KIND_COUNT] = {
   /* ARROW */ {
-    0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC,
-    0xFE, 0xFC, 0xF8, 0xD0, 0x88, 0x04
+    {
+      0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
+      0xFFC0, 0xFEE0, 0xF860, 0xD830, 0x8C30, 0x0630, 0x0630, 0x0000
+    },
+    {
+      0x0000, 0x4000, 0x6000, 0x7000, 0x7800, 0x7C00, 0x7E00, 0x7C00,
+      0x7800, 0x6800, 0x0800, 0x0C00, 0x0400, 0x0000, 0x0000, 0x0000
+    }
   },
   /* TEXT (I-beam) */ {
-    0xE7, 0x18, 0x18, 0x18, 0x18, 0x18,
-    0x18, 0x18, 0x18, 0x18, 0x18, 0xE7
+    {
+      0x3FFC, 0x0660, 0x0660, 0x0660, 0x0660, 0x0660, 0x0660, 0x0660,
+      0x0660, 0x0660, 0x0660, 0x0660, 0x0660, 0x0660, 0x3FFC, 0x0000
+    },
+    {
+      0x1FF8, 0x0240, 0x0240, 0x0240, 0x0240, 0x0240, 0x0240, 0x0240,
+      0x0240, 0x0240, 0x0240, 0x0240, 0x0240, 0x0240, 0x1FF8, 0x0000
+    }
   },
   /* RESIZE_H (<->) */ {
-    0x00, 0x10, 0x30, 0x70, 0xFE, 0xFE,
-    0xFE, 0xFE, 0x70, 0x30, 0x10, 0x00
+    {
+      0x0000, 0x0000, 0x0000, 0x0810, 0x1818, 0x381C, 0x7FFE, 0xFFFF,
+      0x7FFE, 0x381C, 0x1818, 0x0810, 0x0000, 0x0000, 0x0000, 0x0000
+    },
+    {
+      0x0000, 0x0000, 0x0000, 0x0000, 0x0810, 0x1818, 0x3FFC, 0x7FFE,
+      0x3FFC, 0x1818, 0x0810, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+    }
   },
   /* RESIZE_V (^v) */ {
-    0x18, 0x3C, 0x7E, 0xFF, 0x18, 0x18,
-    0x18, 0x18, 0xFF, 0x7E, 0x3C, 0x18
+    {
+      0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x0180, 0x0180, 0x0180, 0x0180,
+      0x0180, 0x0180, 0x0180, 0x0180, 0x0FF0, 0x07E0, 0x03C0, 0x0180
+    },
+    {
+      0x0000, 0x0180, 0x03C0, 0x07E0, 0x0000, 0x0180, 0x0180, 0x0180,
+      0x0180, 0x0180, 0x0180, 0x0000, 0x07E0, 0x03C0, 0x0180, 0x0000
+    }
   },
   /* RESIZE_DIAG (\) */ {
-    0xF0, 0xE0, 0xC0, 0x90, 0x08, 0x04,
-    0x20, 0x10, 0x09, 0x03, 0x07, 0x0F
+    {
+      0xE000, 0xF000, 0xF800, 0x3C00, 0x1E00, 0x0F00, 0x0780, 0x03C0,
+      0x01E0, 0x00F0, 0x0078, 0x003C, 0x001F, 0x000F, 0x0007, 0x0000
+    },
+    {
+      0x4000, 0x6000, 0x7000, 0x1800, 0x0C00, 0x0600, 0x0300, 0x0180,
+      0x00C0, 0x0060, 0x0030, 0x0018, 0x000E, 0x0006, 0x0002, 0x0000
+    }
   },
   /* LOADING (ampulheta) */ {
-    0xFE, 0x82, 0x44, 0x28, 0x10, 0x10,
-    0x10, 0x10, 0x28, 0x44, 0x82, 0xFE
+    {
+      0x7FFE, 0x7FFE, 0x300C, 0x1818, 0x0C30, 0x0660, 0x03C0, 0x0180,
+      0x0180, 0x03C0, 0x0660, 0x0C30, 0x1818, 0x300C, 0x7FFE, 0x7FFE
+    },
+    {
+      0x3FFC, 0x0000, 0x1008, 0x0810, 0x0420, 0x0240, 0x0180, 0x0000,
+      0x0000, 0x0180, 0x0240, 0x0420, 0x0810, 0x1008, 0x0000, 0x3FFC
+    }
   }
 };
 
@@ -500,7 +579,7 @@ static void draw_cursor_on_front(int32_t x, int32_t y) {
   if (kind >= (uint8_t)COMP_CURSOR_KIND_COUNT) {
     kind = (uint8_t)COMP_CURSOR_ARROW;
   }
-  const uint8_t *mask = k_cursor_masks[kind];
+  const struct cursor_mask *mask = &k_cursor_masks[kind];
 
   for (int row = 0; row < COMP_CURSOR_HEIGHT; row++) {
     int32_t py = y + row;
@@ -508,9 +587,10 @@ static void draw_cursor_on_front(int32_t x, int32_t y) {
     uint32_t *line = (uint32_t *)((uint8_t *)comp_fb + py * comp_pitch);
     for (int col = 0; col < COMP_CURSOR_WIDTH; col++) {
       int32_t px = x + col;
-      if (!(mask[row] & (0x80 >> col))) continue;
       if (px < 0 || (uint32_t)px >= comp_width) continue;
-      line[px] = (col == 0 || row == 0) ? 0x000000 : g_theme.text;
+      uint16_t bit = (uint16_t)(0x8000u >> col);
+      if (mask->outline[row] & bit) line[px] = 0x000000u;
+      if (mask->fill[row] & bit) line[px] = 0x00FFFFFFu;
     }
   }
 }
@@ -551,5 +631,6 @@ void compositor_render_cursor(int32_t x, int32_t y) {
   comp_cursor_x = x;
   comp_cursor_y = y;
   comp_cursor_valid = 1;
+  comp_cursor_kind_rendered = comp_cursor_kind_active;
   comp_full_presented = 0;
 }

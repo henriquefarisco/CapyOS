@@ -31,6 +31,9 @@ Escopo atual:
 - `security/release-signing.md`
   - procedimento operacional de assinatura Ed25519 de checksums de release,
     chave offline, publicacao e rotacao
+- `legal/third-party-ui-assets.md`
+  - origem e licencas dos icones e cursores de terceiros usados como base
+    visual do CapyUI
 - `reference/cli-reference.md`
   - referencia dos comandos do CapyCLI
 - `operations/update-from-github.md`

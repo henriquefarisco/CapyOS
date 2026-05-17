@@ -4,10 +4,13 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.238+20260515.md`
-  - Publicacao visual CapyUI v1.1 no README raiz e remocao da marca retangular decorativa do wallpaper do desktop.
+- `capyos-0.8.1+20260517.md`
+  - Release stable com refresh visual CapyUI, cursores/janelas/menu iniciar refinados e correcoes do File Manager.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.238+20260515.md`
+  - Publicacao visual CapyUI v1.1 no README raiz e remocao da marca retangular decorativa do wallpaper do desktop.
 
 - `capyos-0.8.0-alpha.237+20260514.md`
   - Gate externo `mouse-events` com marker serial `[smoke] mouse-events ready`, alvo `smoke-x64-vmware-mouse-events` e evidencias de release exigindo DHCP + `gui-session` + `mouse-events`.

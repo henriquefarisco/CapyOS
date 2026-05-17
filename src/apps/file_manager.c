@@ -258,7 +258,7 @@ int fm_delete_path_now(struct file_manager_app *app, const char *path,
                        uint16_t mode) {
   int rc = 0;
   if (!app || !path || !path[0]) return 0;
-  rc = vfs_unlink(path);
+  rc = (mode & VFS_MODE_DIR) ? vfs_rmdir_recursive(path) : vfs_unlink(path);
   if (rc != 0) {
     fm_set_vfs_status(app,
                       (mode & VFS_MODE_DIR)
@@ -405,21 +405,29 @@ static void file_manager_window_resize(struct gui_window *win, uint32_t w,
 static void file_manager_window_mouse(struct gui_window *win, int32_t x, int32_t y,
                                       uint8_t buttons) {
   struct file_manager_app *app = NULL;
+  int left_down = (buttons & 1) ? 1 : 0;
   if (!win || !win->user_data) return;
   app = (struct file_manager_app *)win->user_data;
   /* Cancel any active drag if the user released the button outside of
    * a valid drop target — see file_manager_handle_mouse_up. */
-  if (app->drag_active && !(buttons & 1)) {
+  if (app->drag_active && !left_down) {
+    app->mouse_left_down = 0;
     file_manager_handle_mouse_up(win, win->frame.x + x, win->frame.y + y);
     return;
   }
   /* Forward drag-in-progress moves to the dnd path so external drop
    * targets get previews. */
-  if (app->drag_active && (buttons & 1)) {
+  if (app->drag_active && left_down) {
     file_manager_handle_drag_move(win, win->frame.x + x, win->frame.y + y,
                                   buttons);
     return;
   }
+  if (!left_down) {
+    app->mouse_left_down = 0;
+    return;
+  }
+  if (app->mouse_left_down) return;
+  app->mouse_left_down = 1;
   file_manager_handle_click(app, x, y);
 }
 
@@ -533,7 +541,7 @@ void file_manager_handle_click(struct file_manager_app *app, int32_t x, int32_t 
     fm_toolbar_layout(app->window->surface.width, &toolbar_x,
                       &button_w, &button_gap);
   }
-  if (y < FM_TOOLBAR_H && app->window) {
+  if (y >= FM_BUTTON_Y && y < FM_BUTTON_Y + FM_BUTTON_H && app->window) {
     if (x >= toolbar_x && x < toolbar_x + button_w) {
       file_manager_navigate_back(app);
       return;
