@@ -149,5 +149,5 @@ make test
 - o instalador por ISO ja entra no wizard, executa o fluxo interativo e grava o
   disco; falhas apos o reboot pelo HDD instalado devem ser tratadas como
   problemas do runtime instalado, nao como ausencia do instalador
-- USB HID/XHCI continua incompleto
+- USB HID/XHCI Slice 3D está entregue por código/testes host-side; validação externa em VMware ainda pendente
 - o caminho `EFI ConIn` ainda mantem parte do boot em modo hibrido

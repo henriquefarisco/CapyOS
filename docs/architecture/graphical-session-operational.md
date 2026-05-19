@@ -3824,12 +3824,17 @@ gráfico real e fallback seguro para TTY.
     Instalacoes feitas com binarios anteriores continuam PBKDF2.
     Slice futuro precisa: definir on-disk volume header com
     algorithm marker + parametros (`algo_id, t_cost, m_cost,
-    salt_len, salt`), atualizar `installer_main.c` para escrever
-    o header, atualizar `key_storage_probe.c` para ler o header
-    no boot e despachar para a KDF correta, ferramenta de
-    re-keying para upgrade in-place de volumes legacy.
+    salt_len, salt`), atualizar o **installer modernizado**
+    (`installer_main.c` foi removido do tree; ver
+    `docs/reference/integration/core-migration-quarantine.md`)
+    para escrever o header, atualizar `key_storage_probe.c` para
+    ler o header no boot e despachar para a KDF correta,
+    ferramenta de re-keying para upgrade in-place de volumes
+    legacy.
   - **Disk salt continua hardcoded** (`g_disk_salt` em
-    `installer_main.c:39-41`). Mitigacao: Argon2id ainda paga 8
+    `src/core/kernel.c:28` e `src/arch/x86_64/kernel_io_helpers.c:53`;
+    o callsite historico em `installer_main.c:39-41` deixou de
+    existir junto com o arquivo). Mitigacao: Argon2id ainda paga 8
     MiB por candidate mesmo com salt fixo (memory wall
     preservado), mas idealmente seria per-install random salt
     armazenado no header de volume. Endereçado no mesmo slice
@@ -4485,23 +4490,17 @@ seção "Marcadores de diagnóstico (não-obrigatórios)".
 
 - Não implementa CapyDisplay 2D, drivers gráficos avançados,
   Wayland, Mesa/Vulkan ou CapyLX — fora do escopo da Etapa 2.
-- Não substitui execução real dos smokes oficiais: a Etapa 2
-  permanece pendente da execução externa final dos gates
-  documentada em
+- A execução real dos smokes oficiais foi informada como aprovada pelo
+  operador em 2026-05-18; o playbook externo permanece como registro
+  operacional em
   [`../operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md).
 - Não altera ABI pública de userland fora do escopo dos contratos
   declarativos descritos acima.
 
 ## Próximos slices
 
-- **Execução externa final dos gates da Etapa 2.** O playbook
-  consolidado em
-  [`../operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md)
-  orquestra fases A-E (build gates, provisionamento, smoke real
-  `mouse-events`, evidência, aceitação e promoção). O aceite
-  operacional da Etapa 2 fica condicionado a essa execução em
-  VMware + UEFI + E1000 fora desta máquina.
 - **Etapa 3** (Driver framework + entrada USB HID + storage estável,
-  reorganizada por ROI em 2026-05-15) fica desbloqueada após o
-  aceite operacional da Etapa 2 e segue a regra sequencial estrita
+  reorganizada por ROI em 2026-05-15) está desbloqueada após o
+  aceite operacional da Etapa 2 informado em 2026-05-18 e segue a
+  regra sequencial estrita
   (`../plans/active/capyos-master-plan.md:18-31`).

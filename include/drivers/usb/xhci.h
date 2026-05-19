@@ -6,6 +6,9 @@
 
 #include <stdint.h>
 
+struct usb_setup_packet;
+struct usb_endpoint_info;
+
 /* PCI class/subclass for USB XHCI controller */
 #define PCI_CLASS_SERIAL_BUS 0x0C
 #define PCI_SUBCLASS_USB 0x03
@@ -50,6 +53,8 @@
 #define XHCI_PORTSC_PR (1 << 4)         /* Port Reset */
 #define XHCI_PORTSC_PLS_MASK (0xF << 5) /* Port Link State */
 #define XHCI_PORTSC_PP (1 << 9)         /* Port Power */
+#define XHCI_PORTSC_SPEED_SHIFT 10
+#define XHCI_PORTSC_SPEED_MASK (0xF << XHCI_PORTSC_SPEED_SHIFT)
 #define XHCI_PORTSC_CSC (1 << 17)       /* Connect Status Change */
 #define XHCI_PORTSC_PRC (1 << 21)       /* Port Reset Change */
 
@@ -73,12 +78,26 @@
  * evt_ring has no Link TRB (event ring uses ERST). */
 #define XHCI_CMD_RING_TRBS 256
 #define XHCI_EVT_RING_TRBS 256
+#define XHCI_MAX_DEVICE_SLOTS 256
+
+#define XHCI_IR0_ERSTSZ 0x28
+#define XHCI_IR0_ERSTBA 0x30
+#define XHCI_IR0_ERDP 0x38
+#define XHCI_ERDP_EHB (1ull << 3)
+
+#define XHCI_TRB_CC_SUCCESS 1
 
 /* Transfer Request Block (TRB) - 16 bytes */
 struct xhci_trb {
   uint64_t param;
   uint32_t status;
   uint32_t control;
+} __attribute__((packed));
+
+struct xhci_erst_entry {
+  uint64_t ring_segment_base;
+  uint32_t ring_segment_size;
+  uint32_t reserved;
 } __attribute__((packed));
 
 /* XHCI Controller State */
@@ -104,9 +123,23 @@ struct xhci_controller {
   uint64_t *dcbaa;           /* Device Context Base Addr Array */
   struct xhci_trb *cmd_ring; /* Command Ring */
   struct xhci_trb *evt_ring; /* Event Ring */
+  struct xhci_erst_entry *erst;
   uint32_t cmd_ring_idx;     /* Current command ring index */
   uint32_t evt_ring_idx;     /* Current event ring index */
   int cmd_ring_cycle;        /* Command ring cycle bit */
+  int evt_ring_cycle;
+  uint32_t context_size;
+  void *device_contexts[XHCI_MAX_DEVICE_SLOTS];
+  struct xhci_trb *ep0_rings[XHCI_MAX_DEVICE_SLOTS];
+  uint32_t ep0_ring_idx[XHCI_MAX_DEVICE_SLOTS];
+  int ep0_ring_cycle[XHCI_MAX_DEVICE_SLOTS];
+  struct xhci_trb *intr_rings[XHCI_MAX_DEVICE_SLOTS];
+  uint8_t *intr_buffers[XHCI_MAX_DEVICE_SLOTS];
+  uint16_t intr_buffer_len[XHCI_MAX_DEVICE_SLOTS];
+  uint8_t intr_ep_addr[XHCI_MAX_DEVICE_SLOTS];
+  uint8_t intr_ep_dci[XHCI_MAX_DEVICE_SLOTS];
+  uint32_t intr_ring_idx[XHCI_MAX_DEVICE_SLOTS];
+  int intr_ring_cycle[XHCI_MAX_DEVICE_SLOTS];
 
   /* State */
   int initialized;
@@ -141,6 +174,26 @@ int xhci_port_get_status(struct xhci_controller *xhci, int port);
 int xhci_enable_slot(struct xhci_controller *xhci, uint8_t *slot_id);
 int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id,
                         int port);
+int xhci_control_transfer(struct xhci_controller *xhci, uint8_t slot_id,
+                          const struct usb_setup_packet *setup, void *buf,
+                          uint16_t len, int dir_in);
+int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
+                                      uint8_t slot_id,
+                                      const struct usb_endpoint_info *ep,
+                                      uint16_t report_len);
+int xhci_poll_interrupt(struct xhci_controller *xhci, uint8_t slot_id,
+                        uint8_t ep_addr, void *out, uint16_t out_len);
+uint8_t xhci_endpoint_dci(uint8_t ep_addr);
+uint8_t xhci_port_speed_from_status(uint32_t portsc);
+uint16_t xhci_ep0_max_packet_size_for_speed(uint8_t port_speed);
+int xhci_build_address_device_input_context(void *input_ctx,
+                                            uint32_t context_size, int port,
+                                            uint8_t port_speed,
+                                            struct xhci_trb *ep0_ring);
+int xhci_build_configure_endpoint_input_context(
+    void *input_ctx, uint32_t context_size, uint8_t ep_addr,
+    uint16_t max_packet_size, uint8_t interval, struct xhci_trb *transfer_ring);
+int xhci_build_normal_trb(struct xhci_trb *trb, void *buf, uint16_t len);
 
 /* Keyboard interface */
 int xhci_find_keyboard(struct xhci_controller *xhci, struct usb_device *kbd);

@@ -143,8 +143,8 @@ int linux_clock_gettime(linux_clockid_t clk, struct linux_timespec *out) {
       int rc = compute_monotonic(&mono);
       if (rc != 0) return rc;
       if (!g_wall_installed) {
-        /* No wall epoch known: report monotonic as wall. Firefox
-         * tolerates this in single-process headless mode. */
+        /* No wall epoch known: report monotonic as wall. Portable
+         * userland should tolerate this until RTC support lands. */
         *out = mono;
         return 0;
       }
@@ -158,8 +158,8 @@ int linux_clock_gettime(linux_clockid_t clk, struct linux_timespec *out) {
     case LINUX_CLOCK_THREAD_CPUTIME_ID:
       /* Per-thread/process accounting requires per-task accumulators
        * that S5 (pthread userland) and a future scheduler hook will
-       * deliver. Until then, return ENOSYS so the caller can fall
-       * back to CLOCK_MONOTONIC; Firefox's profiler already does. */
+       * deliver. Until then, return ENOSYS so callers can fall back
+       * to CLOCK_MONOTONIC. */
       return -LINUX_ENOSYS;
 
     default:
@@ -304,9 +304,8 @@ int64_t linux_clock_nanosleep(int32_t clockid, int flags,
 /* `clock_gettime(clockid_t, struct timespec *)`. The userland pointer
  * is treated verbatim today: there is no per-process page-table
  * sandbox yet between the dispatcher and the user buffer. When S1.x
- * grows a `copy_to_user` primitive (memo'd in
- * `firefox-port-platform-shim.md` riscos), this adapter swaps to it.
- * Until then we write directly through `(struct linux_timespec *)`. */
+ * grows a `copy_to_user` primitive, this adapter swaps to it. Until
+ * then we write directly through `(struct linux_timespec *)`. */
 static int64_t linux_syscall_clock_gettime(const struct linux_syscall_args *a) {
     linux_clockid_t clk = (linux_clockid_t)(int32_t)a->a0;
     struct linux_timespec *out = (struct linux_timespec *)(uintptr_t)a->a1;

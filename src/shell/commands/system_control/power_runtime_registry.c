@@ -315,7 +315,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[29];
+static struct shell_command g_system_control_commands[39];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -380,13 +380,34 @@ static void init_system_control_commands(void) {
   g_system_control_commands[27].handler = cmd_recovery_login;
   g_system_control_commands[28].name = "recovery-storage-repair";
   g_system_control_commands[28].handler = cmd_recovery_storage_repair;
+  g_system_control_commands[29].name = "pkg-list";
+  g_system_control_commands[29].handler = cmd_pkg_list;
+  g_system_control_commands[30].name = "pkg-info";
+  g_system_control_commands[30].handler = cmd_pkg_info;
+  g_system_control_commands[31].name = "pkg-fetch";
+  g_system_control_commands[31].handler = cmd_pkg_fetch;
+  g_system_control_commands[32].name = "pkg-install";
+  g_system_control_commands[32].handler = cmd_pkg_install;
+  g_system_control_commands[33].name = "pkg-remove";
+  g_system_control_commands[33].handler = cmd_pkg_remove;
+  g_system_control_commands[34].name = "pkg-update";
+  g_system_control_commands[34].handler = cmd_pkg_update;
+  g_system_control_commands[35].name = "pkg-source-list";
+  g_system_control_commands[35].handler = cmd_pkg_source_list;
+  g_system_control_commands[36].name = "pkg-source-add";
+  g_system_control_commands[36].handler = cmd_pkg_source_add;
+  g_system_control_commands[37].name = "pkg-source-remove";
+  g_system_control_commands[37].handler = cmd_pkg_source_remove;
+  g_system_control_commands[38].name = "pkg-bootstrap";
+  g_system_control_commands[38].handler = cmd_pkg_bootstrap;
   g_system_control_commands_initialized = 1;
 }
 
 const struct shell_command *shell_commands_system_control(size_t *count) {
+  /* keep the count in sync with the array size declared above. */
   init_system_control_commands();
   if (count) {
-    *count = 29;
+    *count = 39;
   }
   return g_system_control_commands;
 }

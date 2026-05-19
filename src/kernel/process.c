@@ -322,7 +322,7 @@ void process_destroy(struct process *p) {
   p->state = PROC_STATE_UNUSED;
 }
 
-/* 2026-05-02: ROOT-CAUSE fix for "browser engine never sees NAVIGATE
+/* 2026-05-02: ROOT-CAUSE fix for pipe-backed user processes missing request frames
  * (and capy_fork / capy_exec / capy_open / capy_pipe / SYS_BRK / fault
  * classifier all silently failed because process_current() returned
  * NULL).
@@ -338,7 +338,7 @@ void process_destroy(struct process *p) {
  * matched markers emitted via the legacy stdin_buf/debugcon fallbacks
  * that fired BEFORE the FD-table check in sys_read/sys_write.
  *
- * The browser engine uncovered the bug because it actually depends
+ * The pipe-backed user process path uncovered the bug because it depends
  * on `process_current()` returning the right process so sys_read(0)
  * routes to its request pipe, not stdin_buf.
  *
@@ -417,10 +417,9 @@ int process_kill(uint32_t pid, int signal) {
    * resources backing the FDs (pipe ends, VFS files) must be
    * freed at kill time so peers observing the other end of a
    * pipe see EOF / broken-pipe deterministically. Without this,
-   * task-manager-initiated kill of the browser engine left the
-   * response_pipe write end held by the ZOMBIE slot; the chrome
-   * runtime polled forever and the browser_app window stayed
-   * open after kill. parent->wait() reaps the slot via
+   * task-manager-initiated kill of a pipe-backed user process left
+   * the response_pipe write end held by the ZOMBIE slot; the supervisor
+   * polled forever after kill. parent->wait() reaps the slot via
    * process_destroy which is a no-op on already-freed FDs. */
   for (int i = 0; i < PROCESS_FD_MAX; i++) {
     process_fd_free(p, i);
@@ -474,12 +473,11 @@ void process_fd_free(struct process *proc, int fd) {
   /* 2026-05-02: release the underlying kernel resource backing
    * this FD before clearing the slot. The pre-fix path silently
    * dropped pipe ends, leaking them across process_destroy.
-   * Concretely this broke the Task Manager kill flow for the
-   * browser: when the user invoked process_kill(engine_pid, 9)
-   * the engine's response_pipe write end stayed open in the
-   * pipe table, so the chrome runtime never observed EOF on
-   * its read end and the browser_app window kept polling a
-   * dead engine forever. Mirrors sys_close (src/kernel/syscall.c)
+   * Concretely this broke the Task Manager kill flow for pipe-backed
+   * user processes: when the user invoked process_kill(pid, 9)
+   * the response_pipe write end stayed open in the pipe table, so
+   * the supervisor never observed EOF on its read end. Mirrors sys_close
+   * (src/kernel/syscall.c)
    * for VFS files and pipe ends. New FD types added later must
    * extend this switch in lockstep with sys_close.
    *

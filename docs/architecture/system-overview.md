@@ -130,9 +130,10 @@ Current runtime rule:
 - Framebuffer console via UEFI handoff
 - PCI config space scan (legacy I/O access)
 - NVMe single-device bring-up (basic read/write path)
-- Initial XHCI controller init/start (enumeration pending)
+- XHCI enumeration + USB HID Slice 3D implemented by code/host tests; VMware validation pending
 - Hyper-V support code and serial fallback (COM1)
 - Keyboard priority in VM/runtime:
+  - USB HID via XHCI (experimental, pending external Slice 3D validation)
   - `EFI ConIn`
   - PS/2
   - Hyper-V VMBus keyboard (experimental)
@@ -153,23 +154,29 @@ Current runtime rule:
 
 - The ISO installer smoke now exists for the real install path; remaining work
   is broader hardware coverage and continued native-input hardening.
-- USB keyboard path is incomplete (XHCI enumeration/HID missing).
+- USB keyboard path has Slice 3D code/host tests, but still requires external VMware validation before reducing firmware input reliance.
 - Hyper-V synthetic keyboard path still needs stable VMBus flow.
 - The x64 boot path still depends on firmware input in hybrid mode.
 - Integrity/authenticated encryption for filesystem metadata is pending.
 - Version metadata can diverge between `VERSION.yaml` and C headers.
-- HTML viewer: heavy pages (large JS/CSS/images) can stall the UI — no streaming,
-  no image/video decode, no HTTP cache, no cookies. Tracked in
-  `feature/browser-internet-improvements`.
+- Browser path: `CapyBrowse Text` is planned first as a native text-mode
+  HTTP/HTTPS diagnostic browser for simple sites; the graphical browser then
+  grows static HTTPS rendering, image decode, cache and forms. JavaScript,
+  multimedia and any Mozilla/Firefox-style port remain later-stage work gated by
+  sandboxing, CapyLX/Linux ABI and hardening.
+- High-level engines should be decoupled from the base system: CapyLang,
+  browser core, package format, widget model, codecs and benchmarks are allowed
+  to evolve outside this repository only through the contracts in
+  `docs/reference/integration/`.
 
 ## 10. Immediate architecture priorities
 
-Reordered on 2026-05-15 to match the ROI-driven sequence in `docs/plans/active/capyos-master-plan.md` (target audience: common desktop user). Etapa 2 external validation must complete before Etapa 3 work begins.
+Reordered on 2026-05-15 to match the ROI-driven sequence in `docs/plans/active/capyos-master-plan.md` (target audience: common desktop user). Etapa 2 external validation was reported complete on 2026-05-18; Etapa 3 is now active.
 
-1. **Stage 3 (Driver framework + USB HID + storage):** complete XHCI enumeration + USB HID class so keyboard works outside `EFI ConIn`; mature AHCI/NVMe error handling; add device-manager fallback policy so driver failures don't crash kernel.
+1. **Stage 3 (Driver framework + USB HID + storage):** validate the XHCI/USB HID Slice 3D path externally, then mature AHCI/NVMe error handling and add device-manager fallback policy so driver failures don't crash kernel.
 2. **Stage 4 (CapyDisplay 2D + scheduler):** introduce damage-tracked 2D layer and cooperative scheduler/multithread runtime (closes the gap listed in `project-overview.md`).
 3. **Stage 5 (TLS userland real):** advance `libcapy-tls` from metadata-only to real BearSSL handshake with SNI + hostname verification + timeout.
-4. **Stage 6 (Apps maduros) and Stage 7 (Browser usável):** wire existing image decoders (`src/gui/core/{png,jpeg,bmp}_loader.c`) into the renderer, add HTTP cache, streaming render and basic forms. Closes `feature/browser-internet-improvements`.
+4. **Stage 6 (Apps maduros) and Stage 7 (Browser usável):** integrate decoupled `CapyBrowse Text`/HTML core for simple text sites and network diagnostics first, then wire codec/display-list contracts into the graphical renderer, add HTTP cache, streaming render and basic forms. Closes `feature/browser-internet-improvements`.
 5. **Continued architectural hygiene (cross-stage):**
    - Remove remaining hybrid boot dependency and complete native x64 input.
    - Broaden hardware coverage for the official `ISO -> install -> HDD boot -> login` path.

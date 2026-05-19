@@ -34,7 +34,7 @@ static int strcmp_short(const char *a, const char *b) {
 
 static int fstype_supported(const char *t) {
     /* Marco M1: tmpfs, proc, devpts (musl pseudo-tty mount),
-     * sysfs (firefox capability probe), none (bind mount). */
+     * sysfs (common capability probe), none (bind mount). */
     if (!strcmp_short(t, "tmpfs"))  return 1;
     if (!strcmp_short(t, "proc"))   return 1;
     if (!strcmp_short(t, "devpts")) return 1;

@@ -18,8 +18,7 @@ int64_t linux_io_uring_setup(uint32_t entries, void *params) {
      * into the sq/cq size fields. */
     if (!params) return -LINUX_EFAULT;
     /* Marco M1: no async I/O backend. Report -ENOSYS so userland
-     * (musl, liburing-based code, Firefox necko) falls back to
-     * epoll+read/write. */
+     * (musl and liburing-based code) falls back to epoll+read/write. */
     return -LINUX_ENOSYS;
 }
 

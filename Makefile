@@ -50,11 +50,10 @@ CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone 
 # Bug fix critico (2026-05-05 sessao 4b): habilita preemptive
 # scheduler por default. Sem essa flag, `scheduler_set_running(1)`
 # nunca e chamado, `task_yield()` vira no-op, e tasks adicionadas
-# ao run_queue (engine ring 3 do browser, etc) NUNCA sao escalonadas.
-# Resultado pre-fix: tasks ring 3 spawnadas via scheduler_add
-# permaneciam no run_queue sem ser picked. (Sessao 6 erradicou o
-# navegador legacy; este comentario fica como justificativa
-# historica do default ON ate o port do Firefox utilizar a flag.)
+# ao run_queue NUNCA sao escalonadas. Resultado pre-fix: tasks
+# ring 3 spawnadas via scheduler_add permaneciam no run_queue sem
+# ser picked. Este comentario fica como justificativa historica
+# do default ON para processos userland futuros.
 # Ver kernel/scheduler.c::scheduler_yield e
 # arch/x86_64/preemptive_boot.c::capyos_preemptive_mark_running.
 CFLAGS64  += -DCAPYOS_PREEMPTIVE_SCHEDULER
@@ -234,6 +233,12 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/update_agent_apply.o \
 	$(BUILD)/x86_64/services/update_agent_prepare.o \
 	$(BUILD)/x86_64/services/update_agent_transact.o \
+	$(BUILD)/x86_64/services/capypkg/capypkg_state.o \
+	$(BUILD)/x86_64/services/capypkg/capypkg_manifest.o \
+	$(BUILD)/x86_64/services/capypkg/capypkg_repo.o \
+	$(BUILD)/x86_64/services/capypkg/capypkg_install.o \
+	$(BUILD)/x86_64/services/capypkg_bootstrap.o \
+	$(BUILD)/x86_64/services/install_profile.o \
 	$(BUILD)/x86_64/auth/user.o \
 	$(BUILD)/x86_64/auth/user_helpers.o \
 	$(BUILD)/x86_64/auth/userdb_io.o \
@@ -351,6 +356,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/system_control/service_target_resume.o \
 	$(BUILD)/x86_64/shell/commands/system_control/recovery_login_verify.o \
 	$(BUILD)/x86_64/shell/commands/system_control/recovery_storage.o \
+	$(BUILD)/x86_64/shell/commands/system_control/capypkg_commands.o \
 	$(BUILD)/x86_64/shell/commands/system_control/power_runtime_registry.o \
 	$(BUILD)/x86_64/shell/commands/network_common.o \
 	$(BUILD)/x86_64/shell/commands/network_diag.o \
@@ -508,7 +514,6 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/security/chacha20_poly1305.o \
 	$(BUILD)/x86_64/security/x25519.o \
 	$(BUILD)/x86_64/boot/boot_slot.o \
-	$(BUILD)/x86_64/services/package_manager.o \
 	$(BUILD)/x86_64/drivers/input/mouse.o \
 	$(BUILD)/x86_64/gui/core/font8x8_data.o \
 	$(BUILD)/x86_64/gui/core/event.o \
@@ -520,7 +525,6 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/widgets/context_menu.o \
 	$(BUILD)/x86_64/gui/widgets/inline_prompt.o \
 	$(BUILD)/x86_64/gui/terminal/terminal.o \
-	$(BUILD)/x86_64/lang/capylang.o \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_journal_integration.o \
 	$(BUILD)/x86_64/boot/boot_metrics.o \
 	$(BUILD)/x86_64/arch/x86_64/smp.o \
@@ -529,6 +533,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/pipe.o \
 	$(BUILD)/x86_64/kernel/stdin_buf.o \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
+	$(BUILD)/x86_64/drivers/usb/usb_descriptors.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
@@ -555,10 +560,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/extended.o \
 	$(BUILD)/x86_64/gui/window/window_manager.o \
 	$(BUILD)/x86_64/gui/window/window_dispatcher.o \
-	$(BUILD)/x86_64/gui/window/notification.o \
-	$(BUILD)/x86_64/gui/core/bmp_loader.o \
-	$(BUILD)/x86_64/gui/core/png_loader.o \
-	$(BUILD)/x86_64/gui/core/jpeg_loader.o
+	$(BUILD)/x86_64/gui/window/notification.o
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 EFI_LOADER_SRCS = \
@@ -644,7 +646,7 @@ CAPYLIBC_OBJS = \
 # F4 seção c parte 2/2 (2026-05-08): libcapy-net high-level userland
 # TCP client façade. Built as a separate object set so binaries that
 # don't need network I/O (hello, capysh) aren't forced to link the
-# extra ~6 KB. Future libcapy-net users (capybrowser migration,
+# extra ~6 KB. Future libcapy-net users (browser adapters,
 # update-agent fetch path) will pull this in via $(CAPYLIBC_NET_OBJS).
 CAPYLIBC_NET_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_endian.o \
@@ -780,11 +782,8 @@ $(CAPYSH_BLOB_OBJ): $(CAPYSH_ELF)
 capysh-blob: $(CAPYSH_BLOB_OBJ)
 	@echo "[ok] capysh blob ready for kernel link: $(CAPYSH_BLOB_OBJ)"
 
-# Sessao 6 (2026-05-05): regras do capybrowser/capyhtml/browser_ipc
-# erradicadas junto com o navegador legacy. Sera reaberto quando a
-# fase F4 do roadmap (cross-toolchain musl + dynamic linker) habilitar
-# o build do Firefox em userland/bin/firefox/.
-# Ver docs/plans/active/firefox-port-roadmap.md.
+# Sessao 6 (2026-05-05): regras do navegador legado erradicadas.
+# Serao reabertas somente por adaptador versionado na etapa correta.
 
 $(BUILD)/x86_64/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
@@ -1310,7 +1309,6 @@ TEST_SRCS   := \
                tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_theme.c \
                tests/gui/test_gui_window_dispatcher.c tests/gui/test_gui_window_dispatcher_lifecycle.c src/gui/window/window_dispatcher.c \
                tests/gui/test_desktop_smoke_readiness.c src/gui/desktop/desktop_smoke_readiness.c \
-               src/gui/core/png_loader.c src/gui/core/jpeg_loader.c \
                \
                tests/net/test_http_encoding.c src/net/services/http_encoding.c \
                tests/net/test_net_dns.c src/net/services/dns.c \
@@ -1362,6 +1360,8 @@ TEST_SRCS   := \
                tests/drivers/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
                tests/drivers/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/drivers/test_usb_hid_init.c src/drivers/usb/usb_hid.c \
+               tests/drivers/test_xhci_address_device.c src/drivers/usb/xhci.c \
+               tests/drivers/test_usb_descriptor_parse.c src/drivers/usb/usb_descriptors.c \
                \
                tests/kernel/test_klog.c src/kernel/log/klog.c \
                tests/kernel/test_pmm.c src/memory/pmm.c \
@@ -1469,6 +1469,8 @@ TEST_SRCS   := \
                tests/services/test_work_queue.c src/core/work_queue.c \
                tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
                tests/services/test_update_transact.c src/services/update_agent_transact.c \
+               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c \
+               tests/services/test_install_profile.c src/services/install_profile.c \
                \
                tests/apps/test_hello_program.c \
                tests/apps/test_embedded_progs.c src/kernel/embedded_progs.c \
@@ -1498,6 +1500,42 @@ $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
+
+# Quick iteration target: builds and runs ONLY the capypkg unit tests
+# against the in-tree adapter sources, without dragging in the full
+# host test aggregate. Useful during package adapter development.
+TEST_CAPYPKG_BIN := $(BUILD)/tests/capypkg_tests
+TEST_CAPYPKG_SRCS := \
+	tests/services/test_capypkg.c \
+	src/services/capypkg/capypkg_state.c \
+	src/services/capypkg/capypkg_manifest.c \
+	src/services/capypkg/capypkg_repo.c \
+	src/services/capypkg/capypkg_install.c \
+	src/security/sha256.c \
+	src/kernel/log/klog.c
+TEST_CAPYPKG_MAIN := $(BUILD)/tests/capypkg_main.c
+
+.PHONY: test-capypkg
+test-capypkg: $(TEST_CAPYPKG_BIN)
+	@echo "Executando testes unitarios capypkg..."
+	$(TEST_CAPYPKG_BIN)
+	@echo "[ok] capypkg unit tests passed."
+
+$(TEST_CAPYPKG_BIN): $(TEST_CAPYPKG_SRCS) | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	@printf '#include <stdint.h>\nuint64_t pit_ticks(void){static uint64_t t=0;return ++t;}\nint run_capypkg_tests(void);\nint main(void){return run_capypkg_tests();}\n' > $(TEST_CAPYPKG_MAIN)
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $(TEST_CAPYPKG_SRCS) $(TEST_CAPYPKG_MAIN)
+
+.PHONY: modules-index
+# modules-index: aggregate per-repo capypkg manifests (produced by
+# `make package` in each sibling repository) into a single index file
+# the CapyOS in-tree adapter consumes. Output:
+#   build/capypkg/modules-index.txt
+# Override --workspace if the sibling repos do not live under ../.
+modules-index:
+	@echo "Agregando manifests dos repositorios externos..."
+	python3 tools/scripts/build_modules_index.py \
+	  --output build/capypkg/modules-index.txt
 
 .PHONY: layout-audit
 layout-audit:
@@ -1820,10 +1858,9 @@ smoke-x64-capysh:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_capysh.py $(SMOKE_X64_CAPYSH_ARGS)
 
-# Sessao 6 (2026-05-05): target `smoke-x64-browser-spawn` erradicado
-# junto com o navegador legacy. Sera reaberto quando o port do
-# Firefox aterrissar com seu proprio smoke harness.
-# Ver docs/plans/active/firefox-port-roadmap.md.
+# Sessao 6 (2026-05-05): target legado de spawn do navegador erradicado.
+# Sera reaberto somente por adaptador versionado na etapa correta, com
+# seu proprio smoke harness.
 
 # M4 phase 9: aggregate target that runs the FULL preemptive
 # scheduler smoke matrix end-to-end. Exists so CI can invoke a

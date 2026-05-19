@@ -61,8 +61,7 @@ static void emit_kb_field(struct writer *w, const char *label,
      * that matches `cat /proc/meminfo` on Linux 6.x: label, ':',
      * spaces to column 16, number, ' kB\n'. */
     /* For simplicity and parser robustness, we use a single space
-     * separator; major parsers (procps, glibc, Firefox) tolerate
-     * collapsing whitespace. */
+     * separator; common parsers tolerate collapsing whitespace. */
     w_byte(w, ' ');
     w_uint(w, bytes_to_kb(bytes));
     w_str(w, " kB\n");

@@ -76,7 +76,7 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
     /* 2026-05-01: copia pagina-a-pagina. As paginas fisicas alocadas
      * acima por pmm_alloc_page() NAO sao contiguas, entao um unico
      * vmm_virt_to_phys(p_vaddr) + memcpy(filesz) so esta correto se
-     * filesz <= 4 KiB. Para binarios maiores (capybrowser, capysh
+     * filesz <= 4 KiB. Para binarios maiores (legacy browser, capysh
      * com mais codigo) o memcpy extrapola a primeira pagina fisica
      * e corrompe RAM alheia, causando #GP/#PF longe do site original.
      * O loop abaixo recolhe o phys de cada pagina e copia apenas

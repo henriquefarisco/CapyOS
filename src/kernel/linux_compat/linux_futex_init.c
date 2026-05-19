@@ -12,9 +12,9 @@
  *   - Timeout is currently ignored (the kernel scheduler does
  *     not yet expose a timed block primitive). Returns
  *     LINUX_FUTEX_BLOCK_WOKEN unconditionally on wakeup.
- *     SpiderMonkey pthread_cond_timedwait will appear to never
- *     time out; mitigated by surrounding application logic that
- *     also polls. Will be fixed when `task_sleep_until` lands.
+ *     pthread_cond_timedwait users will appear to never time out;
+ *     mitigated by surrounding application logic that also polls.
+ *     Will be fixed when `task_sleep_until` lands.
  *   - The wake count returned is approximate: we wake all
  *     waiters on the channel even if `max_waiters` is 1
  *     (Linux semantics: at most N woken). For pthread mutex
@@ -58,8 +58,8 @@ static int wrap_wake(const uint32_t *uaddr, int max_waiters) {
     (void)max_waiters;  /* see header note: we wake all */
     task_unblock_channel((void *)(uintptr_t)uaddr);
     /* Linux returns the number woken; we approximate with 1
-     * (most pthread mutex/cond wakeups have one waiter). When
-     * SpiderMonkey JS atomics land we will need precise counts. */
+     * (most pthread mutex/cond wakeups have one waiter). Precise
+     * shared-memory atomics will need exact wake counts. */
     return 1;
 }
 

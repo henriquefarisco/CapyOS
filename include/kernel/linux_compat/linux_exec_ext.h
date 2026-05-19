@@ -31,8 +31,8 @@
  *     close.
  *
  * Marco M1: execveat is a stub returning -ENOSYS until exec
- * itself lands (currently musl + capybrowser stack uses spawned
- * processes, not exec); userland code probes -ENOSYS deterministically.
+ * itself lands for the full userland stack; userland code probes
+ * -ENOSYS deterministically.
  * close_range delegates to the existing close() syscall via
  * a callback; we accept any well-formed range. */
 

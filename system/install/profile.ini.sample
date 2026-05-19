@@ -1,0 +1,45 @@
+# /system/install/profile.ini
+#
+# CapyOS install profile (Etapa 9 alpha).
+#
+# This file is consumed by `services/install_profile` and
+# `services/capypkg`. Edit it BEFORE the first successful boot to
+# control whether the system auto-installs remote modules. After the
+# bootstrap is attempted once, the kernel writes
+# /system/install/bootstrap.done and will not retry automatically.
+# Run `pkg-bootstrap --force` from capysh to retry.
+#
+# Schema:
+#   profile=basic|full|custom
+#   bootstrap_repo_name=<name>             # [a-zA-Z0-9._-], 1..31 chars
+#   bootstrap_repo_url=<https url>         # HTTPS only
+#   bootstrap_repo_signed=0|1              # default 0 in alpha
+#   bootstrap_install=<csv of names>       # required when profile=custom
+#
+# Failure modes (the whole file is rejected with no bootstrap):
+#   - any byte outside printable ASCII 0x20-0x7E in any value;
+#   - bootstrap_repo_url not starting with https://;
+#   - bootstrap_repo_name violating the alphabet;
+#   - line without '=' (no silent downgrade to basic);
+#   - profile=full or custom without repo fields;
+#   - profile=custom without a non-empty bootstrap_install list.
+#
+# Defaults:
+#   - no file present => profile=basic;
+#   - profile=basic   => boot to clean shell, no module bootstrap;
+#   - profile=full    => fetch index and install EVERY package in
+#                        the catalog (idempotent, skips installed);
+#   - profile=custom  => same as full but limited to the
+#                        bootstrap_install list.
+
+profile=basic
+
+# Uncomment and edit the block below to enable auto-bootstrap.
+#
+# profile=full
+# bootstrap_repo_name=modules
+# bootstrap_repo_url=https://updates.capyos.org/capypkg/v1/modules-index.txt
+# bootstrap_repo_signed=0
+#
+# Custom selection (only used when profile=custom):
+# bootstrap_install=org.capyos.codecs.image-basic,org.capyos.ui.widget-core

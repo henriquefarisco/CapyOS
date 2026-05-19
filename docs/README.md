@@ -21,7 +21,8 @@ Escopo atual:
 - `architecture/graphical-session-operational.md`
   - Etapa 2 da sessão gráfica operacional, frame pacing e próximos slices
 - `setup/hyper-v.md`
-  - guia historico de investigacao; Hyper-V nao e trilha suportada de release
+  - guia historico de investigacao; Hyper-V e compatibilidade oficial planejada,
+    mas ainda fora da plataforma atual ate gates dedicados
 - `testing/boot-and-cli-validation.md`
   - roteiro de validacao do boot, login, CLI e persistencia
 - `testing/pr-and-release-checklist.md`
@@ -63,6 +64,26 @@ Escopo atual:
     estabilizar a arquitetura de pastas
 - `architecture/source-layout.md`
   - regras oficiais de organizacao de codigo e uso de `make layout-audit`
+- `architecture/decoupled-development-contracts.md`
+  - politica para desenvolver CapyLang, browser core, package format, widgets,
+    codecs e benchmarks fora do sistema base sem quebrar a integracao futura
+- `architecture/capypkg-adapter.md`
+  - design, fronteiras de seguranca e API do adaptador `services/capypkg`
+    para receber pacotes Capy remotos verificados via `capysh`
+- `reference/integration/README.md`
+  - indice dos contratos de integracao de projetos desacoplados
+- `reference/integration/external-core-repositories.md`
+  - registro de ownership externo e snapshots migrados para repos core
+- `reference/integration/tag-release-component-index.md`
+  - contrato alpha para instalação/update modular por tag release, sha256 e ABI
+- `reference/integration/compatibility-matrix.md`
+  - matriz autoritativa de versões pinadas e ABIs cross-repo
+- `reference/integration/capypkg-publisher-manifest-format.md`
+  - formato canônico do manifest line-oriented consumido pelo adapter in-tree
+- `reference/integration/compatibility-audit-2026-05-19.md`
+  - auditoria estática cross-repo de 2026-05-19
+- `operations/manual-module-deploy-runbook.md`
+  - runbook de deploy manual de módulos remotos durante a instalação do core
 - `architecture/libcapy-net-http-hardening.md`
   - contrato de seguranca do request-target HTTP em `libcapy-net`
 - `architecture/libcapy-tls-userland-contract.md`

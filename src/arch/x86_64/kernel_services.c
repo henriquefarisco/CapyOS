@@ -16,6 +16,8 @@
 #include "kernel/log/klog_persist.h"
 #include "lang/localization.h"
 #include "net/stack.h"
+#include "services/capypkg.h"
+#include "services/capypkg_bootstrap.h"
 #include "services/service_boot_policy.h"
 #include "services/service_manager.h"
 #include "services/service_runner.h"
@@ -24,6 +26,8 @@
 #include "auth/user.h"
 #include "auth/session.h"
 #include "core/system_init.h"
+#include "fs/vfs.h"
+#include "net/http.h"
 
 /* ── network service ─────────────────────────────────────────────────── */
 
@@ -202,6 +206,230 @@ int kernel_service_stop_update_agent(void *ctx) {
   (void)service_manager_set_state(SYSTEM_SERVICE_UPDATE_AGENT,
                                   SYSTEM_SERVICE_STATE_STOPPED, 0,
                                   "update catalog idle");
+  return 0;
+}
+
+/* ── capypkg service ─────────────────────────────────────────────────── */
+
+/* VFS-backed adapters; mirror update_agent's pattern but kept local
+ * because the function signatures are slightly different. */
+static int capypkg_runtime_read_file(const char *path, char *buffer,
+                                     size_t buffer_size, size_t *out_len) {
+  struct file *file = NULL;
+  long read = 0;
+  if (!path || !buffer || buffer_size < 2u) {
+    return -1;
+  }
+  file = vfs_open(path, VFS_OPEN_READ);
+  if (!file) {
+    return -1;
+  }
+  read = vfs_read(file, buffer, buffer_size - 1u);
+  vfs_close(file);
+  if (read < 0) {
+    return -1;
+  }
+  buffer[(size_t)read] = '\0';
+  if (out_len) {
+    *out_len = (size_t)read;
+  }
+  return 0;
+}
+
+static int capypkg_runtime_write_text(const char *path, const char *text) {
+  return kernel_write_text_file(path, text);
+}
+
+static int capypkg_runtime_write_bytes(const char *path, const uint8_t *data,
+                                       size_t len) {
+  struct file *file = NULL;
+  struct dentry *d = NULL;
+  if (!path || (!data && len > 0u)) {
+    return -1;
+  }
+  if (vfs_lookup(path, &d) == 0) {
+    (void)vfs_unlink(path);
+  }
+  if (vfs_create(path, VFS_MODE_FILE, NULL) != 0 &&
+      vfs_lookup(path, &d) != 0) {
+    return -1;
+  }
+  file = vfs_open(path, VFS_OPEN_WRITE);
+  if (!file) {
+    return -1;
+  }
+  if (len > 0u && vfs_write(file, data, len) != (long)len) {
+    vfs_close(file);
+    return -1;
+  }
+  vfs_close(file);
+  return 0;
+}
+
+static int capypkg_runtime_remove(const char *path) {
+  struct dentry *d = NULL;
+  if (!path) {
+    return -1;
+  }
+  if (vfs_lookup(path, &d) != 0) {
+    return 0;
+  }
+  return vfs_unlink(path);
+}
+
+static int capypkg_runtime_mkdir(const char *path) {
+  return kernel_ensure_directory_recursive(path);
+}
+
+/* HTTPS adapter binding. http_get returns body+body_len; we copy into
+ * the caller buffer (NUL-terminated for the text fetcher). */
+static int capypkg_runtime_fetch_text(const char *url, char *buffer,
+                                      size_t buffer_size, size_t *out_len) {
+  struct http_response resp = {0};
+  if (!url || !buffer || buffer_size < 2u) {
+    return -1;
+  }
+  int rc = http_get(url, &resp);
+  if (rc != 0 || resp.status_code < 200 || resp.status_code >= 300 ||
+      !resp.body || resp.body_len == 0u) {
+    http_response_free(&resp);
+    return -1;
+  }
+  size_t to_copy = resp.body_len;
+  if (to_copy + 1u > buffer_size) {
+    to_copy = buffer_size - 1u;
+  }
+  for (size_t i = 0u; i < to_copy; ++i) {
+    buffer[i] = (char)resp.body[i];
+  }
+  buffer[to_copy] = '\0';
+  if (out_len) {
+    *out_len = to_copy;
+  }
+  http_response_free(&resp);
+  return 0;
+}
+
+static int capypkg_runtime_fetch_bytes(const char *url, uint8_t *buffer,
+                                       size_t buffer_size, size_t *out_len) {
+  if (!url || !buffer || buffer_size == 0u) {
+    return -1;
+  }
+  return http_download(url, buffer, buffer_size, out_len);
+}
+
+/* Bind once after storage is ready. Idempotent. */
+void kernel_capypkg_bind_runtime_adapters(void) {
+  static int g_capypkg_bound = 0;
+  if (g_capypkg_bound) {
+    return;
+  }
+  capypkg_set_reader(capypkg_runtime_read_file);
+  capypkg_set_writer(capypkg_runtime_write_text);
+  capypkg_set_bytes_writer(capypkg_runtime_write_bytes);
+  capypkg_set_remover(capypkg_runtime_remove);
+  capypkg_set_mkdir(capypkg_runtime_mkdir);
+  capypkg_set_text_fetcher(capypkg_runtime_fetch_text);
+  capypkg_set_bytes_fetcher(capypkg_runtime_fetch_bytes);
+  /* signature verifier intentionally left NULL: until CapyAgent's
+   * ed25519 verifier is integrated the adapter must fail closed for
+   * signed repos. capypkg_install will refuse with CAPYPKG_ERR_SIGNATURE. */
+  (void)capypkg_init();
+  g_capypkg_bound = 1;
+}
+
+void kernel_update_capypkg_service_status(int rc) {
+  struct capypkg_stats stats;
+  capypkg_stats_get(&stats);
+  if (!stats.initialized) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_CAPYPKG,
+                                    SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                    "package adapter not initialized");
+    return;
+  }
+  if (rc < 0 && rc != CAPYPKG_ERR_NOT_READY && rc != CAPYPKG_ERR_NOT_FOUND) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_CAPYPKG,
+                                    SYSTEM_SERVICE_STATE_DEGRADED, rc,
+                                    capypkg_result_label(rc));
+    return;
+  }
+  const char *summary = stats.repo_count == 0u
+                            ? "no package repositories configured"
+                            : (stats.catalog_fresh ? "package catalog ready"
+                                                   : "package catalog idle");
+  (void)service_manager_set_state(SYSTEM_SERVICE_CAPYPKG,
+                                  SYSTEM_SERVICE_STATE_READY, 0, summary);
+}
+
+/* Auto-bootstrap orchestration:
+ *
+ *   - first poll after bind tries `capypkg_bootstrap_run(0, ...)`;
+ *   - the function is fully idempotent and writes its own marker
+ *     once a profile is fully applied (or explicitly basic), so
+ *     subsequent polls are essentially free;
+ *   - per-call failure does NOT short-circuit subsequent polls:
+ *     the bootstrap function only persists the marker when the
+ *     profile said "basic" or when the index fetch + install
+ *     sweep completed (even with per-package failures); HTTP
+ *     fetch errors during network warm-up will retry on the next
+ *     poll without surfacing as a service error.
+ *
+ * `g_capypkg_bootstrap_attempted_marker` is a soft hint to avoid
+ * spamming the audit log on every poll when nothing is going to
+ * change. The bootstrap.done marker in the VFS is the durable
+ * source of truth.
+ */
+static int g_capypkg_bootstrap_logged_idle = 0;
+
+static void kernel_capypkg_maybe_bootstrap(void) {
+  int installed = 0;
+  int failed = 0;
+  int rc = capypkg_bootstrap_run(0, &installed, &failed);
+  if (rc == INSTALL_PROFILE_OK) {
+    if (installed > 0 || failed > 0) {
+      klog(KLOG_INFO,
+           "[audit] [capypkg] bootstrap reached install sweep");
+    } else if (!g_capypkg_bootstrap_logged_idle) {
+      klog(KLOG_INFO,
+           "[audit] [capypkg] bootstrap idle (basic profile or marker present)");
+      g_capypkg_bootstrap_logged_idle = 1;
+    }
+    return;
+  }
+  if (rc == INSTALL_PROFILE_ERR_STORAGE) {
+    /* Transient: network/HTTP not ready yet, or per-package
+     * failures. The bootstrap function emitted its own audit
+     * entry; the next service poll will retry. */
+    return;
+  }
+  /* Permanent failure (profile.ini malformed). The bootstrap
+   * function emitted the audit entry; avoid retry spam. */
+  g_capypkg_bootstrap_logged_idle = 1;
+}
+
+int kernel_service_poll_capypkg(void *ctx) {
+  (void)ctx;
+  if (!g_shell_fs_ready) {
+    (void)service_manager_set_state(SYSTEM_SERVICE_CAPYPKG,
+                                    SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                    "waiting for storage runtime");
+    return 0;
+  }
+  kernel_capypkg_bind_runtime_adapters();
+  kernel_update_capypkg_service_status(0);
+  kernel_capypkg_maybe_bootstrap();
+  return 0;
+}
+
+int kernel_service_start_capypkg(void *ctx) {
+  return kernel_service_poll_capypkg(ctx);
+}
+
+int kernel_service_stop_capypkg(void *ctx) {
+  (void)ctx;
+  (void)service_manager_set_state(SYSTEM_SERVICE_CAPYPKG,
+                                  SYSTEM_SERVICE_STATE_STOPPED, 0,
+                                  "package adapter stopped");
   return 0;
 }
 

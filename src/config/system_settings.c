@@ -49,9 +49,8 @@ static void system_settings_set_defaults(struct system_settings *settings) {
   settings->diagnostics_enabled = 0;
   /* Etapa F4 homepage (2026-05-03): default = wikipedia.org.
    * O campo `browser_homepage` permanece em config.ini apos a
-   * erradicacao do capybrowser na sessao 6 (2026-05-05) -- sera
-   * reusado pelo port do Firefox quando aterrissar.
-   * Ver docs/plans/active/firefox-port-roadmap.md. */
+   * erradicacao do browser legado na sessao 6 (2026-05-05) -- sera
+   * reusado por um adaptador de browser futuro. */
   cstring_copy(settings->browser_homepage, sizeof(settings->browser_homepage),
                "https://wikipedia.org");
 }
@@ -520,8 +519,8 @@ static void apply_config_line(struct system_settings *settings,
     }
   } else if (strings_equal(key, "browser_homepage")) {
     /* URL inicial do browser. Validacao de esquema/comprimento
-     * acontecera no Firefox quando portado (sessao 6 erradicou o
-     * capybrowser; o campo persiste para o sucessor). */
+     * acontecera no adaptador futuro (sessao 6 erradicou o browser
+     * legado; o campo persiste para o sucessor). */
     if (value[0] != '\0') {
       cstring_copy(settings->browser_homepage,
                    sizeof(settings->browser_homepage), value);

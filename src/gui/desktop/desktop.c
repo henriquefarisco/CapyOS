@@ -272,8 +272,8 @@ static void menu_action_task_manager(void *user_data) {
 }
 
 /* Browser menu entry erradicada na sessao 6 (2026-05-05). O
- * capybrowser (engine custom) foi removido; o sucessor sera um
- * port do Firefox. Ver docs/plans/active/firefox-port-roadmap.md. */
+ * browser legado foi removido; o sucessor deve voltar como adaptador
+ * versionado na etapa correta. */
 
 static void menu_action_logout(void *user_data) {
   (void)user_data;
@@ -556,9 +556,8 @@ int desktop_run_frame(struct desktop_session *ds) {
    * exited) reflect in the row list within ~0.5s on real hw. */
   task_manager_tick();
 
-  /* Browser per-frame tick erradicado na sessao 6 (2026-05-05).
-   * Quando o port do Firefox aterrissar, o tick voltara como uma
-   * chamada para `firefox_app_tick(...)`. */
+  /* Legacy browser per-frame tick erradicado na sessao 6 (2026-05-05).
+   * Um sucessor deve voltar somente como adaptador versionado na etapa correta. */
 
   {
     struct mouse_state ms;

@@ -38,8 +38,7 @@ int64_t syscall_dispatch(struct syscall_frame *frame);
  * directly. The priority contract these tests lock is documented
  * inline in src/kernel/syscall.c: the process FD table wins over
  * legacy fd 0 (stdin_buf) / fd 1/2 (debugcon) defaults so that
- * processes which install explicit pipes at those indices (the
- * browser engine in particular) see pipe semantics. */
+ * processes which install explicit pipes at those indices see pipe semantics. */
 int64_t sys_read(struct syscall_frame *frame);
 int64_t sys_write(struct syscall_frame *frame);
 

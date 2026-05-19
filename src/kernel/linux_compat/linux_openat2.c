@@ -50,8 +50,8 @@ int64_t linux_openat2(int dirfd, const char *path,
     }
     /* No backend: report -ENOSYS so userland's fallback to
      * openat() takes over. We could also accept and synthesise
-     * a fake fd, but Firefox sandbox specifically probes for
-     * support and the deterministic -ENOSYS path is safer. */
+     * a fake fd, but sandbox probes are safer on deterministic
+     * -ENOSYS. */
     return -LINUX_ENOSYS;
 }
 

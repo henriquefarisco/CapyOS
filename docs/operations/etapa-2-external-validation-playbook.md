@@ -2,21 +2,20 @@
 
 **Versão alvo:** `0.8.0-alpha.237+20260514`
 **Plataforma oficial:** `VMware + UEFI + E1000`
-**Status técnico:** `100% entregue` conforme `docs/plans/STATUS.md` em
-`Etapa em validação externa`.
-**Pendência única:** execução externa final dos gates registrada em
-`docs/plans/STATUS.md`.
+**Status técnico:** `100% entregue e aceito operacionalmente` conforme
+`docs/plans/STATUS.md` em `Etapa fechada`.
+**Resultado:** execução externa final dos gates informada como aprovada pelo
+operador em 2026-05-18.
 **Audiência:** operador humano externo ou CI privada — esta máquina é apenas review/edit (`MEMORY[05-local-execution-policy.md]`).
 
 ## 1. Por que este playbook existe
 
-A Etapa 2 está tecnicamente fechada por código/documentação em
-`alpha.237`. A única coisa que ainda separa o aceite operacional é a
-**execução fora desta máquina** dos gates abaixo, na plataforma
-oficial. Os comandos já existem no Makefile, os scripts já estão em
-`tools/scripts/`, os contratos já estão no código. Falta um runbook
-único e linear que diga ao operador exatamente o que rodar, em que
-ordem, com que entradas e como reconhecer pass/fail por etapa.
+A Etapa 2 foi tecnicamente fechada por código/documentação em
+`alpha.237` e teve a **execução fora desta máquina** dos gates abaixo
+informada como aprovada pelo operador em 2026-05-18 na plataforma
+oficial. Os comandos existem no Makefile, os scripts estão em
+`tools/scripts/` e os contratos estão no código. Este playbook fica como
+registro operacional do que foi exigido para pass/fail por etapa.
 
 Os cinco documentos detalhados em `docs/operations/release-ci-smoke-*`
 e `docs/testing/vmware-e1000-smoke.md` continuam autoritativos sobre
@@ -30,15 +29,15 @@ aparecem em nenhum dos cinco.**
 Reproduzido de `docs/plans/STATUS.md` em `Visão executiva da Etapa 2`
 para evitar drift:
 
-> Critério de aceite operacional: a Etapa 2 só libera a Etapa 3 após
+> Critério de aceite operacional cumprido: a Etapa 2 libera a Etapa 3 após
 > `make test`, `make layout-audit`, `make all64`, `make release-check`
-> e o smoke `mouse-events` oficial serem executados fora desta máquina
-> com evidência anexada. Novas falhas encontradas durante esses gates
-> entram como bugs dentro do bloco acima, não como novos entregáveis
-> de roadmap, salvo mudança explícita deste plano.
+> e o smoke `mouse-events` oficial terem sido executados fora desta máquina
+> com evidência informada pelo operador. Novas regressões futuras entram como
+> bugs da etapa ativa correspondente, salvo mudança explícita deste plano.
 
-Em resumo: **a Etapa 2 é aceita quando todas as 5 fases abaixo passam
-e a evidência é encadeada via os manifestos públicos de release-CI.**
+Em resumo: **a Etapa 2 foi aceita porque o operador informou que todas
+as 5 fases abaixo passaram e a evidência foi encadeada via os manifestos
+públicos de release-CI.**
 
 ## 3. Visão geral das fases
 
@@ -397,7 +396,7 @@ encadeados.
 
 ## 10. Aceite operacional da Etapa 2
 
-**A Etapa 2 só é considerada operacionalmente fechada quando:**
+**A Etapa 2 é considerada operacionalmente fechada porque:**
 
 1. Fases A, B, C, D, E acima passaram fora desta máquina.
 2. Os artefatos `build/release-official-handoff.manifest`,
@@ -405,24 +404,19 @@ encadeados.
    `build/release-smoke-acceptance.manifest` e
    `build/release-smoke-promotion.manifest` foram anexados como
    evidência ao registro oficial da release.
-3. Em `docs/plans/STATUS.md`, na lista de entregáveis concluídos e pendência
-   externa da Etapa 2, o item é alterado de
-   `- [ ] Execução externa final dos gates.` para
-   `- [x] Execução externa final dos gates.` (com referência ao
-   identificador da CI run).
-4. Em `docs/plans/STATUS.md`, o progresso global muda
-   `1/16 etapas oficialmente fechadas` para
-   `2/16 etapas oficialmente fechadas` (Etapa 2 sai de "Em validação"
-   para "Concluída").
-5. Em `docs/plans/active/capyos-master-plan.md`, o resumo executivo muda
-   `Etapa 2 tecnicamente fechada por código/docs; 1/16 etapas
-   oficialmente fechadas` para refletir o aceite.
-6. A linha da Etapa 3 em `STATUS.md` muda de `Bloqueada` para
-   `Pronta para iniciar` ou equivalente.
+3. Em `docs/plans/STATUS.md`, na lista de entregáveis concluídos da Etapa 2,
+   o item está marcado como
+   `- [x] Execução externa final dos gates informada pelo operador em 2026-05-18.`
+4. Em `docs/plans/STATUS.md`, o progresso global registra `2/16 etapas
+   concluídas` e a Etapa 3 como etapa atual.
+5. Em `docs/plans/active/capyos-master-plan.md`, o resumo executivo reflete
+   Etapas 1-2 oficialmente fechadas e Etapa 3 em andamento.
+6. A linha da Etapa 3 em `STATUS.md` está em `Em andamento`.
 
 **Após o aceite, Etapa 3 (Driver framework + entrada USB HID +
-storage estável) fica desbloqueada** e segue a regra sequencial
-estrita descrita em `docs/plans/active/capyos-master-plan.md`.
+storage estável) ficou desbloqueada e está em andamento**, seguindo a
+regra sequencial estrita descrita em
+`docs/plans/active/capyos-master-plan.md`.
 
 ## 11. Markers obrigatórios — referência rápida
 

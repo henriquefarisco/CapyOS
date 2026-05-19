@@ -8,6 +8,9 @@
 #include "services/service_manager.h"
 #include "core/system_init.h"
 #include "services/update_agent.h"
+#include "services/capypkg.h"
+#include "services/capypkg_bootstrap.h"
+#include "services/install_profile.h"
 #include "auth/user.h"
 #include "auth/user_home.h"
 #include "auth/user_prefs.h"
@@ -85,5 +88,19 @@ int cmd_recovery_verify(struct shell_context *ctx, int argc, char **argv);
 
 /* recovery_storage */
 int cmd_recovery_storage_repair(struct shell_context *ctx, int argc, char **argv);
+/* capypkg_commands */
+int cmd_pkg_list(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_info(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_fetch(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_install(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_remove(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_update(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_source_list(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_source_add(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_source_remove(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv);
+/* The programmatic bootstrap entry point lives in
+ * `include/services/capypkg_bootstrap.h` and is included above. */
+
 
 #endif

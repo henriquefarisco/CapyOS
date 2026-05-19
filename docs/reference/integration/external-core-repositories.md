@@ -1,0 +1,148 @@
+# External core repositories
+
+**Status:** migration registry for decoupled core projects.
+**Rule:** external repository progress does not count as CapyOS
+roadmap progress until the matching CapyOS stage integrates it through
+a versioned in-tree adapter and an external gate.
+**Installation boundary:** `modular-installation-architecture.md`
+defines how installable external components may enter CapyOS in future
+Etapas 8-9.
+**Core hygiene:** `core-migration-quarantine.md` documents the
+completed in-tree hygiene pass.
+
+## Visible local repositories
+
+| Repository | Intended ownership | Migration status |
+|---|---|---|
+| `CapyBrowser` | browser core, HTML-to-text, static layout/display list | browser source not present in active CapyOS; rebuild as decoupled core |
+| `CapyLang` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work |
+| `CapyAgent` | package format, resolver, component index, release manifest model, declarative install/rollback plan | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary |
+| `CapyCodecs` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders until an image adapter lands |
+| `CapyUI` | retained widget model, layout/display-list contracts, abstract event routing | widget tree/event model extracted; compositor/font/input plumbing stays in CapyOS |
+| `CapyBenchmark` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator initialized externally |
+
+## Migrated snapshots
+
+### CapyAgent
+
+The legacy in-tree package manager sources have been **removed in-tree**.
+CapyOS now exposes a small in-tree adapter under `services/capypkg` as
+the Etapa 9 alpha boundary that receives remote Capy packages:
+
+- `include/services/capypkg.h` — public contract;
+- `src/services/capypkg/capypkg_state.c` — singleton state and helpers;
+- `src/services/capypkg/capypkg_manifest.c` — manifest parsing and
+  payload verification (SHA-256 + Ed25519 over canonical descriptor);
+- `src/services/capypkg/capypkg_repo.c` — repository config and
+  persistence under `/system/capypkg/repos.cfg`;
+- `src/services/capypkg/capypkg_install.c` — index fetch, install,
+  remove and update operations.
+
+CapyAgent retains host-testable package/resolver/component-index logic
+in its own repo and may publish signed indices that the in-tree adapter
+consumes. CapyOS still owns the active release/update safety paths
+(manifest parsing, downgrade checks, signature/hash validation, staging,
+boot-slot activation and rollback) through the existing `update_agent`
+service. The `capypkg` adapter is independent of `update_agent` and
+covers application packages rather than core OS updates.
+
+The corresponding shell surface is:
+
+- `pkg-list [--installed|--available]`
+- `pkg-info <name>`
+- `pkg-fetch`
+- `pkg-install <name>`
+- `pkg-remove <name>`
+- `pkg-update [<name>]`
+- `pkg-source-list`
+- `pkg-source-add <name> <https-url> [--unsigned]`
+- `pkg-source-remove <name>`
+
+### CapyCodecs
+
+The legacy in-tree GUI loader sources have been **removed in-tree**.
+CapyOS does not ship image decoders by default until a stage-appropriate
+adapter under `services/` or `gui/codecs/` replaces them. Portable
+decoder behavior is validated in `CapyCodecs` until that CapyOS image
+adapter exists.
+
+External repo entry points (unchanged):
+
+- `CapyCodecs/src/image/capy_image.h`
+- `CapyCodecs/src/image/image.c`
+- `CapyCodecs/src/image/bmp_decode.c`
+- `CapyCodecs/src/image/png_decode.c`
+- `CapyCodecs/src/image/jpeg_decode.c`
+
+### CapyUI
+
+Unchanged. CapyOS keeps compositor, font, rendering surface, theme
+provider and input plumbing. The current `widget`, `context_menu` and
+`inline_prompt` runtime objects have active desktop/app callers and
+remain linked by default until a versioned CapyUI adapter replaces
+only the portable model boundary.
+
+External entry points:
+
+- `CapyUI/src/widget/capy_widget.h`
+- `CapyUI/src/widget/capy_widget.c`
+
+### CapyBenchmark
+
+No coupled benchmark harness implementation ever shipped in active
+CapyOS source. Owned in external repo:
+
+- `CapyBenchmark/src/harness/capy_benchmark.h`
+- `CapyBenchmark/src/harness/capy_benchmark.c`
+
+### CapyBrowser
+
+No active browser implementation exists in `src/apps` to migrate.
+CapyOS still owns the `browser_homepage` system setting and Settings UI
+surface as future browser adapter configuration. That retained
+preference is not an active CapyBrowser implementation and has no
+runtime browser object to quarantine.
+
+External entry points:
+
+- `CapyBrowser/docs/capyos-migration.md`
+- `CapyBrowser/docs/compatibility.md`
+- `CapyBrowser/docs/README.md`
+
+### CapyLang
+
+The in-tree CapyLang prototype has been **removed in-tree**. CapyLang
+owns its parser/IR/VM/host ABI/benchmark work in its own repo until
+Etapa 15 introduces a versioned host-ABI adapter.
+
+External entry points:
+
+- `CapyLang/README.md`
+- `CapyLang/docs/compatibility.md`
+- `CapyLang/docs/integration.md`
+
+## CapyOS integration gates
+
+- Core in-tree hygiene: completed (no more `CAPYOS_ENABLE_LEGACY_MIGRATED`
+  variable, no `capyos-legacy-migrated` target, no quarantined objects).
+- Modular installation architecture and component selection UI:
+  Etapas 8-9.
+- CapyAgent in-tree adapter (`services/capypkg`): Etapa 9 alpha —
+  available now, signature verifier intentionally fail-closed until
+  CapyAgent's Ed25519 verifier is wired through
+  `capypkg_set_signature_verifier`.
+- CapyBrowser text/static core: Etapas 6-7.
+- CapyCodecs image codecs: Etapas 6-7 (will land as a new
+  `gui/codecs/` adapter, not by reintroducing legacy decoders).
+- CapyUI widget/display-list model: Etapas 4 and 6.
+- CapyLang VM/host ABI/benchmarks: Etapa 15.
+- Benchmark regression baseline: Etapa 16.
+
+## Alpha distribution note
+
+Early modular install/update contract work uses GitHub release tags
+plus the compatibility index in `tag-release-component-index.md`. The
+in-tree `capypkg` adapter is the active runtime boundary for remote
+package installs from `capysh`; signatures over the canonical package
+descriptor must be present before the flow becomes an official release
+trust chain.

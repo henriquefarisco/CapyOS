@@ -1,14 +1,14 @@
 # Roadmap: Port do Firefox para o CapyOS + Erradicacao do Capybrowser
 
-**Status**: Sessao 7 (2026-05-05) -- atualizado com analise do codigo
-fonte real do Firefox apos o usuario adicionar `/Volumes/Firefox`
-como workspace.
+**Status**: Roadmap futuro/dependente de CapyLX. A partir do plano mestre
+ativo de 2026-05-18, o primeiro navegador planejado e `CapyBrowse Text`
+nativo na Etapa 6, seguido por browser grafico estatico na Etapa 7; Firefox
+permanece uma opcao futura via ABI Linux/CapyLX depois dos gates dedicados.
 **Autor**: Cascade
-**Trigger**: usuario decidiu que o capybrowser nao amadurecera o
-suficiente para web real e quer migrar para um port do Firefox open
-source. Antes do port, o capybrowser e suas dependencias diretas
-sao removidos do sistema. Estruturas reusaveis para o Firefox sao
-preservadas.
+**Trigger historico**: usuario decidiu investigar um port do Firefox open
+source. A decisao atual do plano mestre e preservar um navegador nativo
+basico primeiro para diagnostico de rede e uso em sites de texto, mantendo
+este documento como trilha de avaliacao para um port grande futuro.
 
 **Documentos relacionados (criados na sessao 7):**
 - `docs/architecture/firefox-port-deep-dive.md` -- analise tecnica
@@ -236,16 +236,14 @@ considerar alternativas mais leves no curto prazo**:
 | **Dillo** | 100k | C99 + FLTK | sem JS | CSS basico | 4-6 meses |
 | **Lynx** (text) | 250k | C89 | sem | sem CSS | 2-3 meses |
 
-Recomendacao tecnica para o CapyOS: comecar com **NetSurf** (C99
-puro, leve, compativel com a stack atual de fonts/raster que ja
-temos) e em paralelo construir as fundacoes (Fases F1-F4) que
-permitirao o port do Firefox em medio prazo. NetSurf sera
-substituido por Firefox quando F1-F7 completas.
+Recomendacao tecnica vigente para o CapyOS: comecar com **CapyBrowse Text**
+nativo na Etapa 6 para abrir sites de texto e diagnosticar DNS/TCP/TLS/HTTP;
+evoluir para browser grafico estatico na Etapa 7; so entao avaliar engines
+intermediarias (NetSurf/WebKit) ou Firefox/Mozilla via CapyLX conforme gates.
 
-Mas o usuario solicitou Firefox, entao o roadmap acima permanece
-como objetivo final. **A erradicacao do capybrowser (Parte D
-abaixo) e o pre-requisito imediato; depois F1-F7 sao executadas
-sequencialmente.**
+Firefox deixa de ser pre-requisito imediato. Este roadmap permanece como
+referencia tecnica para a decisao futura, bloqueada ate CapyLX, Wayland bridge,
+multimidia e hardening de sandbox terem gates proprios.
 
 ## Parte D: Plano de erradicacao do capybrowser
 

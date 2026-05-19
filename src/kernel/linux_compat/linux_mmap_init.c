@@ -20,9 +20,8 @@
  *     (acceptable for short-lived processes; bytes are reclaimed
  *     when the AS is destroyed).
  *   - mprotect returns -EINVAL until the VMM grows a per-page
- *     prot helper. SpiderMonkey JIT will see this and fall back
- *     to its W^X-via-mmap path (allocating two regions with
- *     different prots).
+ *     prot helper. Portable JIT runtimes should fall back to
+ *     dual-mapping or non-JIT paths.
  */
 
 #if !defined(UNIT_TEST)
@@ -76,8 +75,8 @@ static int wrap_free_pages(uint64_t addr, size_t pages) {
 }
 
 static int wrap_protect(uint64_t addr, size_t pages, uint32_t prot) {
-    /* No per-page prot mutation helper yet. SpiderMonkey JIT
-     * detects this and falls back to dual-mapping. */
+    /* No per-page prot mutation helper yet. JIT-capable userland
+     * should detect this and fall back to dual-mapping. */
     (void)addr;
     (void)pages;
     (void)prot;

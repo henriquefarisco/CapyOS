@@ -24,5 +24,7 @@ int usb_hid_keyboard_poll(char *out_char);
 int usb_hid_keyboard_available(void);
 int usb_hid_mouse_poll(int8_t *dx, int8_t *dy, int8_t *dz, uint8_t *buttons);
 int usb_hid_mouse_available(void);
+void usb_hid_handle_keyboard_report(const struct usb_hid_keyboard_report *report);
+void usb_hid_handle_mouse_report(const struct usb_hid_mouse_report *report);
 
 #endif /* DRIVERS_USB_HID_H */

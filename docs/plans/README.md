@@ -2,6 +2,11 @@
 
 > **Atualizado em 2026-05-15** — Etapas 3-15 reorganizadas por ROI ao usuário desktop comum e expandidas para 14 etapas (3-16) sem violar a regra sequencial estrita. Sequência antiga preservada em [`historical/capyos-master-plan-pre-roi-reorder.md`](historical/capyos-master-plan-pre-roi-reorder.md).
 >
+> **Desacoplamento em 2026-05-18:** projetos apartados como CapyLang,
+> browser core, package format, widget model, codecs e benchmark harness são
+> permitidos por contrato, mas só contam como progresso oficial quando
+> integrados ao plano mestre na etapa correspondente.
+>
 > **Histórico anterior (2026-05-10):** reorganização do plano ativo para uma sequência bloqueante. Entregas concluídas até `0.8.0-alpha.93+20260510` foram movidas para documentação histórica.
 >
 > A pasta `active/` continua com **um único plano vivo**.
@@ -32,6 +37,8 @@ docs/plans/
 | Documento | Papel atual |
 |---|---|
 | [`capyos-master-plan.md`](active/capyos-master-plan.md) | Fonte de verdade única. Define a sequência bloqueante Etapa 1 → Etapa 16 reorganizada por ROI ao usuário desktop comum em 2026-05-15: CapyUI polish (1), sessão gráfica (2), drivers+USB HID+storage (3), CapyDisplay 2D+scheduler (4), TLS real (5), apps maduros (6), browser usável (7), release+instalador (8), package manager+SDK (9), áudio+multimídia (10), WiFi+power (11), JS engine (12), CapyLX unificado (13), Wayland (14), Mesa+CapyLang (15) e hardening 1.0 (16). |
+| [`../architecture/decoupled-development-contracts.md`](../architecture/decoupled-development-contracts.md) | Política de fronteira entre sistema base e projetos apartados. |
+| [`../reference/integration/README.md`](../reference/integration/README.md) | Índice dos contratos para integrar componentes desenvolvidos fora do CapyOS. |
 
 ## Entregas históricas consolidadas
 
@@ -71,8 +78,8 @@ docs/plans/
 
 | Documento | Trilha | Observação |
 |---|---|---|
-| [`hyperv-network-reset-plan.md`](experimental/hyperv-network-reset-plan.md) | Investigação Hyper-V/rede | Hyper-V está fora da trilha oficial de release. |
-| [`network-hyperv-refactor-and-update-plan.md`](experimental/network-hyperv-refactor-and-update-plan.md) | Refatoração de rede Hyper-V | Hyper-V está fora da trilha oficial de release. |
+| [`hyperv-network-reset-plan.md`](experimental/hyperv-network-reset-plan.md) | Investigação Hyper-V/rede | Histórico experimental; Hyper-V agora é compatibilidade oficial planejada, pendente de gates dedicados. |
+| [`network-hyperv-refactor-and-update-plan.md`](experimental/network-hyperv-refactor-and-update-plan.md) | Refatoração de rede Hyper-V | Histórico experimental; Hyper-V agora é compatibilidade oficial planejada, pendente de gates dedicados. |
 
 ## Regras de manutenção
 
@@ -80,4 +87,6 @@ docs/plans/
 2. Nenhuma etapa posterior inicia antes da anterior fechar 100%.
 3. Nenhuma promoção para `Implementado`/✅ sem evidência.
 4. Mover documento entre pastas exige atualizar `STATUS.md` e este índice.
-5. Plataforma oficial: `VMware + UEFI + E1000`.
+5. Plataforma oficial atual de validação: `VMware + UEFI + E1000`.
+6. Projeto desacoplado sem contrato em `docs/reference/integration/` não deve
+   ser importado para `src/`.

@@ -451,9 +451,9 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   x64_timebase_init();
   dbgcon_putc('g');
   /* Linux-ABI clock_gettime shim: captures TSC as the boot epoch so
-   * future Firefox/SpiderMonkey calls to clock_gettime(CLOCK_MONOTONIC)
-   * see monotonic time relative to this point. Cheap and idempotent;
-   * x64_timebase_init has already calibrated tsc_hz. */
+   * future userland calls to clock_gettime(CLOCK_MONOTONIC) see monotonic
+   * time relative to this point. Cheap and idempotent; x64_timebase_init
+   * has already calibrated tsc_hz. */
   extern void linux_clock_init_boot(void);
   linux_clock_init_boot();
   /* Linux-ABI getrandom shim: install csprng as the source. Done here
@@ -471,7 +471,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   extern void linux_fd_init_boot(void);
   linux_fd_init_boot();
   /* Linux-ABI mmap shim: anonymous private mappings via the VMM
-   * demand-page registry. Used by SpiderMonkey JIT and GC. */
+   * demand-page registry. Used by portable userland allocators/JITs. */
   extern void linux_mmap_init_boot(void);
   linux_mmap_init_boot();
   /* Linux-ABI futex shim: pthread mutex/cond wait/wake against
@@ -849,6 +849,19 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)service_manager_set_dependencies(
         SYSTEM_SERVICE_UPDATE_AGENT, (1u << SYSTEM_SERVICE_LOGGER));
     (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
+    (void)service_manager_set_poll(SYSTEM_SERVICE_CAPYPKG,
+                                   kernel_service_poll_capypkg, NULL);
+    (void)service_manager_set_control(SYSTEM_SERVICE_CAPYPKG,
+                                      kernel_service_start_capypkg,
+                                      kernel_service_stop_capypkg, NULL);
+    /* 60s poll lets the auto-bootstrap (`kernel_capypkg_maybe_bootstrap`)
+     * retry quickly while the network warms up after boot. Once the
+     * `/system/install/bootstrap.done` marker is written, each poll
+     * is essentially a stat() + early return. */
+    (void)service_manager_set_poll_interval(SYSTEM_SERVICE_CAPYPKG, 60u);
+    (void)service_manager_set_dependencies(
+        SYSTEM_SERVICE_CAPYPKG, (1u << SYSTEM_SERVICE_LOGGER));
+    (void)service_manager_set_restart_limit(SYSTEM_SERVICE_CAPYPKG, 3u);
     update_agent_status_get(&update_status);
 
     {

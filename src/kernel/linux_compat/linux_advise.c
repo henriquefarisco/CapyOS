@@ -52,7 +52,7 @@ int64_t linux_fallocate(int fd, int mode, int64_t offset, int64_t len) {
     }
     /* Marco M1: tmpfs without preallocation support. Linux tmpfs
      * returns -EOPNOTSUPP for fallocate on old kernels and
-     * userland (glibc, musl, Firefox) handles it gracefully. */
+     * portable userland handles it gracefully. */
     return -LINUX_EOPNOTSUPP;
 }
 

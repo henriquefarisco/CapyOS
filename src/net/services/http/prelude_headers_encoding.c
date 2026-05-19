@@ -59,9 +59,26 @@ void http_store_headers(const char *headers, size_t len,
       hdr = &resp->headers[resp->header_count++];
       if (name_len >= sizeof(hdr->name)) name_len = sizeof(hdr->name) - 1;
       if (value_len >= sizeof(hdr->value)) value_len = sizeof(hdr->value) - 1;
-      for (size_t i = 0; i < name_len; i++) hdr->name[i] = headers[line_start + i];
+      /* Strip non-printable bytes from header name and value during
+       * storage. RFC 7230 §3.2.6 forbids control characters in
+       * field-content; some real servers emit them anyway and a
+       * hostile one could ship `Content-Type: text/html\x1b[2J...`
+       * or `Location: https://x.com/\x1b[2J...`. cmd_net_query
+       * echoes both directly via shell_print -> vga_write -> serial,
+       * so an unfiltered control byte would land in a terminal
+       * emulator as an ANSI escape. Replace each control byte / DEL
+       * with '?' so the header text remains readable and length-
+       * stable for downstream parsers that already key on prefixes
+       * (Content-Length digits, "chunked" substring, etc). */
+      for (size_t i = 0; i < name_len; i++) {
+        unsigned char nc = (unsigned char)headers[line_start + i];
+        hdr->name[i] = (nc <= 0x20u || nc == 0x7Fu) ? '?' : (char)nc;
+      }
       hdr->name[name_len] = '\0';
-      for (size_t i = 0; i < value_len; i++) hdr->value[i] = headers[value_start + i];
+      for (size_t i = 0; i < value_len; i++) {
+        unsigned char vc = (unsigned char)headers[value_start + i];
+        hdr->value[i] = (vc < 0x20u || vc == 0x7Fu) ? '?' : (char)vc;
+      }
       hdr->value[value_len] = '\0';
       if (http_streq_ci(hdr->name, "Transfer-Encoding") &&
           http_contains_ci(hdr->value, "chunked")) {

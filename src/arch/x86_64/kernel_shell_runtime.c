@@ -94,7 +94,9 @@ static int bootstrap_ramdisk_runtime(
       "  net-status, net-ip, net-gw, net-dns,\n"
       "  net-set <ip> <mask> <gw> <dns>, hey <ip>,\n"
       "  add-user <user> <pass> [role], set-pass <user> <pass>, list-users,\n"
-      "  shutdown-reboot, shutdown-off, do-sync\n";
+      "  shutdown-reboot, shutdown-off, do-sync,\n"
+      "  pkg-list, pkg-info, pkg-fetch, pkg-install, pkg-remove,\n"
+      "  pkg-update, pkg-source-list, pkg-source-add, pkg-source-remove\n";
 
   ramdisk_init(512);
   struct block_device *ram = ramdisk_device();

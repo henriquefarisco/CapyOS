@@ -29,7 +29,7 @@ void linux_rlimit_legacy_reset_for_tests(void) {
  * The values mirror what a 64-bit Linux kernel exposes in the
  * default initrd-friendly profile: NOFILE caps soft at 1024,
  * STACK at 8 MiB, the rest at INFINITY for things we don't
- * really limit. SpiderMonkey + bash boot cleanly with these. */
+ * really limit. */
 static void synthesize(int resource, struct linux_rlimit *out) {
     out->rlim_cur = LINUX_RLIM_INFINITY;
     out->rlim_max = LINUX_RLIM_INFINITY;

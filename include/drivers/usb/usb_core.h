@@ -13,6 +13,23 @@
 #define USB_PROTOCOL_MOUSE 2
 #define USB_CLASS_STORAGE  8
 
+#define USB_DESC_TYPE_DEVICE        1
+#define USB_DESC_TYPE_CONFIGURATION 2
+#define USB_DESC_TYPE_INTERFACE     4
+#define USB_DESC_TYPE_ENDPOINT      5
+
+#define USB_REQ_GET_DESCRIPTOR 6
+#define USB_REQ_SET_CONFIGURATION 9
+#define USB_HID_REQ_SET_PROTOCOL 11
+
+struct usb_setup_packet {
+  uint8_t bmRequestType;
+  uint8_t bRequest;
+  uint16_t wValue;
+  uint16_t wIndex;
+  uint16_t wLength;
+} __attribute__((packed));
+
 /* USB device state machine.
  *
  * Contract for upper layers (e.g. usb_hid):
@@ -21,16 +38,19 @@
  *                   No class/subclass/protocol info is populated yet.
  *                   Upper layers must not try to claim the device.
  *   - ADDRESSED:    xhci slot enabled, Address Device command completed.
- *                   class_code/subclass/protocol MAY be populated only if
- *                   the device descriptor was already read. Upper layers
- *                   may probe the device only when class_code != 0.
+ *                   Device/configuration descriptors MAY be populated.
+ *                   Upper layers may probe the device only when
+ *                   class_code != 0.
  *   - CONFIGURED:   configuration descriptor parsed, endpoints populated,
- *                   Configure Endpoint command issued. Polling is safe.
+ *                   SET_CONFIGURATION, HID boot protocol and Configure
+ *                   Endpoint completed.
+ *                   Polling is safe.
  *   - ERROR:        the device hit an unrecoverable error; ignore.
  *
  * Slices that own each transition:
  *   ATTACHED -> ADDRESSED:  slice 3B (xhci_address_device + enumerate).
- *   ADDRESSED -> CONFIGURED: slice 3C (descriptor parsing + Configure EP).
+ *   ADDRESSED descriptor enrichment: slice 3C (control + parsing).
+ *   ADDRESSED -> CONFIGURED: slice 3D (SET_CONFIGURATION + HID boot protocol + Configure EP + interrupt transfer).
  */
 enum usb_device_state {
   USB_DEV_DISCONNECTED = 0,
@@ -71,6 +91,8 @@ struct usb_device_info {
   struct usb_device_descriptor descriptor;
   struct usb_endpoint_info endpoints[USB_MAX_ENDPOINTS];
   uint8_t endpoint_count;
+  uint8_t configuration_value;
+  uint8_t interface_number;
   uint8_t class_code;
   uint8_t subclass;
   uint8_t protocol;
@@ -84,6 +106,13 @@ int usb_get_device_count(void);
 int usb_get_device(int index, struct usb_device_info *out);
 int usb_device_is_hid_keyboard(const struct usb_device_info *dev);
 int usb_device_is_hid_mouse(const struct usb_device_info *dev);
+int usb_build_get_descriptor_request(uint8_t desc_type, uint8_t desc_index,
+                                     uint16_t lang_or_index, uint16_t length,
+                                     struct usb_setup_packet *out);
+int usb_parse_device_descriptor(const uint8_t *buf, size_t len,
+                                struct usb_device_descriptor *out);
+int usb_parse_configuration_descriptor(const uint8_t *buf, size_t len,
+                                       struct usb_device_info *dev);
 void usb_poll_all(void);
 void usb_hotplug_check(void);
 

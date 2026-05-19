@@ -1,4 +1,5 @@
 #include "internal/http_internal.h"
+#include "core/version.h"
 
 int http_init(void) {
   http_set_ok();
@@ -13,6 +14,27 @@ int http_parse_url(const char *url, char *host, size_t host_len,
   }
   *use_tls = 0;
   *port = 80;
+
+  /* Reject any control byte (0x00-0x1F), the space character (0x20)
+   * and DEL (0x7F) anywhere in the URL. The motivating threat is
+   * CRLF injection into the Host header: a URL whose authority
+   * contains embedded `\r\nGET /evil HTTP/1.1\r\nHost: ...` would
+   * otherwise be copied verbatim into req->host by the loop below
+   * and then concatenated into the wire request by
+   * http_build_request, producing a stacked second HTTP request
+   * (request smuggling). Upstream callers — the capypkg manifest
+   * parser and update_agent_manifest_payload_url_valid — already
+   * strip these bytes, but
+   * `shell/commands/network_query.c::cmd_net_query` passes argv[1]
+   * verbatim to http_get, so the URL parser is the last defense
+   * before bytes reach the wire. Space is rejected because it has
+   * no role in a URL outside RFC 3986 percent-encoding. */
+  for (size_t i = 0u; url[i]; ++i) {
+    unsigned char c = (unsigned char)url[i];
+    if (c <= 0x20u || c == 0x7Fu) {
+      return http_fail(HTTP_ERR_INVALID_URL);
+    }
+  }
 
   if (http_strncmp(url, "https://", 8) == 0) {
     *use_tls = 1; *port = 443; url += 8;
@@ -84,7 +106,7 @@ int http_build_request(const struct http_request *req, char *buf, size_t buf_siz
   }
   if (!http_request_has_header(req, "User-Agent") &&
       http_buf_append_str(buf, buf_size, &pos,
-                          "\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) CapyBrowser/0.9 Chrome/124.0.0.0 Safari/537.36") != 0) {
+                          "\r\nUser-Agent: CapyOS/" CAPYOS_VERSION_EXTENDED) != 0) {
     return -1;
   }
   if (!http_request_has_header(req, "Accept") &&

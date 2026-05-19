@@ -98,6 +98,15 @@ Contexto operacional atual:
 | `config-language` | `config-language [list|show|pt-BR|en|es]` | Alterna o idioma do usuario atual e grava no perfil do `home`. |
 | `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |
 | `shutdown-off` | `shutdown-off` | Desliga (`halt`) apos sincronizar buffers. |
+| `pkg-list` | `pkg-list [--installed\|--available]` | Lista pacotes Capy instalados e/ou disponiveis no catalogo do adaptador `capypkg`. |
+| `pkg-info` | `pkg-info <nome>` | Mostra metadados do pacote (versao, repo, SHA-256, assinatura, dependencias). |
+| `pkg-fetch` | `pkg-fetch` | Sincroniza o indice de pacotes em todos os repositorios configurados via HTTPS. |
+| `pkg-install` | `pkg-install <nome>` | Instala um pacote verificando SHA-256 do payload e assinatura sobre o descritor canonico (fail-closed quando assinatura e exigida e o verificador Ed25519 nao esta plugado). |
+| `pkg-remove` | `pkg-remove <nome>` | Remove um pacote instalado e seu cache em `/var/capypkg`. |
+| `pkg-update` | `pkg-update [<nome>]` | Atualiza um pacote especifico ou todos os pacotes instalados. |
+| `pkg-source-list` | `pkg-source-list` | Lista repositorios `capypkg` configurados (nome, URL, pinned, signed). |
+| `pkg-source-add` | `pkg-source-add <nome> <https-url> [--unsigned]` | Adiciona um repositorio (HTTPS obrigatorio); por padrao exige assinatura. |
+| `pkg-source-remove` | `pkg-source-remove <nome>` | Remove um repositorio configurado; entradas marcadas como `pinned` sao protegidas. |
 | `type` | `type <caminho>` | Informa tipo basico (arquivo ou diretorio). |
 | `stats-file` | `stats-file <caminho>` | Mostra tamanho, UID/GID e permissoes. |
 | `hunt-file` | `hunt-file <padrao> [onde]` | Busca apenas arquivos. |

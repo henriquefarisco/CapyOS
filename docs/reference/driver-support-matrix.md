@@ -55,7 +55,7 @@ Last updated: 2026-04-28
 |--------|--------------------|--------|-------|
 | PS/2 Keyboard (i8042) | PS/2 nativo | **Suportado** | Teclado primario em VMware UEFI; layouts PT-BR e US validados |
 | `vmbus_keyboard` | Hyper-V VMBus HID | **Fora de suporte** | Segue trilha Hyper-V |
-| USB HID (`xhci` + `usb_hid`) | USB HID via xHCI | **Experimental** | Codigo presente; sem validacao sistematica |
+| USB HID (`xhci` + `usb_hid`) | USB HID via xHCI | **Experimental** | Slice 3D entregue por código/testes host-side; validação VMware pendente |
 | Mouse (PS/2 / USB) | Mouse | **Experimental** | Codigo presente; integrado ao compositor GUI |
 
 ---

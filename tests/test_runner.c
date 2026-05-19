@@ -31,6 +31,8 @@ int run_service_manager_tests(void);
 int run_service_boot_policy_tests(void);
 int run_work_queue_tests(void);
 int run_update_agent_tests(void);
+int run_capypkg_tests(void);
+int run_install_profile_tests(void);
 int run_audit_events_tests(void);
 int run_journal_tests(void);
 int run_capyfs_journal_cause_tests(void);
@@ -57,6 +59,8 @@ int run_storvsc_backend_tests(void);
 int run_storvsc_runtime_tests(void);
 int run_storage_runtime_hyperv_plan_tests(void);
 int run_usb_hid_init_tests(void);
+int run_xhci_address_device_tests(void);
+int run_usb_descriptor_parse_tests(void);
 
 int test_pmm_run(void);
 int test_task_run(void);
@@ -208,6 +212,8 @@ int main(void) {
     failures += run_service_boot_policy_tests();
     failures += run_work_queue_tests();
     failures += run_update_agent_tests();
+    failures += run_install_profile_tests();
+    failures += run_capypkg_tests();
     failures += run_audit_events_tests();
     failures += run_journal_tests();
     failures += run_capyfs_journal_cause_tests();
@@ -234,6 +240,8 @@ int main(void) {
     failures += run_storvsc_runtime_tests();
     failures += run_storage_runtime_hyperv_plan_tests();
     failures += run_usb_hid_init_tests();
+    failures += run_xhci_address_device_tests();
+    failures += run_usb_descriptor_parse_tests();
 
     failures += test_pmm_run();
     failures += test_task_run();

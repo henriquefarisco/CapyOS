@@ -7,15 +7,17 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.8.1`
+Versao de referencia: `0.8.0-alpha.240` (build `0.8.0-alpha.240+20260519`; canal `alpha`; ver `VERSION.yaml`)
 
 ## Destaques
 
 - Boot UEFI x86_64 com imagem ISO e disco GPT provisionado.
 - Desktop CapyUI com login grafico, taskbar, janelas, apps e terminal.
 - Persistencia em disco com CAPYFS e volume `DATA` cifrado.
-- CapyCLI com comandos de arquivos, sessao, rede e diagnostico.
+- CapyCLI com comandos de arquivos, sessao, rede, diagnostico e pacotes.
 - Pilha de rede x64 com `E1000`, IPv4, ICMP, TCP, DNS e HTTP/HTTPS.
+- Adaptador `capypkg` para receber pacotes Capy remotos verificados
+  (SHA-256 + Ed25519 sobre descritor canonico) via `capysh`.
 - Gates de release com testes de host, build x64, ISO UEFI e smoke QEMU.
 
 ## Screenshots
@@ -70,6 +72,9 @@ make verify-release-checksums TOOLCHAIN64=host
 - [Release notes](docs/releases/README.md)
 - [Referencia do CapyCLI](docs/reference/cli-reference.md)
 - [Checklist de PR e release](docs/testing/pr-and-release-checklist.md)
+- [Contratos de integracao cross-repo](docs/reference/integration/README.md)
+- [Matriz de compatibilidade cross-repo](docs/reference/integration/compatibility-matrix.md)
+- [Runbook de deploy manual de modulos remotos](docs/operations/manual-module-deploy-runbook.md)
 
 ## Licenca
 

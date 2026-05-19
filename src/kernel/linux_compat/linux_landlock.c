@@ -99,9 +99,8 @@ int64_t linux_landlock_restrict_self(int ruleset_fd, uint32_t flags) {
     ensure_init();
     if (flags != 0) return -LINUX_EINVAL;
     if (!valid_ruleset_fd(ruleset_fd)) return -LINUX_EBADF;
-    /* Marco M1: no per-task LSM hook; accept the request. The
-     * fd remains alive (Firefox keeps it open for the lifetime
-     * of the renderer). */
+    /* Marco M1: no per-task LSM hook; accept the request. The fd
+     * remains alive for sandboxed userland probes. */
     return 0;
 }
 

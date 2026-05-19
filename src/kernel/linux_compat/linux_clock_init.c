@@ -47,7 +47,7 @@ void linux_clock_init_boot(void) {
   linux_clock_install_timebase(cycles_source, hz_source, rdtsc_local());
 
   /* Wall-clock epoch is left uninstalled until an RTC reader lands
-   * (S2.4 / S2.5 territory). Firefox in headless mode tolerates
+   * (S2.4 / S2.5 territory). Portable userland must tolerate
    * CLOCK_REALTIME == CLOCK_MONOTONIC for now. */
 }
 

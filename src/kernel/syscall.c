@@ -13,7 +13,7 @@
 /* 2026-05-02: FD type discriminators (FD_TYPE_FREE/VFS/PIPE) and
  * pipe direction flags (FD_PIPE_FLAG_READ/WRITE) now centralised
  * in include/kernel/process.h. They were previously duplicated
- * here, in src/kernel/process.c and src/kernel/browser_engine_spawn.c.
+ * here, in src/kernel/process.c and a removed pipe-backed spawn path.
  * Adding a new FD type still requires extending sys_read /
  * sys_write / sys_close in this file AND process_fd_free in
  * src/kernel/process.c in lockstep. */
@@ -38,12 +38,12 @@ static int64_t sys_exit(struct syscall_frame *f) {
  *   - process fd table slot has FD_TYPE_PIPE + FD_PIPE_FLAG_READ:
  *     pipe_read; if buffer empty and write end still open, busy-yield
  *     until data or EOF. THIS RUNS FIRST so that processes that
- *     install an explicit pipe at fd 0 (e.g. the browser engine
- *     spawned via browser_engine_spawn) get the pipe semantics --
+ *     install an explicit pipe at fd 0 (e.g. a pipe-backed user
+ *     process) get the pipe semantics --
  *     not the legacy stdin_buf shortcut. Without this priority,
- *     the engine's `capy_read(0, ...)` would silently drain the
+ *     the process `capy_read(0, ...)` would silently drain the
  *     kernel keyboard buffer instead of its request pipe and never
- *     observe a NAVIGATE.
+ *     observe its request frame.
  *   - fd == 0 with FD_TYPE_FREE slot: drain kernel stdin_buf (legacy
  *     M5 stdin behaviour for hello/capysh). Yields until at least
  *     1 byte arrives, returning whatever is currently buffered.
@@ -113,12 +113,11 @@ int64_t sys_read(struct syscall_frame *f) {
  *     pipe_write; on full buffer busy-yield until space (or until
  *     the reader closes the pipe -> -1 broken pipe). THIS RUNS
  *     FIRST so that processes that install an explicit pipe at
- *     fd 1 (e.g. the browser engine writing events to its response
+ *     fd 1 (e.g. a pipe-backed user process writing events to its response
  *     pipe via fd 1) get the pipe semantics -- not the legacy
  *     debugcon shortcut. Without this priority, every event the
- *     engine emits would silently land on port 0xE9 instead of
- *     reaching the chrome runtime, which is exactly the symptom
- *     reported as "browser does not load home page".
+ *     process emits would silently land on port 0xE9 instead of
+ *     reaching its supervising runtime.
  *   - fd == 1 or fd == 2 with FD_TYPE_FREE slot: debug-console
  *     (port 0xE9). Legacy stdout/stderr behaviour kept for hello /
  *     capysh and any other binary that has not installed an
@@ -150,7 +149,7 @@ int64_t sys_write(struct syscall_frame *f) {
           continue;
         }
         /* wr < 0: either buffer full (would block) or read end
-         * closed. Pipes are the browser IPC transport and large
+         * closed. Pipes are an IPC transport and large
          * frames must not devolve into dozens of partial user/kernel
          * returns. Cooperatively yield until the reader drains; only
          * fail when the read end is actually closed. A stalled reader

@@ -313,6 +313,28 @@ static void build_remote_manifest_url(const char *source, const char *channel,
 
 /* ── .ini line parsers + buffer iterator ────────────────────────────── */
 
+/* Reject any byte outside printable ASCII (0x20-0x7E). Same threat
+ * model and rationale as `value_is_printable_ascii` in
+ * `src/services/capypkg/capypkg_manifest.c`: parsed update-agent
+ * fields end up echoed by `cmd_update_status` through `shell_print`
+ * to the framebuffer AND to the serial port (COM1). A terminal
+ * emulator on the serial side would interpret ANSI escape bytes
+ * smuggled inside `summary`, `version`, `branch`, `source`,
+ * `payload_url`, `published_at` etc. before the signature gate ever
+ * runs (signature is only validated when the staged update is
+ * armed). Refusing at parse time keeps hostile bytes out of both
+ * the in-memory status struct and the persisted state.ini /
+ * repository.ini / payload_cache_sha256 stores. */
+static int update_value_is_printable_ascii(const char *value, size_t value_len) {
+  for (size_t i = 0u; i < value_len; ++i) {
+    unsigned char c = (unsigned char)value[i];
+    if (c < 0x20u || c > 0x7Eu) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static void parse_repo_line(const char *key, const char *value) {
   if (update_agent_local_equal(key, "channel")) {
     update_agent_local_copy(update_agent_g_status.channel,
@@ -418,6 +440,17 @@ static void parse_buffer_line(const char *line, size_t len, int parse_mode,
     value[i] = line[eq + 1u + i];
   }
   value[i] = '\0';
+
+  /* Skip silently when the value carries non-printable bytes. This
+   * is the analogue of `value_is_printable_ascii` in capypkg: hostile
+   * manifests / tampered state.ini / repository.ini could otherwise
+   * inject ANSI escapes into the in-memory status struct, which is
+   * echoed by `cmd_update_status` to the serial port. Dropping the
+   * line keeps every downstream consumer safe without faulting the
+   * whole parse (other lines may still be valid). */
+  if (!update_value_is_printable_ascii(value, len)) {
+    return;
+  }
 
   if (parse_mode == 0) {
     parse_repo_line(key, value);

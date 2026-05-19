@@ -27,11 +27,11 @@ release.
 | VMware UEFI + E1000 | trilha principal de validacao |
 | QEMU/OVMF + E1000 | laboratorio e smoke automatizado |
 | VMXNET3 | detectavel, ainda nao validado como backend principal |
-| Hyper-V | investigacao, fora de suporte oficial |
+| Hyper-V | compatibilidade oficial planejada, fora da plataforma atual até gates dedicados |
 
 Diretriz pratica: para boot, instalacao, login, CLI e rede basica, use
-`VMware + UEFI + E1000`. Nao trate Hyper-V como ambiente valido de release,
-smoke oficial ou promessa de compatibilidade.
+`VMware + UEFI + E1000`. Hyper-V e compatibilidade oficial planejada, mas so
+vira ambiente valido de release/smoke quando os gates dedicados fecharem.
 
 ## Funcionalidades atuais
 
@@ -106,20 +106,24 @@ Aliases de compatibilidade:
 | CLI modular | comandos principais ativos | estavel |
 | Rede x64 | `E1000`, TCP/IP, DNS e HTTP/HTTPS | parcial |
 | VMware | caminho principal de validacao | parcial |
-| Hyper-V | investigacao historica | fora de suporte |
-| USB HID teclado x64 | enumeracao XHCI incompleta | em desenvolvimento |
+| Hyper-V | compatibilidade oficial planejada, pendente de gates dedicados | planejado |
+| USB HID teclado x64 | XHCI + HID Slice 3D entregue por código/testes; validação VMware pendente | experimental |
 | Multithread/scheduler | ainda nao implantado | pendente |
 
 ## Lacunas conhecidas
 
 - validar continuamente o caminho oficial ISO UEFI em VMware com `E1000`
-- finalizar driver USB HID completo
+- validar externamente o caminho USB HID/XHCI do Slice 3D em VMware
 - endurecer `VMXNET3` antes de promove-lo a backend suportado
-- manter Hyper-V fora da promessa de release ate estabilizacao real
+- manter Hyper-V como compatibilidade oficial planejada, sem substituir VMware
+  ate estabilizacao real e gates dedicados
 - melhorar driver `tulip-2114x`
 - implantar scheduler/multithread no runtime de kernel
 - evoluir integridade autenticada por bloco/metadata
 - reduzir dependencia de `EFI ConIn` em cenarios UEFI
+- manter CapyLang, browser core, package format, widget model, codecs e
+  benchmarks como projetos desacoplados ate integrarem por contrato versionado
+  e gate na etapa correspondente
 
 ## Validacao
 

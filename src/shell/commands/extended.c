@@ -315,8 +315,8 @@ static int cmd_open_settings(struct shell_context *c, int a, char **v) {
   settings_open(); return 0;
 }
 /* `cmd_open_browser` erradicado na sessao 6 (2026-05-05). O
- * capybrowser foi removido; o port do Firefox o substituira.
- * Ver docs/plans/active/firefox-port-roadmap.md. */
+ * browser legado foi removido; o sucessor deve voltar como adaptador
+ * versionado na etapa correta. */
 
 #define EXT_CMD_COUNT 23
 #define EXT_EARLY_COUNT 6

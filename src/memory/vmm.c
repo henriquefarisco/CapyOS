@@ -15,7 +15,7 @@
  * the high bit produced a NON-CANONICAL address which #GP'd on the
  * very first store. The bug was masked by binaries whose only
  * PT_LOAD was executable (NX=0) -- hello and exectarget -- and
- * surfaced the moment capybrowser introduced a separate writable
+ * surfaced the moment a larger user binary introduced a separate writable
  * .rodata/.data segment with NX=1. */
 #define VMM_PTE_PHYS_MASK 0x000FFFFFFFFFF000ULL
 

@@ -47,6 +47,8 @@ struct usb_hid_state {
   uint8_t kbd_head;
   uint8_t kbd_tail;
   uint8_t prev_keys[6];
+  struct usb_hid_mouse_report mouse_report;
+  int mouse_report_ready;
 };
 
 static struct usb_hid_state g_hid;
@@ -121,7 +123,8 @@ static int kbd_buffer_pop(char *c) {
   return 1;
 }
 
-static void __attribute__((unused)) process_kbd_report(const struct usb_hid_keyboard_report *report) {
+void usb_hid_handle_keyboard_report(const struct usb_hid_keyboard_report *report) {
+  if (!report) return;
   int shift = (report->modifiers & 0x22) ? 1 : 0; /* L/R Shift */
 
   for (int i = 0; i < 6; i++) {
@@ -147,6 +150,12 @@ static void __attribute__((unused)) process_kbd_report(const struct usb_hid_keyb
   }
 }
 
+void usb_hid_handle_mouse_report(const struct usb_hid_mouse_report *report) {
+  if (!report) return;
+  g_hid.mouse_report = *report;
+  g_hid.mouse_report_ready = 1;
+}
+
 int usb_hid_keyboard_available(void) {
   return g_hid.initialized && g_hid.kbd_slot >= 0;
 }
@@ -154,7 +163,6 @@ int usb_hid_keyboard_available(void) {
 int usb_hid_keyboard_poll(char *out_char) {
   if (!g_hid.initialized || g_hid.kbd_slot < 0 || !out_char) return 0;
 
-  /* Poll USB core for new data (stub: real impl needs xHCI interrupt TRB) */
   usb_poll_all();
 
   return kbd_buffer_pop(out_char);
@@ -169,11 +177,17 @@ int usb_hid_mouse_poll(int8_t *dx, int8_t *dy, int8_t *dz, uint8_t *buttons) {
   if (!dx || !dy || !dz || !buttons) return 0;
 
   usb_poll_all();
-
-  /* Stub: real implementation needs to read interrupt transfer from xHCI */
-  *dx = 0;
-  *dy = 0;
-  *dz = 0;
-  *buttons = 0;
-  return 0;
+  if (!g_hid.mouse_report_ready) {
+    *dx = 0;
+    *dy = 0;
+    *dz = 0;
+    *buttons = 0;
+    return 0;
+  }
+  *dx = g_hid.mouse_report.dx;
+  *dy = g_hid.mouse_report.dy;
+  *dz = g_hid.mouse_report.dz;
+  *buttons = g_hid.mouse_report.buttons;
+  g_hid.mouse_report_ready = 0;
+  return 1;
 }

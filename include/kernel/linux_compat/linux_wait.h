@@ -9,10 +9,8 @@
  *   int   waitid(idtype_t idtype, id_t id,
  *               siginfo_t *infop, int options);
  *
- * Marco M1 has no `clone()` thread groups and no fork() with a
- * separate child process visible to userland (capybrowser
- * spawns a kernel-managed engine but it isn't a child of the
- * caller in POSIX terms). Per Linux semantics, when a process
+ * Marco M1 has no `clone()` thread groups and no fork() with a separate child
+ * process visible to userland. Per Linux semantics, when a process
  * calls `wait4` and has no children to reap, the syscall must
  * return -ECHILD. Userland (musl, glibc, busybox, popen()) all
  * handle ECHILD gracefully -- it's the documented "no children

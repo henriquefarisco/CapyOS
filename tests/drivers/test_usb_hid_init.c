@@ -118,8 +118,8 @@ static void test_addressed_with_class_mouse_is_found(void) {
     if (usb_hid_keyboard_available()) fail("keyboard must not be available (only mouse registered)");
 }
 
-/* Test 4: keyboard poll must be safe and return 0 when no real transfer
- * pipeline exists yet (slice 3D will fill the ring buffer). The function
+/* Test 4: keyboard poll must be safe and return 0 when the host stub has no
+ * real transfer pipeline to fill the ring buffer. The function
  * must not write garbage into *out_char and must not crash. */
 static void test_keyboard_poll_safe_without_transfer(void) {
     stub_usb_core_reset();
@@ -167,6 +167,51 @@ static void test_mixed_table_picks_correctly(void) {
     if (!usb_hid_mouse_available()) fail("mixed table must surface a mouse");
 }
 
+static void test_keyboard_report_handler_buffers_ascii(void) {
+    stub_usb_core_reset();
+    struct usb_device_info devs[1];
+    struct usb_hid_keyboard_report report;
+    devs[0] = make_kbd_device(USB_DEV_CONFIGURED, USB_CLASS_HID);
+    stub_usb_core_set_devices(devs, 1);
+    if (usb_hid_init() != 0) {
+        fail("keyboard report test init failed");
+        return;
+    }
+    memset(&report, 0, sizeof(report));
+    report.keys[0] = 4u;
+    usb_hid_handle_keyboard_report(&report);
+    char out = 0;
+    if (usb_hid_keyboard_poll(&out) != 1) fail("keyboard report must produce one char");
+    if (out != 'a') fail("keyboard usage 4 must translate to 'a'");
+}
+
+static void test_mouse_report_handler_surfaces_delta(void) {
+    stub_usb_core_reset();
+    struct usb_device_info devs[1];
+    struct usb_hid_mouse_report report;
+    int8_t dx = 0;
+    int8_t dy = 0;
+    int8_t dz = 0;
+    uint8_t buttons = 0;
+    devs[0] = make_mouse_device(USB_DEV_CONFIGURED, USB_CLASS_HID);
+    stub_usb_core_set_devices(devs, 1);
+    if (usb_hid_init() != 0) {
+        fail("mouse report test init failed");
+        return;
+    }
+    report.buttons = 1u;
+    report.dx = 3;
+    report.dy = -2;
+    report.dz = 1;
+    usb_hid_handle_mouse_report(&report);
+    if (usb_hid_mouse_poll(&dx, &dy, &dz, &buttons) != 1) {
+        fail("mouse report must produce one packet");
+    }
+    if (buttons != 1u || dx != 3 || dy != -2 || dz != 1) {
+        fail("mouse poll must surface latest report");
+    }
+}
+
 int run_usb_hid_init_tests(void) {
     g_failures = 0;
     test_attached_without_class_is_ignored();
@@ -175,6 +220,8 @@ int run_usb_hid_init_tests(void) {
     test_keyboard_poll_safe_without_transfer();
     test_configured_keyboard_still_works();
     test_mixed_table_picks_correctly();
+    test_keyboard_report_handler_buffers_ascii();
+    test_mouse_report_handler_surfaces_delta();
     if (g_failures == 0) printf("[tests] usb_hid_init OK\n");
     return g_failures;
 }

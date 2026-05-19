@@ -27,6 +27,11 @@ que foram criados.
 
 - C de runtime/kernel: `src/<dominio>/...`.
 - Headers publicos: `include/<dominio>/...`.
+- Headers migrados/quarentenados: convenção `include/legacy/<dominio>/...`
+  reservada para futuras migrações que precisem de fallback explícito
+  documentado. Atualmente o diretório está vazio — a higiene completa de
+  Etapa 9 removeu todos os antigos tombstones (`include/services/package_manager.h`,
+  `include/gui/{bmp,png,jpeg}_loader.h`, `include/lang/capylang.h`).
 - Headers internos: `src/<dominio>/internal/...` quando usados apenas por aquele dominio.
 - Fragmentos `.inc` de C sao permitidos somente como etapa intermediaria de
   split, dentro do modulo dono, com um `.c` orquestrador mantendo a ordem de
@@ -57,11 +62,11 @@ src/apps/<app>/
 include/apps/<app>.h
 ```
 
-Exemplo para o navegador:
+Exemplo futuro para adaptador de navegador quando a etapa correspondente
+estiver ativa:
 
 ```text
 src/apps/html_viewer/
-  *.inc                 # etapa intermediaria atual
   browser_app.c
   navigation.c
   document_loader.c
@@ -123,6 +128,29 @@ historico.
 Ferramentas C ficam em `tools/host/src` com headers em `tools/host/include`.
 Automacoes Python/shell ficam em `tools/scripts`.
 
+### Projetos desacoplados
+
+Engines, linguagens, parsers, formatos e codecs desenvolvidos fora do sistema
+base não devem ser importados diretamente para `src/` até existir contrato de
+integração e adaptador CapyOS pequeno.
+
+Contratos vivem em:
+
+```text
+docs/reference/integration/
+```
+
+Quando integrados ao repositório principal, a lógica pura deve continuar em
+módulo próprio, host-testável, e o código CapyOS deve ficar limitado a
+adaptadores por domínio:
+
+- browser/app adapter em `src/apps/`;
+- widget/render adapter em `src/gui/`;
+- package/apply adapter em `src/services/` ou domínio equivalente;
+- codec backend em `src/gui/` ou `src/media/` quando esse domínio existir;
+- CapyLang runtime adapter em domínio próprio somente quando a etapa ativa
+  permitir.
+
 ## Wrappers de raiz
 
 Arquivos executaveis na raiz devem ser pequenos pontos de entrada. A logica real
@@ -135,12 +163,12 @@ Exemplo atual:
 
 ## Processo de refactor
 
-1. Rodar `make layout-audit` para identificar monolitos e mistura de camadas.
+1. Usar `make layout-audit` em ambiente externo/CI para identificar monolitos e mistura de camadas.
 2. Escolher um modulo por vez.
 3. Mover/splitar sem alterar comportamento.
 4. Atualizar Makefile/includes no mesmo patch.
-5. Rodar `make test`.
-6. Para areas de boot/runtime, rodar tambem `make all64`.
+5. Recomendar `make test` em ambiente externo/CI.
+6. Para areas de boot/runtime, recomendar tambem `make all64` em ambiente externo/CI.
 
 ## Auditoria automatizada
 

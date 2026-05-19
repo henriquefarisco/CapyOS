@@ -9,6 +9,12 @@ Indice das release notes mantidas no repositorio.
 
 ## Historico recente
 
+- `capyos-0.8.0-alpha.240+20260519.md`
+  - Circuito modular de instalacao e deploy: install profile, bootstrap capypkg, comando `pkg-bootstrap`, target `make modules-index` e formato de pacote dos repos externos.
+
+- `capyos-0.8.0-alpha.239+20260519.md`
+  - Adapter `services/capypkg` consolidado in-tree como fronteira de recepcao da Etapa 9 (4 TUs runtime + 9 comandos `pkg-*` + 28 testes), com gate de printable-ASCII propagado tambem para `update_agent_parse.c`, `http_parse_url` e `http_store_headers` (fecha terminal-escape injection e HTTP request smuggling em todas as trilhas atuais de input externo).
+
 - `capyos-0.8.0-alpha.238+20260515.md`
   - Publicacao visual CapyUI v1.1 no README raiz e remocao da marca retangular decorativa do wallpaper do desktop.
 

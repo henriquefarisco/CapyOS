@@ -83,9 +83,9 @@ int64_t linux_seccomp(uint32_t operation, uint32_t flags, void *args) {
 int64_t linux_bpf(int cmd, void *attr, uint32_t size) {
     if (cmd < 0 || cmd >= LINUX_BPF_CMD_MAX) return -LINUX_EINVAL;
     if (!attr && size > 0) return -LINUX_EFAULT;
-    /* Marco M1: no real BPF subsystem. Userland (libbpf, Firefox
-     * sandbox compiler) probes for support and falls back to
-     * interpreted classic BPF on -ENOSYS. */
+    /* Marco M1: no real BPF subsystem. Userland sandbox tooling
+     * probes for support and falls back to interpreted classic BPF
+     * on -ENOSYS. */
     return -LINUX_ENOSYS;
 }
 

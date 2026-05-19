@@ -9,7 +9,7 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
 
 1. Abra um PR ou prepare uma release.
 2. Marque cada caixa abaixo apenas depois de validar a evidencia.
-3. Cole as evidencias (saida de comando, link de release note, arquivo
+3. Cole as evidencias (saida de comando externo/CI, link de release note, arquivo
    modificado) no corpo do PR ou no checklist do release.
 4. Bloqueie merge/release se algum item estiver incompleto sem justificativa
    explicita.
@@ -31,11 +31,11 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
 
 ## 2. Gates automaticos obrigatorios
 
-- [ ] `make test` passou local.
-- [ ] `make layout-audit` passou local em modo estrito.
-- [ ] `make all64 TOOLCHAIN64=elf` passou local; build host e usado apenas
+- [ ] `make test` passou em ambiente externo/CI.
+- [ ] `make layout-audit` passou em ambiente externo/CI em modo estrito.
+- [ ] `make all64 TOOLCHAIN64=elf` passou em ambiente externo/CI; build host e usado apenas
       para iteracao rapida.
-- [ ] `make release-check` passou local quando o PR afeta release, build,
+- [ ] `make release-check` passou em ambiente externo/CI quando o PR afeta release, build,
       seguranca, FS, rede, browser ou performance.
 - [ ] Se a mudanca toca markers de smoke, `tools/scripts/smoke_x64_vmware.py`,
       `tools/scripts/release_ci_smoke_evidence.py` ou evidencias VMware,
@@ -79,10 +79,12 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
 
 ## 6. Browser e internet
 
-- [ ] Mudancas em `src/apps/html_viewer/*` ou em `src/net/*` mantem os
-      budgets ativos (`navigation_budget.c`) e o `safe_mode` previsivel.
-- [ ] `tests/html_viewer/resource_cases.inc` cobre o novo comportamento se
-      ele afeta render, parse, cache ou rede.
+- [ ] Mudancas em `src/net/*`, HTTP/TLS ou na futura integração de browser
+      mantem limites de rede previsiveis e falham fechado em URL, certificado
+      ou conteúdo inválido.
+- [ ] Enquanto `src/apps/html_viewer/*` não existir no core ativo, mudanças de
+      browser devem permanecer no repositório externo e nos contratos de
+      integração até a etapa correspondente.
 
 ## 7. Filesystem
 

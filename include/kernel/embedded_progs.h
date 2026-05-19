@@ -20,9 +20,8 @@
  *   "/bin/exectarget"   -> userland/bin/exectarget/exectarget.elf
  *   "/bin/capysh"       -> userland/bin/capysh/capysh.elf
  *
- * (Sessao 6, 2026-05-05: `/bin/capybrowser` removido junto com o
- * navegador legacy. Sera substituido por `/bin/firefox` em uma
- * fase futura -- ver docs/plans/active/firefox-port-roadmap.md.)
+ * (Sessao 6, 2026-05-05: o binario de browser legado foi removido.
+ * Um sucessor deve voltar como adaptador versionado na etapa correta.)
  *
  * Adding a binary:
  *
