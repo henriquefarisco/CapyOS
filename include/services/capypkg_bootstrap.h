@@ -60,7 +60,7 @@ enum capypkg_bootstrap_event {
 /* Progress callback. `name` is NUL-terminated and points into
  * caller-owned memory; do not store the pointer past the callback
  * return. `index`/`total` are 1-based package counters; both 0 for
- * REPO_REGISTER/INDEX_FETCH/*_FAIL events. `rc` carries the underlying
+ * REPO_REGISTER, INDEX_FETCH, and *_FAIL events. `rc` carries the underlying
  * capypkg result code (CAPYPKG_OK, CAPYPKG_ERR_*) for FAIL events;
  * zero otherwise. `ctx` is opaque user data passed in unchanged. */
 typedef void (*capypkg_bootstrap_progress_fn)(

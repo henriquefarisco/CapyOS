@@ -4,10 +4,13 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.242+20260520.md`
-  - Corrige o fluxo de download do indice de modulos via redirect em GitHub Releases, preserva staging de payload em `/var/capypkg/updates` e destrava o bootstrap remoto do primeiro boot.
+- `capyos-0.8.0-alpha.243+20260520.md`
+  - Corrige o bootstrap remoto de componentes, limpa warnings no build x64 e valida a ISO com reboot e persistencia.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.242+20260520.md`
+  - Corrige o fluxo de download do indice de modulos via redirect em GitHub Releases, preserva staging de payload em `/var/capypkg/updates` e destrava o bootstrap remoto do primeiro boot.
 
 - `capyos-0.8.0-alpha.241+20260519.md`
   - Higienizacao end-to-end: wizard interativo de primeiro boot com selecao de modulos + progress, sources de desktop session/window/apps migrados para CapyUI 0.7.0 (build cross-repo via CAPYUI_DIR + PROFILE=full|core-only), activation gate de modulos, comando `capy` unificado, installer UEFI minimalista (so disco + chave de recovery), silent provisioning eliminado.

@@ -129,6 +129,11 @@ int http_request(const struct http_request *req, struct http_response *resp) {
 
     if (header_done) {
       size_t body_received_now = total - header_end_offset;
+      if (http_status_is_redirect(resp->status_code) &&
+          resp->content_length == 0 &&
+          !resp->chunked) {
+        break;
+      }
       if (resp->content_length > 0 && body_received_now >= resp->content_length) break;
       if (resp->chunked && body_start &&
           http_chunked_complete((const uint8_t *)body_start, body_received_now)) break;

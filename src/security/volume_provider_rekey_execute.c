@@ -11,12 +11,6 @@
 #define VP_REKEY_EXEC_BLOCK_SIZE 4096u
 #define VP_REKEY_STAGE_SALT_LEN 16u
 
-struct vp_rekey_offset_view {
-  struct block_device *lower;
-  uint32_t start_lba;
-  uint32_t block_count;
-};
-
 static void vp_rekey_exec_wipe(void *ptr, size_t len) {
   volatile uint8_t *p = (volatile uint8_t *)ptr;
   while (len--) {
@@ -34,40 +28,6 @@ static void vp_rekey_put_u32_le(uint8_t *p, uint32_t v) {
 static uint32_t vp_rekey_get_u32_le(const uint8_t *p) {
   return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) |
          ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static int vp_rekey_offset_read(void *ctx, uint32_t block_no, void *buffer) {
-  struct vp_rekey_offset_view *view = (struct vp_rekey_offset_view *)ctx;
-  if (!view || !view->lower || !buffer || block_no >= view->block_count) {
-    return -1;
-  }
-  return block_device_read(view->lower, view->start_lba + block_no, buffer);
-}
-
-static int vp_rekey_offset_write(void *ctx, uint32_t block_no,
-                                 const void *buffer) {
-  struct vp_rekey_offset_view *view = (struct vp_rekey_offset_view *)ctx;
-  if (!view || !view->lower || !buffer || block_no >= view->block_count) {
-    return -1;
-  }
-  return block_device_write(view->lower, view->start_lba + block_no, buffer);
-}
-
-static const struct block_device_ops vp_rekey_offset_ops = {
-    .read_block = vp_rekey_offset_read,
-    .write_block = vp_rekey_offset_write,
-};
-
-static int vp_rekey_block_same(const uint8_t *a, const uint8_t *b,
-                               size_t len) {
-  uint8_t diff = 0u;
-  if (!a || !b) {
-    return 0;
-  }
-  for (size_t i = 0u; i < len; ++i) {
-    diff |= (uint8_t)(a[i] ^ b[i]);
-  }
-  return diff == 0u;
 }
 
 static int vp_rekey_checkpoint_same(
