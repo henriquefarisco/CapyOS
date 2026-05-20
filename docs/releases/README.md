@@ -4,8 +4,8 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.1+20260517.md`
-  - Release stable com refresh visual CapyUI, cursores/janelas/menu iniciar refinados e correcoes do File Manager.
+- `capyos-0.8.0-alpha.242+20260520.md`
+  - Corrige o fluxo de download do indice de modulos via redirect em GitHub Releases, preserva staging de payload em `/var/capypkg/updates` e destrava o bootstrap remoto do primeiro boot.
 
 ## Historico recente
 
