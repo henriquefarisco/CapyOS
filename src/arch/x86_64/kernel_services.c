@@ -18,6 +18,7 @@
 #include "net/stack.h"
 #include "services/capypkg.h"
 #include "services/capypkg_bootstrap.h"
+#include "services/capypkg_runtime.h"
 #include "services/service_boot_policy.h"
 #include "services/service_manager.h"
 #include "services/service_runner.h"

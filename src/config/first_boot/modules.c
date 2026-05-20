@@ -37,12 +37,14 @@
 
 #include "services/capypkg.h"
 #include "services/capypkg_bootstrap.h"
+#include "services/capypkg_runtime.h"
 #include "services/install_profile.h"
 #include "fs/vfs.h"
 
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://capyos.org/releases/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyUI/releases/download/" \
+    "v0.7.0/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME
@@ -301,6 +303,7 @@ int first_boot_module_selection_step(const char *setup_language) {
     struct modules_progress_state st = {0};
     int installed = 0;
     int failed = 0;
+    kernel_capypkg_bind_runtime_adapters();
     int rc = capypkg_bootstrap_run_with_progress(
         1, &installed, &failed, modules_render_progress, &st);
 

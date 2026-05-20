@@ -100,10 +100,15 @@ Publicar então:
 
 1. Cada `<repo>/build/capypkg/<name>-<v>.bin` na URL declarada em
    `payload_url` (default: GitHub Release `v<version>` do repo);
-2. `CapyOS/build/capypkg/modules-index.txt` em uma URL HTTPS estável
-   (recomendado: GitHub Release do CapyOS core ou raw GitHub).
+2. `modules-index.txt` em uma URL HTTPS estável (recomendado: GitHub
+   Release do repo publicador do índice; para CapyUI 0.7.0 o asset
+   esperado é `https://github.com/henriquefarisco/CapyUI/releases/download/v0.7.0/modules-index.txt`).
 
-A URL do índice será referenciada em `profile.ini`.
+A URL do índice será referenciada em `profile.ini`. Não use a URL de
+um `.manifest` individual como `bootstrap_repo_url`: o adapter in-tree
+baixa um índice agregado com um ou mais descritores separados por `---`.
+Os assets automáticos do GitHub (`Source code .zip` / `.tar.gz`) também
+não são consumidos pelo capypkg.
 
 Smokes opcionais antes de promover a build:
 
@@ -195,8 +200,9 @@ sistema instalado, via TUI no framebuffer:
 2. Primeiro boot: wizard interativo abre automaticamente.
    - Etapas do wizard: idioma, layout teclado, hostname, tema, splash,
      usuário admin, senha admin, **seleção de módulos** (BASIC | FULL | CUSTOM).
-   - Se profile != BASIC: wizard pergunta URL do índice (default oficial),
-     grava `/system/install/profile.ini` e dispara
+   - Se profile != BASIC: wizard pergunta URL do índice (Enter usa o asset
+     `modules-index.txt` da release CapyUI `v0.7.0`), grava
+     `/system/install/profile.ini` e dispara
      `capypkg_bootstrap_run_with_progress` que mostra
      `[modules] [i/N] instalando org.capyos.ui.desktop-session...` na tela.
 3. Após o sweep terminar com sucesso, o wizard chama `acpi_reboot` para

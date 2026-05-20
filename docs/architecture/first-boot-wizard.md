@@ -109,7 +109,7 @@ re-runs the module selection step (it clears
 | Symptom                                     | Cause                                                | Recovery                                                                              |
 |---------------------------------------------|------------------------------------------------------|----------------------------------------------------------------------------------------|
 | Wizard never appears                        | `BOOT_CONFIG_FLAG_HAS_SETUP_DATA` set by legacy ISO  | Reinstall with an alpha.241+ ISO, or clear `/system/first-run.done` and run `capy wizard` |
-| Modules step shows "adapter not yet ready"  | capypkg bind not done yet                            | Kernel auto-bootstrap retries every 60s; or run `capy wizard --modules` after boot     |
+| Modules step shows "adapter not yet ready"  | storage/runtime bind failed before the wizard could bind capypkg | Kernel auto-bootstrap retries every 60s; or run `capy wizard --modules` after boot     |
 | Modules step says "network unavailable"     | DHCP not yet ready, or repo URL unreachable          | Same; bootstrap retries; or fix profile.ini and run `pkg-bootstrap --force`           |
 | `capy install` says "Desktop not installed" | Activation gate; module never staged                 | `capy install org.capyos.ui.desktop-session` or `capy wizard --modules`                |
 | Desktop never starts after reboot           | Module installed but `installed` marker missing      | Inspect `/var/capypkg/org.capyos.ui.desktop-session/`, re-run `pkg-install <name>`     |

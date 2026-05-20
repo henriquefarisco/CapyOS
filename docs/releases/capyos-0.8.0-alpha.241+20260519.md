@@ -175,5 +175,6 @@ make smoke-x64-vmware-mouse-events TOOLCHAIN64=host SMOKE_X64_VMWARE_ARGS=...
 - Smoke `smoke-x64-vmware-wizard-full` que dirige o wizard via HMP.
 - Loader sandbox de módulos (Etapa 12+) para tirar desktop bytes do
   kernel ELF de fato.
-- Publicar o `capy-ui-desktop-session` manifest na URL pública
-  oficial (`updates.capyos.org/.../modules-index.txt`).
+- Publicar o índice agregado `modules-index.txt` como asset operacional
+  da release CapyUI `v0.7.0`; os `.manifest` individuais permanecem
+  auxiliares de publisher.

@@ -119,11 +119,15 @@ signature_ed25519=" + hex_lower(signature) + "
 
 | Recurso | Endpoint | Conteúdo |
 |---|---|---|
-| Índice do repositório | `index_url` registrado via `pkg-source-add` | descritores separados por `---\n` no formato acima |
+| Índice do repositório | `index_url` registrado via `pkg-source-add` ou `bootstrap_repo_url` em `/system/install/profile.ini` | `modules-index.txt` com descritores separados por `---\n` no formato acima |
 | Payload binário | `payload_url` declarado por cada entrada | bytes opacos; tamanho ≤ `CAPYPKG_PAYLOAD_MAX` (8 MiB) |
 
 O adapter persiste o cache em `/system/capypkg/cache/index.txt` e o
 DB de instalados em `/system/capypkg/db.idx` usando o mesmo formato.
+Arquivos `.manifest` individuais são entradas de publisher/CI; publique
+o índice agregado como asset operacional para o wizard e para `pkg-fetch`.
+Os arquivos automáticos `Source code .zip` e `.tar.gz` do GitHub não são
+índices nem payloads capypkg.
 
 ## 7. Tamanho máximo de payload
 
