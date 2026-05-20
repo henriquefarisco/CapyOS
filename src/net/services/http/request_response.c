@@ -88,6 +88,9 @@ int http_request(const struct http_request *req, struct http_response *resp) {
       }
       recv_buf = grown;
       recv_capacity = new_capacity;
+      if (header_done) {
+        body_start = recv_buf + header_end_offset;
+      }
     }
 
     r = http_transport_recv(&transport, recv_buf + total, recv_capacity - 1 - total);
@@ -152,6 +155,12 @@ int http_request(const struct http_request *req, struct http_response *resp) {
   }
 
   body_received = total - header_end_offset;
+  if ((resp->content_length > 0 && body_received < resp->content_length) ||
+      (resp->chunked && body_start &&
+       !http_chunked_complete((const uint8_t *)body_start, body_received))) {
+    result = http_fail(HTTP_ERR_RECV);
+    goto cleanup;
+  }
   if (buffer_exhausted &&
       ((resp->content_length > 0 && body_received < resp->content_length) ||
        (resp->chunked && body_start &&

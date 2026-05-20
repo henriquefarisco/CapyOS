@@ -15,9 +15,11 @@
  *   4. Verify SHA-256 against the manifest.
  *   5. Verify Ed25519 signature when the source repository requires
  *      it (default).
- *   6. Stage the bytes under <install_root>/<name>.bin.
- *   7. Append/replace the entry in the installed table and persist
- *      the DB.
+ *   6. Stage the bytes under <install_root>/<name>.bin, or split into
+ *      payload.partNN files when the filesystem's current file-size
+ *      ceiling is smaller than the verified artifact.
+ *   7. Write <install_root>/installed, then append/replace the entry
+ *      in the installed table and persist the DB.
  *
  * The kernel never executes the staged bytes from this path. Future
  * stages will introduce a sandboxed loader that consumes
@@ -32,6 +34,7 @@
 
 #define CAPYPKG_INDEX_BUFFER_BYTES 16384u
 #define CAPYPKG_DB_BUFFER_BYTES    8192u
+#define CAPYPKG_PAYLOAD_PART_BYTES (256u * 1024u)
 
 static int has_text_fetcher(void) {
     return g_capypkg_text_fetcher != NULL;
@@ -426,6 +429,101 @@ static int build_payload_target(const struct capypkg_entry *entry,
     return 0;
 }
 
+static int build_payload_part_target(const struct capypkg_entry *entry,
+                                     uint32_t part_index,
+                                     char *out, size_t out_size) {
+    if (!entry || !out || out_size == 0u || part_index > 99u) return -1;
+    capypkg_local_copy(out, out_size, entry->install_root);
+    capypkg_local_append(out, out_size, "/payload.part");
+    char suffix[3];
+    suffix[0] = (char)('0' + (part_index / 10u));
+    suffix[1] = (char)('0' + (part_index % 10u));
+    suffix[2] = '\0';
+    capypkg_local_append(out, out_size, suffix);
+    return 0;
+}
+
+static int build_installed_marker_target(const struct capypkg_entry *entry,
+                                         char *out, size_t out_size) {
+    if (!entry || !out || out_size == 0u) return -1;
+    capypkg_local_copy(out, out_size, entry->install_root);
+    capypkg_local_append(out, out_size, "/installed");
+    return 0;
+}
+
+static void append_decimal(char *out, size_t out_size, uint32_t value) {
+    char digits[10];
+    size_t count = 0u;
+    if (value == 0u) {
+        capypkg_local_append(out, out_size, "0");
+        return;
+    }
+    while (value > 0u && count < sizeof(digits)) {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (count > 0u) {
+        char ch[2];
+        ch[0] = digits[--count];
+        ch[1] = '\0';
+        capypkg_local_append(out, out_size, ch);
+    }
+}
+
+static int write_payload_parts(const struct capypkg_entry *entry,
+                               const uint8_t *payload,
+                               size_t payload_len) {
+    size_t offset = 0u;
+    uint32_t part = 0u;
+    if (!entry || !payload || !g_capypkg_bytes_writer) {
+        return CAPYPKG_ERR_INVALID_ARG;
+    }
+    while (offset < payload_len) {
+        char part_path[CAPYPKG_PATH_MAX];
+        size_t chunk = payload_len - offset;
+        if (chunk > CAPYPKG_PAYLOAD_PART_BYTES) {
+            chunk = CAPYPKG_PAYLOAD_PART_BYTES;
+        }
+        if (build_payload_part_target(entry, part, part_path,
+                                      sizeof(part_path)) != 0) {
+            return CAPYPKG_ERR_STORAGE;
+        }
+        if (g_capypkg_bytes_writer(part_path, payload + offset, chunk) != 0) {
+            return CAPYPKG_ERR_STORAGE;
+        }
+        offset += chunk;
+        ++part;
+    }
+    return CAPYPKG_OK;
+}
+
+static int write_installed_marker(const struct capypkg_entry *entry,
+                                  size_t payload_len) {
+    char marker_path[CAPYPKG_PATH_MAX];
+    char marker[256];
+    if (!entry || !g_capypkg_bytes_writer) {
+        return CAPYPKG_ERR_INVALID_ARG;
+    }
+    if (build_installed_marker_target(entry, marker_path,
+                                      sizeof(marker_path)) != 0) {
+        return CAPYPKG_ERR_STORAGE;
+    }
+    marker[0] = '\0';
+    capypkg_local_append(marker, sizeof(marker), "state=installed\nname=");
+    capypkg_local_append(marker, sizeof(marker), entry->name);
+    capypkg_local_append(marker, sizeof(marker), "\nversion=");
+    capypkg_local_append(marker, sizeof(marker), entry->version);
+    capypkg_local_append(marker, sizeof(marker), "\npayload_sha256=");
+    capypkg_local_append(marker, sizeof(marker), entry->payload_sha256);
+    capypkg_local_append(marker, sizeof(marker), "\npayload_size=");
+    append_decimal(marker, sizeof(marker), (uint32_t)payload_len);
+    capypkg_local_append(marker, sizeof(marker), "\n");
+    return g_capypkg_bytes_writer(marker_path, (const uint8_t *)marker,
+                                  capypkg_local_len(marker)) == 0
+               ? CAPYPKG_OK
+               : CAPYPKG_ERR_STORAGE;
+}
+
 /* Build the staging path under CAPYPKG_DIR_UPDATES for the freshly
  * fetched payload. The directory is bounded by capypkg_manifest's
  * `path_is_under()` whitelist (CAPYPKG_DIR_VAR), so this path
@@ -576,12 +674,20 @@ int capypkg_install(const char *name) {
         return CAPYPKG_ERR_INVALID_ARG;
     }
     if (g_capypkg_bytes_writer(target, payload_buffer, payload_len) != 0) {
-        avail->state = CAPYPKG_STATE_BROKEN;
-        klog(KLOG_WARN,
-             "[audit] [capypkg] payload write failed; install aborted");
-        /* Keep the staging file: the commit failed, so the operator
-         * may want to manually copy the verified bytes into place. */
-        return CAPYPKG_ERR_STORAGE;
+        if (g_capypkg_remover) {
+            (void)g_capypkg_remover(target);
+        }
+        rc = write_payload_parts(avail, payload_buffer, payload_len);
+        if (rc != CAPYPKG_OK) {
+            avail->state = CAPYPKG_STATE_BROKEN;
+            klog(KLOG_WARN,
+                 "[audit] [capypkg] payload write failed; install aborted");
+            /* Keep the staging file: the commit failed, so the operator
+             * may want to manually copy the verified bytes into place. */
+            return rc;
+        }
+        klog(KLOG_INFO,
+             "[audit] [capypkg] payload stored in split parts");
     }
 
     /* Happy path: the bytes are committed in install_root and the
@@ -592,6 +698,14 @@ int capypkg_install(const char *name) {
     }
 
     avail->state = CAPYPKG_STATE_STAGED;
+    rc = write_installed_marker(avail, payload_len);
+    if (rc != CAPYPKG_OK) {
+        avail->state = CAPYPKG_STATE_BROKEN;
+        klog(KLOG_WARN,
+             "[audit] [capypkg] installed marker write failed; install aborted");
+        return rc;
+    }
+
     int append_rc = append_or_replace_installed(avail);
     if (append_rc != CAPYPKG_OK) {
         /* Payload is on disk but the installed table is full. The

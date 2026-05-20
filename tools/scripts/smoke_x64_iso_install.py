@@ -78,6 +78,17 @@ def parse_args() -> argparse.Namespace:
         choices=("us", "br-abnt2"),
         help="Keyboard layout selected in the installer and first boot",
     )
+    parser.add_argument(
+        "--module-profile",
+        default="basic",
+        choices=("basic", "full"),
+        help="Module profile selected in the first-boot wizard",
+    )
+    parser.add_argument(
+        "--modules-index-url",
+        default="",
+        help="Override the first-boot modules-index URL prompt",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
     return parser.parse_args()
 
@@ -153,14 +164,27 @@ def run_boot1(
         verbose=parsed.verbose,
     )
     try:
-        maybe_run_first_boot_setup(
-            session=session,
-            timeout=parsed.step_timeout,
-            user=parsed.user,
-            password=parsed.password,
-            keyboard_layout=parsed.keyboard_layout,
-            volume_key=volume_key,
-        )
+        try:
+            setup_result = maybe_run_first_boot_setup(
+                session=session,
+                timeout=parsed.step_timeout,
+                user=parsed.user,
+                password=parsed.password,
+                keyboard_layout=parsed.keyboard_layout,
+                volume_key=volume_key,
+                module_profile=parsed.module_profile,
+                modules_index_url=parsed.modules_index_url,
+            )
+        except RuntimeError as exc:
+            tail = session.tail(8000)
+            if "qemu exited early with code 0" in str(exc) and (
+                "[modules] install complete" in tail
+                or "Initial setup complete. Rebooting" in tail
+            ):
+                return
+            raise
+        if setup_result == "rebooted":
+            return
         mode = login(
             session=session,
             timeout=parsed.step_timeout,

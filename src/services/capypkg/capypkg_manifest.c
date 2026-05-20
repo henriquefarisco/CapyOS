@@ -31,6 +31,70 @@
 #include <stddef.h>
 #include <stdint.h>
 
+static char g_capypkg_last_verify_error[192];
+
+static void diag_clear(void) {
+    g_capypkg_last_verify_error[0] = '\0';
+}
+
+static void diag_append(char *dst, size_t dst_size, const char *src) {
+    size_t d = 0u;
+    size_t s = 0u;
+    if (!dst || dst_size == 0u || !src) return;
+    while (d + 1u < dst_size && dst[d]) d++;
+    while (d + 1u < dst_size && src[s]) {
+        dst[d++] = src[s++];
+    }
+    dst[d] = '\0';
+}
+
+static void diag_append_u32(char *dst, size_t dst_size, uint32_t value) {
+    char digits[10];
+    size_t count = 0u;
+    if (value == 0u) {
+        diag_append(dst, dst_size, "0");
+        return;
+    }
+    while (value > 0u && count < sizeof(digits)) {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (count > 0u) {
+        char ch[2];
+        ch[0] = digits[--count];
+        ch[1] = '\0';
+        diag_append(dst, dst_size, ch);
+    }
+}
+
+static void diag_set_size_mismatch(size_t actual, uint32_t expected) {
+    diag_clear();
+    diag_append(g_capypkg_last_verify_error, sizeof(g_capypkg_last_verify_error),
+                "size actual=");
+    diag_append_u32(g_capypkg_last_verify_error,
+                    sizeof(g_capypkg_last_verify_error), (uint32_t)actual);
+    diag_append(g_capypkg_last_verify_error, sizeof(g_capypkg_last_verify_error),
+                " expected=");
+    diag_append_u32(g_capypkg_last_verify_error,
+                    sizeof(g_capypkg_last_verify_error), expected);
+}
+
+static void diag_set_sha_mismatch(const char *actual, const char *expected) {
+    diag_clear();
+    diag_append(g_capypkg_last_verify_error, sizeof(g_capypkg_last_verify_error),
+                "sha actual=");
+    diag_append(g_capypkg_last_verify_error, sizeof(g_capypkg_last_verify_error),
+                actual ? actual : "-");
+    diag_append(g_capypkg_last_verify_error, sizeof(g_capypkg_last_verify_error),
+                " expected=");
+    diag_append(g_capypkg_last_verify_error, sizeof(g_capypkg_last_verify_error),
+                expected ? expected : "-");
+}
+
+const char *capypkg_last_verify_error(void) {
+    return g_capypkg_last_verify_error;
+}
+
 static int hex_value(char c) {
     if (c >= '0' && c <= '9') return (int)(c - '0');
     if (c >= 'a' && c <= 'f') return 10 + (int)(c - 'a');
@@ -431,7 +495,9 @@ int capypkg_verify_payload(const struct capypkg_entry *entry,
     if (!entry || !payload || payload_len == 0u) {
         return CAPYPKG_ERR_INVALID_ARG;
     }
+    diag_clear();
     if (entry->size_bytes && (uint32_t)payload_len != entry->size_bytes) {
+        diag_set_size_mismatch(payload_len, entry->size_bytes);
         return CAPYPKG_ERR_DIGEST;
     }
     if (decode_hex64(entry->payload_sha256, expected) != 0) {
@@ -440,6 +506,7 @@ int capypkg_verify_payload(const struct capypkg_entry *entry,
     sha256_hash(payload, payload_len, digest);
     sha256_hex(digest, digest_hex);
     if (!capypkg_local_equal(digest_hex, entry->payload_sha256)) {
+        diag_set_sha_mismatch(digest_hex, entry->payload_sha256);
         /* Constant-style compare not strictly necessary here (hash is
          * not a secret), but we go through capypkg_local_equal for
          * uniformity with the rest of the adapter. */

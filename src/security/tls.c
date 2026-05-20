@@ -111,11 +111,40 @@ static void tls_record_failure(struct tls_context *ctx, int error) {
 
 static int tls_engine_error(struct tls_context *ctx, int fallback) {
   int err;
+  unsigned state;
   if (!ctx) {
     return fallback;
   }
   err = br_ssl_engine_last_error(&ctx->client.eng);
-  return err != 0 ? err : fallback;
+  if (err != 0) {
+    return err;
+  }
+  state = br_ssl_engine_current_state(&ctx->client.eng);
+  if ((state & BR_SSL_RECVAPP) != 0) {
+    return BR_ERR_BAD_STATE;
+  }
+  return fallback;
+}
+
+static int tls_drain_pending_app(struct tls_context *ctx) {
+  for (unsigned rounds = 0; rounds < 8; rounds++) {
+    unsigned state;
+    unsigned char *buf;
+    size_t len = 0;
+    if (!ctx) {
+      return -1;
+    }
+    state = br_ssl_engine_current_state(&ctx->client.eng);
+    if ((state & BR_SSL_RECVAPP) == 0) {
+      return 0;
+    }
+    buf = br_ssl_engine_recvapp_buf(&ctx->client.eng, &len);
+    if (!buf || len == 0) {
+      return 0;
+    }
+    br_ssl_engine_recvapp_ack(&ctx->client.eng, len);
+  }
+  return -1;
 }
 
 static void tls_seed_engine(struct tls_context *ctx) {
@@ -569,8 +598,18 @@ int tls_send(struct tls_context *ctx, const void *data, size_t len) {
   if (len == 0) {
     return 0;
   }
-  if (br_sslio_write_all(&ctx->io, data, len) < 0 ||
-      br_sslio_flush(&ctx->io) < 0) {
+  if (tls_drain_pending_app(ctx) != 0) {
+    tls_record_failure(ctx, BR_ERR_BAD_STATE);
+    return -1;
+  }
+  if (br_sslio_write_all(&ctx->io, data, len) < 0) {
+    if (tls_drain_pending_app(ctx) != 0 ||
+        br_sslio_write_all(&ctx->io, data, len) < 0) {
+      tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_IO));
+      return -1;
+    }
+  }
+  if (br_sslio_flush(&ctx->io) < 0) {
     tls_record_failure(ctx, tls_engine_error(ctx, BR_ERR_IO));
     return -1;
   }

@@ -2,10 +2,12 @@
 #include "net/stack.h"
 #include "security/csprng.h"
 #include "memory/kmem.h"
+#include "kernel/spinlock.h"
 #include <stddef.h>
 
 static struct tcp_connection tcp_conns[TCP_MAX_CONNECTIONS];
 static struct tcp_stats tcp_global_stats;
+static struct spinlock tcp_lock = SPINLOCK_INIT;
 
 static void tcp_memset(void *dst, int val, size_t len) {
   uint8_t *d = (uint8_t *)dst;
@@ -54,10 +56,22 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
   return (uint16_t)~sum;
 }
 
+static uint16_t tcp_advertised_window(const struct tcp_connection *c) {
+  uint32_t available;
+  if (!c || !c->recv_buf || c->recv_cap <= c->recv_len) {
+    return 0;
+  }
+  available = c->recv_cap - c->recv_len;
+  return available > 65535u ? 65535u : (uint16_t)available;
+}
+
 static int tcp_send_segment(struct tcp_connection *c, uint8_t flags,
                              const void *data, size_t len) {
-  uint8_t pkt[20 + TCP_WINDOW_SIZE];
+  uint8_t pkt[24 + TCP_MSS_DEFAULT];
   size_t hdr_len = 20;
+  if (len > TCP_MSS_DEFAULT) {
+    return -1;
+  }
   if (flags & TCP_FLAG_SYN) hdr_len = 24;
 
   struct tcp_header *hdr = (struct tcp_header *)pkt;
@@ -67,7 +81,7 @@ static int tcp_send_segment(struct tcp_connection *c, uint8_t flags,
   hdr->ack_num = tcp_htonl((flags & TCP_FLAG_ACK) ? c->rcv_nxt : 0);
   hdr->data_offset = (uint8_t)((hdr_len / 4) << 4);
   hdr->flags = flags;
-  hdr->window = tcp_htons((uint16_t)c->rcv_wnd);
+  hdr->window = tcp_htons(tcp_advertised_window(c));
   hdr->checksum = 0;
   hdr->urgent = 0;
 
@@ -96,6 +110,7 @@ static int tcp_send_segment(struct tcp_connection *c, uint8_t flags,
 }
 
 void tcp_init(void) {
+  spinlock_init(&tcp_lock);
   tcp_memset(tcp_conns, 0, sizeof(tcp_conns));
   tcp_memset(&tcp_global_stats, 0, sizeof(tcp_global_stats));
 }
@@ -175,10 +190,20 @@ int tcp_send(int conn_id, const void *data, size_t len) {
 int tcp_recv(int conn_id, void *buf, size_t len) {
   if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
   struct tcp_connection *c = &tcp_conns[conn_id];
-  if (!c->active) return -1;
+  uint64_t flags = 0;
+  int should_ack = 0;
+  int ret = -1;
+  spin_lock_irqsave(&tcp_lock, &flags);
+  if (!c->active) {
+    spin_unlock_irqrestore(&tcp_lock, flags);
+    return -1;
+  }
   if (c->recv_len == 0 || !c->recv_buf) {
-    if (c->state == TCP_STATE_CLOSE_WAIT || c->state == TCP_STATE_CLOSED)
+    if (c->state == TCP_STATE_CLOSE_WAIT || c->state == TCP_STATE_CLOSED) {
+      spin_unlock_irqrestore(&tcp_lock, flags);
       return 0;
+    }
+    spin_unlock_irqrestore(&tcp_lock, flags);
     return -1;
   }
   uint32_t avail = c->recv_len;
@@ -187,19 +212,36 @@ int tcp_recv(int conn_id, void *buf, size_t len) {
   c->recv_head += avail;
   c->recv_len -= avail;
   if (c->recv_len == 0) c->recv_head = 0;
-  return (int)avail;
+  if (c->state == TCP_STATE_ESTABLISHED) {
+    should_ack = 1;
+  }
+  ret = (int)avail;
+  spin_unlock_irqrestore(&tcp_lock, flags);
+  if (should_ack) {
+    tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
+  }
+  return ret;
 }
 
 int tcp_close(int conn_id) {
   if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
   struct tcp_connection *c = &tcp_conns[conn_id];
-  if (!c->active) return -1;
+  uint64_t flags = 0;
+  spin_lock_irqsave(&tcp_lock, &flags);
+  if (!c->active) {
+    spin_unlock_irqrestore(&tcp_lock, flags);
+    return -1;
+  }
 
   if (c->state == TCP_STATE_ESTABLISHED) {
+    spin_unlock_irqrestore(&tcp_lock, flags);
     tcp_send_segment(c, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
+    spin_lock_irqsave(&tcp_lock, &flags);
     c->state = TCP_STATE_FIN_WAIT_1;
   } else if (c->state == TCP_STATE_CLOSE_WAIT) {
+    spin_unlock_irqrestore(&tcp_lock, flags);
     tcp_send_segment(c, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
+    spin_lock_irqsave(&tcp_lock, &flags);
     c->state = TCP_STATE_LAST_ACK;
   } else {
     c->active = 0;
@@ -209,6 +251,7 @@ int tcp_close(int conn_id) {
   if (c->recv_buf) { kfree(c->recv_buf); c->recv_buf = NULL; }
   c->send_cap = 0;
   c->recv_cap = 0;
+  spin_unlock_irqrestore(&tcp_lock, flags);
   return 0;
 }
 
@@ -224,10 +267,19 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
   uint32_t ack = tcp_ntohl(hdr->ack_num);
   uint8_t flags = hdr->flags;
   uint32_t data_off = ((uint32_t)(hdr->data_offset >> 4)) * 4;
+  uint64_t lock_flags = 0;
 
   tcp_global_stats.segments_received++;
 
+  if (data_off < 20u || data_off > len) {
+    return;
+  }
+  if (tcp_checksum(src_ip, dst_ip, segment, len) != 0u) {
+    return;
+  }
+
   struct tcp_connection *c = NULL;
+  spin_lock_irqsave(&tcp_lock, &lock_flags);
   for (int i = 0; i < TCP_MAX_CONNECTIONS; i++) {
     if (!tcp_conns[i].active) continue;
     if (tcp_conns[i].local_port == dst_port &&
@@ -237,13 +289,17 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
       break;
     }
   }
-  if (!c) return;
+  if (!c) {
+    spin_unlock_irqrestore(&tcp_lock, lock_flags);
+    return;
+  }
 
   /* RST tears down the connection immediately in any state. */
   if (flags & TCP_FLAG_RST) {
     c->state = TCP_STATE_CLOSED;
     c->active = 0;
     tcp_global_stats.resets++;
+    spin_unlock_irqrestore(&tcp_lock, lock_flags);
     return;
   }
 
@@ -284,6 +340,10 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
     if (data_off < len) {
       size_t data_len = len - data_off;
       const uint8_t *payload = segment + data_off;
+      if (seq != c->rcv_nxt) {
+        tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
+        break;
+      }
       if (c->recv_buf && c->recv_len + data_len <= c->recv_cap) {
         /* Compact if the logical write pointer (recv_head + recv_len) would
            exceed the buffer end; moving data to index 0 keeps recv_head==0. */
@@ -299,6 +359,14 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
       tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
     }
     if (flags & TCP_FLAG_FIN) {
+      uint32_t fin_seq = seq;
+      if (data_off < len) {
+        fin_seq += (uint32_t)(len - data_off);
+      }
+      if (fin_seq != c->rcv_nxt) {
+        tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
+        break;
+      }
       c->rcv_nxt++;
       c->state = TCP_STATE_CLOSE_WAIT;
       tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
@@ -341,6 +409,7 @@ void tcp_receive_segment(uint32_t src_ip, uint32_t dst_ip,
   default:
     break;
   }
+  spin_unlock_irqrestore(&tcp_lock, lock_flags);
 }
 
 void tcp_timer_tick(void) {

@@ -101,7 +101,7 @@ int http_build_request(const struct http_request *req, char *buf, size_t buf_siz
   }
 
   if (!http_request_has_header(req, "Connection") &&
-      http_buf_append_str(buf, buf_size, &pos, "\r\nConnection: keep-alive") != 0) {
+      http_buf_append_str(buf, buf_size, &pos, "\r\nConnection: close") != 0) {
     return -1;
   }
   if (!http_request_has_header(req, "User-Agent") &&
@@ -120,13 +120,7 @@ int http_build_request(const struct http_request *req, char *buf, size_t buf_siz
   }
   if (!http_request_has_header(req, "Accept-Encoding") &&
       http_buf_append_str(buf, buf_size, &pos,
-                          "\r\nAccept-Encoding: gzip, deflate, identity") != 0) {
-    return -1;
-  }
-  if (req->method == HTTP_GET &&
-      !http_request_has_header(req, "Upgrade-Insecure-Requests") &&
-      http_buf_append_str(buf, buf_size, &pos,
-                          "\r\nUpgrade-Insecure-Requests: 1") != 0) {
+                          "\r\nAccept-Encoding: identity") != 0) {
     return -1;
   }
   if (req->body && req->body_len > 0 && !http_request_has_header(req, "Content-Length")) {

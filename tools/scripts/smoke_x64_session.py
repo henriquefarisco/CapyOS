@@ -22,12 +22,18 @@ SERIAL_CHAR_DELAY = 0.002
 
 class SmokeSession:
     def __init__(
-        self, cmd: list[str], serial_port: int, log_path: Path, verbose: bool = False
+        self,
+        cmd: list[str],
+        serial_port: int,
+        log_path: Path,
+        verbose: bool = False,
+        debugcon_log_path: Path | None = None,
     ):
         self.cmd = cmd
         self.serial_port = serial_port
         self.log_path = log_path
         self.verbose = verbose
+        self.debugcon_log_path = debugcon_log_path
 
         self.proc: subprocess.Popen[bytes] | None = None
         self.sock: socket.socket | None = None
@@ -37,6 +43,7 @@ class SmokeSession:
 
         self._proc_reader: threading.Thread | None = None
         self._serial_reader: threading.Thread | None = None
+        self._debugcon_reader: threading.Thread | None = None
 
         self._logf = None
 
@@ -59,6 +66,12 @@ class SmokeSession:
 
         self._serial_reader = threading.Thread(target=self._read_serial, daemon=True)
         self._serial_reader.start()
+
+        if self.debugcon_log_path is not None:
+            self._debugcon_reader = threading.Thread(
+                target=self._read_debugcon, daemon=True
+            )
+            self._debugcon_reader.start()
 
     def stop(self) -> None:
         if self.sock is not None:
@@ -83,6 +96,8 @@ class SmokeSession:
             self._proc_reader.join(timeout=1)
         if self._serial_reader is not None:
             self._serial_reader.join(timeout=1)
+        if self._debugcon_reader is not None:
+            self._debugcon_reader.join(timeout=1)
 
         if self._logf is not None:
             self._logf.flush()
@@ -141,6 +156,29 @@ class SmokeSession:
             if self.verbose:
                 sys.stdout.write(data.decode("latin-1", errors="replace"))
                 sys.stdout.flush()
+
+    def _read_debugcon(self) -> None:
+        if self.debugcon_log_path is None or self._logf is None:
+            return
+        offset = 0
+        while True:
+            if self.proc is not None and self.proc.poll() is not None:
+                return
+            try:
+                with self.debugcon_log_path.open("rb") as fp:
+                    fp.seek(offset)
+                    data = fp.read()
+                    offset = fp.tell()
+            except OSError:
+                data = b""
+            if data:
+                with self._lock:
+                    self._buf.extend(data)
+                self._logf.write(data)
+                if self.verbose:
+                    sys.stdout.write(data.decode("latin-1", errors="replace"))
+                    sys.stdout.flush()
+            time.sleep(0.05)
 
     def marker(self) -> int:
         with self._lock:

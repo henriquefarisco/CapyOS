@@ -82,7 +82,7 @@ int http_get(const char *url, struct http_response *resp) {
   for (int hop = 0; hop <= max_hops; hop++) {
     http_memset(req, 0, sizeof(*req));
     req->method = HTTP_GET;
-    req->timeout_ms = 10000;
+    req->timeout_ms = 60000;
 
     if (http_parse_url(next_url, req->host, HTTP_MAX_HOST, req->path, HTTP_MAX_PATH,
                        &req->port, &req->use_tls) != 0) {
@@ -143,7 +143,10 @@ int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
   }
 
   size_t copy = resp.body_len;
-  if (copy > buffer_size) copy = buffer_size;
+  if (copy > buffer_size) {
+    http_response_free(&resp);
+    return -1;
+  }
   if (resp.body && copy > 0) http_memcpy(buffer, resp.body, copy);
   if (out_len) *out_len = copy;
   http_response_free(&resp);

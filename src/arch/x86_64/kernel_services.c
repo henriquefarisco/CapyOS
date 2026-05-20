@@ -217,69 +217,99 @@ int kernel_service_stop_update_agent(void *ctx) {
 static int capypkg_runtime_read_file(const char *path, char *buffer,
                                      size_t buffer_size, size_t *out_len) {
   struct file *file = NULL;
+  struct session_context *previous_session = NULL;
   long read = 0;
   if (!path || !buffer || buffer_size < 2u) {
     return -1;
   }
+  previous_session = session_active();
+  session_set_active(NULL);
   file = vfs_open(path, VFS_OPEN_READ);
   if (!file) {
+    session_set_active(previous_session);
     return -1;
   }
   read = vfs_read(file, buffer, buffer_size - 1u);
   vfs_close(file);
   if (read < 0) {
+    session_set_active(previous_session);
     return -1;
   }
   buffer[(size_t)read] = '\0';
   if (out_len) {
     *out_len = (size_t)read;
   }
+  session_set_active(previous_session);
   return 0;
 }
 
 static int capypkg_runtime_write_text(const char *path, const char *text) {
-  return kernel_write_text_file(path, text);
+  struct session_context *previous_session = session_active();
+  session_set_active(NULL);
+  int rc = kernel_write_text_file(path, text);
+  session_set_active(previous_session);
+  return rc;
 }
 
 static int capypkg_runtime_write_bytes(const char *path, const uint8_t *data,
                                        size_t len) {
   struct file *file = NULL;
   struct dentry *d = NULL;
+  struct session_context *previous_session = NULL;
+  int rc = 0;
   if (!path || (!data && len > 0u)) {
     return -1;
   }
+  previous_session = session_active();
+  session_set_active(NULL);
   if (vfs_lookup(path, &d) == 0) {
     (void)vfs_unlink(path);
   }
   if (vfs_create(path, VFS_MODE_FILE, NULL) != 0 &&
       vfs_lookup(path, &d) != 0) {
-    return -1;
+    rc = -1;
+    goto done;
   }
   file = vfs_open(path, VFS_OPEN_WRITE);
   if (!file) {
-    return -1;
+    rc = -1;
+    goto done;
   }
   if (len > 0u && vfs_write(file, data, len) != (long)len) {
     vfs_close(file);
-    return -1;
+    rc = -1;
+    goto done;
   }
   vfs_close(file);
-  return 0;
+done:
+  session_set_active(previous_session);
+  return rc;
 }
 
 static int capypkg_runtime_remove(const char *path) {
   struct dentry *d = NULL;
+  struct session_context *previous_session = NULL;
+  int rc = 0;
   if (!path) {
     return -1;
   }
+  previous_session = session_active();
+  session_set_active(NULL);
   if (vfs_lookup(path, &d) != 0) {
-    return 0;
+    goto done;
   }
-  return vfs_unlink(path);
+  rc = vfs_unlink(path);
+done:
+  session_set_active(previous_session);
+  return rc;
 }
 
 static int capypkg_runtime_mkdir(const char *path) {
-  return kernel_ensure_directory_recursive(path);
+  struct session_context *previous_session = session_active();
+  session_set_active(NULL);
+  int rc = kernel_ensure_directory_recursive(path);
+  session_set_active(previous_session);
+  return rc;
 }
 
 /* HTTPS adapter binding.

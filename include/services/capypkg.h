@@ -216,6 +216,7 @@ int  capypkg_db_load(void);
 void capypkg_stats_get(struct capypkg_stats *out);
 const char *capypkg_state_label(uint8_t state);
 const char *capypkg_result_label(int rc);
+const char *capypkg_last_verify_error(void);
 
 /* Path constants the runtime uses for persistence. */
 #define CAPYPKG_DIR_SYSTEM    "/system/capypkg"

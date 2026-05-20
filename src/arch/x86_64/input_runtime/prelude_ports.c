@@ -12,6 +12,8 @@ void x64_input_enable_auto_promotion(void) {
 }
 
 int com1_detect(void) {
+  uint8_t status = 0;
+
   if (g_has_com1 >= 0) {
     return g_has_com1;
   }
@@ -33,6 +35,12 @@ int com1_detect(void) {
   }
 
   outb_local(0x3F8 + 4, 0x0Bu);
+  status = inb_local(0x3F8 + 5);
+  if (status != 0x00u && status != 0xFFu && (status & 0x60u) != 0u) {
+    g_has_com1 = 1;
+    return 1;
+  }
+
   g_has_com1 = 0;
   return 0;
 }

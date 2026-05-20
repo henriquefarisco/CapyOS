@@ -376,6 +376,12 @@ void fbcon_putc(char c) {
       com1_putc(c);
     }
   }
+  if (c == '\n') {
+    dbgcon_putc('\r');
+  }
+  if (c != '\r') {
+    dbgcon_putc((uint8_t)c);
+  }
   if (g_fbcon_visual_muted) {
     fbcon_capture_muted_char(c);
     return;

@@ -20,6 +20,7 @@
 #include "services/install_profile.h"
 #include "fs/vfs.h"
 #include "kernel/log/klog.h"
+#include "auth/session.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -70,19 +71,25 @@ static int profile_read_from_vfs(struct install_profile *out) {
 static int profile_write_marker(const char *path, const char *text) {
     struct file *file = NULL;
     struct dentry *d = NULL;
+    struct session_context *previous_session = NULL;
+    int rc = 0;
     if (!path || !text) {
         return -1;
     }
+    previous_session = session_active();
+    session_set_active(NULL);
     if (vfs_lookup(path, &d) == 0) {
         (void)vfs_unlink(path);
     }
     if (vfs_create(path, VFS_MODE_FILE, NULL) != 0 &&
         vfs_lookup(path, &d) != 0) {
-        return -1;
+        rc = -1;
+        goto done;
     }
     file = vfs_open(path, VFS_OPEN_WRITE);
     if (!file) {
-        return -1;
+        rc = -1;
+        goto done;
     }
     size_t len = 0u;
     while (text[len] != '\0') {
@@ -90,10 +97,13 @@ static int profile_write_marker(const char *path, const char *text) {
     }
     if (len > 0u && vfs_write(file, text, len) != (long)len) {
         vfs_close(file);
-        return -1;
+        rc = -1;
+        goto done;
     }
     vfs_close(file);
-    return 0;
+done:
+    session_set_active(previous_session);
+    return rc;
 }
 
 static int profile_marker_exists(void) {

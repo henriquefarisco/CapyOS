@@ -330,6 +330,7 @@ def boot_with_session(
         serial_port=port,
         log_path=log_path,
         verbose=verbose,
+        debugcon_log_path=debugcon_log,
     )
     session.start()
     return session

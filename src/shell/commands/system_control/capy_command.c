@@ -79,10 +79,15 @@ static void capy_print_help(struct shell_context *ctx) {
 
 static int capy_unlink_marker(const char *path) {
     struct dentry *d = NULL;
+    struct session_context *previous_session = session_active();
+    int rc = 0;
     if (vfs_lookup(path, &d) != 0) {
         return 0; /* not present is OK */
     }
-    return vfs_unlink(path);
+    session_set_active(NULL);
+    rc = vfs_unlink(path);
+    session_set_active(previous_session);
+    return rc;
 }
 
 static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
@@ -103,9 +108,12 @@ static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
     if (modules_only) {
         /* Drive only capypkg_bootstrap_run with force=1; the user
          * already provided a profile.ini we trust. */
+        struct session_context *previous_session = session_active();
         int installed = 0;
         int failed = 0;
+        session_set_active(NULL);
         int rc = capypkg_bootstrap_run(1, &installed, &failed);
+        session_set_active(previous_session);
         if (rc == INSTALL_PROFILE_OK) {
             shell_print_ok(localization_select(language,
                 "bootstrap de modulos concluido\n",
@@ -132,7 +140,10 @@ static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
         "Reabrindo assistente de primeiro boot...\n",
         "Reopening first-boot wizard...\n",
         "Reabriendo asistente inicial...\n"));
+    struct session_context *previous_session = session_active();
+    session_set_active(NULL);
     int rc = system_run_first_boot_setup();
+    session_set_active(previous_session);
     return (rc == 0) ? 0 : -1;
 }
 

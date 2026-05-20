@@ -315,7 +315,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[39];
+static struct shell_command g_system_control_commands[40];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {

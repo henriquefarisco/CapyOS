@@ -4,10 +4,13 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.243+20260520.md`
-  - Corrige o bootstrap remoto de componentes, limpa warnings no build x64 e valida a ISO com reboot e persistencia.
+- `capyos-0.8.0-alpha.244+20260520.md`
+  - Corrige a instalacao remota completa dos modulos CapyUI via GitHub Release e valida o desktop ativado no reboot.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.243+20260520.md`
+  - Corrige o bootstrap remoto de componentes, limpa warnings no build x64 e valida a ISO com reboot e persistencia.
 
 - `capyos-0.8.0-alpha.242+20260520.md`
   - Corrige o fluxo de download do indice de modulos via redirect em GitHub Releases, preserva staging de payload em `/var/capypkg/updates` e destrava o bootstrap remoto do primeiro boot.

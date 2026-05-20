@@ -138,7 +138,9 @@ def maybe_run_first_boot_setup(
     password: str,
     keyboard_layout: str,
     volume_key: str | None = None,
-) -> None:
+    module_profile: str = "basic",
+    modules_index_url: str = "",
+) -> str:
     """Wait for first boot to complete.
 
     When the installer has provisioned all config (hostname, theme, admin,
@@ -193,7 +195,7 @@ def maybe_run_first_boot_setup(
             start_at=mk,
         )
     if found in ("Usuario:", "User:", "Usuario: ", "User: "):
-        return
+        return "login"
     if found == "Provisionamento automatico":
         # Silent provisioning in progress — just wait for the login prompt
         mk = session.marker()
@@ -202,7 +204,7 @@ def maybe_run_first_boot_setup(
             timeout=timeout * 4,
             start_at=mk,
         )
-        return
+        return "login"
 
     # Fallback: interactive wizard (e.g. RAM boot without installer config)
     if found in ("Available keyboard layouts:", "Layouts de teclado disponiveis:"):
@@ -302,7 +304,52 @@ def maybe_run_first_boot_setup(
                 "Perfil de instalacao",
                 "Perfil de instalacion",
             ):
-                session.send_text("1", newline=False)
+                session.send_text("2" if module_profile == "full" else "1", newline=False)
+                if module_profile == "full":
+                    mk = session.marker()
+                    session.wait_for_any(
+                        [
+                            "Modules-index URL",
+                            "URL do indice de modulos",
+                            "URL del indice de modulos",
+                        ],
+                        timeout=timeout,
+                        start_at=mk,
+                    )
+                    session.send_line(modules_index_url)
+                    mk = session.marker()
+                    session.wait_for_any(
+                        [
+                            "[modules] install complete",
+                            "[modules] instalacao concluida",
+                            "[modules] instalacion completa",
+                        ],
+                        timeout=timeout * 10,
+                        start_at=mk,
+                    )
+                    mk = session.marker()
+                    try:
+                        found_after_modules = session.wait_for_any(
+                            volume_key_prompts + ["Usuario:", "User:", "Usuario: ", "User: "],
+                            timeout=timeout * 8,
+                            start_at=mk,
+                        )
+                    except RuntimeError:
+                        if "Initial setup complete. Rebooting" in session.tail(4000):
+                            wait_for_vm_exit(session, timeout=timeout * 2)
+                            return "rebooted"
+                        raise
+                    if found_after_modules in volume_key_prompts:
+                        if not volume_key:
+                            raise RuntimeError("post-module reboot requested volume key, but no key was provided")
+                        session.send_line(volume_key)
+                        mk = session.marker()
+                        session.wait_for_any(
+                            ["Usuario:", "User:", "Usuario: ", "User: "],
+                            timeout=timeout * 4,
+                            start_at=mk,
+                        )
+                    break
                 mk = session.marker()
                 session.wait_for_any(
                     ["Usuario:", "User:", "Usuario: ", "User: "],
@@ -311,7 +358,8 @@ def maybe_run_first_boot_setup(
                 )
                 break
             continue
-        return
+        return "login"
+    return "login"
 
 
 def login(

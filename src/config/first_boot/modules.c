@@ -37,8 +37,10 @@
 
 #include "drivers/console/tty.h"
 #include "drivers/timer/pit.h"
+#include "arch/x86_64/framebuffer_console.h"
 #include "net/http.h"
 #include "net/stack.h"
+#include "security/tls.h"
 #include "services/capypkg.h"
 #include "services/capypkg_bootstrap.h"
 #include "services/capypkg_runtime.h"
@@ -60,7 +62,7 @@
  */
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://github.com/henriquefarisco/CapyUI/releases/latest/download/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyUI/releases/download/v0.7.3/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME
@@ -153,6 +155,10 @@ static void modules_render_progress(enum capypkg_bootstrap_event event,
         config_buffer_append(line, sizeof(line), rc_buf);
         config_buffer_append(line, sizeof(line), "): ");
         config_buffer_append(line, sizeof(line), http_error_string(http_last_error()));
+        config_buffer_append(line, sizeof(line), " tls=");
+        config_buffer_append(line, sizeof(line), tls_state_name(tls_last_state()));
+        config_buffer_append(line, sizeof(line), "/");
+        config_buffer_append(line, sizeof(line), tls_alert_name(tls_last_error()));
         config_print_line(line);
         if (st) {
             st->fail_stage = MODULES_FAIL_STAGE_INDEX_FETCH;
@@ -190,6 +196,9 @@ static void modules_render_progress(enum capypkg_bootstrap_event event,
         config_buffer_append(line, sizeof(line), "): ");
         config_buffer_append(line, sizeof(line), name);
         config_print_line(line);
+        if (rc == CAPYPKG_ERR_DIGEST && capypkg_last_verify_error()[0]) {
+            config_print_line(capypkg_last_verify_error());
+        }
         break;
     }
     case CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_SKIP:
@@ -320,6 +329,9 @@ static int modules_run_bootstrap_with_retry(const char *setup_language) {
  * (cancel). Any other key defaults to 'b' so an accidental keystroke
  * never silently downgrades the install profile. */
 static char modules_ask_retry_choice(const char *setup_language) {
+    uint64_t deadline = pit_ticks() + (30u * MODULES_TICKS_PER_SECOND);
+    int announced_timeout = 0;
+
     config_print_line(L(setup_language,
                         "[modules] falha persistente. Escolha:",
                         "[modules] persistent failure. Choose:",
@@ -336,15 +348,36 @@ static char modules_ask_retry_choice(const char *setup_language) {
                         "  [c] Cancelar e ficar so com o nucleo (basico)",
                         "  [c] Cancel and keep core-only (basic)",
                         "  [c] Cancelar y quedarse solo con el nucleo (basico)"));
+    config_print_line(L(setup_language,
+                        "  Sem escolha em 30s: continuar em segundo plano.",
+                        "  No choice in 30s: continue in background.",
+                        "  Sin eleccion en 30s: continuar en segundo plano."));
     tty_set_echo(1);
     tty_set_echo_mask('\0');
-    for (;;) {
-        char ch = tty_getc();
+    while (pit_ticks() < deadline) {
+        char ch = 0;
+        if (!announced_timeout &&
+            pit_ticks() + (10u * MODULES_TICKS_PER_SECOND) >= deadline) {
+            config_print_line(L(setup_language,
+                                "[modules] aguardando escolha; fallback em 10s...",
+                                "[modules] waiting for choice; fallback in 10s...",
+                                "[modules] esperando eleccion; fallback en 10s..."));
+            announced_timeout = 1;
+        }
+        if (kernel_input_trygetc(&ch) == 0) {
+            modules_sleep_ticks(10u);
+            continue;
+        }
         if (ch == 'r' || ch == 'R') return 'r';
         if (ch == 'b' || ch == 'B' || ch == '\r' || ch == '\n') return 'b';
         if (ch == 'c' || ch == 'C') return 'c';
         /* loop: ignore other keys */
     }
+    config_print_line(L(setup_language,
+                        "[modules] sem resposta; continuando em segundo plano.",
+                        "[modules] no response; continuing in background.",
+                        "[modules] sin respuesta; continuando en segundo plano."));
+    return 'b';
 }
 
 /* ---- public step ---------------------------------------------------- */
