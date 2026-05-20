@@ -57,53 +57,80 @@ int http_status_is_redirect(int status) {
 int http_get(const char *url, struct http_response *resp) {
   if (!url || !resp) return http_fail(HTTP_ERR_INVALID_ARGUMENT);
 
-  struct http_request req;
-  char next_url[HTTP_MAX_URL];
+  /* All three of these would push the kernel stack frame past the
+   * 16 KiB per-task budget on x86_64 once HTTP_MAX_PATH and
+   * HTTP_MAX_URL grew to 2048: `struct http_request` alone is
+   * ~7.4 KiB, two HTTP_MAX_URL char buffers add another 4 KiB, and
+   * the nested `http_request()` call needs ~4 KiB more for its own
+   * request_buf. Allocate on the heap and free on every exit. */
+  struct http_request *req = (struct http_request *)kmalloc(sizeof(*req));
+  char *next_url = (char *)kmalloc(HTTP_MAX_URL);
+  char *resolved = (char *)kmalloc(HTTP_MAX_URL);
   const int max_hops = 5;
+  int result;
+
+  if (!req || !next_url || !resolved) {
+    if (req) kfree(req);
+    if (next_url) kfree(next_url);
+    if (resolved) kfree(resolved);
+    return http_fail(HTTP_ERR_NO_MEMORY);
+  }
 
   http_memset(resp, 0, sizeof(*resp));
-  http_strcpy(next_url, url, sizeof(next_url));
+  http_strcpy(next_url, url, HTTP_MAX_URL);
 
   for (int hop = 0; hop <= max_hops; hop++) {
-    http_memset(&req, 0, sizeof(req));
-    req.method = HTTP_GET;
-    req.timeout_ms = 10000;
+    http_memset(req, 0, sizeof(*req));
+    req->method = HTTP_GET;
+    req->timeout_ms = 10000;
 
-    if (http_parse_url(next_url, req.host, HTTP_MAX_HOST, req.path, HTTP_MAX_PATH,
-                       &req.port, &req.use_tls) != 0) {
-      return -g_http_last_error;
+    if (http_parse_url(next_url, req->host, HTTP_MAX_HOST, req->path, HTTP_MAX_PATH,
+                       &req->port, &req->use_tls) != 0) {
+      result = -g_http_last_error;
+      goto out;
     }
 
-    int rc = http_request(&req, resp);
-    if (rc != 0) return rc;
+    int rc = http_request(req, resp);
+    if (rc != 0) { result = rc; goto out; }
 
     if (!http_status_is_redirect(resp->status_code)) {
-      return 0;
+      result = 0; goto out;
     }
     if (hop == max_hops) {
       http_response_free(resp);
-      return http_fail(HTTP_ERR_REDIRECT_LIMIT);
+      result = http_fail(HTTP_ERR_REDIRECT_LIMIT);
+      goto out;
     }
 
-    const char *location = http_find_header(resp, "Location");
+    /* Read the redirect target from resp->location (HTTP_MAX_URL
+     * bytes, full SAS/JWT preserved) instead of the generic
+     * headers[].value (256 bytes, would truncate the URL and
+     * silently corrupt the next hop). Fall back to the generic
+     * header array only when the dedicated buffer is empty, which
+     * happens on responses without a Location header. */
+    const char *location = resp->location[0]
+                               ? resp->location
+                               : http_find_header(resp, "Location");
     if (!location || !location[0]) {
-      return 0;
+      result = 0; goto out;
     }
 
-    char loc_copy[HTTP_MAX_HEADER_VALUE];
-    http_strcpy(loc_copy, location, sizeof(loc_copy));
-
-    char resolved[HTTP_MAX_URL];
-    if (http_resolve_location(&req, loc_copy, resolved, sizeof(resolved)) != 0) {
+    if (http_resolve_location(req, location, resolved, HTTP_MAX_URL) != 0) {
       http_response_free(resp);
-      return http_fail(HTTP_ERR_BAD_REDIRECT);
+      result = http_fail(HTTP_ERR_BAD_REDIRECT);
+      goto out;
     }
 
     http_response_free(resp);
-    http_strcpy(next_url, resolved, sizeof(next_url));
+    http_strcpy(next_url, resolved, HTTP_MAX_URL);
   }
 
-  return http_fail(HTTP_ERR_REDIRECT_LIMIT);
+  result = http_fail(HTTP_ERR_REDIRECT_LIMIT);
+out:
+  kfree(req);
+  kfree(next_url);
+  kfree(resolved);
+  return result;
 }
 
 int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
@@ -133,5 +160,9 @@ void http_response_free(struct http_response *resp) {
     resp->content_length = 0;
     resp->header_count = 0;
     resp->chunked = 0;
+    /* Clear the redirect target so a follow-up http_get on this
+     * same resp cannot pick up a stale Location from a previous
+     * hop if the second request's Location header is missing. */
+    resp->location[0] = '\0';
   }
 }

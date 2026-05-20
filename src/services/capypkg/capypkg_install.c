@@ -426,12 +426,47 @@ static int build_payload_target(const struct capypkg_entry *entry,
     return 0;
 }
 
+/* Build the staging path under CAPYPKG_DIR_UPDATES for the freshly
+ * fetched payload. The directory is bounded by capypkg_manifest's
+ * `path_is_under()` whitelist (CAPYPKG_DIR_VAR), so this path
+ * inherits the same sandbox as `install_root`. */
+static int build_payload_staging(const struct capypkg_entry *entry,
+                                 char *out, size_t out_size) {
+    if (!entry || !out || out_size == 0u) return -1;
+    capypkg_local_copy(out, out_size, CAPYPKG_DIR_UPDATES);
+    capypkg_local_append(out, out_size, "/");
+    capypkg_local_append(out, out_size, entry->name);
+    capypkg_local_append(out, out_size, ".bin");
+    return 0;
+}
+
 static int ensure_install_dirs(const struct capypkg_entry *entry) {
     if (!g_capypkg_mkdir) return CAPYPKG_OK;
     (void)g_capypkg_mkdir(CAPYPKG_DIR_SYSTEM);
     (void)g_capypkg_mkdir(CAPYPKG_DIR_VAR);
+    /* Staging area for fetched payloads. Created up-front (not just
+     * before the staging write) so failed installs leave the
+     * directory visible to the operator for forensics, and so the
+     * cleanup pass at the start of capypkg_install can always find
+     * the directory to scan. */
+    (void)g_capypkg_mkdir(CAPYPKG_DIR_UPDATES);
     (void)g_capypkg_mkdir(entry->install_root);
     return CAPYPKG_OK;
+}
+
+/* Best-effort cleanup of the staging payload. Called both on the
+ * happy path (after the file has been committed to install_root)
+ * and from the error paths after the staging write has happened.
+ * The remover is allowed to be NULL or to fail silently: a leftover
+ * .bin in CAPYPKG_DIR_UPDATES is harmless (it is not on the load
+ * path) and the next install of the same package will overwrite it. */
+static void cleanup_payload_staging(const struct capypkg_entry *entry) {
+    if (!entry || !g_capypkg_remover) return;
+    char staging[CAPYPKG_PATH_MAX];
+    if (build_payload_staging(entry, staging, sizeof(staging)) != 0) {
+        return;
+    }
+    (void)g_capypkg_remover(staging);
 }
 
 int capypkg_install(const char *name) {
@@ -474,6 +509,12 @@ int capypkg_install(const char *name) {
 
     avail->state = CAPYPKG_STATE_FETCHING;
 
+    /* Make sure the staging directory exists before we even hit the
+     * network: an mkdir failure now is easier to surface (we can
+     * still try the legacy direct-write path) than after several
+     * megabytes of payload have been pulled. */
+    (void)ensure_install_dirs(avail);
+
     /* Allocate a stack-bound payload buffer. CAPYPKG_PAYLOAD_MAX is
      * 8 MiB and would blow up the stack; we cap per-call to a small
      * buffer for the alpha runtime. Larger payloads should ride
@@ -489,6 +530,25 @@ int capypkg_install(const char *name) {
         return CAPYPKG_ERR_FETCH;
     }
 
+    /* Land the fresh payload in /var/capypkg/updates/<name>.bin BEFORE
+     * verifying it: this lets an operator inspect the bytes that were
+     * actually rejected (e.g. an Azure SAS error XML disguised as a
+     * 200 response, or a truncated download) instead of seeing an
+     * opaque "sha256 mismatch" line. The file is cleared again on the
+     * happy path right after the commit to install_root, so the
+     * staging area stays empty on a steady-state system. */
+    char staging[CAPYPKG_PATH_MAX];
+    int staged = 0;
+    if (build_payload_staging(avail, staging, sizeof(staging)) == 0 &&
+        g_capypkg_bytes_writer) {
+        if (g_capypkg_bytes_writer(staging, payload_buffer, payload_len) == 0) {
+            staged = 1;
+        } else {
+            klog(KLOG_WARN,
+                 "[audit] [capypkg] staging write failed; install continues");
+        }
+    }
+
     avail->state = CAPYPKG_STATE_VERIFYING;
 
     rc = capypkg_verify_payload(avail, payload_buffer, payload_len);
@@ -496,6 +556,8 @@ int capypkg_install(const char *name) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
              "[audit] [capypkg] payload-sha256 mismatch; install aborted");
+        /* Keep the staging file on verify failure: it is the only
+         * artifact the operator has to debug the upstream payload. */
         return rc;
     }
 
@@ -504,20 +566,29 @@ int capypkg_install(const char *name) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
              "[audit] [capypkg] signature verification failed; install aborted");
+        /* Same rationale as above: keep the staging file for audit. */
         return rc;
     }
 
-    (void)ensure_install_dirs(avail);
-
     char target[CAPYPKG_PATH_MAX];
     if (build_payload_target(avail, target, sizeof(target)) != 0) {
+        if (staged) cleanup_payload_staging(avail);
         return CAPYPKG_ERR_INVALID_ARG;
     }
     if (g_capypkg_bytes_writer(target, payload_buffer, payload_len) != 0) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
              "[audit] [capypkg] payload write failed; install aborted");
+        /* Keep the staging file: the commit failed, so the operator
+         * may want to manually copy the verified bytes into place. */
         return CAPYPKG_ERR_STORAGE;
+    }
+
+    /* Happy path: the bytes are committed in install_root and the
+     * staging copy is now redundant. Hygienise the staging directory
+     * so a steady-state system never accumulates leftover payloads. */
+    if (staged) {
+        cleanup_payload_staging(avail);
     }
 
     avail->state = CAPYPKG_STATE_STAGED;

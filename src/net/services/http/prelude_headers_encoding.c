@@ -31,6 +31,7 @@ void http_store_headers(const char *headers, size_t len,
                         struct http_response *resp) {
   size_t pos = 0;
   if (!headers || !resp) return;
+  resp->location[0] = '\0';
   while (pos + 1 < len) {
     if (headers[pos] == '\r' && headers[pos + 1] == '\n') {
       pos += 2;
@@ -53,9 +54,11 @@ void http_store_headers(const char *headers, size_t len,
     if (colon < line_end) {
       size_t name_len = colon - line_start;
       size_t value_start = colon + 1;
+      size_t full_value_len = 0;
       size_t value_len = 0;
       while (value_start < line_end && headers[value_start] == ' ') value_start++;
-      value_len = line_end - value_start;
+      full_value_len = line_end - value_start;
+      value_len = full_value_len;
       hdr = &resp->headers[resp->header_count++];
       if (name_len >= sizeof(hdr->name)) name_len = sizeof(hdr->name) - 1;
       if (value_len >= sizeof(hdr->value)) value_len = sizeof(hdr->value) - 1;
@@ -83,6 +86,29 @@ void http_store_headers(const char *headers, size_t len,
       if (http_streq_ci(hdr->name, "Transfer-Encoding") &&
           http_contains_ci(hdr->value, "chunked")) {
         resp->chunked = 1;
+      }
+      /* Capture the full Location header value into the dedicated
+       * resp->location buffer (HTTP_MAX_URL chars). The generic
+       * headers[].value array is intentionally capped at
+       * HTTP_MAX_HEADER_VALUE (256), which is way smaller than a
+       * GitHub Release / Azure SAS redirect target (~1700 bytes).
+       * Without this dedicated copy the redirect handler in
+       * http_get would consume a truncated URL, the next hop would
+       * send a request with a half-signature/half-jwt, the upstream
+       * would close the connection without responding, and the
+       * caller would see HTTP_ERR_RECV (rc=-6 "response receive
+       * failed") with no actionable diagnostic. */
+      if (http_streq_ci(hdr->name, "Location") &&
+          resp->location[0] == '\0') {
+        size_t loc_len = full_value_len;
+        if (loc_len >= sizeof(resp->location)) {
+          loc_len = sizeof(resp->location) - 1u;
+        }
+        for (size_t i = 0; i < loc_len; i++) {
+          unsigned char vc = (unsigned char)headers[value_start + i];
+          resp->location[i] = (vc < 0x20u || vc == 0x7Fu) ? '?' : (char)vc;
+        }
+        resp->location[loc_len] = '\0';
       }
     }
     pos = line_end;

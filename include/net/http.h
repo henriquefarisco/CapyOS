@@ -4,10 +4,24 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define HTTP_MAX_URL       1024
+/* HTTP buffer sizing.
+ *
+ * Real-world redirect chains (notably GitHub Release downloads served
+ * via release-assets.githubusercontent.com with SAS query strings or
+ * JWT-wrapped tokens) routinely produce 1500-1800 byte URLs and
+ * 1500-1800 byte `Location:` headers. HTTP_MAX_URL and HTTP_MAX_PATH
+ * therefore sit at 2048 to accommodate two doublings of the median
+ * SAS URL we observe in production. `Location:` is parsed into a
+ * dedicated, untruncated `http_response.location` buffer (see below),
+ * so HTTP_MAX_HEADER_VALUE only governs *other* headers and can stay
+ * small (Content-Type, ETag, ...) and HTTP_MAX_HEADERS is reduced
+ * from 24 to 16 to compensate for the larger path/url buffers in
+ * `struct http_request` (kept on the kernel stack inside http_get).
+ */
+#define HTTP_MAX_URL       2048
 #define HTTP_MAX_HOST      192
-#define HTTP_MAX_PATH      768
-#define HTTP_MAX_HEADERS   24
+#define HTTP_MAX_PATH      2048
+#define HTTP_MAX_HEADERS   16
 #define HTTP_MAX_HEADER_VALUE 256
 #define HTTP_RECV_BUF_SIZE 131072
 #define HTTP_MAX_RESPONSE_SIZE (1024 * 1024)
@@ -39,6 +53,12 @@ struct http_response {
   int status_code;
   struct http_header headers[HTTP_MAX_HEADERS];
   uint32_t header_count;
+  /* Dedicated, untruncated copy of the `Location:` response header
+   * (empty string if absent). Populated by http_store_headers in
+   * parallel with the generic headers[] array, so the redirect
+   * handler in http_get can consume the full URL even when the
+   * GitHub Release / Azure SAS chain emits a 1500+ byte target. */
+  char location[HTTP_MAX_URL];
   uint8_t *body;
   size_t body_len;
   size_t content_length;

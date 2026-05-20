@@ -223,5 +223,18 @@ const char *capypkg_result_label(int rc);
 #define CAPYPKG_REPOS_FILE    "/system/capypkg/repos.cfg"
 #define CAPYPKG_DB_FILE       "/system/capypkg/db.idx"
 #define CAPYPKG_CACHE_DIR     "/system/capypkg/cache"
+/* Staging area where the install pipeline lands the freshly fetched
+ * payload before it is verified (SHA-256 + signature) and committed
+ * to its final install_root. The directory is opt-in: it only exists
+ * if `ensure_install_dirs()` has been called at least once for a
+ * non-basic profile. Successful installs delete their staging file
+ * immediately after the commit; failed installs keep the file so the
+ * operator can audit it with `cat /var/capypkg/updates/<name>.bin`.
+ *
+ * The directory is also explicitly bounded by capypkg_manifest's
+ * `path_is_under()` check: install_root must stay under
+ * CAPYPKG_DIR_VAR or /opt, and CAPYPKG_DIR_UPDATES is a child of
+ * CAPYPKG_DIR_VAR so the staging path inherits the same sandbox. */
+#define CAPYPKG_DIR_UPDATES   "/var/capypkg/updates"
 
 #endif /* SERVICES_CAPYPKG_H */
