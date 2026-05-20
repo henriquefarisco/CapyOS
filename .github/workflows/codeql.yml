@@ -62,6 +62,16 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v6
 
+    - name: Checkout CapyUI sibling
+      shell: bash
+      run: |
+        CAPYUI_REF=main
+        if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+          CAPYUI_REF=develop
+        fi
+        git clone --depth 1 --branch "$CAPYUI_REF" \
+          https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+
     # Add any setup steps before running the `github/codeql-action/init` action.
     # This includes steps like installing compilers or runtimes (`actions/setup-node`
     # or others). This is typically only required for manual builds.
