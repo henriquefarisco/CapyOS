@@ -98,11 +98,19 @@ com separadores `---` no arquivo único.
 
 Publicar então:
 
-1. Cada `<repo>/build/capypkg/<name>-<v>.bin` na URL declarada em
-   `payload_url` (default: GitHub Release `v<version>` do repo);
-2. `modules-index.txt` em uma URL HTTPS estável (recomendado: GitHub
-   Release do repo publicador do índice; para CapyUI 0.7.0 o asset
-   esperado é `https://github.com/henriquefarisco/CapyUI/releases/download/v0.7.0/modules-index.txt`).
+1. Cada `<repo>/build/capypkg/<name>.bin` no canal `latest` do
+   GitHub Release do repo publicador. O `payload_url` gerado pelo
+   Makefile do CapyUI já aponta para esse canal estável:
+   `https://github.com/<owner>/<repo>/releases/latest/download/<name>.bin`.
+2. `modules-index.txt` no mesmo canal `latest`:
+   `https://github.com/<owner>/<repo>/releases/latest/download/modules-index.txt`.
+
+O canal `latest` é mantido por `.github/workflows/release-artifacts.yml`
+em cada repo publicador: todo push em `main` reconstroi os pacotes, move
+a tag `latest` para o novo commit e republica a Release `latest` com
+`make_latest: true`. O CapyOS não precisa saber qual semver é o atual;
+o redirect `/releases/latest/download/` sempre serve o último artefato
+validado.
 
 A URL do índice será referenciada em `profile.ini`. Não use a URL de
 um `.manifest` individual como `bootstrap_repo_url`: o adapter in-tree
@@ -200,9 +208,10 @@ sistema instalado, via TUI no framebuffer:
 2. Primeiro boot: wizard interativo abre automaticamente.
    - Etapas do wizard: idioma, layout teclado, hostname, tema, splash,
      usuário admin, senha admin, **seleção de módulos** (BASIC | FULL | CUSTOM).
-   - Se profile != BASIC: wizard pergunta URL do índice (Enter usa o asset
-     `modules-index.txt` da release CapyUI `v0.7.0`), grava
-     `/system/install/profile.ini` e dispara
+   - Se profile != BASIC: wizard pergunta URL do índice (Enter usa o
+     `modules-index.txt` servido pelo canal rolante `latest` do CapyUI
+     em `https://github.com/<owner>/CapyUI/releases/latest/download/`),
+     grava `/system/install/profile.ini` e dispara
      `capypkg_bootstrap_run_with_progress` que mostra
      `[modules] [i/N] instalando org.capyos.ui.desktop-session...` na tela.
 3. Após o sweep terminar com sucesso, o wizard chama `acpi_reboot` para
