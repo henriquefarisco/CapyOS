@@ -1,6 +1,7 @@
 # Manual module deploy runbook
 
-**Status:** autoritativo desde 2026-05-19 (atualizado com fluxo auto-bootstrap).
+**Status:** autoritativo desde 2026-05-19 (atualizado em alpha.241
+com wizard interativo e comando `capy`).
 **Audiência:** operador que vai instalar o CapyOS core e, em seguida,
 módulos remotos via os repositórios externos (`CapyAgent`,
 `CapyBrowser`, `CapyCodecs`, `CapyUI`, `CapyLang`, `CapyBenchmark`).
@@ -183,10 +184,48 @@ Aceitação:
 - arquivo aparece em `/var/capypkg/<nome>/<nome>.bin`;
 - `pkg-list --installed` mostra o pacote.
 
-## 4.A. Caminho automatizado por install profile
+## 4.A. Caminho oficial recomendado: wizard interativo do primeiro boot (alpha.241+)
 
-Se você configurou `/system/install/profile.ini` com `profile=full` ou
-`profile=custom`, o auto-bootstrap acontece **sem ação no terminal**:
+**Este é o fluxo padrão desde alpha.241**: o installer UEFI ficou minimalista
+(só disco + chave de recovery + confirmação) e TODA configuração de usuário
++ idioma + teclado + tema + seleção de módulos acontece no primeiro boot do
+sistema instalado, via TUI no framebuffer:
+
+1. ISO faz install do core (passo 2) e reboota.
+2. Primeiro boot: wizard interativo abre automaticamente.
+   - Etapas do wizard: idioma, layout teclado, hostname, tema, splash,
+     usuário admin, senha admin, **seleção de módulos** (BASIC | FULL | CUSTOM).
+   - Se profile != BASIC: wizard pergunta URL do índice (default oficial),
+     grava `/system/install/profile.ini` e dispara
+     `capypkg_bootstrap_run_with_progress` que mostra
+     `[modules] [i/N] instalando org.capyos.ui.desktop-session...` na tela.
+3. Após o sweep terminar com sucesso, o wizard chama `acpi_reboot` para
+   ativar os módulos recém-instalados.
+4. Segundo boot: gate de ativação encontra `org.capyos.ui.desktop-session/installed`,
+   `desktop_runtime_start` dispara, usuário vê o desktop.
+
+Sem necessidade de editar `profile.ini` manualmente ou rodar `pkg-*`.
+
+Para re-rodar tudo depois (ex: trocar profile, instalar módulo novo):
+
+```text
+capy wizard           # re-executa o assistente completo
+capy wizard --modules # re-executa SÓ a etapa de módulos
+capy install <nome>   # instala um módulo específico
+capy module list      # lista instalados
+capy update           # refresh do índice
+```
+
+## 4.B. Caminho automatizado por install profile pré-existente (avançado)
+
+Use quando você precisa **bypassar o wizard interativo** (por exemplo:
+provisionamento de fleet via imagem dourada com `profile.ini`
+pré-gravado no `/system/install/` antes do primeiro boot).
+
+Se `/system/install/profile.ini` já existe ao boot, o wizard ainda
+roda (não pula etapas do user), mas o auto-bootstrap em
+`kernel_service_poll_capypkg` também pode disparar 60s depois sem
+ação no terminal:
 
 1. ISO instala o core (passo 2).
 2. Primeiro boot até a sessão gráfica.

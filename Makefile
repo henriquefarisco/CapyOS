@@ -67,6 +67,52 @@ CFLAGS64  += $(EXTRA_CFLAGS64)
 DEPFLAGS64 := -MMD -MP
 LDFLAGS64 := -nostdlib
 
+# ── alpha.241 modular build profile ─────────────────────────────────────────
+# PROFILE selects which subsystems are linked into the kernel ELF:
+#   full      (default) — kernel + services + desktop session + apps
+#   core-only           — kernel + services + capysh only; desktop+apps off
+#
+# Desktop session, window manager and apps source code is OWNED by the
+# sibling CapyUI repo (since alpha.241). When CAPYUI_DIR points at a
+# valid sibling checkout the cross-repo compile path is used. When the
+# sibling is absent OR the migration has not been applied yet (run
+# `python3 tools/scripts/migrate_to_capyui.py --apply` to do it), the
+# build falls back to the legacy in-tree copies so existing checkouts
+# keep working during the transition.
+PROFILE ?= full
+ifneq ($(PROFILE),full)
+  ifneq ($(PROFILE),core-only)
+    $(error Unknown PROFILE=$(PROFILE); expected full or core-only)
+  endif
+endif
+
+# Keep this path relative by default. GNU Make's path functions split on
+# whitespace, and this workspace commonly lives under "Área de trabalho".
+CAPYUI_DIR ?= ../CapyUI
+ifneq ($(strip $(CAPYUI_DIR)),)
+  ifneq ($(wildcard $(CAPYUI_DIR)/src/desktop/desktop_runtime.c),)
+    $(info [build] CapyUI sibling detected; sourcing desktop+window+apps from $(CAPYUI_DIR)/src/)
+    DESKTOP_SRC_ROOT := $(CAPYUI_DIR)/src/desktop
+    WINDOW_SRC_ROOT  := $(CAPYUI_DIR)/src/window
+    APPS_SRC_ROOT    := $(CAPYUI_DIR)/src/apps
+  else
+    $(info [build] CapyUI present but desktop subtree not migrated yet; using in-tree fallback)
+    DESKTOP_SRC_ROOT := $(SRC_DIR)/gui/desktop
+    WINDOW_SRC_ROOT  := $(SRC_DIR)/gui/window
+    APPS_SRC_ROOT    := $(SRC_DIR)/apps
+  endif
+else
+  $(info [build] CapyUI sibling not found at ../CapyUI; using in-tree desktop sources)
+  DESKTOP_SRC_ROOT := $(SRC_DIR)/gui/desktop
+  WINDOW_SRC_ROOT  := $(SRC_DIR)/gui/window
+  APPS_SRC_ROOT    := $(SRC_DIR)/apps
+endif
+
+ifeq ($(PROFILE),core-only)
+  CFLAGS64 += -DCAPYOS_PROFILE_CORE_ONLY
+  $(info [build] PROFILE=core-only: kernel ELF will NOT include desktop+window+apps)
+endif
+
 # Toolchain EFI (gnu-efi)
 EFI_CC := x86_64-linux-gnu-gcc
 EFI_LD := x86_64-linux-gnu-ld
@@ -228,6 +274,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/config/first_boot/logging.o \
 	$(BUILD)/x86_64/config/first_boot/storage_users.o \
 	$(BUILD)/x86_64/config/first_boot/program.o \
+	$(BUILD)/x86_64/config/first_boot/modules.o \
 	$(BUILD)/x86_64/services/update_agent.o \
 	$(BUILD)/x86_64/services/update_agent_parse.o \
 	$(BUILD)/x86_64/services/update_agent_apply.o \
@@ -357,6 +404,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/shell/commands/system_control/recovery_login_verify.o \
 	$(BUILD)/x86_64/shell/commands/system_control/recovery_storage.o \
 	$(BUILD)/x86_64/shell/commands/system_control/capypkg_commands.o \
+	$(BUILD)/x86_64/shell/commands/system_control/capy_command.o \
 	$(BUILD)/x86_64/shell/commands/system_control/power_runtime_registry.o \
 	$(BUILD)/x86_64/shell/commands/network_common.o \
 	$(BUILD)/x86_64/shell/commands/network_diag.o \
@@ -479,6 +527,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/process.o \
 	$(BUILD)/x86_64/kernel/process_iter.o \
 	$(BUILD)/x86_64/kernel/embedded_progs.o \
+	$(BUILD)/x86_64/kernel/module_gate.o \
 	$(HELLO_BLOB_OBJ) \
 	$(EXECTARGET_BLOB_OBJ) \
 	$(CAPYSH_BLOB_OBJ) \
@@ -538,30 +587,46 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
 	$(BUILD)/x86_64/drivers/serial/serial_com1.o \
-	$(BUILD)/x86_64/gui/desktop/taskbar.o \
-	$(BUILD)/x86_64/gui/desktop/taskbar_menu.o \
-	$(BUILD)/x86_64/gui/desktop/taskbar_menu_input.o \
 	$(BUILD)/x86_64/security/sha512.o \
-	$(BUILD)/x86_64/gui/desktop/desktop.o \
-	$(BUILD)/x86_64/gui/desktop/desktop_mouse.o \
-	$(BUILD)/x86_64/gui/desktop/desktop_smoke_readiness.o \
-	$(BUILD)/x86_64/gui/desktop/desktop_icons.o \
-	$(BUILD)/x86_64/gui/desktop/desktop_icons_context.o \
-	$(BUILD)/x86_64/gui/desktop/desktop_runtime.o \
-	$(BUILD)/x86_64/apps/calculator.o \
-	$(BUILD)/x86_64/apps/file_manager.o \
-	$(BUILD)/x86_64/apps/file_manager_view.o \
-	$(BUILD)/x86_64/apps/file_manager_dnd.o \
-	$(BUILD)/x86_64/apps/text_editor.o \
-	$(BUILD)/x86_64/apps/task_manager.o \
-	$(BUILD)/x86_64/apps/settings.o \
-	$(BUILD)/x86_64/apps/settings_view.o \
-	$(BUILD)/x86_64/apps/settings_actions.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
-	$(BUILD)/x86_64/gui/window/window_manager.o \
-	$(BUILD)/x86_64/gui/window/window_dispatcher.o \
-	$(BUILD)/x86_64/gui/window/notification.o
+	$(DESKTOP_OBJS) \
+	$(WINDOW_OBJS) \
+	$(APPS_OBJS)
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
+
+# ── Desktop / window / apps object lists (alpha.241 modular profile) ────────
+# Empty when PROFILE=core-only; populated from CapyUI when sibling repo
+# is present (otherwise from the in-tree fallback path under src/gui|apps).
+ifeq ($(PROFILE),full)
+DESKTOP_OBJS := \
+	$(BUILD)/x86_64/capyui-desktop/desktop.o \
+	$(BUILD)/x86_64/capyui-desktop/desktop_runtime.o \
+	$(BUILD)/x86_64/capyui-desktop/desktop_mouse.o \
+	$(BUILD)/x86_64/capyui-desktop/desktop_icons.o \
+	$(BUILD)/x86_64/capyui-desktop/desktop_icons_context.o \
+	$(BUILD)/x86_64/capyui-desktop/desktop_smoke_readiness.o \
+	$(BUILD)/x86_64/capyui-desktop/taskbar.o \
+	$(BUILD)/x86_64/capyui-desktop/taskbar_menu.o \
+	$(BUILD)/x86_64/capyui-desktop/taskbar_menu_input.o
+WINDOW_OBJS := \
+	$(BUILD)/x86_64/capyui-window/window_manager.o \
+	$(BUILD)/x86_64/capyui-window/window_dispatcher.o \
+	$(BUILD)/x86_64/capyui-window/notification.o
+APPS_OBJS := \
+	$(BUILD)/x86_64/capyui-apps/calculator.o \
+	$(BUILD)/x86_64/capyui-apps/file_manager.o \
+	$(BUILD)/x86_64/capyui-apps/file_manager_view.o \
+	$(BUILD)/x86_64/capyui-apps/file_manager_dnd.o \
+	$(BUILD)/x86_64/capyui-apps/text_editor.o \
+	$(BUILD)/x86_64/capyui-apps/task_manager.o \
+	$(BUILD)/x86_64/capyui-apps/settings.o \
+	$(BUILD)/x86_64/capyui-apps/settings_view.o \
+	$(BUILD)/x86_64/capyui-apps/settings_actions.o
+else
+DESKTOP_OBJS :=
+WINDOW_OBJS :=
+APPS_OBJS :=
+endif
 
 EFI_LOADER_SRCS = \
 	$(SRC_DIR)/boot/uefi_loader/prelude_boot_files.c \
@@ -591,6 +656,25 @@ $(BUILD)/boot:
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
+# ── alpha.241: cross-repo compile rules for CapyUI-owned subtrees ───────────
+# These pattern rules build desktop/window/apps from whatever source
+# directory CAPYUI_DIR resolved to above (either the sibling CapyUI repo
+# after migration, or the in-tree fallback). The object output paths
+# (`capyui-desktop/`, `capyui-window/`, `capyui-apps/`) deliberately do
+# NOT match the in-tree source tree under `src/` to make the modular
+# boundary obvious in build logs.
+$(BUILD)/x86_64/capyui-desktop/%.o: $(DESKTOP_SRC_ROOT)/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) -I$(DESKTOP_SRC_ROOT) -I$(DESKTOP_SRC_ROOT)/internal $(DEPFLAGS64) -c $< -o $@
+
+$(BUILD)/x86_64/capyui-window/%.o: $(WINDOW_SRC_ROOT)/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
+$(BUILD)/x86_64/capyui-apps/%.o: $(APPS_SRC_ROOT)/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) -I$(APPS_SRC_ROOT)/internal $(DEPFLAGS64) -c $< -o $@
 
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
 	@mkdir -p $(dir $@)
@@ -1307,8 +1391,8 @@ TEST_SRCS   := \
                \
                tests/gui/test_gui_event.c tests/gui/test_gui_event_helpers.c src/gui/core/event.c \
                tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_theme.c \
-               tests/gui/test_gui_window_dispatcher.c tests/gui/test_gui_window_dispatcher_lifecycle.c src/gui/window/window_dispatcher.c \
-               tests/gui/test_desktop_smoke_readiness.c src/gui/desktop/desktop_smoke_readiness.c \
+               tests/gui/test_gui_window_dispatcher.c tests/gui/test_gui_window_dispatcher_lifecycle.c $(WINDOW_SRC_ROOT)/window_dispatcher.c \
+               tests/gui/test_desktop_smoke_readiness.c $(DESKTOP_SRC_ROOT)/desktop_smoke_readiness.c \
                \
                tests/net/test_http_encoding.c src/net/services/http_encoding.c \
                tests/net/test_net_dns.c src/net/services/dns.c \

@@ -264,204 +264,21 @@ static int shell_bootstrap_filesystem(
           io,
           "[fs] aviso: nao foi possivel persistir hash da chave do volume.\n");
     }
-    /* Silent provisioning: when installer config is available and this is
-       a genuine first boot, provision admin user + config + marker here
-       (where ops->write_text_file works reliably) so the system boots
-       directly to login with no wizard. */
+    /* alpha.241: silent provisioning retired.
+     *
+     * The installer no longer carries BOOT_CONFIG_FLAG_HAS_SETUP_DATA,
+     * which means `system_installer_config_available()` will always
+     * return 0 here. The first-boot wizard (TUI in
+     * `src/config/first_boot/program.c::first_boot_setup_interactive`)
+     * is now the single source of truth for admin user, language,
+     * keyboard, theme, hostname, splash and module selection. The
+     * previous silent path that ran before the wizard has been removed
+     * to avoid two sources of truth diverging. */
     if (is_first_boot && system_installer_config_available()) {
-      int provision_ok = 1;
       io_print(io,
-               "[setup] Provisionamento automatico via configuracao do "
-               "instalador.\n");
-      const char *hostname = system_installer_hostname();
-      const char *theme = system_installer_theme();
-      const char *admin_user = system_installer_admin_username();
-      const char *admin_pass = system_installer_admin_password();
-      const char *lang = (state->handoff && state->handoff->boot_language[0])
-                             ? state->handoff->boot_language
-                             : "en";
-      int splash = system_installer_splash_enabled();
-      uint32_t admin_uid = USER_UID_FIRST_REGULAR;
-      uint32_t admin_gid = USER_GID_FIRST_REGULAR;
-      if (!hostname || !hostname[0]) hostname = "capyos-node";
-      if (!theme || !theme[0]) theme = "capyos";
-      if (!admin_user || !admin_user[0]) admin_user = "admin";
-      if (splash < 0) splash = 1;
-      /* Create admin home directory */
-      char admin_home[64];
-      admin_home[0] = '\0';
-      local_copy(admin_home, sizeof(admin_home), "/home/");
-      {
-        size_t base = 0;
-        while (admin_home[base]) ++base;
-        size_t ui = 0;
-        while (admin_user[ui] && base + 1 < sizeof(admin_home)) {
-          admin_home[base++] = admin_user[ui++];
-        }
-        admin_home[base] = '\0';
-      }
-      if (userdb_next_ids(&admin_uid, &admin_gid) != 0) {
-        io_print(io,
-                 "[setup] Aviso: falha ao reservar UID/GID do "
-                 "administrador.\n");
-        provision_ok = 0;
-      }
-      /* Create admin user record */
-      if (provision_ok && admin_pass && admin_pass[0]) {
-        struct user_record admin;
-        struct user_record verify_admin;
-        int admin_record_ready = 0;
-        user_record_clear(&admin);
-        user_record_clear(&verify_admin);
-        if (userdb_find(admin_user, &admin) == 0) {
-          if (admin.home[0] == '/') {
-            local_copy(admin_home, sizeof(admin_home), admin.home);
-          }
-          if (user_home_prepare(admin_home, admin.uid, admin.gid) != 0) {
-            io_print(io,
-                     "[setup] Aviso: falha ao reparar diretorio pessoal do "
-                     "administrador existente.\n");
-            provision_ok = 0;
-          } else {
-            io_print(io,
-                     "[setup] Usuario administrador ja existente; "
-                     "reutilizando registro atual.\n");
-            admin_record_ready = 1;
-          }
-        } else if (user_home_prepare(admin_home, admin_uid, admin_gid) != 0) {
-          io_print(io,
-                   "[setup] Aviso: falha ao preparar diretorio pessoal do "
-                   "administrador.\n");
-          provision_ok = 0;
-        } else if (user_record_init(admin_user, admin_pass, "admin",
-                                    admin_uid, admin_gid, admin_home,
-                                    &admin) == 0) {
-          if (userdb_add(&admin) == 0) {
-            io_print(io,
-                     "[setup] Usuario administrador criado com sucesso.\n");
-            admin_record_ready = 1;
-          } else {
-            io_print(io,
-                     "[setup] Aviso: falha ao salvar usuario administrador.\n");
-            provision_ok = 0;
-          }
-        } else {
-          io_print(io,
-                   "[setup] Aviso: falha ao construir registro do admin.\n");
-          provision_ok = 0;
-        }
-        if (provision_ok && admin_record_ready) {
-          struct super_block *root_sb = vfs_root();
-          if (root_sb && root_sb->bdev) {
-            buffer_cache_sync(root_sb->bdev);
-          }
-          if (userdb_authenticate(admin_user, admin_pass, &verify_admin) != 0) {
-            if (userdb_set_password(admin_user, admin_pass) != 0) {
-              io_print(io,
-                       "[setup] Aviso: falha ao reparar credenciais do "
-                       "administrador provisionado.\n");
-              provision_ok = 0;
-            } else if (root_sb && root_sb->bdev) {
-              buffer_cache_sync(root_sb->bdev);
-            }
-          }
-          if (provision_ok &&
-              userdb_authenticate(admin_user, admin_pass, &verify_admin) != 0) {
-            io_print(io,
-                     "[setup] Aviso: falha ao validar credenciais do "
-                     "administrador provisionado.\n");
-            provision_ok = 0;
-          } else if (user_prefs_save_language(&verify_admin, lang) != 0) {
-            io_print(io,
-                     "[setup] Aviso: falha ao gravar preferencias do "
-                     "administrador.\n");
-          }
-        }
-        user_record_clear(&admin);
-        user_record_clear(&verify_admin);
-        system_installer_clear_password();
-      } else if (!admin_pass || !admin_pass[0]) {
-        io_print(io,
-                 "[setup] Aviso: senha do administrador ausente no "
-                 "provisionamento automatico.\n");
-        provision_ok = 0;
-      }
-      /* Build and write /system/config.ini */
-      {
-        const char *kbd = keyboard_current_layout();
-        if (!kbd || !kbd[0]) kbd = "us";
-        const char *splash_str = splash ? "enabled" : "disabled";
-        char cfg[512];
-        cfg[0] = '\0';
-        local_copy(cfg, sizeof(cfg), "hostname=");
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *v = hostname; size_t vi = 0;
-          while (v[vi] && p + 1 < sizeof(cfg)) cfg[p++] = v[vi++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *s = "\ntheme="; size_t si = 0;
-          while (s[si] && p + 1 < sizeof(cfg)) cfg[p++] = s[si++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *v = theme; size_t vi = 0;
-          while (v[vi] && p + 1 < sizeof(cfg)) cfg[p++] = v[vi++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *s = "\nkeyboard="; size_t si = 0;
-          while (s[si] && p + 1 < sizeof(cfg)) cfg[p++] = s[si++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *v = kbd; size_t vi = 0;
-          while (v[vi] && p + 1 < sizeof(cfg)) cfg[p++] = v[vi++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *s = "\nlanguage="; size_t si = 0;
-          while (s[si] && p + 1 < sizeof(cfg)) cfg[p++] = s[si++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *v = lang; size_t vi = 0;
-          while (v[vi] && p + 1 < sizeof(cfg)) cfg[p++] = v[vi++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *s = "\nupdate_channel=stable\nnetwork_mode=dhcp\n"
-                          "service_target=network\nsplash="; size_t si = 0;
-          while (s[si] && p + 1 < sizeof(cfg)) cfg[p++] = s[si++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *v = splash_str; size_t vi = 0;
-          while (v[vi] && p + 1 < sizeof(cfg)) cfg[p++] = v[vi++];
-          cfg[p] = '\0'; }
-        { size_t p = 0; while (cfg[p]) ++p;
-          const char *s = "\nipv4=0.0.0.0\nmask=0.0.0.0\n"
-                          "gateway=0.0.0.0\ndns=0.0.0.0\n"; size_t si = 0;
-          while (s[si] && p + 1 < sizeof(cfg)) cfg[p++] = s[si++];
-          cfg[p] = '\0'; }
-        if (ops->write_text_file("/system/config.ini", cfg) == 0) {
-          io_print(io, "[setup] /system/config.ini gravado.\n");
-        } else {
-          io_print(io,
-                   "[setup] Aviso: falha ao gravar /system/config.ini.\n");
-          provision_ok = 0;
-        }
-      }
-      /* Mark first boot complete */
-      if (provision_ok &&
-          ops->write_text_file("/system/first-run.done", "completed\n") == 0) {
-        io_print(io, "[setup] Provisionamento automatico concluido.\n");
-      } else if (provision_ok) {
-        io_print(io,
-                 "[setup] Aviso: falha ao marcar first-run.done.\n");
-      } else {
-        io_print(io,
-                 "[setup] Provisionamento automatico incompleto; mantendo "
-                 "first boot pendente.\n");
-      }
-      /* Sync */
-      {
-        struct super_block *rsb = vfs_root();
-        if (rsb && rsb->bdev)
-          buffer_cache_sync(rsb->bdev);
-      }
+               "[setup] Legacy installer handoff detected (HAS_SETUP_DATA);\n"
+               "[setup] ignoring it and deferring to the in-kernel wizard.\n");
+      system_installer_clear_password();
     }
   } else {
     /* Persistent volume unavailable — try recovery first, then always

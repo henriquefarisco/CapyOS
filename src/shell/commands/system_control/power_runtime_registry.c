@@ -400,6 +400,8 @@ static void init_system_control_commands(void) {
   g_system_control_commands[37].handler = cmd_pkg_source_remove;
   g_system_control_commands[38].name = "pkg-bootstrap";
   g_system_control_commands[38].handler = cmd_pkg_bootstrap;
+  g_system_control_commands[39].name = "capy";
+  g_system_control_commands[39].handler = cmd_capy;
   g_system_control_commands_initialized = 1;
 }
 
@@ -407,7 +409,7 @@ const struct shell_command *shell_commands_system_control(size_t *count) {
   /* keep the count in sync with the array size declared above. */
   init_system_control_commands();
   if (count) {
-    *count = 39;
+    *count = 40;
   }
   return g_system_control_commands;
 }

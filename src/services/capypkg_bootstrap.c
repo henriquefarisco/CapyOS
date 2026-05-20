@@ -116,7 +116,22 @@ static int profile_install_list_contains(const char *list, const char *name) {
     return 0;
 }
 
-int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
+/* Internal: emit a progress event when a callback is set. */
+static void emit_progress(capypkg_bootstrap_progress_fn fn,
+                          void *ctx,
+                          enum capypkg_bootstrap_event event,
+                          const char *name,
+                          int index, int total, int rc) {
+    if (!fn) return;
+    fn(event, name ? name : "", index, total, rc, ctx);
+}
+
+int capypkg_bootstrap_run_with_progress(
+        int force,
+        int *out_installed,
+        int *out_failed,
+        capypkg_bootstrap_progress_fn progress,
+        void *ctx) {
     int installed = 0;
     int failed = 0;
     struct install_profile profile;
@@ -132,6 +147,8 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
 
     if (!force && profile_marker_exists()) {
         /* Bootstrap already ran successfully once; no-op. */
+        emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE,
+                      NULL, 0, 0, 0);
         return INSTALL_PROFILE_OK;
     }
 
@@ -149,10 +166,14 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
                                    "kind=basic\n");
         klog(KLOG_INFO,
              "[audit] [capypkg] bootstrap: profile=basic, no modules");
+        emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE,
+                      NULL, 0, 0, 0);
         return INSTALL_PROFILE_OK;
     }
 
     /* Register repository (idempotent). */
+    emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_REPO_REGISTER,
+                  profile.repo_name, 0, 0, 0);
     int rrc = capypkg_repo_add(profile.repo_name, profile.repo_url,
                                profile.repo_signed ? 1 : 0);
     if (rrc != CAPYPKG_OK && rrc != CAPYPKG_ERR_ALREADY) {
@@ -163,6 +184,8 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
 
     /* Fetch the index. If this fails the bootstrap is incomplete and
      * the marker is NOT written so the next poll can retry. */
+    emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH,
+                  profile.repo_url, 0, 0, 0);
     int frc = capypkg_fetch_index();
     if (frc != CAPYPKG_OK) {
         klog(KLOG_WARN,
@@ -170,10 +193,26 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
         return INSTALL_PROFILE_ERR_STORAGE;
     }
 
+    /* First pass: count packages that will actually be installed so
+     * the progress UI can show "[i/N] name" deterministically. */
+    size_t count = capypkg_available_count();
+    int planned = 0;
+    for (size_t i = 0u; i < count; ++i) {
+        struct capypkg_entry entry;
+        if (capypkg_available_get_at(i, &entry) != CAPYPKG_OK) continue;
+        if (profile.kind == INSTALL_PROFILE_CUSTOM) {
+            if (!profile_install_list_contains(profile.install_list,
+                                               entry.name)) {
+                continue;
+            }
+        }
+        ++planned;
+    }
+
     /* Install every package in the catalog (or the custom subset).
      * Each per-package failure is counted but does not abort the
      * sweep: a single bad package should not block the rest. */
-    size_t count = capypkg_available_count();
+    int progressed = 0;
     for (size_t i = 0u; i < count; ++i) {
         struct capypkg_entry entry;
         if (capypkg_available_get_at(i, &entry) != CAPYPKG_OK) {
@@ -182,14 +221,27 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
         if (profile.kind == INSTALL_PROFILE_CUSTOM) {
             if (!profile_install_list_contains(profile.install_list,
                                                entry.name)) {
+                emit_progress(progress, ctx,
+                              CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_SKIP,
+                              entry.name, 0, planned, 0);
                 continue;
             }
         }
+        ++progressed;
+        emit_progress(progress, ctx,
+                      CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_BEGIN,
+                      entry.name, progressed, planned, 0);
         int irc = capypkg_install(entry.name);
         if (irc == CAPYPKG_OK || irc == CAPYPKG_ERR_ALREADY) {
             ++installed;
+            emit_progress(progress, ctx,
+                          CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_OK,
+                          entry.name, progressed, planned, irc);
         } else {
             ++failed;
+            emit_progress(progress, ctx,
+                          CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_FAIL,
+                          entry.name, progressed, planned, irc);
         }
     }
 
@@ -212,5 +264,13 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
         klog(KLOG_WARN,
              "[audit] [capypkg] bootstrap: completed with per-package failures");
     }
+    emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE,
+                  NULL, installed, planned, failed);
     return failed == 0 ? INSTALL_PROFILE_OK : INSTALL_PROFILE_ERR_STORAGE;
+}
+
+/* Backwards-compatible silent entry point: just forwards. */
+int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed) {
+    return capypkg_bootstrap_run_with_progress(force, out_installed,
+                                               out_failed, NULL, NULL);
 }

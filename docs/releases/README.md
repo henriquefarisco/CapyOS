@@ -9,6 +9,9 @@ Indice das release notes mantidas no repositorio.
 
 ## Historico recente
 
+- `capyos-0.8.0-alpha.241+20260519.md`
+  - Higienizacao end-to-end: wizard interativo de primeiro boot com selecao de modulos + progress, sources de desktop session/window/apps migrados para CapyUI 0.7.0 (build cross-repo via CAPYUI_DIR + PROFILE=full|core-only), activation gate de modulos, comando `capy` unificado, installer UEFI minimalista (so disco + chave de recovery), silent provisioning eliminado.
+
 - `capyos-0.8.0-alpha.240+20260519.md`
   - Circuito modular de instalacao e deploy: install profile, bootstrap capypkg, comando `pkg-bootstrap`, target `make modules-index` e formato de pacote dos repos externos.
 

@@ -126,8 +126,36 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   }
   Print(L"\r\n\r\n");
 
-  /* --- Step 1: Installer/system language --- */
+  /*
+   * alpha.241: installer UEFI is intentionally minimal.
+   *
+   * The installer no longer asks for language, keyboard, hostname,
+   * theme or admin credentials. All of those are collected by the
+   * first-boot wizard inside the kernel (`first_boot_setup_interactive`)
+   * the first time the freshly installed system boots. This keeps the
+   * installer ISO focused on disk preparation and avoids duplicating
+   * UI between two contexts (UEFI loader and the kernel TUI).
+   *
+   * The only thing that must happen here is generating the volume
+   * recovery key — it has to be persisted to boot_cfg BEFORE the FAT32
+   * write so the kernel can mount the encrypted DATA partition on first
+   * boot. We print the key once so the operator can record it.
+   */
   installer_language_t install_language = INSTALLER_LANG_EN;
+  /* alpha.241: install_language stays at EN for this minimal installer.
+   * The first-boot wizard inside the kernel collects the real language
+   * choice from the operator and writes it to /system/config.ini. */
+  CHAR16 keyboard_layout[16] = L"us";
+  CHAR16 hostname_in[32]     = L"capyos-node";
+  CHAR16 theme_in[16]        = L"capyos";
+  CHAR16 admin_user_in[32]   = L"admin";
+  /* admin_pass_in stays empty: the kernel wizard refuses to login
+   * with the empty default and forces the operator to set a real one
+   * on first boot. boot_cfg therefore carries no usable password. */
+  CHAR16 admin_pass_in[64]   = L"";
+  UINT8 splash_enabled = 1;
+
+#if 0 /* alpha.241: removed installer-side prompts (Steps 1-6). */
   CHAR16 language_in[32];
   Print(L"=== Language ===\r\n\r\n");
   Print(L"  [1] English\r\n");
@@ -350,6 +378,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     }
   }
   Print(L"\r\n");
+#endif /* alpha.241: end of removed installer prompts (Steps 1-6). */
 
   /* --- Step 7: Volume key guidance --- */
   CHAR16 recovery_key[64];
@@ -360,94 +389,25 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     Print(L"[UEFI] Falha ao gerar chave de volume.\r\n");
     return EFI_DEVICE_ERROR;
   }
-  if (install_language == INSTALLER_LANG_PT_BR) {
-    Print(L"\r\n=== Chave do Volume Cifrado ===\r\n\r\n");
-    Print(L"Chave gerada automaticamente para o volume:\r\n");
-    Print(L"  %s\r\n\r\n", recovery_key);
-    Print(L"Guarde essa chave em local seguro.\r\n");
-    Print(L"No primeiro boot ela sera usada para montar/inicializar o volume cifrado.\r\n");
-    Print(L"Formato aceito no sistema: letras/numeros, hifens opcionais.\r\n");
-    Print(L"\r\nValidacao manual da chave esta desativada nesta fase.\r\n");
-    Print(L"Pressione ENTER para continuar...");
-  } else if (install_language == INSTALLER_LANG_ES) {
-    Print(L"\r\n=== Clave del Volumen Cifrado ===\r\n\r\n");
-    Print(L"Clave generada automaticamente para el volumen:\r\n");
-    Print(L"  %s\r\n\r\n", recovery_key);
-    Print(L"Guarda esta clave en un lugar seguro.\r\n");
-    Print(L"En el primer arranque sera usada para montar/inicializar el volumen cifrado.\r\n");
-    Print(L"Formato aceptado: letras/numeros, guiones opcionales.\r\n");
-    Print(L"\r\nLa validacion manual de la clave esta deshabilitada en esta fase.\r\n");
-    Print(L"Presiona ENTER para continuar...");
-  } else {
-    Print(L"\r\n=== Encrypted Volume Key ===\r\n\r\n");
-    Print(L"Automatically generated key for the volume:\r\n");
-    Print(L"  %s\r\n\r\n", recovery_key);
-    Print(L"Store this key in a safe place.\r\n");
-    Print(L"It will be used on the first boot to mount/initialize the encrypted volume.\r\n");
-    Print(L"Accepted format: letters/numbers, hyphens optional.\r\n");
-    Print(L"\r\nManual key validation is disabled at this stage.\r\n");
-    Print(L"Press ENTER to continue...");
-  }
-  CHAR16 continue_line[8];
-  uefi_readline(st, continue_line, sizeof(continue_line) / sizeof(continue_line[0]),
-                FALSE);
-  if (install_language == INSTALLER_LANG_PT_BR) {
-    Print(L"[info] Layout selecionado para o setup: %s\r\n", keyboard_layout);
-    Print(L"[info] Idioma padrao do sistema: %s\r\n\r\n",
-          installer_language_code(install_language));
-  } else if (install_language == INSTALLER_LANG_ES) {
-    Print(L"[info] Layout seleccionado para el setup: %s\r\n", keyboard_layout);
-    Print(L"[info] Idioma predeterminado del sistema: %s\r\n\r\n",
-          installer_language_code(install_language));
-  } else {
-    Print(L"[info] Selected setup layout: %s\r\n", keyboard_layout);
-    Print(L"[info] System default language: %s\r\n\r\n",
-          installer_language_code(install_language));
-  }
-
-  /* --- Step 8: Confirm installation --- */
-  if (install_language == INSTALLER_LANG_PT_BR) {
-    Print(L"=== Confirmacao Final ===\r\n\r\n");
-    Print(L"Layout teclado: %s\r\n", keyboard_layout);
-    Print(L"Idioma padrao: %s\r\n", installer_language_code(install_language));
-    Print(L"Hostname: %s\r\n", hostname_in);
-    Print(L"Tema: %s\r\n", theme_in);
-    Print(L"Usuario administrador: %s\r\n", admin_user_in);
-    Print(L"Disco: %lu MiB (sera APAGADO)\r\n",
-          (disk_bytes / (1024ULL * 1024ULL)));
-    Print(L"\r\nConfirmar instalacao? [S/n]: ");
-  } else if (install_language == INSTALLER_LANG_ES) {
-    Print(L"=== Confirmacion Final ===\r\n\r\n");
-    Print(L"Layout teclado: %s\r\n", keyboard_layout);
-    Print(L"Idioma predeterminado: %s\r\n",
-          installer_language_code(install_language));
-    Print(L"Hostname: %s\r\n", hostname_in);
-    Print(L"Tema: %s\r\n", theme_in);
-    Print(L"Usuario administrador: %s\r\n", admin_user_in);
-    Print(L"Disco: %lu MiB (sera BORRADO)\r\n",
-          (disk_bytes / (1024ULL * 1024ULL)));
-    Print(L"\r\nConfirmar instalacion? [S/n]: ");
-  } else {
-    Print(L"=== Final Confirmation ===\r\n\r\n");
-    Print(L"Keyboard layout: %s\r\n", keyboard_layout);
-    Print(L"Default language: %s\r\n", installer_language_code(install_language));
-    Print(L"Hostname: %s\r\n", hostname_in);
-    Print(L"Theme: %s\r\n", theme_in);
-    Print(L"Administrator user: %s\r\n", admin_user_in);
-    Print(L"Disk: %lu MiB (WILL BE ERASED)\r\n",
-          (disk_bytes / (1024ULL * 1024ULL)));
-    Print(L"\r\nConfirm installation? [Y/n]: ");
-  }
+  /* alpha.241: minimal volume-key disclosure and confirmation.
+   *
+   * The recovery key MUST be shown here because the operator has no
+   * other opportunity to record it before the kernel mounts the
+   * encrypted DATA partition. Everything else (language, keyboard,
+   * hostname, theme, admin credentials, module selection) is now
+   * collected by the in-kernel wizard, not here. */
+  Print(L"\r\n=== Volume Recovery Key ===\r\n\r\n");
+  Print(L"  %s\r\n\r\n", recovery_key);
+  Print(L"Record this key. The first-boot wizard inside CapyOS will\r\n");
+  Print(L"collect language, keyboard, hostname, theme, admin user,\r\n");
+  Print(L"password and module selection on the installed system.\r\n\r\n");
+  Print(L"Target disk: %lu MiB (WILL BE ERASED)\r\n",
+        (disk_bytes / (1024ULL * 1024ULL)));
+  Print(L"Confirm installation? [Y/n]: ");
   CHAR16 confirm[8];
   uefi_readline(st, confirm, 8, FALSE);
   if (confirm[0] == L'n' || confirm[0] == L'N') {
-    if (install_language == INSTALLER_LANG_PT_BR) {
-      Print(L"[UEFI] Instalacao cancelada pelo usuario.\r\n");
-    } else if (install_language == INSTALLER_LANG_ES) {
-      Print(L"[UEFI] Instalacion cancelada por el usuario.\r\n");
-    } else {
-      Print(L"[UEFI] Installation cancelled by the user.\r\n");
-    }
+    Print(L"[UEFI] Installation cancelled by the user.\r\n");
     return EFI_ABORTED;
   }
   Print(L"\r\n");
@@ -532,7 +492,12 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   bootcfg_clear(&boot_cfg);
   boot_cfg.magic = BOOT_CONFIG_MAGIC;
   boot_cfg.version = BOOT_CONFIG_VERSION;
-  boot_cfg.flags = BOOT_CONFIG_FLAG_HAS_VOLUME_KEY | BOOT_CONFIG_FLAG_HAS_SETUP_DATA;
+  /* alpha.241: BOOT_CONFIG_FLAG_HAS_SETUP_DATA intentionally omitted.
+   * The kernel's silent-provisioning path is being retired; the
+   * first-boot wizard now collects user/hostname/theme/etc. directly.
+   * Defaults below stay for backward compatibility with older boot
+   * config consumers but the kernel ignores them when the flag is off. */
+  boot_cfg.flags = BOOT_CONFIG_FLAG_HAS_VOLUME_KEY;
   char16_to_ascii(boot_cfg.keyboard_layout, sizeof(boot_cfg.keyboard_layout),
                   keyboard_layout);
   char16_to_ascii(boot_cfg.language, sizeof(boot_cfg.language),

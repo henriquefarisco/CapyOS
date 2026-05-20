@@ -211,6 +211,89 @@ static void test_signed_repo_flag(void) {
     EXPECT(profile.repo_signed == 1u, "signed flag is 1");
 }
 
+static void test_format_basic_round_trip(void) {
+    struct install_profile profile;
+    install_profile_reset(&profile);
+    char buf[256];
+    size_t len = 0;
+    int rc = install_profile_format(&profile, buf, sizeof(buf), &len);
+    EXPECT(rc == INSTALL_PROFILE_OK, "basic format ok");
+    EXPECT(strstr(buf, "profile=basic\n") != NULL, "kind line basic present");
+
+    struct install_profile reparsed;
+    rc = install_profile_parse(buf, len, &reparsed);
+    EXPECT(rc == INSTALL_PROFILE_OK, "basic round-trip parses");
+    EXPECT(reparsed.kind == INSTALL_PROFILE_BASIC, "basic kind preserved");
+}
+
+static void test_format_full_round_trip(void) {
+    struct install_profile profile;
+    install_profile_reset(&profile);
+    profile.kind = INSTALL_PROFILE_FULL;
+    snprintf(profile.repo_name, sizeof(profile.repo_name), "modules");
+    snprintf(profile.repo_url, sizeof(profile.repo_url),
+             "https://example.org/modules-index.txt");
+    profile.repo_signed = 0u;
+    profile.valid = 1u;
+
+    char buf[512];
+    size_t len = 0;
+    int rc = install_profile_format(&profile, buf, sizeof(buf), &len);
+    EXPECT(rc == INSTALL_PROFILE_OK, "full format ok");
+    EXPECT(strstr(buf, "profile=full\n") != NULL, "kind full present");
+    EXPECT(strstr(buf, "bootstrap_repo_name=modules\n") != NULL, "name line");
+    EXPECT(strstr(buf, "bootstrap_repo_url=https://example.org/modules-index.txt\n") != NULL, "url line");
+    EXPECT(strstr(buf, "bootstrap_repo_signed=0\n") != NULL, "signed=0 line");
+
+    struct install_profile reparsed;
+    rc = install_profile_parse(buf, len, &reparsed);
+    EXPECT(rc == INSTALL_PROFILE_OK, "full round-trip parses");
+    EXPECT(reparsed.kind == INSTALL_PROFILE_FULL, "full kind preserved");
+    EXPECT(strcmp(reparsed.repo_name, "modules") == 0, "repo_name preserved");
+}
+
+static void test_format_custom_with_install_list(void) {
+    struct install_profile profile;
+    install_profile_reset(&profile);
+    profile.kind = INSTALL_PROFILE_CUSTOM;
+    snprintf(profile.repo_name, sizeof(profile.repo_name), "modules");
+    snprintf(profile.repo_url, sizeof(profile.repo_url),
+             "https://example.org/index.txt");
+    snprintf(profile.install_list, sizeof(profile.install_list),
+             "org.capyos.ui.desktop-session,org.capyos.browser.core");
+    profile.repo_signed = 1u;
+    profile.valid = 1u;
+
+    char buf[512];
+    size_t len = 0;
+    int rc = install_profile_format(&profile, buf, sizeof(buf), &len);
+    EXPECT(rc == INSTALL_PROFILE_OK, "custom format ok");
+    EXPECT(strstr(buf, "bootstrap_repo_signed=1\n") != NULL, "signed=1");
+    EXPECT(strstr(buf, "bootstrap_install=org.capyos.ui.desktop-session,org.capyos.browser.core\n") != NULL,
+           "install list preserved");
+
+    struct install_profile reparsed;
+    rc = install_profile_parse(buf, len, &reparsed);
+    EXPECT(rc == INSTALL_PROFILE_OK, "custom round-trip parses");
+    EXPECT(reparsed.kind == INSTALL_PROFILE_CUSTOM, "custom kind preserved");
+    EXPECT(reparsed.repo_signed == 1u, "signed preserved");
+}
+
+static void test_format_rejects_too_small_buffer(void) {
+    struct install_profile profile;
+    install_profile_reset(&profile);
+    profile.kind = INSTALL_PROFILE_FULL;
+    snprintf(profile.repo_name, sizeof(profile.repo_name), "modules");
+    snprintf(profile.repo_url, sizeof(profile.repo_url),
+             "https://example.org/modules-index.txt");
+    profile.valid = 1u;
+
+    char tiny[8];
+    int rc = install_profile_format(&profile, tiny, sizeof(tiny), NULL);
+    EXPECT(rc == INSTALL_PROFILE_ERR_INVALID_ARG,
+           "format rejects too-small buffer");
+}
+
 static void test_labels(void) {
     EXPECT(strcmp(install_profile_kind_label(INSTALL_PROFILE_BASIC),
                   "basic") == 0, "label basic");
@@ -240,6 +323,11 @@ int run_install_profile_tests(void) {
     test_malformed_line_rejected();
     test_control_byte_rejected();
     test_signed_repo_flag();
+    /* alpha.241: serializer round-trip tests. */
+    test_format_basic_round_trip();
+    test_format_full_round_trip();
+    test_format_custom_with_install_list();
+    test_format_rejects_too_small_buffer();
     test_labels();
     fprintf(stderr,
             "install_profile: %d/%d tests passed (%d failures)\n",

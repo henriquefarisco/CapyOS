@@ -16,15 +16,18 @@
 #include "net/socket.h"
 #include "net/dns_cache.h"
 #include "fs/fsck.h"
-#include "gui/desktop.h"
-#include "gui/desktop_runtime.h"
 #include "drivers/input/mouse.h"
 #include "drivers/input/keyboard_layout.h"
+#include "kernel/module_gate.h"
+#ifndef CAPYOS_PROFILE_CORE_ONLY
+#include "gui/desktop.h"
+#include "gui/desktop_runtime.h"
 #include "apps/calculator.h"
 #include "apps/file_manager.h"
 #include "apps/text_editor.h"
 #include "apps/task_manager.h"
 #include "apps/settings.h"
+#endif
 #include "security/tls.h"
 #include "arch/x86_64/framebuffer_console.h"
 #include "drivers/pcie.h"
@@ -278,14 +281,35 @@ static int cmd_scheduler_stats(struct shell_context *ctx, int argc, char **argv)
   return 0;
 }
 
+#ifndef CAPYOS_PROFILE_CORE_ONLY
+/* alpha.241 activation gate: refuse to start the desktop session
+ * unless the org.capyos.ui.desktop-session module has actually been
+ * staged by capypkg. The kernel ELF carries the desktop code when
+ * PROFILE=full but exposing it before the user opted in (via the
+ * first-boot wizard or `capy install`) would defeat the whole
+ * modular install story. The message instructs the operator on the
+ * minimal next step. */
+static int desktop_gate_block_message(void) {
+  fbcon_print(
+      "Desktop module not installed. Run `capy install "
+      "org.capyos.ui.desktop-session` or rerun `capy wizard`.\n");
+  return -1;
+}
+
 static int ensure_desktop(struct shell_context *ctx) {
   if (desktop_is_active()) return 0;
   if (!ctx) { fbcon_print("No shell context for desktop.\n"); return -1; }
+  if (!kernel_module_desktop_session_available()) {
+    return desktop_gate_block_message();
+  }
   return desktop_runtime_start(ctx);
 }
 
 static int cmd_desktop_start(struct shell_context *ctx, int argc, char **argv) {
   (void)argc; (void)argv;
+  if (!kernel_module_desktop_session_available()) {
+    return desktop_gate_block_message();
+  }
   return desktop_runtime_start(ctx);
 }
 
@@ -314,6 +338,19 @@ static int cmd_open_settings(struct shell_context *c, int a, char **v) {
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   settings_open(); return 0;
 }
+#else /* CAPYOS_PROFILE_CORE_ONLY */
+/* core-only profile: desktop/apps symbols are not linked. Provide a
+ * single explanatory stub for the shell so registry references stay
+ * valid; the desktop/apps commands themselves are excluded from the
+ * registry below. */
+static int cmd_desktop_unavailable(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx; (void)argc; (void)argv;
+  fbcon_print(
+      "core-only build: desktop and GUI apps are not part of this kernel ELF.\n"
+      "Rebuild with PROFILE=full or use a profile=full installer.\n");
+  return -1;
+}
+#endif /* CAPYOS_PROFILE_CORE_ONLY */
 /* `cmd_open_browser` erradicado na sessao 6 (2026-05-05). O
  * browser legado foi removido; o sucessor deve voltar como adaptador
  * versionado na etapa correta. */
@@ -333,16 +370,30 @@ static void set_cmd(struct shell_command *c, const char *n, shell_command_handle
 static void extended_init(void) {
   if (g_extended_initialized) return;
   int i = 0;
+#ifndef CAPYOS_PROFILE_CORE_ONLY
   set_cmd(&g_extended_commands[i++], "desktop",          cmd_desktop_start);
   set_cmd(&g_extended_commands[i++], "desktopstart",     cmd_desktop_start);
   set_cmd(&g_extended_commands[i++], "desktop-start",    cmd_desktop_start);
+#else
+  set_cmd(&g_extended_commands[i++], "desktop",          cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "desktopstart",     cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "desktop-start",    cmd_desktop_unavailable);
+#endif
   set_cmd(&g_extended_commands[i++], "clock",            cmd_print_clock);
   set_cmd(&g_extended_commands[i++], "printclock",       cmd_print_clock);
+#ifndef CAPYOS_PROFILE_CORE_ONLY
   set_cmd(&g_extended_commands[i++], "open-calculator",  cmd_open_calc);
   set_cmd(&g_extended_commands[i++], "open-files",       cmd_open_files);
   set_cmd(&g_extended_commands[i++], "open-editor",      cmd_open_editor);
   set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_open_tasks);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_open_settings);
+#else
+  set_cmd(&g_extended_commands[i++], "open-calculator",  cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "open-files",       cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "open-editor",      cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "open-settings",    cmd_desktop_unavailable);
+#endif
   set_cmd(&g_extended_commands[i++], "print-tasks",      cmd_print_tasks);
   set_cmd(&g_extended_commands[i++], "print-mem",        cmd_print_mem);
   set_cmd(&g_extended_commands[i++], "print-cpus",       cmd_print_cpus);

@@ -392,3 +392,91 @@ int install_profile_should_bootstrap(const struct install_profile *profile) {
     }
     return 1;
 }
+
+/* ---- format / serializer ------------------------------------------------ */
+
+static int profile_format_append(char *buf, size_t buf_size, size_t *cursor,
+                                 const char *src) {
+    if (!buf || !cursor || !src) return -1;
+    while (*src) {
+        if (*cursor + 1u >= buf_size) return -1;
+        buf[(*cursor)++] = *src++;
+    }
+    return 0;
+}
+
+static int profile_field_printable(const char *field) {
+    size_t i = 0u;
+    if (!field) return 1;
+    while (field[i]) {
+        unsigned char c = (unsigned char)field[i];
+        if (c < 0x20u || c > 0x7Eu) return 0;
+        ++i;
+    }
+    return 1;
+}
+
+int install_profile_format(const struct install_profile *profile,
+                           char *buf, size_t buf_size, size_t *out_len) {
+    size_t cursor = 0u;
+    if (!profile || !buf || buf_size == 0u) {
+        return INSTALL_PROFILE_ERR_INVALID_ARG;
+    }
+    if (!profile_field_printable(profile->repo_name) ||
+        !profile_field_printable(profile->repo_url) ||
+        !profile_field_printable(profile->install_list)) {
+        return INSTALL_PROFILE_ERR_DENIED;
+    }
+
+    /* profile=basic|full|custom */
+    if (profile_format_append(buf, buf_size, &cursor, "profile=") != 0) {
+        return INSTALL_PROFILE_ERR_INVALID_ARG;
+    }
+    const char *kind_str = "basic";
+    if (profile->kind == INSTALL_PROFILE_FULL) kind_str = "full";
+    else if (profile->kind == INSTALL_PROFILE_CUSTOM) kind_str = "custom";
+    if (profile_format_append(buf, buf_size, &cursor, kind_str) != 0 ||
+        profile_format_append(buf, buf_size, &cursor, "\n") != 0) {
+        return INSTALL_PROFILE_ERR_INVALID_ARG;
+    }
+
+    if (profile->repo_name[0]) {
+        if (profile_format_append(buf, buf_size, &cursor,
+                                  "bootstrap_repo_name=") != 0 ||
+            profile_format_append(buf, buf_size, &cursor,
+                                  profile->repo_name) != 0 ||
+            profile_format_append(buf, buf_size, &cursor, "\n") != 0) {
+            return INSTALL_PROFILE_ERR_INVALID_ARG;
+        }
+    }
+    if (profile->repo_url[0]) {
+        if (profile_format_append(buf, buf_size, &cursor,
+                                  "bootstrap_repo_url=") != 0 ||
+            profile_format_append(buf, buf_size, &cursor,
+                                  profile->repo_url) != 0 ||
+            profile_format_append(buf, buf_size, &cursor, "\n") != 0) {
+            return INSTALL_PROFILE_ERR_INVALID_ARG;
+        }
+    }
+    if (profile_format_append(buf, buf_size, &cursor,
+                              "bootstrap_repo_signed=") != 0 ||
+        profile_format_append(buf, buf_size, &cursor,
+                              profile->repo_signed ? "1" : "0") != 0 ||
+        profile_format_append(buf, buf_size, &cursor, "\n") != 0) {
+        return INSTALL_PROFILE_ERR_INVALID_ARG;
+    }
+    if (profile->install_list[0]) {
+        if (profile_format_append(buf, buf_size, &cursor,
+                                  "bootstrap_install=") != 0 ||
+            profile_format_append(buf, buf_size, &cursor,
+                                  profile->install_list) != 0 ||
+            profile_format_append(buf, buf_size, &cursor, "\n") != 0) {
+            return INSTALL_PROFILE_ERR_INVALID_ARG;
+        }
+    }
+
+    if (cursor + 1u > buf_size) return INSTALL_PROFILE_ERR_INVALID_ARG;
+    buf[cursor] = '\0';
+    if (out_len) *out_len = cursor;
+    return INSTALL_PROFILE_OK;
+}

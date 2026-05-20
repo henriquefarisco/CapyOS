@@ -21,7 +21,37 @@ def complete_iso_install(
     session.send_text("I", newline=False)
 
     mk = session.marker()
-    session.wait_for("Select language [1]:", timeout=timeout, start_at=mk)
+    installer_prompt = session.wait_for_any(
+        [
+            "Select language [1]:",
+            "=== Volume Recovery Key ===",
+            "Confirm installation? [Y/n]:",
+            "Confirmar instalacao? [S/n]:",
+            "Confirmar instalacion? [S/n]:",
+        ],
+        timeout=timeout,
+        start_at=mk,
+    )
+    if installer_prompt != "Select language [1]:":
+        if installer_prompt == "=== Volume Recovery Key ===":
+            confirm_prompts = [
+                "Confirm installation? [Y/n]:",
+                "Confirmar instalacao? [S/n]:",
+                "Confirmar instalacion? [S/n]:",
+            ]
+            if not any(prompt in session.tail(2400) for prompt in confirm_prompts):
+                mk = session.marker()
+                session.wait_for_any(confirm_prompts, timeout=timeout, start_at=mk)
+        session.send_line("")
+        mk = session.marker()
+        session.wait_for(
+            "Installation complete. Rebooting...",
+            timeout=timeout * 8,
+            start_at=mk,
+        )
+        wait_for_vm_exit(session, timeout=timeout * 2)
+        return
+
     session.send_line("")
 
     mk = session.marker()
@@ -186,8 +216,11 @@ def maybe_run_first_boot_setup(
             "Theme [capyos]:",
             "Tema [capyos]:",
             "Available themes: capyos, ocean, forest.",
+            "Available themes: capyos, ocean, forest, love.",
             "Temas disponibles: capyos, ocean, forest.",
+            "Temas disponibles: capyos, ocean, forest, love.",
             "Temas disponiveis: capyos, ocean, forest.",
+            "Temas disponiveis: capyos, ocean, forest, love.",
         ],
         timeout=timeout,
         start_at=mk,
@@ -255,11 +288,27 @@ def maybe_run_first_boot_setup(
                     "User:",
                     "Usuario: ",
                     "User: ",
+                    "Installation profile",
+                    "Perfil de instalacao",
+                    "Perfil de instalacion",
                 ],
                 timeout=timeout * 2,
                 start_at=mk,
             )
             if outcome in ("Usuario:", "User:", "Usuario: ", "User: "):
+                break
+            if outcome in (
+                "Installation profile",
+                "Perfil de instalacao",
+                "Perfil de instalacion",
+            ):
+                session.send_text("1", newline=False)
+                mk = session.marker()
+                session.wait_for_any(
+                    ["Usuario:", "User:", "Usuario: ", "User: "],
+                    timeout=timeout * 4,
+                    start_at=mk,
+                )
                 break
             continue
         return
@@ -290,6 +339,8 @@ def login(
         found = session.wait_for_any(
             [
                 f"{user}@smoke-node>~> ",
+                f"{user}@capyos64>~> ",
+                f"{user}@capyos-node>~> ",
                 "[smoke] mouse-events ready",
                 "[smoke] gui-session ready",
                 "[desktop] session started",

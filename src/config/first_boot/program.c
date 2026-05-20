@@ -609,12 +609,40 @@ static int first_boot_setup_interactive(void) {
   config_log_process_conclude(proc_settings);
   config_log_process_finalize(proc_settings);
   config_log_process_finalize_success(proc_settings);
+
+  /* alpha.241: module selection happens AFTER the admin user is in
+   * place (so the operator has logged-in identity to receive the
+   * resulting state) but BEFORE the wizard's first-run.done marker
+   * is committed via the bootstrap chain. Returning 1 signals the
+   * wizard should reboot to activate the freshly installed modules
+   * (the desktop session is the most common consumer of this gate). */
+  {
+    int mod_rc = first_boot_module_selection_step(setup_language);
+    if (mod_rc > 0) {
+      config_print_line(
+          strings_equal(setup_language, "en")
+              ? "Initial setup complete. Rebooting to activate modules..."
+              : strings_equal(setup_language, "es")
+                    ? "Configuracion inicial completa. Reiniciando para activar modulos..."
+                    : "Configuracao inicial concluida. Reiniciando para ativar modulos...");
+      config_sync_root_device();
+      config_log_flush_pending();
+      acpi_reboot();
+      /* acpi_reboot does not return; this guard is defensive only. */
+    }
+  }
   return 0;
 }
 
 static int first_boot_setup_impl(void) {
+  /* alpha.241: the wizard is now the ONLY first-boot path. The
+   * legacy silent provisioning that ran when the installer carried
+   * HAS_SETUP_DATA has been retired (see installer_run.c). We keep
+   * the call to first_boot_silent_provision() for backwards
+   * compatibility with operators who manually re-flag the boot
+   * config, but it now just emits a no-op log line. */
   if (system_installer_config_available()) {
-    return first_boot_silent_provision();
+    (void)first_boot_silent_provision();
   }
   return first_boot_setup_interactive();
 }

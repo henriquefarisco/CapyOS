@@ -86,7 +86,7 @@ def smoke_first_boot(
         session,
         "update-channel show",
         timeout=timeout,
-        expect="refs/heads/main/system/update/latest.ini",
+        expect="refs/tags/v0.8.0",
     )
     run_open_write(
         session,
@@ -97,6 +97,9 @@ def smoke_first_boot(
             "branch=main",
             "source=github:henriquefarisco/CapyOS",
             "published_at=2026-04-09",
+            "payload_sha256=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "payload_url=https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.1-alpha.0/capyos64.bin",
+            "signature_ed25519=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ],
         timeout=timeout,
     )
@@ -104,15 +107,9 @@ def smoke_first_boot(
         session,
         f"update-import-manifest {update_manifest}",
         timeout=timeout,
-        expect="manifest imported into the local catalog",
+        expect="imported manifest missing or invalid ed25519 signature",
     )
-    run_cmd(session, "update-status", timeout=timeout, expect="catalog=present")
-    run_cmd(
-        session,
-        "update-status",
-        timeout=timeout,
-        expect="available=0.8.1-alpha.0+20260409",
-    )
+    run_cmd(session, "update-status", timeout=timeout, expect="catalog=missing")
     run_cmd(
         session,
         "job-run recovery-snapshot",
@@ -376,13 +373,7 @@ def smoke_second_boot(
     run_cmd(session, "job-status recovery-snapshot", timeout=timeout, expect="recovery-snapshot state=")
     run_cmd(session, "update-status", timeout=timeout, expect="channel=stable")
     run_cmd(session, "update-status", timeout=timeout, expect="branch=main")
-    run_cmd(session, "update-status", timeout=timeout, expect="catalog=present")
-    run_cmd(
-        session,
-        "update-status",
-        timeout=timeout,
-        expect="available=0.8.1-alpha.0+20260409",
-    )
+    run_cmd(session, "update-status", timeout=timeout, expect="catalog=missing")
     run_cmd(session, "update-channel show", timeout=timeout, expect="channel=stable branch=main")
     run_cmd(session, "net-mode show", timeout=timeout, expect="dhcp", expect_optional=True)
     run_cmd(session, "net-refresh", timeout=timeout, expect="driver=", expect_optional=True)

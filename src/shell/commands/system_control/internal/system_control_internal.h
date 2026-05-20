@@ -102,5 +102,8 @@ int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv);
 /* The programmatic bootstrap entry point lives in
  * `include/services/capypkg_bootstrap.h` and is included above. */
 
+/* capy_command (alpha.241 unified entry point). */
+int cmd_capy(struct shell_context *ctx, int argc, char **argv);
+
 
 #endif

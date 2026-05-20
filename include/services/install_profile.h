@@ -98,4 +98,16 @@ const char *install_profile_result_label(int rc);
 int install_profile_install_list_next(const char *list, size_t *cursor,
                                       char *out, size_t out_size);
 
+/* Serialize a profile into a textual INI buffer that round-trips
+ * through install_profile_parse. Returns INSTALL_PROFILE_OK on
+ * success and writes the NUL-terminated length to *out_len when
+ * provided (excluding the trailing NUL). Fails with
+ * INSTALL_PROFILE_ERR_DENIED if any field contains non-printable
+ * ASCII, or INSTALL_PROFILE_ERR_INVALID_ARG when buf_size is too
+ * small for the resulting text. The first-boot wizard uses this to
+ * write the answers collected from the user back to
+ * /system/install/profile.ini before triggering capypkg_bootstrap. */
+int install_profile_format(const struct install_profile *profile,
+                           char *buf, size_t buf_size, size_t *out_len);
+
 #endif /* SERVICES_INSTALL_PROFILE_H */

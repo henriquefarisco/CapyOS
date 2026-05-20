@@ -96,12 +96,6 @@ def trigger_reboot(session: SmokeSession, timeout: float) -> bool:
             return vm_has_exited(session) or any(marker in session.tail() for marker in reboot_markers)
         try:
             session.wait_for_any(reboot_markers, timeout=8.0, start_at=mk)
-            try:
-                wait_for_vm_exit(session, timeout=timeout)
-            except TimeoutError:
-                if any(marker in session.tail() for marker in reboot_markers):
-                    return True
-                raise
             return True
         except RuntimeError as exc:
             if "code 0" in str(exc):
