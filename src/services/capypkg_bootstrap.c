@@ -179,6 +179,9 @@ int capypkg_bootstrap_run_with_progress(
     if (rrc != CAPYPKG_OK && rrc != CAPYPKG_ERR_ALREADY) {
         klog(KLOG_WARN,
              "[audit] [capypkg] bootstrap: repo registration failed");
+        emit_progress(progress, ctx,
+                      CAPYPKG_BOOTSTRAP_EVENT_REPO_REGISTER_FAIL,
+                      profile.repo_name, 0, 0, rrc);
         return INSTALL_PROFILE_ERR_STORAGE;
     }
 
@@ -190,6 +193,9 @@ int capypkg_bootstrap_run_with_progress(
     if (frc != CAPYPKG_OK) {
         klog(KLOG_WARN,
              "[audit] [capypkg] bootstrap: index fetch failed (will retry)");
+        emit_progress(progress, ctx,
+                      CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH_FAIL,
+                      profile.repo_url, 0, 0, frc);
         return INSTALL_PROFILE_ERR_STORAGE;
     }
 

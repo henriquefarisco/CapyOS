@@ -282,17 +282,122 @@ static int capypkg_runtime_mkdir(const char *path) {
   return kernel_ensure_directory_recursive(path);
 }
 
-/* HTTPS adapter binding. http_get returns body+body_len; we copy into
- * the caller buffer (NUL-terminated for the text fetcher). */
+/* HTTPS adapter binding.
+ *
+ * Both fetchers emit a single, structured klog line on failure so the
+ * caller (the first-boot wizard) and post-mortem audit can tell *why*
+ * the fetch failed (DNS, TLS, connect, HTTP status, body empty, etc.)
+ * without having to wire a new error channel through the in-tree
+ * capypkg adapter ABI. The functions still return 0/-1 to keep the
+ * existing contract intact.
+ *
+ * URLs are clipped in the log line to avoid swamping the kernel log
+ * with a single message; the wizard prints the full URL on the
+ * framebuffer alongside this entry, which is enough context for an
+ * operator to reproduce the request from a shell. */
+
+/* Local string helpers, freestanding (no libc, no heap). */
+static size_t capypkg_log_strlen(const char *s) {
+  size_t n = 0u;
+  if (!s) return 0u;
+  while (s[n]) ++n;
+  return n;
+}
+
+static void capypkg_log_append(char *dst, size_t dst_size, const char *src) {
+  if (!dst || dst_size == 0u || !src) return;
+  size_t cur = capypkg_log_strlen(dst);
+  while (*src && cur + 1u < dst_size) {
+    dst[cur++] = *src++;
+  }
+  dst[cur] = '\0';
+}
+
+static void capypkg_log_append_clipped(char *dst, size_t dst_size,
+                                       const char *src, size_t max_chars) {
+  if (!dst || dst_size == 0u || !src) return;
+  size_t cur = capypkg_log_strlen(dst);
+  size_t copied = 0u;
+  while (*src && copied < max_chars && cur + 1u < dst_size) {
+    dst[cur++] = *src++;
+    ++copied;
+  }
+  if (*src && cur + 4u < dst_size) {
+    dst[cur++] = '.';
+    dst[cur++] = '.';
+    dst[cur++] = '.';
+  }
+  dst[cur] = '\0';
+}
+
+static void capypkg_log_i32(int value, char *out, size_t out_size) {
+  if (!out || out_size == 0u) return;
+  char tmp[12];
+  size_t ti = 0u;
+  unsigned int abs_val;
+  int negative = 0;
+  if (value < 0) {
+    negative = 1;
+    abs_val = (unsigned int)(-(value + 1)) + 1u; /* INT_MIN safe */
+  } else {
+    abs_val = (unsigned int)value;
+  }
+  if (abs_val == 0u) {
+    tmp[ti++] = '0';
+  } else {
+    while (abs_val > 0u && ti < sizeof(tmp)) {
+      tmp[ti++] = (char)('0' + (abs_val % 10u));
+      abs_val /= 10u;
+    }
+  }
+  size_t oi = 0u;
+  if (negative && oi + 1u < out_size) {
+    out[oi++] = '-';
+  }
+  while (ti > 0u && oi + 1u < out_size) {
+    out[oi++] = tmp[--ti];
+  }
+  out[oi] = '\0';
+}
+
+static void capypkg_runtime_log_fetch_failure(const char *url, int http_rc,
+                                              int status_code) {
+  char line[160];
+  char num[12];
+  line[0] = '\0';
+  num[0] = '\0';
+  capypkg_log_append(line, sizeof(line), "[audit] [capypkg] fetch failed: ");
+  capypkg_log_append(line, sizeof(line), http_error_string(http_rc));
+  capypkg_log_append(line, sizeof(line), " (rc=");
+  capypkg_log_i32(http_rc, num, sizeof(num));
+  capypkg_log_append(line, sizeof(line), num);
+  capypkg_log_append(line, sizeof(line), ", status=");
+  capypkg_log_i32(status_code, num, sizeof(num));
+  capypkg_log_append(line, sizeof(line), num);
+  capypkg_log_append(line, sizeof(line), ") url=");
+  capypkg_log_append_clipped(line, sizeof(line), url ? url : "(null)", 64u);
+  klog(KLOG_WARN, line);
+}
+
 static int capypkg_runtime_fetch_text(const char *url, char *buffer,
                                       size_t buffer_size, size_t *out_len) {
   struct http_response resp = {0};
+  /* -1 maps to HTTP_ERR_INVALID_ARGUMENT in http_error_string(). The
+   * enum itself lives in the http internal header and is not part of
+   * the public ABI, so we use the numeric value here. */
   if (!url || !buffer || buffer_size < 2u) {
+    capypkg_runtime_log_fetch_failure(url, -1, 0);
     return -1;
   }
   int rc = http_get(url, &resp);
-  if (rc != 0 || resp.status_code < 200 || resp.status_code >= 300 ||
+  if (rc != 0) {
+    capypkg_runtime_log_fetch_failure(url, rc, resp.status_code);
+    http_response_free(&resp);
+    return -1;
+  }
+  if (resp.status_code < 200 || resp.status_code >= 300 ||
       !resp.body || resp.body_len == 0u) {
+    capypkg_runtime_log_fetch_failure(url, 0, resp.status_code);
     http_response_free(&resp);
     return -1;
   }
@@ -314,9 +419,15 @@ static int capypkg_runtime_fetch_text(const char *url, char *buffer,
 static int capypkg_runtime_fetch_bytes(const char *url, uint8_t *buffer,
                                        size_t buffer_size, size_t *out_len) {
   if (!url || !buffer || buffer_size == 0u) {
+    capypkg_runtime_log_fetch_failure(url, -1, 0);
     return -1;
   }
-  return http_download(url, buffer, buffer_size, out_len);
+  int rc = http_download(url, buffer, buffer_size, out_len);
+  if (rc != 0) {
+    capypkg_runtime_log_fetch_failure(url, http_last_error(), 0);
+    return -1;
+  }
+  return 0;
 }
 
 /* Bind once after storage is ready. Idempotent. */
@@ -380,9 +491,47 @@ void kernel_update_capypkg_service_status(int rc) {
  * change. The bootstrap.done marker in the VFS is the durable
  * source of truth.
  */
+
 static int g_capypkg_bootstrap_logged_idle = 0;
+static int g_capypkg_bootstrap_logged_waiting_net = 0;
+
+/* Return 1 if the kernel network stack is in a usable state for
+ * capypkg index/payload fetching. DHCP-mode installs additionally
+ * require a lease, because http_get would otherwise fail at DNS
+ * resolution and the bootstrap would just churn the audit log.
+ *
+ * Gating the background bootstrap on this prevents the wizard's
+ * "[modules] network or repo unavailable" line from being repeated
+ * silently every 60 seconds while the kernel is still in network
+ * warm-up. */
+static int kernel_capypkg_network_is_usable(void) {
+  struct net_stack_status status;
+  if (net_stack_status(&status) != 0) {
+    return 0;
+  }
+  if (!status.initialized || !status.runtime_supported ||
+      !status.nic.found || !status.ready) {
+    return 0;
+  }
+  if (status.dhcp_attempts > 0u && !status.dhcp_lease_acquired) {
+    return 0;
+  }
+  return 1;
+}
 
 static void kernel_capypkg_maybe_bootstrap(void) {
+  if (!kernel_capypkg_network_is_usable()) {
+    if (!g_capypkg_bootstrap_logged_waiting_net) {
+      klog(KLOG_INFO,
+           "[audit] [capypkg] bootstrap deferred: network not ready");
+      g_capypkg_bootstrap_logged_waiting_net = 1;
+    }
+    return;
+  }
+  /* Network came up since last poll; allow the "waiting" line to fire
+   * again if connectivity is lost later. */
+  g_capypkg_bootstrap_logged_waiting_net = 0;
+
   int installed = 0;
   int failed = 0;
   int rc = capypkg_bootstrap_run(0, &installed, &failed);
@@ -398,9 +547,9 @@ static void kernel_capypkg_maybe_bootstrap(void) {
     return;
   }
   if (rc == INSTALL_PROFILE_ERR_STORAGE) {
-    /* Transient: network/HTTP not ready yet, or per-package
-     * failures. The bootstrap function emitted its own audit
-     * entry; the next service poll will retry. */
+    /* Transient: per-package failures or repo/index error. The
+     * bootstrap function emitted its own audit entry; the next
+     * service poll will retry. */
     return;
   }
   /* Permanent failure (profile.ini malformed). The bootstrap
