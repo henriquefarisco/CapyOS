@@ -41,10 +41,22 @@
 #include "services/install_profile.h"
 #include "fs/vfs.h"
 
+/*
+ * Default modules-index URL.
+ *
+ * Uses GitHub's stable `/releases/latest/download/` redirect so the
+ * wizard always picks up whichever CapyUI release is currently marked
+ * as "latest" in the publisher repo, with no need to bump a hardcoded
+ * tag on every alpha. CapyUI's CI publishes the rolling `latest`
+ * release on every push to its `main` branch.
+ *
+ * The compile-time CAPYOS_DEFAULT_MODULES_INDEX_URL knob lets vendor
+ * builds redirect to a private/mirrored channel without patching this
+ * source file.
+ */
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://github.com/henriquefarisco/CapyUI/releases/download/" \
-    "v0.7.0/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyUI/releases/latest/download/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME
