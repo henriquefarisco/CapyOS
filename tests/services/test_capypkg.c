@@ -161,6 +161,95 @@ static void test_install_rejects_sha256_mismatch(void) {
            "failed install must not add to installed table");
 }
 
+static void test_full_sweep_can_continue_after_one_payload_failure(void) {
+    reset_state(1);
+    static char idx[2048];
+    char hex[65];
+    compute_sha256_hex((const uint8_t *)CAPYPKG_TEST_PAYLOAD,
+                       strlen(CAPYPKG_TEST_PAYLOAD), hex);
+    snprintf(idx, sizeof(idx),
+             "name=good.one\nversion=1.0.0\n"
+             "payload_url=https://example.com/good-one.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/good.one\n---\n"
+             "name=bad.one\nversion=1.0.0\n"
+             "payload_url=https://example.com/bad-one.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/bad.one\n---\n"
+             "name=good.two\nversion=1.0.0\n"
+             "payload_url=https://example.com/good-two.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/good.two\n---\n",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "multi-package index must populate catalog");
+    g_payload_bytes = (const uint8_t *)CAPYPKG_TEST_PAYLOAD;
+    g_payload_len = strlen(CAPYPKG_TEST_PAYLOAD);
+    g_payload_rc = 0;
+    g_payload_fail_url_substr = "bad-one";
+
+    int rc1 = capypkg_install("good.one");
+    int rc2 = capypkg_install("bad.one");
+    int rc3 = capypkg_install("good.two");
+
+    EXPECT(rc1 == CAPYPKG_OK, "first good package must install");
+    EXPECT(rc2 == CAPYPKG_ERR_FETCH, "bad package must fail fetch");
+    EXPECT(rc3 == CAPYPKG_OK,
+           "package after a failed one must still install");
+    EXPECT(capypkg_installed_count() == 2u,
+           "failed package must not prevent later installs");
+    struct capypkg_entry got;
+    EXPECT(capypkg_installed_get("good.one", &got) == CAPYPKG_OK,
+           "first good package must remain installed");
+    EXPECT(capypkg_installed_get("good.two", &got) == CAPYPKG_OK,
+           "second good package must remain installed");
+}
+
+static void test_install_accepts_payload_larger_than_one_mib(void) {
+    reset_state(1);
+    enum { BIG_PAYLOAD_LEN = (1u * 1024u * 1024u) + 4096u };
+    static uint8_t big_payload[BIG_PAYLOAD_LEN];
+    static char idx[1024];
+    char hex[65];
+    for (size_t i = 0u; i < sizeof(big_payload); ++i) {
+        big_payload[i] = (uint8_t)((i * 31u) ^ (i >> 3u));
+    }
+    compute_sha256_hex(big_payload, sizeof(big_payload), hex);
+    snprintf(idx, sizeof(idx),
+             "name=large.payload\nversion=1.0.0\n"
+             "payload_url=https://example.com/large-payload.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "payload_size=%u\ninstall_root=/var/capypkg/large.payload\n---\n",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab",
+             (unsigned)sizeof(big_payload));
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "large payload manifest must populate catalog");
+    g_payload_bytes = big_payload;
+    g_payload_len = sizeof(big_payload);
+    g_payload_rc = 0;
+    g_signature_rc = 0;
+
+    int rc = capypkg_install("large.payload");
+    EXPECT(rc == CAPYPKG_OK,
+           "valid payload above 1 MiB must install successfully");
+    EXPECT(capypkg_installed_count() == 1u,
+           "large payload package must be tracked as installed");
+}
+
 static void test_install_fail_closed_without_verifier(void) {
     /* No verifier plugged in. Repo default requires signature. */
     reset_state(0);
@@ -749,6 +838,8 @@ int run_capypkg_tests(void) {
     test_install_rejects_non_https_payload();
     test_install_verifies_sha256_and_signature();
     test_install_rejects_sha256_mismatch();
+    test_full_sweep_can_continue_after_one_payload_failure();
+    test_install_accepts_payload_larger_than_one_mib();
     test_install_fail_closed_without_verifier();
     test_install_no_source_when_no_repo();
     test_repo_serialize_roundtrip();

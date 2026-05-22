@@ -29,6 +29,10 @@
 #include "internal/capypkg_internal.h"
 #include "kernel/log/klog.h"
 
+#if !defined(UNIT_TEST)
+#include "memory/kmem.h"
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -613,18 +617,31 @@ int capypkg_install(const char *name) {
      * megabytes of payload have been pulled. */
     (void)ensure_install_dirs(avail);
 
-    /* Allocate a stack-bound payload buffer. CAPYPKG_PAYLOAD_MAX is
-     * 8 MiB and would blow up the stack; we cap per-call to a small
-     * buffer for the alpha runtime. Larger payloads should ride
-     * through the kernel heap once a streaming writer lands. */
-    static uint8_t payload_buffer[1u * 1024u * 1024u];
+    /* Keep host tests deterministic, but allocate in-kernel so the
+     * 8 MiB package contract does not permanently live in .bss. */
+#if defined(UNIT_TEST)
+    static uint8_t payload_buffer[CAPYPKG_PAYLOAD_MAX];
+    size_t payload_buffer_cap = sizeof(payload_buffer);
+#else
+    uint8_t *payload_buffer = (uint8_t *)kalloc(CAPYPKG_PAYLOAD_MAX);
+    size_t payload_buffer_cap = CAPYPKG_PAYLOAD_MAX;
+    if (!payload_buffer) {
+        avail->state = CAPYPKG_STATE_BROKEN;
+        klog(KLOG_WARN,
+             "[audit] [capypkg] payload buffer unavailable; install aborted");
+        return CAPYPKG_ERR_QUOTA;
+    }
+#endif
     size_t payload_len = 0u;
     int rc = g_capypkg_bytes_fetcher(avail->payload_url, payload_buffer,
-                                     sizeof(payload_buffer), &payload_len);
+                                     payload_buffer_cap, &payload_len);
     if (rc != 0 || payload_len == 0u) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
              "[audit] [capypkg] payload fetch failed; install aborted");
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return CAPYPKG_ERR_FETCH;
     }
 
@@ -656,6 +673,9 @@ int capypkg_install(const char *name) {
              "[audit] [capypkg] payload-sha256 mismatch; install aborted");
         /* Keep the staging file on verify failure: it is the only
          * artifact the operator has to debug the upstream payload. */
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return rc;
     }
 
@@ -665,12 +685,18 @@ int capypkg_install(const char *name) {
         klog(KLOG_WARN,
              "[audit] [capypkg] signature verification failed; install aborted");
         /* Same rationale as above: keep the staging file for audit. */
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return rc;
     }
 
     char target[CAPYPKG_PATH_MAX];
     if (build_payload_target(avail, target, sizeof(target)) != 0) {
         if (staged) cleanup_payload_staging(avail);
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return CAPYPKG_ERR_INVALID_ARG;
     }
     if (g_capypkg_bytes_writer(target, payload_buffer, payload_len) != 0) {
@@ -684,6 +710,9 @@ int capypkg_install(const char *name) {
                  "[audit] [capypkg] payload write failed; install aborted");
             /* Keep the staging file: the commit failed, so the operator
              * may want to manually copy the verified bytes into place. */
+#if !defined(UNIT_TEST)
+            kfree(payload_buffer);
+#endif
             return rc;
         }
         klog(KLOG_INFO,
@@ -703,6 +732,9 @@ int capypkg_install(const char *name) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
              "[audit] [capypkg] installed marker write failed; install aborted");
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return rc;
     }
 
@@ -714,6 +746,9 @@ int capypkg_install(const char *name) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
              "[audit] [capypkg] installed-table quota exhausted; install aborted");
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return append_rc;
     }
     avail->state = CAPYPKG_STATE_INSTALLED;
@@ -729,10 +764,16 @@ int capypkg_install(const char *name) {
          * the difference between persisted and transient installs. */
         klog(KLOG_WARN,
              "[audit] [capypkg] package installed but db persistence failed");
+#if !defined(UNIT_TEST)
+        kfree(payload_buffer);
+#endif
         return save_rc;
     }
     klog(KLOG_INFO,
          "[audit] [capypkg] payload-sha256 verified; package installed");
+#if !defined(UNIT_TEST)
+    kfree(payload_buffer);
+#endif
     return save_rc;
 }
 

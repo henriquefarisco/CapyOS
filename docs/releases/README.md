@@ -4,10 +4,13 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.255+20260521.md`
-  - **Roll-back honesto de alpha.254.** O scaffolding entregue inventou ABI paralela ao sister `CapyUI`, mas a ABI real `capy-ui-widget` já está publicada em v2.7 (display-list schema v7) com header autoritativo em `CapyUI/src/widget/capy_display_list.h`. Arquivos do alpha.254 removidos; wiring revertido. Pendência cross-repo documentada: matriz CapyOS continua stale.
+- `capyos-0.8.0-alpha.256+20260522.md`
+  - Corrige instalacao remota full/custom de modulos via GitHub Release: payloads ate 8 MiB, falhas isoladas por pacote, logs com rc+label, marker de sweep parcial e perfil personalizado com checkboxes para pacotes oficiais.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.255+20260521.md`
+  - **Roll-back honesto de alpha.254.** O scaffolding entregue inventou ABI paralela ao sister `CapyUI`, mas a ABI real `capy-ui-widget` já está publicada em v2.7 (display-list schema v7) com header autoritativo em `CapyUI/src/widget/capy_display_list.h`. Arquivos do alpha.254 removidos; wiring revertido. Pendência cross-repo documentada: matriz CapyOS continua stale.
 
 - `capyos-0.8.0-alpha.254+20260521.md` — **REVOGADO em alpha.255.** Scaffolding incorreto de Fase A da Etapa 4 (declarou ABI paralela em vez de consumir a do sister CapyUI).
 

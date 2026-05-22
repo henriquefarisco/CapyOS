@@ -163,7 +163,9 @@ def emit_entry(fields: Dict[str, str], out_lines: List[str]) -> None:
     """Emit a manifest entry in the deterministic field order the
     in-tree adapter recognises. Unknown keys are still forwarded so
     forward-compat keys survive aggregation."""
-    canonical = ("name", "version", "summary", "payload_url",
+    fields = dict(fields)
+    fields.setdefault("official", "1")
+    canonical = ("name", "version", "summary", "official", "payload_url",
                  "payload_sha256", "payload_size",
                  "signature_ed25519", "install_root", "depends")
     for key in canonical:

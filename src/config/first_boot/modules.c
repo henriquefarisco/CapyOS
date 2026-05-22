@@ -27,10 +27,8 @@
  *   - Default modules-index URL is overrideable at compile time via
  *     CAPYOS_DEFAULT_MODULES_INDEX_URL; operators can also paste a
  *     full HTTPS URL when prompted.
- *   - CUSTOM mode asks for a comma-separated list of module names.
- *     The string is fed verbatim into install_profile_format which
- *     in turn round-trips through the parser to enforce the
- *     [a-zA-Z0-9._-] alphabet before persisting.
+ *   - CUSTOM mode renders a checkbox list of official modules and
+ *     serialises the selected names as bootstrap_install CSV.
  */
 
 #include "../internal/first_boot_internal.h"
@@ -68,6 +66,7 @@
 #endif
 
 #define MODULES_PROFILE_BUF 1024u
+#define MODULES_OFFICIAL_COUNT 7u
 
 /* ---- localized strings (PT default, EN, ES) -------------------------- */
 
@@ -76,6 +75,150 @@ static const char *L(const char *language, const char *pt, const char *en,
     if (strings_equal(language, "en")) return en;
     if (strings_equal(language, "es")) return es;
     return pt;
+}
+
+struct modules_official_package {
+    const char *name;
+    const char *pt;
+    const char *en;
+    const char *es;
+};
+
+static const struct modules_official_package g_modules_official[MODULES_OFFICIAL_COUNT] = {
+    {"org.capyos.ui.widget-core",
+     "CapyUI widgets oficiais",
+     "Official CapyUI widgets",
+     "Widgets oficiales de CapyUI"},
+    {"org.capyos.ui.desktop-session",
+     "Desktop oficial CapyUI",
+     "Official CapyUI desktop",
+     "Escritorio oficial CapyUI"},
+    {"org.capyos.browser.core",
+     "Navegador oficial",
+     "Official browser",
+     "Navegador oficial"},
+    {"org.capyos.codecs.image-basic",
+     "Codecs oficiais de imagem",
+     "Official image codecs",
+     "Codecs oficiales de imagen"},
+    {"org.capyos.agent.core",
+     "Agente oficial",
+     "Official agent",
+     "Agente oficial"},
+    {"org.capyos.lang.runtime",
+     "Runtime oficial CapyLang",
+     "Official CapyLang runtime",
+     "Runtime oficial CapyLang"},
+    {"org.capyos.benchmark.harness",
+     "Benchmark oficial",
+     "Official benchmark",
+     "Benchmark oficial"},
+};
+
+static const char *modules_official_label(const char *language, size_t idx) {
+    const struct modules_official_package *p = &g_modules_official[idx];
+    return L(language, p->pt, p->en, p->es);
+}
+
+static size_t modules_build_selected_csv(const uint8_t selected[MODULES_OFFICIAL_COUNT],
+                                         char *out, size_t out_size) {
+    size_t count = 0u;
+    if (!out || out_size == 0u) return 0u;
+    out[0] = '\0';
+    for (size_t i = 0u; i < MODULES_OFFICIAL_COUNT; ++i) {
+        if (!selected[i]) continue;
+        if (count > 0u) {
+            config_buffer_append(out, out_size, ",");
+        }
+        config_buffer_append(out, out_size, g_modules_official[i].name);
+        ++count;
+    }
+    return count;
+}
+
+static void modules_draw_official_checklist(const char *setup_language,
+                                            const uint8_t selected[MODULES_OFFICIAL_COUNT],
+                                            size_t cursor) {
+    wizard_draw_header(98u,
+                       L(setup_language,
+                         "Modulos oficiais",
+                         "Official modules",
+                         "Modulos oficiales"));
+    config_print_line(L(setup_language,
+                        "Espaco alterna, numeros alternam, Enter confirma.",
+                        "Space toggles, numbers toggle, Enter confirms.",
+                        "Espacio alterna, numeros alternan, Enter confirma."));
+    config_print_line(L(setup_language,
+                        "[a] marcar todos, [n] desmarcar todos.",
+                        "[a] select all, [n] select none.",
+                        "[a] marcar todos, [n] desmarcar todos."));
+    vga_newline();
+    for (size_t i = 0u; i < MODULES_OFFICIAL_COUNT; ++i) {
+        char line[192];
+        char idx[12];
+        line[0] = '\0';
+        config_u32_to_string((uint32_t)(i + 1u), idx, sizeof(idx));
+        config_buffer_append(line, sizeof(line), (i == cursor) ? "> " : "  ");
+        config_buffer_append(line, sizeof(line), selected[i] ? "[x] " : "[ ] ");
+        config_buffer_append(line, sizeof(line), idx);
+        config_buffer_append(line, sizeof(line), ". ");
+        config_buffer_append(line, sizeof(line), modules_official_label(setup_language, i));
+        config_buffer_append(line, sizeof(line), " - ");
+        config_buffer_append(line, sizeof(line), g_modules_official[i].name);
+        config_print_line(line);
+    }
+}
+
+static size_t modules_select_official_packages(const char *setup_language,
+                                               char *out_csv, size_t out_csv_size) {
+    uint8_t selected[MODULES_OFFICIAL_COUNT];
+    size_t cursor = 0u;
+    for (size_t i = 0u; i < MODULES_OFFICIAL_COUNT; ++i) {
+        selected[i] = 1u;
+    }
+    tty_set_echo(1);
+    tty_set_echo_mask('\0');
+    for (;;) {
+        char ch;
+        modules_draw_official_checklist(setup_language, selected, cursor);
+        ch = tty_getc();
+        if (ch == '\r' || ch == '\n') {
+            return modules_build_selected_csv(selected, out_csv, out_csv_size);
+        }
+        if (ch == ' ' || ch == '\t') {
+            selected[cursor] = selected[cursor] ? 0u : 1u;
+            continue;
+        }
+        if (ch == 'a' || ch == 'A') {
+            for (size_t i = 0u; i < MODULES_OFFICIAL_COUNT; ++i) selected[i] = 1u;
+            continue;
+        }
+        if (ch == 'n' || ch == 'N') {
+            for (size_t i = 0u; i < MODULES_OFFICIAL_COUNT; ++i) selected[i] = 0u;
+            continue;
+        }
+        if (ch >= '1' && ch <= '9') {
+            size_t idx = (size_t)(ch - '1');
+            if (idx < MODULES_OFFICIAL_COUNT) {
+                selected[idx] = selected[idx] ? 0u : 1u;
+                cursor = idx;
+            }
+            continue;
+        }
+        if (ch != 27) {
+            continue;
+        }
+        ch = tty_getc();
+        if (ch != '[') {
+            continue;
+        }
+        ch = tty_getc();
+        if (ch == 'A') {
+            cursor = (cursor == 0u) ? (MODULES_OFFICIAL_COUNT - 1u) : (cursor - 1u);
+        } else if (ch == 'B') {
+            cursor = (cursor + 1u) % MODULES_OFFICIAL_COUNT;
+        }
+    }
 }
 
 /* ---- profile-driven VFS write --------------------------------------- */
@@ -193,6 +336,8 @@ static void modules_render_progress(enum capypkg_bootstrap_event event,
         config_buffer_append(line, sizeof(line), rc_buf);
         config_buffer_append(line, sizeof(line), "): ");
         config_buffer_append(line, sizeof(line), name);
+        config_buffer_append(line, sizeof(line), " ");
+        config_buffer_append(line, sizeof(line), capypkg_result_label(rc));
         config_print_line(line);
         if (rc == CAPYPKG_ERR_DIGEST && capypkg_last_verify_error()[0]) {
             config_print_line(capypkg_last_verify_error());
@@ -272,9 +417,13 @@ static int modules_wait_for_network(uint32_t timeout_ticks,
 /* Run capypkg_bootstrap_run_with_progress up to MODULES_RETRY_MAX
  * times with exponential backoff (2/4/8 s). Returns the underlying
  * install_profile_result for the last attempt. */
-static int modules_run_bootstrap_with_retry(const char *setup_language) {
+static int modules_run_bootstrap_with_retry(const char *setup_language,
+                                            int *out_installed,
+                                            int *out_failed) {
     static const uint32_t backoff_seconds[MODULES_RETRY_MAX] = {2u, 4u, 8u};
     int rc = INSTALL_PROFILE_ERR_STORAGE;
+    if (out_installed) *out_installed = 0;
+    if (out_failed) *out_failed = 0;
     for (uint32_t attempt = 0u; attempt < MODULES_RETRY_MAX; ++attempt) {
         struct modules_progress_state st = {0};
         int installed = 0;
@@ -295,6 +444,8 @@ static int modules_run_bootstrap_with_retry(const char *setup_language) {
         }
         rc = capypkg_bootstrap_run_with_progress(
             1, &installed, &failed, modules_render_progress, &st);
+        if (out_installed) *out_installed = installed;
+        if (out_failed) *out_failed = failed;
         if (rc == INSTALL_PROFILE_OK || rc == INSTALL_PROFILE_ERR_NOT_READY) {
             return rc;
         }
@@ -469,23 +620,14 @@ int first_boot_module_selection_step(const char *setup_language) {
     if (profile.kind == INSTALL_PROFILE_CUSTOM) {
         char list_in[INSTALL_PROFILE_INSTALL_LIST_MAX];
         memory_zero(list_in, sizeof(list_in));
-        size_t len = wizard_prompt_setup(
-            98u,
-            L(setup_language,
-              "Modulos personalizados",
-              "Custom module list",
-              "Lista de modulos personalizados"),
-            L(setup_language,
-              "Lista CSV (ex: org.capyos.ui.desktop-session,org.capyos.browser.core): ",
-              "CSV list (e.g. org.capyos.ui.desktop-session,org.capyos.browser.core): ",
-              "Lista CSV (ej: org.capyos.ui.desktop-session,org.capyos.browser.core): "),
-            list_in, sizeof(list_in), 0);
-        if (len == 0u) {
+        size_t selected_count = modules_select_official_packages(
+            setup_language, list_in, sizeof(list_in));
+        if (selected_count == 0u) {
             config_print_line(L(setup_language,
-                                "[modules] lista vazia; tratando como perfil completo.",
-                                "[modules] empty list; treating as full profile.",
-                                "[modules] lista vacia; tratando como completo."));
-            profile.kind = INSTALL_PROFILE_FULL;
+                                "[modules] nenhum modulo marcado; usando perfil basico.",
+                                "[modules] no module selected; using basic profile.",
+                                "[modules] ningun modulo marcado; usando perfil basico."));
+            profile.kind = INSTALL_PROFILE_BASIC;
         } else {
             cstring_copy(profile.install_list, sizeof(profile.install_list),
                          list_in);
@@ -538,13 +680,23 @@ int first_boot_module_selection_step(const char *setup_language) {
     }
 
     for (;;) {
-        int rc = modules_run_bootstrap_with_retry(setup_language);
+        int installed = 0;
+        int failed = 0;
+        int rc = modules_run_bootstrap_with_retry(setup_language,
+                                                  &installed, &failed);
         if (rc == INSTALL_PROFILE_OK) {
-            config_print_line(L(setup_language,
-                                "[modules] instalacao concluida; reinicio recomendado para ativar.",
-                                "[modules] install complete; reboot recommended to activate.",
-                                "[modules] instalacion completa; se recomienda reiniciar para activar."));
-            return 1;
+            if (failed > 0) {
+                config_print_line(L(setup_language,
+                                    "[modules] instalacao parcial; pacotes com falha foram ignorados.",
+                                    "[modules] partial install; failed packages were skipped.",
+                                    "[modules] instalacion parcial; se omitieron paquetes con fallo."));
+            } else {
+                config_print_line(L(setup_language,
+                                    "[modules] instalacao concluida; reinicio recomendado para ativar.",
+                                    "[modules] install complete; reboot recommended to activate.",
+                                    "[modules] instalacion completa; se recomienda reiniciar para activar."));
+            }
+            return installed > 0 ? 1 : 0;
         }
         if (rc == INSTALL_PROFILE_ERR_NOT_READY) {
             config_print_line(L(setup_language,

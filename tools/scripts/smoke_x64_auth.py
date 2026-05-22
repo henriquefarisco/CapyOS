@@ -8,6 +8,15 @@ from contextlib import suppress
 from smoke_x64_helpers import wait_and_send, wait_for_vm_exit
 from smoke_x64_session import SmokeSession
 
+MODULE_INSTALL_DONE_MARKERS = [
+    "[modules] install complete",
+    "[modules] instalacao concluida",
+    "[modules] instalacion completa",
+    "[modules] partial install",
+    "[modules] instalacao parcial",
+    "[modules] instalacion parcial",
+]
+
 
 def complete_iso_install(
     session: SmokeSession,
@@ -304,8 +313,9 @@ def maybe_run_first_boot_setup(
                 "Perfil de instalacao",
                 "Perfil de instalacion",
             ):
-                session.send_text("2" if module_profile == "full" else "1", newline=False)
-                if module_profile == "full":
+                profile_keys = {"basic": "1", "full": "2", "custom": "3"}
+                session.send_text(profile_keys[module_profile], newline=False)
+                if module_profile in ("full", "custom"):
                     mk = session.marker()
                     session.wait_for_any(
                         [
@@ -317,13 +327,21 @@ def maybe_run_first_boot_setup(
                         start_at=mk,
                     )
                     session.send_line(modules_index_url)
+                    if module_profile == "custom":
+                        mk = session.marker()
+                        session.wait_for_any(
+                            [
+                                "Official modules",
+                                "Modulos oficiais",
+                                "Modulos oficiales",
+                            ],
+                            timeout=timeout,
+                            start_at=mk,
+                        )
+                        session.send_line("")
                     mk = session.marker()
                     session.wait_for_any(
-                        [
-                            "[modules] install complete",
-                            "[modules] instalacao concluida",
-                            "[modules] instalacion completa",
-                        ],
+                        MODULE_INSTALL_DONE_MARKERS,
                         timeout=timeout * 10,
                         start_at=mk,
                     )

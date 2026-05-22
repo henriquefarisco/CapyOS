@@ -24,7 +24,10 @@
 #define HTTP_MAX_HEADERS   16
 #define HTTP_MAX_HEADER_VALUE 256
 #define HTTP_RECV_BUF_SIZE 131072
-#define HTTP_MAX_RESPONSE_SIZE (1024 * 1024)
+/* Must cover CAPYPKG_PAYLOAD_MAX so GitHub Release assets that are valid
+ * package payloads do not fail inside the HTTP layer before capypkg can
+ * verify and install them. */
+#define HTTP_MAX_RESPONSE_SIZE (8 * 1024 * 1024)
 
 enum http_method {
   HTTP_GET = 0,

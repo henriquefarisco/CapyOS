@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--module-profile",
         default="basic",
-        choices=("basic", "full"),
+        choices=("basic", "full", "custom"),
         help="Module profile selected in the first-boot wizard",
     )
     parser.add_argument(
@@ -179,6 +179,7 @@ def run_boot1(
             tail = session.tail(8000)
             if "qemu exited early with code 0" in str(exc) and (
                 "[modules] install complete" in tail
+                or "[modules] partial install" in tail
                 or "Initial setup complete. Rebooting" in tail
             ):
                 return

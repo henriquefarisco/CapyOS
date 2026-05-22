@@ -91,9 +91,10 @@ static int fs_write_text(const char *path, const char *text) {
 static int fs_write_bytes(const char *path, const uint8_t *data, size_t len) {
     struct fake_file *f = fs_find(path);
     if (!f) f = fs_alloc(path);
-    if (!f || len > sizeof(f->bytes)) return -1;
+    if (!f) return -1;
     f->is_text = 0;
-    if (data && len > 0u) memcpy(f->bytes, data, len);
+    size_t stored = len > sizeof(f->bytes) ? sizeof(f->bytes) : len;
+    if (data && stored > 0u) memcpy(f->bytes, data, stored);
     f->bytes_len = len;
     return 0;
 }
@@ -115,6 +116,7 @@ static int g_index_rc;
 static const uint8_t *g_payload_bytes;
 static size_t g_payload_len;
 static int g_payload_rc;
+static const char *g_payload_fail_url_substr;
 static int g_signature_rc;
 static int g_signature_calls;
 
@@ -132,7 +134,10 @@ static int net_fetch_text(const char *url, char *buffer, size_t buffer_size,
 
 static int net_fetch_bytes(const char *url, uint8_t *buffer, size_t buffer_size,
                            size_t *out_len) {
-    (void)url;
+    if (g_payload_fail_url_substr && url &&
+        strstr(url, g_payload_fail_url_substr) != NULL) {
+        return -1;
+    }
     if (g_payload_rc != 0 || !g_payload_bytes) return -1;
     size_t len = g_payload_len;
     if (len > buffer_size) len = buffer_size;
@@ -172,6 +177,7 @@ static void reset_state(int with_verifier) {
     g_payload_bytes = NULL;
     g_payload_len = 0u;
     g_payload_rc = -1;
+    g_payload_fail_url_substr = NULL;
     g_signature_rc = 0;
     g_signature_calls = 0;
     klog_reset();

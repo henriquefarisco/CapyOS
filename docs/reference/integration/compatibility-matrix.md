@@ -14,7 +14,7 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.255+20260521` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.8.0-alpha.256+20260522` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.0.4` | `capy-agent-component-index` v1 | `0.0.4` | `0.0.4` |
 | `CapyBrowser` | `0.0.4` | `capy-browser-core` v1 (planejada) | n/a (sem runtime ativo) | n/a |
 | `CapyCodecs` | `0.0.4` | `capy-codec-image` v1 (`CAPY_IMAGE_ABI_VERSION`) | `0.0.4` (host-only) | `0.0.4` |

@@ -255,6 +255,8 @@ int capypkg_bootstrap_run_with_progress(
                           entry.name, progressed, planned, irc);
         } else {
             ++failed;
+            klog(KLOG_WARN,
+                 "[audit] [capypkg] bootstrap: package install failed");
             emit_progress(progress, ctx,
                           CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_FAIL,
                           entry.name, progressed, planned, irc);
@@ -282,7 +284,10 @@ int capypkg_bootstrap_run_with_progress(
     }
     emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE,
                   NULL, installed, planned, failed);
-    return failed == 0 ? INSTALL_PROFILE_OK : INSTALL_PROFILE_ERR_STORAGE;
+    /* Repository/index failures remain retryable errors. Once the sweep
+     * starts, however, package failures are isolated: installed packages
+     * stay usable and the marker prevents a boot-time retry loop. */
+    return INSTALL_PROFILE_OK;
 }
 
 /* Backwards-compatible silent entry point: just forwards. */
