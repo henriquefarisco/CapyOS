@@ -56,7 +56,15 @@ struct usb_endpoint_info;
 #define XHCI_PORTSC_SPEED_SHIFT 10
 #define XHCI_PORTSC_SPEED_MASK (0xF << XHCI_PORTSC_SPEED_SHIFT)
 #define XHCI_PORTSC_CSC (1 << 17)       /* Connect Status Change */
+#define XHCI_PORTSC_PEC (1 << 18)       /* Port Enabled/Disabled Change */
+#define XHCI_PORTSC_WRC (1 << 19)       /* Warm Port Reset Change */
+#define XHCI_PORTSC_OCC (1 << 20)       /* Over-current Change */
 #define XHCI_PORTSC_PRC (1 << 21)       /* Port Reset Change */
+#define XHCI_PORTSC_PLC (1 << 22)       /* Port Link State Change */
+#define XHCI_PORTSC_CEC (1 << 23)       /* Port Config Error Change */
+#define XHCI_PORTSC_CHANGE_BITS                                                \
+  (XHCI_PORTSC_CSC | XHCI_PORTSC_PEC | XHCI_PORTSC_WRC | XHCI_PORTSC_OCC |     \
+   XHCI_PORTSC_PRC | XHCI_PORTSC_PLC | XHCI_PORTSC_CEC)
 
 /* TRB Types */
 #define TRB_TYPE_NORMAL 1
@@ -100,6 +108,16 @@ struct xhci_erst_entry {
   uint32_t reserved;
 } __attribute__((packed));
 
+/* Latched event-ring completion. Populated by `xhci_event_pump` when it
+ * routes a Transfer Event or Command Completion Event to its owner.
+ * The owner consumes by clearing `valid`. */
+struct xhci_pending_event {
+  uint8_t valid;      /* 1 when populated; cleared by consumer.       */
+  uint8_t slot;       /* Slot ID from the event TRB (CMD_COMPLETE).   */
+  uint32_t cc;        /* Completion code (CC) from TRB.status[31:24]. */
+  uint32_t residual;  /* TRB.status[23:0] for transfer events.        */
+};
+
 /* XHCI Controller State */
 struct xhci_controller {
   /* PCI location */
@@ -141,6 +159,17 @@ struct xhci_controller {
   uint32_t intr_ring_idx[XHCI_MAX_DEVICE_SLOTS];
   int intr_ring_cycle[XHCI_MAX_DEVICE_SLOTS];
 
+  /* Event dispatcher state (Etapa 3 — Slice 3D hardening).
+   * The event ring is drained by `xhci_event_pump`, which routes each
+   * Transfer Event to the endpoint owner via `ep0_pending[]` or
+   * `intr_pending[]`, and each Command Completion to `cmd_pending`.
+   * Strays (events with no live owner) are advanced past and counted
+   * in `event_stray_count` for forensic visibility. */
+  struct xhci_pending_event cmd_pending;
+  struct xhci_pending_event ep0_pending[XHCI_MAX_DEVICE_SLOTS];
+  struct xhci_pending_event intr_pending[XHCI_MAX_DEVICE_SLOTS];
+  uint32_t event_stray_count;
+
   /* State */
   int initialized;
   int running;
@@ -169,11 +198,20 @@ int xhci_stop(struct xhci_controller *xhci);
 /* Port operations */
 int xhci_port_reset(struct xhci_controller *xhci, int port);
 int xhci_port_get_status(struct xhci_controller *xhci, int port);
+/* Clear Connect Status Change (CSC) for a port. xHCI 1.2 §5.4.8
+ * marks PORTSC change bits as RW1C; this helper preserves the other
+ * change bits and the RWS bits while ack'ing CSC, so that subsequent
+ * polls do not re-fire on the same event. Returns 0 on success. */
+int xhci_port_ack_csc(struct xhci_controller *xhci, int port);
 
 /* Device operations */
 int xhci_enable_slot(struct xhci_controller *xhci, uint8_t *slot_id);
 int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id,
                         int port);
+/* Tear down a slot after device disconnection or port-cycle. Issues
+ * Disable Slot, frees EP0/interrupt rings and buffers, clears DCBAA
+ * entry and pending event latches. See §14.3 follow-up. */
+int xhci_release_slot(struct xhci_controller *xhci, uint8_t slot_id);
 int xhci_control_transfer(struct xhci_controller *xhci, uint8_t slot_id,
                           const struct usb_setup_packet *setup, void *buf,
                           uint16_t len, int dir_in);
@@ -183,6 +221,13 @@ int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
                                       uint16_t report_len);
 int xhci_poll_interrupt(struct xhci_controller *xhci, uint8_t slot_id,
                         uint8_t ep_addr, void *out, uint16_t out_len);
+
+/* Drain currently-valid event TRBs from the consumer position until the
+ * cycle bit stops matching (no more events) or a reserved type-0 TRB is
+ * observed (uninitialised memory). Routes each event to its owning
+ * pending slot. Safe to call repeatedly; idempotent on an empty ring.
+ * Exposed for direct unit testing of the dispatcher contract. */
+void xhci_event_pump(struct xhci_controller *xhci);
 uint8_t xhci_endpoint_dci(uint8_t ep_addr);
 uint8_t xhci_port_speed_from_status(uint32_t portsc);
 uint16_t xhci_ep0_max_packet_size_for_speed(uint8_t port_speed);

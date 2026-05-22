@@ -52,6 +52,8 @@ const char *x64_input_backend_name(enum x64_input_backend backend) {
     return "hyperv";
   case X64_INPUT_BACKEND_COM1:
     return "com1";
+  case X64_INPUT_BACKEND_USB:
+    return "usb";
   default:
     return "none";
   }

@@ -183,8 +183,9 @@ static int setup_ready_legacy(struct rekey_exec_ram_dev **out) {
   return 0;
 }
 
-static int read_legacy_plain(struct rekey_exec_ram_dev *r, uint32_t lba,
-                             uint8_t out[REKEY_EXEC_BLOCK_SIZE]) {
+static int __attribute__((unused))
+read_legacy_plain(struct rekey_exec_ram_dev *r, uint32_t lba,
+                  uint8_t out[REKEY_EXEC_BLOCK_SIZE]) {
   static const uint8_t legacy_salt[16] = {
       0x4e, 0x6f, 0x69, 0x72, 0x4f, 0x53, 0x2d, 0x46,
       0x53, 0x2d, 0x53, 0x61, 0x6c, 0x74, 0x21, 0x00};
@@ -202,9 +203,10 @@ static int read_legacy_plain(struct rekey_exec_ram_dev *r, uint32_t lba,
   return rc;
 }
 
-static int read_target_plain_from_scratch(struct rekey_exec_ram_dev *r,
-                                          uint32_t logical_lba,
-                                          uint8_t out[REKEY_EXEC_BLOCK_SIZE]) {
+static int __attribute__((unused))
+read_target_plain_from_scratch(struct rekey_exec_ram_dev *r,
+                               uint32_t logical_lba,
+                               uint8_t out[REKEY_EXEC_BLOCK_SIZE]) {
   uint8_t scratch[REKEY_EXEC_BLOCK_SIZE];
   uint8_t k1[CRYPT_KEY_SIZE], k2[CRYPT_KEY_SIZE];
   struct capyos_volume_header header;

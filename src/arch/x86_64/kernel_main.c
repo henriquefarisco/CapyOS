@@ -745,6 +745,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     int has_ps2 = input_probe.has_ps2;
     int has_com1 = input_probe.has_com1;
     int has_hyperv = input_probe.has_hyperv_ready;
+    int has_usb = input_probe.has_usb;
 
     g_com1_ready = has_com1 ? 1 : 0;
     g_serial_mirror = has_com1 ? 1 : 0;
@@ -757,6 +758,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
       input_config.has_hyperv = has_hyperv;
       input_config.hyperv_deferred = input_probe.has_hyperv_deferred;
       input_config.has_com1 = has_com1;
+      input_config.has_usb = has_usb;
       input_config.efi_system_table = input_probe.efi_system_table;
       x64_input_runtime_init(&g_input_runtime, &input_config);
     }

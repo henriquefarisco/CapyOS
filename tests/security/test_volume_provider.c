@@ -117,18 +117,17 @@ static int expect_true(int cond, const char *msg) {
   return 0;
 }
 
-static void test_put_u32_le(uint8_t *p, uint32_t v) {
+static void __attribute__((unused)) test_put_u32_le(uint8_t *p, uint32_t v) {
   p[0] = (uint8_t)(v & 0xFFu);
   p[1] = (uint8_t)((v >> 8) & 0xFFu);
   p[2] = (uint8_t)((v >> 16) & 0xFFu);
   p[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
-static int write_legacy_capyfs_super(struct ram_dev *r,
-                                     const uint8_t *legacy_salt,
-                                     size_t legacy_salt_len,
-                                     uint32_t legacy_iter,
-                                     uint32_t capyfs_blocks) {
+static int __attribute__((unused))
+write_legacy_capyfs_super(struct ram_dev *r, const uint8_t *legacy_salt,
+                          size_t legacy_salt_len, uint32_t legacy_iter,
+                          uint32_t capyfs_blocks) {
   uint8_t k1[CRYPT_KEY_SIZE], k2[CRYPT_KEY_SIZE];
   uint8_t super[TEST_BLOCK_SIZE];
   struct block_device *legacy_crypt = NULL;

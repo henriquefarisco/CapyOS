@@ -186,6 +186,40 @@ void usb_core_init(void) {
   klog_dec(KLOG_INFO, "[usb] Max ports: ", g_xhci.max_ports);
 }
 
+/* Etapa 3 — Slice 3D hardening (§14.3 follow-up + post-audit fix).
+ *
+ * Releases controller-side resources for slots whose owning port has
+ * either lost the device (CCS=0) or been status-changed (CSC=1,
+ * indicating a port-cycle that replaced the device). Must run BEFORE
+ * the new enumeration loop, otherwise a slot whose ID is recycled by
+ * `xhci_enable_slot` would collide with stale `device_contexts[]` /
+ * `ep0_rings[]` populated from the prior device, and the new
+ * `xhci_address_device` would fail with -1 (slot busy).
+ *
+ * Reuse semantics: when CCS=1 AND CSC=0, the same device is still
+ * physically present and the enumeration loop reuses the existing
+ * slot via `usb_find_existing_addressed_device`; we MUST NOT release
+ * it here. */
+static void usb_release_stale_slots(const struct usb_device_info *previous,
+                                    int previous_count) {
+  int i;
+  for (i = 0; i < previous_count && i < USB_MAX_DEVICES; i++) {
+    uint8_t prev_slot = previous[i].slot_id;
+    uint8_t prev_port = previous[i].port;
+    int status;
+    if (prev_slot == 0u) continue;
+    status = xhci_port_get_status(&g_xhci, prev_port);
+    if (status < 0) continue;
+    /* Device still attached AND no status change → keep slot for the
+     * reuse path in usb_enumerate_devices. */
+    if ((status & XHCI_PORTSC_CCS) && !(status & XHCI_PORTSC_CSC)) {
+      continue;
+    }
+    (void)xhci_release_slot(&g_xhci, prev_slot);
+    klog_dec(KLOG_INFO, "[usb] Released slot ", prev_slot);
+  }
+}
+
 int usb_enumerate_devices(void) {
   if (!g_usb_initialized) return 0;
 
@@ -193,6 +227,11 @@ int usb_enumerate_devices(void) {
   int previous_count = g_device_count;
   struct usb_device_info previous[USB_MAX_DEVICES];
   for (int i = 0; i < USB_MAX_DEVICES; i++) previous[i] = g_devices[i];
+  /* Release controller resources for ports that lost their device or
+   * port-cycled, BEFORE we issue Enable Slot. This prevents slot ID
+   * recycling by xHCI from colliding with stale per-slot state from
+   * the previous device on that slot. */
+  usb_release_stale_slots(previous, previous_count);
   for (uint8_t port = 0; port < g_xhci.max_ports && found < USB_MAX_DEVICES; port++) {
     int status = xhci_port_get_status(&g_xhci, port);
     uint8_t slot_id = 0;
@@ -290,13 +329,44 @@ void usb_poll_all(void) {
   }
 }
 
+/* Etapa 3 — Slice 3D §15.3: HID SET_REPORT (Output) to drive keyboard
+ * LEDs (Caps Lock / Num Lock / Scroll Lock). Uses the standard HID
+ * class request on EP0 with a 1-byte payload following the HID Usage
+ * Tables §10 keyboard layout. */
+int usb_hid_send_led_report(uint8_t slot_id, uint8_t interface_number,
+                            uint8_t led_bitmap) {
+  struct usb_setup_packet setup;
+  uint8_t buf;
+  if (slot_id == 0u) return -1;
+  setup.bmRequestType = 0x21u; /* Host-to-Device | Class | Interface */
+  setup.bRequest = 0x09u;       /* SET_REPORT */
+  setup.wValue = 0x0200u;       /* ReportType=Output(2), ReportID=0 */
+  setup.wIndex = (uint16_t)interface_number;
+  setup.wLength = 1u;
+  buf = led_bitmap;
+  return xhci_control_transfer(&g_xhci, slot_id, &setup, &buf, 1u, 0);
+}
+
+/* Etapa 3 — Slice 3D §15.1 fix: detect Port Status Change on each
+ * root-hub port and trigger re-enumeration. CSC is RW1C; we clear it
+ * via `xhci_port_ack_csc` BEFORE calling `usb_enumerate_devices` so
+ * subsequent polls don't re-fire on the same event. */
 void usb_hotplug_check(void) {
+  int any_change = 0;
   if (!g_usb_initialized) return;
   for (uint8_t port = 0; port < g_xhci.max_ports; port++) {
     int status = xhci_port_get_status(&g_xhci, port);
-    if (status & 0x020000) { /* Port Status Change */
+    if (status < 0) continue;
+    if ((uint32_t)status & XHCI_PORTSC_CSC) {
       klog_dec(KLOG_INFO, "[usb] Hotplug event on port ", port);
-      usb_enumerate_devices();
+      (void)xhci_port_ack_csc(&g_xhci, port);
+      any_change = 1;
     }
+  }
+  if (any_change) {
+    /* Single re-enumeration handles all changed ports in one pass; the
+     * inner loop in usb_enumerate_devices iterates all ports and
+     * `usb_release_stale_slots` releases departed devices. */
+    (void)usb_enumerate_devices();
   }
 }

@@ -12,6 +12,7 @@
 #include "drivers/input/keyboard_compose.h"
 #include "drivers/input/keyboard_layout.h"
 #include "drivers/timer/pit.h"
+#include "drivers/usb/usb_hid.h"
 #include "drivers/usb/xhci.h"
 
 enum {

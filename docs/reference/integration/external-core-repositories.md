@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry for decoupled core projects.
+**Status:** migration registry for decoupled core projects (updated 2026-05-20).
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
 a versioned in-tree adapter and an external gate.
@@ -9,17 +9,18 @@ defines how installable external components may enter CapyOS in future
 Etapas 8-9.
 **Core hygiene:** `core-migration-quarantine.md` documents the
 completed in-tree hygiene pass.
+**Authoritative matrix:** [`compatibility-matrix.md`](compatibility-matrix.md).
 
 ## Visible local repositories
 
-| Repository | Intended ownership | Migration status |
-|---|---|---|
-| `CapyBrowser` | browser core, HTML-to-text, static layout/display list | browser source not present in active CapyOS; rebuild as decoupled core |
-| `CapyLang` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work |
-| `CapyAgent` | package format, resolver, component index, release manifest model, declarative install/rollback plan | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary |
-| `CapyCodecs` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders until an image adapter lands |
-| `CapyUI` | retained widget model, layout/display-list contracts, abstract event routing | widget tree/event model extracted; compositor/font/input plumbing stays in CapyOS |
-| `CapyBenchmark` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator initialized externally |
+| Repository | Current version | Intended ownership | Migration status |
+|---|---|---|---|
+| `CapyBrowser` | `0.0.4` | browser core, HTML-to-text, static layout/display list | browser source not present in active CapyOS; rebuild as decoupled core |
+| `CapyLang` | `0.1.3` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work (lexer S1 delivered) |
+| `CapyAgent` | `0.0.4` | package format, resolver, component index, release manifest model, declarative install/rollback plan | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary; CapyAgent Ed25519 signer **not yet published** (verifier slot NULL by design) |
+| `CapyCodecs` | `0.0.4` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders until an image adapter lands |
+| `CapyUI` | `0.7.3` | retained widget model + **desktop session, window manager and apps** (`org.capyos.ui.desktop-session` published in `alpha.241`) | widget tree/event model extracted (`capy-ui-widget` v0.6); desktop/window/apps extracted (`capy-ui-desktop-session` v1); compositor/font/input plumbing **stays in CapyOS** |
+| `CapyBenchmark` | `0.0.4` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator initialized externally |
 
 ## Migrated snapshots
 
@@ -45,6 +46,23 @@ consumes. CapyOS still owns the active release/update safety paths
 boot-slot activation and rollback) through the existing `update_agent`
 service. The `capypkg` adapter is independent of `update_agent` and
 covers application packages rather than core OS updates.
+
+The CapyAgent **Ed25519 signer** is the still-pending piece of the
+Etapa 9 chain. Until it is published and registered through
+`capypkg_set_signature_verifier`, the kernel binder in
+`src/arch/x86_64/kernel_services.c::kernel_capypkg_bind_runtime_adapters`
+intentionally leaves the verifier slot NULL and the adapter rejects any
+`signed` repository install with `CAPYPKG_ERR_SIGNATURE`. Lab installs
+with `--unsigned` repositories are possible but must never be promoted
+to user-facing release.
+
+External entry points:
+
+- `CapyAgent/docs/compatibility.md` (authoritative contract)
+- `CapyAgent/docs/capypkg-publisher-guide.md` (publisher workflow)
+- `CapyAgent/docs/component-index-example.md` (high-level JSON index)
+- `CapyAgent/docs/tag-release-index.md` (GitHub release tag trust model)
+- `CapyAgent/Makefile` (targets `make package` and `make validate`)
 
 The corresponding shell surface is:
 
@@ -76,16 +94,39 @@ External repo entry points (unchanged):
 
 ### CapyUI
 
-Unchanged. CapyOS keeps compositor, font, rendering surface, theme
-provider and input plumbing. The current `widget`, `context_menu` and
-`inline_prompt` runtime objects have active desktop/app callers and
-remain linked by default until a versioned CapyUI adapter replaces
-only the portable model boundary.
+**Expanded in `alpha.241`.** CapyUI now owns two installable modules:
+
+- `org.capyos.ui.widget-core` — portable retained widget model, layout,
+  display-list schema v2, focus traversal, text editing, animation,
+  theme tokens v2 (`capy-ui-widget` v0.6).
+- `org.capyos.ui.desktop-session` — desktop runtime, taskbar, window
+  manager, dispatcher, notifications and built-in apps (calculator,
+  file manager, settings, task manager, text editor)
+  (`capy-ui-desktop-session` v1, depends on `widget-core`).
+
+The CapyOS Makefile detects the `../CapyUI` sibling and compiles
+`gui/desktop/`, `gui/window/` and `apps/` from there when present.
+When the sibling is absent (`PROFILE=core-only` or external builds),
+the in-tree fallback under `src/gui/desktop/`, `src/gui/window/` and
+`src/apps/` is compiled instead. The owner of feature evolution is
+the `CapyUI` repository; the in-tree fallback exists only to sustain
+`make all64` without the sibling and to ease the migration path.
+
+CapyOS keeps in the core: compositor, fonts, rendering surface, theme
+provider, input plumbing, framebuffer, kernel module gate
+(`kernel/module_gate.c`) that checks
+`/var/capypkg/<canonical-name>/installed` markers and gates the
+desktop activation when `CAPYOS_PROFILE_CORE_ONLY` is defined or the
+module is missing.
 
 External entry points:
 
-- `CapyUI/src/widget/capy_widget.h`
-- `CapyUI/src/widget/capy_widget.c`
+- `CapyUI/src/widget/capy_widget.h` and `CapyUI/src/widget/capy_widget.c`
+- `CapyUI/src/desktop/desktop_runtime.c` (and the rest of `desktop/`,
+  `window/`, `apps/` when migrated)
+- `CapyUI/Makefile` (targets `make package` and `make validate`)
+- `CapyUI/docs/compatibility.md` (authoritative contract)
+- `CapyUI/docs/roadmap/contracts/` (versioned ABI contracts by area)
 
 ### CapyBenchmark
 

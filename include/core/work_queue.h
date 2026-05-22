@@ -12,6 +12,11 @@ enum system_work_id {
   SYSTEM_WORK_GPU_DISCOVERY,
   SYSTEM_WORK_USB_BRINGUP,
   SYSTEM_WORK_UPDATE_AGENT_WARMUP,
+  /* Etapa 3 — Slice 3D: periodic interrupt-endpoint pump that drives
+   * usb_poll_all() so that HID keyboard reports flow from the xHCI
+   * event ring into the HID class buffer. Registered and scheduled by
+   * kernel_work_usb_bringup after usb_hid_init succeeds. */
+  SYSTEM_WORK_USB_POLL,
   SYSTEM_WORK_COUNT
 };
 

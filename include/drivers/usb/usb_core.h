@@ -116,4 +116,12 @@ int usb_parse_configuration_descriptor(const uint8_t *buf, size_t len,
 void usb_poll_all(void);
 void usb_hotplug_check(void);
 
+/* Etapa 3 — Slice 3D §15.3: send HID Output Report (keyboard LEDs)
+ * via SET_REPORT class request on EP0. `led_bitmap` follows the
+ * HID Usage Tables §10 keyboard layout: bit 0=NumLock, bit 1=CapsLock,
+ * bit 2=ScrollLock, bit 3=Compose, bit 4=Kana. Returns 0 on success
+ * or negative on transfer failure. */
+int usb_hid_send_led_report(uint8_t slot_id, uint8_t interface_number,
+                            uint8_t led_bitmap);
+
 #endif /* DRIVERS_USB_CORE_H */

@@ -77,6 +77,7 @@ void work_queue_init(void) {
   work_seed(SYSTEM_WORK_GPU_DISCOVERY, "gpu-discovery");
   work_seed(SYSTEM_WORK_USB_BRINGUP, "usb-bringup");
   work_seed(SYSTEM_WORK_UPDATE_AGENT_WARMUP, "update-agent-warmup");
+  work_seed(SYSTEM_WORK_USB_POLL, "usb-poll");
   g_work_ready = 1;
 }
 

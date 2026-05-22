@@ -6,7 +6,7 @@ com wizard interativo e comando `capy`).
 módulos remotos via os repositórios externos (`CapyAgent`,
 `CapyBrowser`, `CapyCodecs`, `CapyUI`, `CapyLang`, `CapyBenchmark`).
 **Plataforma alvo:** `VMware + UEFI + E1000` (trilha oficial).
-**Etapa atual:** Etapa 3 (USB HID); Etapas 8-9 (installer/package) ainda
+**Etapa atual:** Etapa 4 (CapyDisplay 2D + scheduler); Etapas 8-9 (installer/package) ainda
 bloqueadas — este runbook usa o adapter `services/capypkg`
 **entrega antecipatória da Etapa 9**, em modo recebedor fail-closed,
 estendida com:

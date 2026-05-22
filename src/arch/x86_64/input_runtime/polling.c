@@ -210,6 +210,22 @@ int x64_input_poll_char(struct x64_input_runtime *runtime, char *out_char) {
         }
       }
       break;
+    case X64_INPUT_BACKEND_USB:
+      /* Etapa 3 — Slice 3D §14.1: the USB HID class driver pre-
+       * translates HID usage IDs to ASCII (including '\n' for Enter
+       * and '\b' for Backspace) before pushing to the keyboard ring
+       * buffer, so the input runtime just forwards the char. The
+       * pump in `SYSTEM_WORK_USB_POLL` keeps the ring populated
+       * without blocking this poll. */
+      if (runtime->has_usb && usb_hid_keyboard_poll(&c) == 1) {
+        if (c == '\r') {
+          c = '\n';
+        }
+        *out_char = c;
+        x64_input_note_backend(runtime, backend);
+        return 1;
+      }
+      break;
     case X64_INPUT_BACKEND_COM1:
       if (runtime->has_com1 && com1_poll_char(&c)) {
         if (c == '\r') {

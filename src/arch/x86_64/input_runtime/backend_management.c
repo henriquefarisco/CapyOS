@@ -89,32 +89,25 @@ void x64_input_probe_backends(struct x64_input_probe_result *result,
     runtime_print(print, "[info] COM1 habilitado em modo de emergencia.\n");
   }
 
-  if (!result->has_ps2 && !result->has_efi && !result->has_hyperv_ready &&
-      !is_hyperv) {
-    runtime_print(print, "[usb] Buscando controlador XHCI...\n");
-    if (xhci_find(&xhci) == 0) {
-      runtime_print(print, "[usb] XHCI encontrado.\n");
-      if (xhci_init(&xhci) == 0) {
-        runtime_print(print, "[usb] XHCI inicializado.\n");
-        if (xhci_start(&xhci) == 0) {
-          result->has_usb = 1;
-          runtime_print(print, "[usb] XHCI rodando.\n");
-          runtime_print(print, "[usb] Enumeracao HID pendente para teclado.\n");
-        } else {
-          runtime_print(print, "[usb] Falha ao iniciar XHCI.\n");
-        }
-      } else {
-        runtime_print(print, "[usb] Falha ao inicializar XHCI.\n");
-      }
-    } else {
-      runtime_print(print, "[usb] XHCI nao encontrado via PCIe.\n");
-    }
+  /* Etapa 3 — Slice 3D §14.1: USB HID is now a first-class input
+   * backend. Probe XHCI presence unconditionally so the runtime can
+   * register `X64_INPUT_BACKEND_USB` alongside PS/2 and Hyper-V.
+   * Actual controller `xhci_init`/`xhci_start` is deferred to
+   * `usb_core_init` running in `kernel_work_usb_bringup`; doing it
+   * twice would leak the first set of ring/DCBAA allocations. */
+  runtime_print(print, "[usb] Buscando controlador XHCI...\n");
+  if (xhci_find(&xhci) == 0) {
+    result->has_usb = 1;
+    runtime_print(print,
+                  "[usb] XHCI detectado; bring-up via usb-bringup work.\n");
+  } else {
+    runtime_print(print, "[usb] XHCI nao encontrado via PCIe.\n");
   }
 }
 
 void append_backend(struct x64_input_runtime *runtime,
                            enum x64_input_backend backend) {
-  if (!runtime || runtime->order_count >= 4u ||
+  if (!runtime || runtime->order_count >= 5u ||
       backend == X64_INPUT_BACKEND_NONE) {
     return;
   }
@@ -123,7 +116,7 @@ void append_backend(struct x64_input_runtime *runtime,
 
 void prepend_backend(struct x64_input_runtime *runtime,
                             enum x64_input_backend backend) {
-  if (!runtime || runtime->order_count >= 4u ||
+  if (!runtime || runtime->order_count >= 5u ||
       backend == X64_INPUT_BACKEND_NONE) {
     return;
   }
@@ -225,7 +218,7 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->primary_backend = X64_INPUT_BACKEND_NONE;
   runtime->last_backend = X64_INPUT_BACKEND_NONE;
   runtime->prefer_native = (config->prefer_native || config->has_ps2 ||
-                            config->has_hyperv)
+                            config->has_hyperv || config->has_usb)
                                ? 1
                                : 0;
   runtime->has_efi = config->has_efi ? 1 : 0;
@@ -244,6 +237,7 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->hyperv_prepare_last_result = 0;
   runtime->hyperv_retry_tick = 0u;
   runtime->has_com1 = config->has_com1 ? 1 : 0;
+  runtime->has_usb = config->has_usb ? 1 : 0;
   runtime->efi_system_table = config->efi_system_table;
   runtime->native_confirmed = 0;
   runtime->firmware_retired = 0;
@@ -261,12 +255,24 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
   runtime->escape_seq_len = 0;
   runtime->escape_seq_pos = 0;
 
+  /* Etapa 3 — Slice 3D §14.1: USB HID joins the native group
+   * (PS/2, Hyper-V, USB) so post-ExitBootServices the kernel can
+   * keep delivering keystrokes without relying on `EFI ConIn`.
+   * Ordering rationale within the native group: PS/2 is the most
+   * deterministic on legacy hardware, Hyper-V on Microsoft
+   * virtualisation, USB on modern firmware + VMware/QEMU. EFI is
+   * kept as a firmware backstop and retired by
+   * `retire_firmware_backend` once a real key arrives from a
+   * native source. */
   if (runtime->prefer_native) {
     if (config->has_ps2) {
       append_backend(runtime, X64_INPUT_BACKEND_PS2);
     }
     if (config->has_hyperv) {
       append_backend(runtime, X64_INPUT_BACKEND_HYPERV);
+    }
+    if (config->has_usb) {
+      append_backend(runtime, X64_INPUT_BACKEND_USB);
     }
     if (config->has_efi) {
       append_backend(runtime, X64_INPUT_BACKEND_EFI);
@@ -280,6 +286,9 @@ void x64_input_runtime_init(struct x64_input_runtime *runtime,
     }
     if (config->has_hyperv) {
       append_backend(runtime, X64_INPUT_BACKEND_HYPERV);
+    }
+    if (config->has_usb) {
+      append_backend(runtime, X64_INPUT_BACKEND_USB);
     }
   }
 

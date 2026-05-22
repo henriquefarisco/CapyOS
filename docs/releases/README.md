@@ -4,10 +4,42 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.244+20260520.md`
-  - Corrige a instalacao remota completa dos modulos CapyUI via GitHub Release e valida o desktop ativado no reboot.
+- `capyos-0.8.0-alpha.255+20260521.md`
+  - **Roll-back honesto de alpha.254.** O scaffolding entregue inventou ABI paralela ao sister `CapyUI`, mas a ABI real `capy-ui-widget` já está publicada em v2.7 (display-list schema v7) com header autoritativo em `CapyUI/src/widget/capy_display_list.h`. Arquivos do alpha.254 removidos; wiring revertido. Pendência cross-repo documentada: matriz CapyOS continua stale.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.254+20260521.md` — **REVOGADO em alpha.255.** Scaffolding incorreto de Fase A da Etapa 4 (declarou ABI paralela em vez de consumir a do sister CapyUI).
+
+- `capyos-0.8.0-alpha.253+20260521.md`
+  - Sub-slice 3E.4.B entregue: migração mecânica de `dbg_*` → `klog`/`klog_hex` em `ahci.c` e `nvme.c` (108 call sites). Helpers locais removidos. Bug latente de undefined-reference a `dbg_label_hex32` em `nvme_controller_reset` corrigido como efeito colateral.
+
+- `capyos-0.8.0-alpha.252+20260521.md`
+  - Audit fix pós-Slice 3E.5: dois bugs críticos corrigidos antes da execução externa. BUG #1 — storage smoke marker double-emission em VMs dual-storage (latch movido para global em `storage_smoke.c`). BUG #2 — NVMe Controller Level Reset reemite Create I/O CQ/SQ após CC.EN=1. 4 novos host tests de regressão.
+
+- `capyos-0.8.0-alpha.251+20260521.md`
+  - Slice 3E.5 entregue (scaffolding): external validation gate `smoke-x64-vmware-storage-resilience` plumado. Novo alvo `Makefile` reusa `tools/scripts/smoke_x64_vmware.py`. Novo runbook `docs/operations/etapa-3-slice-3e-validation-playbook.md`.
+
+- `capyos-0.8.0-alpha.250+20260521.md`
+  - Slice 3E.4 entregue: storage stack smoke marker `[smoke] storage-stack ready`. Novo `storage_smoke` gate puro + IO emitter; AHCI/NVMe `_ex` ops disparam o marker na primeira completion OK; latch idempotente. 9 novos host tests.
+
+- `capyos-0.8.0-alpha.249+20260521.md`
+  - Slice 3E.3 entregue (escopo reduzido): infraestrutura multi-slot AHCI. Novo `ahci_slot_allocator` (bitmap puro 32 slots, host-testable). NVMe queue depth 64 + CID rolling auditados. 11 novos host tests.
+
+- `capyos-0.8.0-alpha.248+20260521.md`
+  - Slice 3E.2.B entregue: recoverable retry policy + reset escalation. `block_device_ops` ganha `read_block_ex`/`write_block_ex`/`reset` opcionais; AHCI ganha COMRESET; NVMe ganha Controller Level Reset; 12 novos host tests.
+
+- `capyos-0.8.0-alpha.247+20260521.md`
+  - Slice 3E.2.A entregue: unified block-I/O error classifier compartilhado entre AHCI/NVMe com 5 classes (OK, TRANSIENT, PERMANENT, TIMEOUT, DEVICE_GONE) + integração em 7 sites de runtime + 15 novos host tests.
+
+- `capyos-0.8.0-alpha.246+20260521.md`
+  - Slice 3E.1 entregue: extração host-testável dos AHCI/NVMe command builders (8 builders puros + 20 novos host tests + refatoração de ahci.c/nvme.c sem mudança de bit-pattern).
+
+- `capyos-0.8.0-alpha.245+20260521.md`
+  - Slice 3D (USB HID + xHCI + interrupt polling) fechado e externamente validado: scaffolding do smoke gate, follow-ups §14.1-§14.3, audit fixes §15.1-§15.5, bug W (slot reuse) corrigido, 25 novos host tests, plano da próxima slice (3E storage hardening) rascunhado.
+
+- `capyos-0.8.0-alpha.244+20260520.md`
+  - Corrige a instalacao remota completa dos modulos CapyUI via GitHub Release e valida o desktop ativado no reboot.
 
 - `capyos-0.8.0-alpha.243+20260520.md`
   - Corrige o bootstrap remoto de componentes, limpa warnings no build x64 e valida a ISO com reboot e persistencia.

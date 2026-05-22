@@ -21,11 +21,22 @@ static struct usb_device_info g_stub_devices[STUB_USB_MAX_DEVICES];
 static int g_stub_device_count = 0;
 static int g_stub_poll_calls = 0;
 static int g_stub_hotplug_calls = 0;
+/* Etapa 3 — Slice 3D §15.3: counters for SET_REPORT (LED) calls so
+ * host tests can assert that the HID class drove the keyboard LEDs
+ * the right number of times with the right payload. */
+static int g_stub_led_report_calls = 0;
+static uint8_t g_stub_last_led_bitmap = 0;
+static uint8_t g_stub_last_led_slot = 0;
+static uint8_t g_stub_last_led_interface = 0;
 
 void stub_usb_core_reset(void) {
     g_stub_device_count = 0;
     g_stub_poll_calls = 0;
     g_stub_hotplug_calls = 0;
+    g_stub_led_report_calls = 0;
+    g_stub_last_led_bitmap = 0;
+    g_stub_last_led_slot = 0;
+    g_stub_last_led_interface = 0;
     for (int i = 0; i < STUB_USB_MAX_DEVICES; i++) {
         uint8_t *raw = (uint8_t *)&g_stub_devices[i];
         for (size_t j = 0; j < sizeof(g_stub_devices[i]); j++) raw[j] = 0;
@@ -84,4 +95,24 @@ void usb_poll_all(void) {
 
 void usb_hotplug_check(void) {
     g_stub_hotplug_calls++;
+}
+
+int usb_hid_send_led_report(uint8_t slot_id, uint8_t interface_number,
+                            uint8_t led_bitmap) {
+    g_stub_led_report_calls++;
+    g_stub_last_led_slot = slot_id;
+    g_stub_last_led_interface = interface_number;
+    g_stub_last_led_bitmap = led_bitmap;
+    return 0;
+}
+
+int stub_usb_hid_send_led_report_calls(void) { return g_stub_led_report_calls; }
+uint8_t stub_usb_hid_send_led_report_last_bitmap(void) {
+    return g_stub_last_led_bitmap;
+}
+uint8_t stub_usb_hid_send_led_report_last_slot(void) {
+    return g_stub_last_led_slot;
+}
+uint8_t stub_usb_hid_send_led_report_last_interface(void) {
+    return g_stub_last_led_interface;
 }

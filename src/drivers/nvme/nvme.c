@@ -2,32 +2,20 @@
  * Minimal implementation supporting single namespace read/write.
  */
 #include "drivers/nvme.h"
+#include "drivers/nvme/nvme_commands.h"
 #include "drivers/pcie.h"
+#include "drivers/storage/block_error.h"
+#include "drivers/storage/storage_smoke.h"
 #include "fs/block.h"
+#include "kernel/log/klog.h"
 #include <stddef.h>
 #include <stdint.h>
 
-/* Debug output via port 0xE9 (works in QEMU/Bochs/debug builds) */
-static inline void dbg_putc(char c) {
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)c), "Nd"((uint16_t)0xE9));
-}
-
-static void dbg_puts(const char *s) {
-  while (*s)
-    dbg_putc(*s++);
-}
-
-static void dbg_hex32(uint32_t v) {
-  static const char hex[] = "0123456789ABCDEF";
-  for (int i = 28; i >= 0; i -= 4) {
-    dbg_putc(hex[(v >> i) & 0xF]);
-  }
-}
-
-static void dbg_hex64(uint64_t v) {
-  dbg_hex32((uint32_t)(v >> 32));
-  dbg_hex32((uint32_t)v);
-}
+/* Slice 3E.4.B (alpha.253) — local `dbg_puts`/`dbg_hex*` helpers
+ * were removed in favor of `klog(level, ...)` / `klog_hex(...)`.
+ * As a side-effect this also closes a latent undefined-reference
+ * to `dbg_label_hex32` (alpha.248 introduced two call sites in
+ * `nvme_controller_reset` that referenced ahci.c's local helper). */
 
 static inline void cpu_relax(void) { __asm__ volatile("pause"); }
 
@@ -86,12 +74,12 @@ static int nvme_wait_ready(struct nvme_device *dev, int expected) {
       return 0;
     }
     if (csts & NVME_CSTS_CFS) {
-      dbg_puts("[nvme] controller fatal status\n");
+      klog(KLOG_ERROR, "[nvme] controller fatal status");
       return -1;
     }
     cpu_relax();
   }
-  dbg_puts("[nvme] timeout waiting for ready\n");
+  klog(KLOG_ERROR, "[nvme] timeout waiting for ready");
   return -1;
 }
 
@@ -140,12 +128,15 @@ static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
       }
       nvme_ring_cq_doorbell(dev, 0, dev->admin_cq_head);
 
-      /* Check status (bits 1-14 are status code) */
-      uint16_t sc = (status >> 1) & 0x7FF;
-      if (sc != 0) {
-        dbg_puts("[nvme] admin cmd failed, sc=");
-        dbg_hex32(sc);
-        dbg_putc('\n');
+      /* Etapa 3 — Slice 3E.2: classify the completion so logs
+       * carry a stable taxonomy. Legacy 0/-1 return preserved. */
+      enum block_io_error_class cls =
+          block_io_classify_nvme(status, /*timed_out=*/0);
+      if (cls != BLOCK_IO_OK) {
+        uint16_t sc = (status >> 1) & 0x7FF;
+        klog(KLOG_ERROR, "[nvme] admin cmd failed");
+        klog(KLOG_ERROR, block_io_error_class_name(cls));
+        klog_hex(KLOG_ERROR, "[nvme] admin cmd sc=", sc);
         return -1;
       }
       return 0;
@@ -153,7 +144,12 @@ static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
     cpu_relax();
   }
 
-  dbg_puts("[nvme] admin cmd timeout\n");
+  {
+    enum block_io_error_class cls =
+        block_io_classify_nvme(0, /*timed_out=*/1);
+    klog(KLOG_ERROR, "[nvme] admin cmd timeout");
+    klog(KLOG_ERROR, block_io_error_class_name(cls));
+  }
   return -1;
 }
 
@@ -161,9 +157,7 @@ static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
 static int nvme_init_controller(struct nvme_device *dev, uint64_t bar_addr) {
   dev->bar = (volatile uint8_t *)(uintptr_t)bar_addr;
 
-  dbg_puts("[nvme] BAR0=");
-  dbg_hex64(bar_addr);
-  dbg_putc('\n');
+  klog_hex(KLOG_INFO, "[nvme] BAR0=", bar_addr);
 
   /* Read capabilities */
   dev->cap_lo = mmio_read32(dev->bar + NVME_CAP);
@@ -174,12 +168,9 @@ static int nvme_init_controller(struct nvme_device *dev, uint64_t bar_addr) {
   uint32_t dstrd = dev->cap_hi & 0xF;
   dev->doorbell_stride = 4 << dstrd;
 
-  dbg_puts("[nvme] CAP=");
-  dbg_hex32(dev->cap_hi);
-  dbg_hex32(dev->cap_lo);
-  dbg_puts(" DSTRD=");
-  dbg_hex32(dstrd);
-  dbg_putc('\n');
+  klog_hex(KLOG_INFO, "[nvme] CAP_hi=", dev->cap_hi);
+  klog_hex(KLOG_INFO, "[nvme] CAP_lo=", dev->cap_lo);
+  klog_hex(KLOG_INFO, "[nvme] DSTRD=", dstrd);
 
   /* Disable controller */
   mmio_write32(dev->bar + NVME_CC, 0);
@@ -220,7 +211,7 @@ static int nvme_init_controller(struct nvme_device *dev, uint64_t bar_addr) {
     return -1;
   }
 
-  dbg_puts("[nvme] controller enabled\n");
+  klog(KLOG_INFO, "[nvme] controller enabled");
   dev->next_cid = 1;
 
   return 0;
@@ -228,37 +219,35 @@ static int nvme_init_controller(struct nvme_device *dev, uint64_t bar_addr) {
 
 /* Identify controller */
 static int nvme_identify(struct nvme_device *dev) {
-  struct nvme_sqe cmd = {0};
+  struct nvme_sqe cmd;
   struct nvme_cqe cqe;
 
-  cmd.opcode = NVME_ADMIN_IDENTIFY;
-  cmd.nsid = 0;
-  cmd.prp1 = (uint64_t)(uintptr_t)g_identify_buf;
-  cmd.cdw10 = 1; /* CNS = 01h (Identify Controller) */
+  /* Etapa 3 — Slice 3E.1: command-word construction lives in
+   * src/drivers/nvme/nvme_commands.c so host tests can exercise the
+   * exact layout without driving doorbells. */
+  if (nvme_build_identify_ctrl_cmd(&cmd, g_identify_buf) != 0) {
+    return -1;
+  }
 
   if (nvme_admin_cmd(dev, &cmd, &cqe) != 0) {
     return -1;
   }
 
   struct nvme_identify_ctrl *ctrl = (struct nvme_identify_ctrl *)g_identify_buf;
-  dbg_puts("[nvme] VID=");
-  dbg_hex32(ctrl->vid);
-  dbg_puts(" MDTS=");
-  dbg_hex32(ctrl->mdts);
-  dbg_putc('\n');
+  klog_hex(KLOG_INFO, "[nvme] VID=", ctrl->vid);
+  klog_hex(KLOG_INFO, "[nvme] MDTS=", ctrl->mdts);
 
   return 0;
 }
 
 /* Identify namespace and get geometry */
 static int nvme_identify_ns(struct nvme_device *dev, uint32_t nsid) {
-  struct nvme_sqe cmd = {0};
+  struct nvme_sqe cmd;
   struct nvme_cqe cqe;
 
-  cmd.opcode = NVME_ADMIN_IDENTIFY;
-  cmd.nsid = nsid;
-  cmd.prp1 = (uint64_t)(uintptr_t)g_identify_buf;
-  cmd.cdw10 = 0; /* CNS = 00h (Identify Namespace) */
+  if (nvme_build_identify_ns_cmd(&cmd, g_identify_buf, nsid) != 0) {
+    return -1;
+  }
 
   if (nvme_admin_cmd(dev, &cmd, &cqe) != 0) {
     return -1;
@@ -276,20 +265,16 @@ static int nvme_identify_ns(struct nvme_device *dev, uint32_t nsid) {
 
   dev->nsid = nsid;
 
-  dbg_puts("[nvme] NS");
-  dbg_hex32(nsid);
-  dbg_puts(" LBA_COUNT=");
-  dbg_hex64(dev->lba_count);
-  dbg_puts(" BLOCK_SIZE=");
-  dbg_hex32(dev->block_size);
-  dbg_putc('\n');
+  klog_hex(KLOG_INFO, "[nvme] NS=", nsid);
+  klog_hex(KLOG_INFO, "[nvme] NS LBA_COUNT=", dev->lba_count);
+  klog_hex(KLOG_INFO, "[nvme] NS BLOCK_SIZE=", dev->block_size);
 
   return 0;
 }
 
 /* Create I/O completion queue */
 static int nvme_create_io_cq(struct nvme_device *dev, uint16_t qid) {
-  struct nvme_sqe cmd = {0};
+  struct nvme_sqe cmd;
   struct nvme_cqe cqe;
 
   dev->io_cq = g_io_cq;
@@ -300,10 +285,10 @@ static int nvme_create_io_cq(struct nvme_device *dev, uint16_t qid) {
     __builtin_memset(&g_io_cq[i], 0, sizeof(struct nvme_cqe));
   }
 
-  cmd.opcode = NVME_ADMIN_CREATE_IOCQ;
-  cmd.prp1 = (uint64_t)(uintptr_t)dev->io_cq;
-  cmd.cdw10 = ((NVME_QUEUE_DEPTH - 1) << 16) | qid;
-  cmd.cdw11 = 1; /* PC=1 (physically contiguous) */
+  if (nvme_build_create_cq_cmd(&cmd, dev->io_cq, qid,
+                               (uint16_t)NVME_QUEUE_DEPTH) != 0) {
+    return -1;
+  }
 
   return nvme_admin_cmd(dev, &cmd, &cqe);
 }
@@ -311,7 +296,7 @@ static int nvme_create_io_cq(struct nvme_device *dev, uint16_t qid) {
 /* Create I/O submission queue */
 static int nvme_create_io_sq(struct nvme_device *dev, uint16_t qid,
                              uint16_t cqid) {
-  struct nvme_sqe cmd = {0};
+  struct nvme_sqe cmd;
   struct nvme_cqe cqe;
 
   dev->io_sq = g_io_sq;
@@ -321,17 +306,19 @@ static int nvme_create_io_sq(struct nvme_device *dev, uint16_t qid,
     __builtin_memset(&g_io_sq[i], 0, sizeof(struct nvme_sqe));
   }
 
-  cmd.opcode = NVME_ADMIN_CREATE_IOSQ;
-  cmd.prp1 = (uint64_t)(uintptr_t)dev->io_sq;
-  cmd.cdw10 = ((NVME_QUEUE_DEPTH - 1) << 16) | qid;
-  cmd.cdw11 = (cqid << 16) | 1; /* CQID in bits 31:16, PC=1 */
+  if (nvme_build_create_sq_cmd(&cmd, dev->io_sq, qid,
+                               (uint16_t)NVME_QUEUE_DEPTH, cqid) != 0) {
+    return -1;
+  }
 
   return nvme_admin_cmd(dev, &cmd, &cqe);
 }
 
-/* Submit I/O command and wait */
-static int nvme_io_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
-                       struct nvme_cqe *cqe) {
+/* Submit I/O command and wait. Returns the classifier; the legacy
+ * `nvme_io_cmd` wrapper collapses to 0/-1 for callers that have
+ * not been ported to the extended ABI yet. */
+static enum block_io_error_class nvme_io_cmd_classified(
+    struct nvme_device *dev, struct nvme_sqe *cmd, struct nvme_cqe *cqe) {
   cmd->cid = dev->next_cid++;
 
   dev->io_sq[dev->io_sq_tail] = *cmd;
@@ -355,42 +342,51 @@ static int nvme_io_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
       }
       nvme_ring_cq_doorbell(dev, 1, dev->io_cq_head);
 
-      uint16_t sc = (status >> 1) & 0x7FF;
-      if (sc != 0) {
-        dbg_puts("[nvme] I/O cmd failed, sc=");
-        dbg_hex32(sc);
-        dbg_putc('\n');
-        return -1;
+      enum block_io_error_class cls =
+          block_io_classify_nvme(status, /*timed_out=*/0);
+      if (cls != BLOCK_IO_OK) {
+        uint16_t sc = (status >> 1) & 0x7FF;
+        klog(KLOG_WARN, "[nvme] I/O cmd failed");
+        klog(KLOG_WARN, block_io_error_class_name(cls));
+        klog_hex(KLOG_WARN, "[nvme] I/O cmd sc=", sc);
       }
-      return 0;
+      return cls;
     }
     cpu_relax();
   }
 
-  dbg_puts("[nvme] I/O cmd timeout\n");
-  return -1;
+  {
+    enum block_io_error_class cls =
+        block_io_classify_nvme(0, /*timed_out=*/1);
+    klog(KLOG_WARN, "[nvme] I/O cmd timeout");
+    klog(KLOG_WARN, block_io_error_class_name(cls));
+    return cls;
+  }
+}
+
+/* Legacy 0/-1 wrapper retained for callers (read/write internals)
+ * that still use the original ABI. */
+static int nvme_io_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
+                       struct nvme_cqe *cqe) {
+  return nvme_io_cmd_classified(dev, cmd, cqe) == BLOCK_IO_OK ? 0 : -1;
 }
 
 /* Read blocks from NVMe */
 int nvme_read_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
                      void *buffer) {
-  struct nvme_sqe cmd = {0};
+  struct nvme_sqe cmd;
   struct nvme_cqe cqe;
 
   /* For simplicity, read one block at a time using internal buffer */
   uint8_t *dst = (uint8_t *)buffer;
   for (uint32_t i = 0; i < count; i++) {
-    cmd.opcode = NVME_CMD_READ;
-    cmd.nsid = dev->nsid;
-    cmd.prp1 = (uint64_t)(uintptr_t)g_io_buffer;
-    cmd.cdw10 = (uint32_t)(lba + i);
-    cmd.cdw11 = (uint32_t)((lba + i) >> 32);
-    cmd.cdw12 = 0; /* NLB = 0 means 1 block */
+    if (nvme_build_rw_cmd(&cmd, NVME_CMD_READ, dev->nsid, lba + i, 1u,
+                          g_io_buffer) != 0) {
+      return -1;
+    }
 
     if (nvme_io_cmd(dev, &cmd, &cqe) != 0) {
-      dbg_puts("[nvme] read failed lba=");
-      dbg_hex64(lba + i);
-      dbg_putc('\n');
+      klog_hex(KLOG_WARN, "[nvme] read failed lba=", lba + i);
       return -1;
     }
 
@@ -402,24 +398,20 @@ int nvme_read_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
 /* Write blocks to NVMe */
 int nvme_write_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
                       const void *buffer) {
-  struct nvme_sqe cmd = {0};
+  struct nvme_sqe cmd;
   struct nvme_cqe cqe;
 
   const uint8_t *src = (const uint8_t *)buffer;
   for (uint32_t i = 0; i < count; i++) {
     __builtin_memcpy(g_io_buffer, src + i * dev->block_size, dev->block_size);
 
-    cmd.opcode = NVME_CMD_WRITE;
-    cmd.nsid = dev->nsid;
-    cmd.prp1 = (uint64_t)(uintptr_t)g_io_buffer;
-    cmd.cdw10 = (uint32_t)(lba + i);
-    cmd.cdw11 = (uint32_t)((lba + i) >> 32);
-    cmd.cdw12 = 0; /* NLB = 0 means 1 block */
+    if (nvme_build_rw_cmd(&cmd, NVME_CMD_WRITE, dev->nsid, lba + i, 1u,
+                          g_io_buffer) != 0) {
+      return -1;
+    }
 
     if (nvme_io_cmd(dev, &cmd, &cqe) != 0) {
-      dbg_puts("[nvme] write failed lba=");
-      dbg_hex64(lba + i);
-      dbg_putc('\n');
+      klog_hex(KLOG_WARN, "[nvme] write failed lba=", lba + i);
       return -1;
     }
   }
@@ -437,6 +429,149 @@ static int nvme_block_write(void *ctx, uint32_t block_no, const void *buffer) {
   return nvme_write_blocks(dev, block_no, 1, buffer);
 }
 
+/* Slice 3E.2.B — extended I/O returning the classifier. We issue a
+ * single-block command, mirroring the loop that nvme_read_blocks /
+ * nvme_write_blocks already perform internally; doing it here lets
+ * us surface the exact class instead of collapsing to -1. */
+/* Etapa 3 — Slice 3E.4 (alpha.250) + alpha.252 audit fix BUG #1.
+ * The latch lives in `storage_smoke.c` (global, shared with AHCI)
+ * so the marker is emitted exactly once per boot. */
+static void nvme_smoke_signal_ok(void) {
+  if (storage_smoke_try_latch_global(STORAGE_SMOKE_SRC_NVME)) {
+    storage_smoke_emit_marker();
+  }
+}
+
+static enum block_io_error_class nvme_block_read_ex(void *opaque,
+                                                    uint32_t block_no,
+                                                    void *buffer) {
+  struct nvme_device *dev = (struct nvme_device *)opaque;
+  struct nvme_sqe cmd;
+  struct nvme_cqe cqe;
+  enum block_io_error_class cls;
+  if (!dev || !buffer) {
+    return BLOCK_IO_ERR_PERMANENT;
+  }
+  if (nvme_build_rw_cmd(&cmd, NVME_CMD_READ, dev->nsid, (uint64_t)block_no,
+                        1u, g_io_buffer) != 0) {
+    return BLOCK_IO_ERR_PERMANENT;
+  }
+  cls = nvme_io_cmd_classified(dev, &cmd, &cqe);
+  if (cls != BLOCK_IO_OK) {
+    return cls;
+  }
+  __builtin_memcpy(buffer, g_io_buffer, dev->block_size);
+  nvme_smoke_signal_ok();
+  return BLOCK_IO_OK;
+}
+
+static enum block_io_error_class nvme_block_write_ex(void *opaque,
+                                                     uint32_t block_no,
+                                                     const void *buffer) {
+  struct nvme_device *dev = (struct nvme_device *)opaque;
+  struct nvme_sqe cmd;
+  struct nvme_cqe cqe;
+  enum block_io_error_class cls;
+  if (!dev || !buffer) {
+    return BLOCK_IO_ERR_PERMANENT;
+  }
+  __builtin_memcpy(g_io_buffer, buffer, dev->block_size);
+  if (nvme_build_rw_cmd(&cmd, NVME_CMD_WRITE, dev->nsid, (uint64_t)block_no,
+                        1u, g_io_buffer) != 0) {
+    return BLOCK_IO_ERR_PERMANENT;
+  }
+  cls = nvme_io_cmd_classified(dev, &cmd, &cqe);
+  if (cls == BLOCK_IO_OK) {
+    nvme_smoke_signal_ok();
+  }
+  return cls;
+}
+
+/* Slice 3E.2.B — Controller Level Reset triggered by the unified
+ * retry loop when it observes BLOCK_IO_ERR_TIMEOUT.
+ *
+ * Strategy: toggle CC.EN=0, wait for CSTS.RDY=0, then CC.EN=1 and
+ * wait for CSTS.RDY=1. This is the heaviest recovery NVMe offers
+ * short of NSSR; it loses in-flight commands by design, which is
+ * acceptable because we only reach it after a TIMEOUT (the
+ * controller already wedged).
+ *
+ * Per NVMe 2.0 §3.5.4 / 1.4 §7.3.1: across CC.EN toggle the
+ * controller discards all I/O queue mappings. The DRAM buffers
+ * (`g_admin_sq`, `g_admin_cq`, `g_io_sq`, `g_io_cq`) survive but
+ * the controller's view of them does NOT — the host MUST reissue
+ * Create I/O CQ + Create I/O SQ before the next I/O command, or
+ * the retry will pend forever. This was alpha.251 audit BUG #2,
+ * fixed in alpha.252 by calling `nvme_create_io_cq` /
+ * `nvme_create_io_sq` here as part of the reset path.
+ *
+ * Admin queues survive because their base addresses live in the
+ * AQA register, which is preserved across CC.EN unless the host
+ * explicitly clears it; we do not touch AQA so the admin path is
+ * usable for the Create I/O CQ/SQ commands themselves.
+ *
+ * Returns 0 if the controller came back ready AND the I/O queues
+ * were re-registered, -1 if any step failed. */
+static int nvme_controller_reset(struct nvme_device *dev) {
+  uint32_t cc;
+  uint32_t csts;
+  if (!dev || !dev->bar) {
+    return -1;
+  }
+  klog(KLOG_INFO, "[nvme] controller reset begin");
+  cc = mmio_read32(dev->bar + NVME_CC);
+  mmio_write32(dev->bar + NVME_CC, cc & ~NVME_CC_EN);
+  for (uint32_t spin = 0; spin < 1000000u; ++spin) {
+    csts = mmio_read32(dev->bar + NVME_CSTS);
+    if ((csts & NVME_CSTS_RDY) == 0u) {
+      break;
+    }
+    cpu_relax();
+  }
+  csts = mmio_read32(dev->bar + NVME_CSTS);
+  if (csts & NVME_CSTS_RDY) {
+    klog_hex(KLOG_ERROR, "[nvme] reset CSTS still RDY=", csts);
+    return -1;
+  }
+  mmio_write32(dev->bar + NVME_CC, cc | NVME_CC_EN);
+  for (uint32_t spin = 0; spin < 1000000u; ++spin) {
+    csts = mmio_read32(dev->bar + NVME_CSTS);
+    if (csts & NVME_CSTS_RDY) {
+      break;
+    }
+    cpu_relax();
+  }
+  csts = mmio_read32(dev->bar + NVME_CSTS);
+  if ((csts & NVME_CSTS_RDY) == 0u) {
+    klog_hex(KLOG_ERROR, "[nvme] reset RDY never came back, csts=", csts);
+    return -1;
+  }
+  /* Re-prime phase tracking. The next CQE will flip the phase bit. */
+  dev->admin_cq_head = 0;
+  dev->admin_cq_phase = 1;
+  dev->admin_sq_tail = 0;
+  dev->io_cq_head = 0;
+  dev->io_cq_phase = 1;
+  dev->io_sq_tail = 0;
+  /* alpha.252 audit fix BUG #2: recreate I/O queues. The controller
+   * discarded them when CC.EN dropped; without these the next I/O
+   * command would pend forever and burn the retry budget. */
+  if (nvme_create_io_cq(dev, 1) != 0) {
+    klog(KLOG_ERROR, "[nvme] controller reset: failed to recreate I/O CQ");
+    return -1;
+  }
+  if (nvme_create_io_sq(dev, 1, 1) != 0) {
+    klog(KLOG_ERROR, "[nvme] controller reset: failed to recreate I/O SQ");
+    return -1;
+  }
+  klog(KLOG_INFO, "[nvme] controller reset ok (I/O queues restored)");
+  return 0;
+}
+
+static int nvme_reset_op(void *opaque) {
+  return nvme_controller_reset((struct nvme_device *)opaque);
+}
+
 static struct block_device_ops nvme_block_ops;
 static int nvme_block_ops_initialized = 0;
 
@@ -446,6 +581,9 @@ static void nvme_init_block_ops(void) {
   }
   nvme_block_ops.read_block = nvme_block_read;
   nvme_block_ops.write_block = nvme_block_write;
+  nvme_block_ops.read_block_ex = nvme_block_read_ex;
+  nvme_block_ops.write_block_ex = nvme_block_write_ex;
+  nvme_block_ops.reset = nvme_reset_op;
   nvme_block_ops_initialized = 1;
 }
 
@@ -455,22 +593,18 @@ int nvme_init(void) {
   nvme_init_block_ops();
   struct pci_device pci_dev;
 
-  dbg_puts("[nvme] scanning for NVMe controller...\n");
+  klog(KLOG_INFO, "[nvme] scanning for NVMe controller...");
 
   pci_init();
 
   if (pci_find_nvme(&pci_dev) != 0) {
-    dbg_puts("[nvme] no NVMe controller found\n");
+    klog(KLOG_INFO, "[nvme] no NVMe controller found");
     return -1;
   }
 
-  dbg_puts("[nvme] found NVMe at ");
-  dbg_hex32(pci_dev.bus);
-  dbg_putc(':');
-  dbg_hex32(pci_dev.device);
-  dbg_putc('.');
-  dbg_hex32(pci_dev.function);
-  dbg_putc('\n');
+  klog_hex(KLOG_INFO, "[nvme] found NVMe bus=", pci_dev.bus);
+  klog_hex(KLOG_INFO, "[nvme] found NVMe device=", pci_dev.device);
+  klog_hex(KLOG_INFO, "[nvme] found NVMe function=", pci_dev.function);
 
   /* Enable bus mastering and memory access */
   uint16_t cmd = pci_config_read16(pci_dev.bus, pci_dev.device,
@@ -483,7 +617,7 @@ int nvme_init(void) {
   uint64_t bar0 =
       pci_read_bar64(pci_dev.bus, pci_dev.device, pci_dev.function, 0);
   if (bar0 == 0) {
-    dbg_puts("[nvme] BAR0 is zero\n");
+    klog(KLOG_ERROR, "[nvme] BAR0 is zero");
     return -1;
   }
 
@@ -504,15 +638,15 @@ int nvme_init(void) {
 
   /* Create I/O queues */
   if (nvme_create_io_cq(&g_nvme_dev, 1) != 0) {
-    dbg_puts("[nvme] failed to create I/O CQ\n");
+    klog(KLOG_ERROR, "[nvme] failed to create I/O CQ");
     return -1;
   }
   if (nvme_create_io_sq(&g_nvme_dev, 1, 1) != 0) {
-    dbg_puts("[nvme] failed to create I/O SQ\n");
+    klog(KLOG_ERROR, "[nvme] failed to create I/O SQ");
     return -1;
   }
 
-  dbg_puts("[nvme] I/O queues created\n");
+  klog(KLOG_INFO, "[nvme] I/O queues created");
 
   /* Setup block device */
   g_nvme_block_dev.name = "nvme0n1";
@@ -523,7 +657,7 @@ int nvme_init(void) {
   g_nvme_block_dev.ops = &nvme_block_ops;
 
   g_nvme_initialized = 1;
-  dbg_puts("[nvme] init complete\n");
+  klog(KLOG_INFO, "[nvme] init complete");
 
   return 0;
 }

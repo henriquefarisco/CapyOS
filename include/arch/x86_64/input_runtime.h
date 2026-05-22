@@ -9,6 +9,13 @@ enum x64_input_backend {
   X64_INPUT_BACKEND_PS2,
   X64_INPUT_BACKEND_HYPERV,
   X64_INPUT_BACKEND_COM1,
+  /* Etapa 3 — Slice 3D §14.1: USB HID keyboard as a first-class
+   * input backend. Drained from `usb_hid_keyboard_poll` which is
+   * fed by `SYSTEM_WORK_USB_POLL` running through xHCI interrupt
+   * transfers. Selected in the native group together with PS/2
+   * and Hyper-V so the desktop session works post-ExitBootServices
+   * without relying on `EFI ConIn`. */
+  X64_INPUT_BACKEND_USB,
 };
 
 struct x64_input_config {
@@ -18,11 +25,14 @@ struct x64_input_config {
   int has_hyperv;
   int hyperv_deferred;
   int has_com1;
+  int has_usb;
   uint64_t efi_system_table;
 };
 
 struct x64_input_runtime {
-  enum x64_input_backend order[4];
+  /* Capacity sized for all 5 backends (EFI, PS/2, Hyper-V, USB, COM1)
+   * so the registration order never silently drops one. */
+  enum x64_input_backend order[5];
   uint32_t order_count;
   enum x64_input_backend primary_backend;
   enum x64_input_backend last_backend;
@@ -43,6 +53,7 @@ struct x64_input_runtime {
   int32_t hyperv_prepare_last_result;
   uint64_t hyperv_retry_tick;
   int has_com1;
+  int has_usb;
   uint64_t efi_system_table;
   int native_confirmed;
   int firmware_retired;

@@ -50,11 +50,9 @@
 /*
  * Default modules-index URL.
  *
- * Uses GitHub's stable `/releases/latest/download/` redirect so the
- * wizard always picks up whichever CapyUI release is currently marked
- * as "latest" in the publisher repo, with no need to bump a hardcoded
- * tag on every alpha. CapyUI's CI publishes the rolling `latest`
- * release on every push to its `main` branch.
+ * Pin the modules index to the frozen CapyUI release consumed by this
+ * CapyOS alpha. Avoiding `/releases/latest/download/` keeps the kernel
+ * downloader on a direct release asset URL with no redirect dependency.
  *
  * The compile-time CAPYOS_DEFAULT_MODULES_INDEX_URL knob lets vendor
  * builds redirect to a private/mirrored channel without patching this
@@ -62,7 +60,7 @@
  */
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://github.com/henriquefarisco/CapyUI/releases/download/v0.7.3/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyUI/releases/download/v2.13.0/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME

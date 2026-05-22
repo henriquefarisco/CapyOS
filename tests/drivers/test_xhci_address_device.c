@@ -1,9 +1,22 @@
+/* test_xhci_address_device.c — Context builders + enable_slot tests.
+ *
+ * Split (2026-05-21) across 4 TUs to keep each ≤ 900 lines:
+ *   - test_xhci_address_device.c (this file)  — context builders + enable_slot
+ *   - test_xhci_transfers.c                   — control transfer + interrupt EP
+ *   - test_xhci_event_pump.c                  — event-ring dispatcher
+ *   - test_xhci_release_slot.c                — release slot + port ack CSC
+ *
+ * Shared seed helpers live in
+ * `tests/drivers/internal/test_xhci_helpers.h` (static inline).
+ */
 #include "drivers/usb/xhci.h"
 #include "drivers/usb/usb_core.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "internal/test_xhci_helpers.h"
 
 static int g_failures = 0;
 
@@ -149,29 +162,6 @@ static void test_build_normal_trb_layout(void) {
     if (((trb.control >> 5) & 1u) != 1u) fail("normal TRB must request IOC");
 }
 
-static void seed_command_completion(struct xhci_trb *evt_ring, uint32_t evt_idx,
-                                    uint8_t slot_id) {
-    evt_ring[evt_idx].param = 0;
-    evt_ring[evt_idx].status = (uint32_t)XHCI_TRB_CC_SUCCESS << 24;
-    evt_ring[evt_idx].control = (TRB_TYPE_CMD_COMPLETE << 10) |
-                                ((uint32_t)slot_id << 24) | 1u;
-}
-
-static void seed_port_status_event(struct xhci_trb *evt_ring, uint32_t evt_idx) {
-    evt_ring[evt_idx].param = 0;
-    evt_ring[evt_idx].status = 0;
-    evt_ring[evt_idx].control = (TRB_TYPE_PORT_STATUS << 10) | 1u;
-}
-
-static void seed_transfer_event(struct xhci_trb *evt_ring, uint32_t evt_idx,
-                                uint8_t slot_id, uint8_t ep_id) {
-    evt_ring[evt_idx].param = 0;
-    evt_ring[evt_idx].status = (uint32_t)XHCI_TRB_CC_SUCCESS << 24;
-    evt_ring[evt_idx].control = (TRB_TYPE_TRANSFER << 10) |
-                                ((uint32_t)ep_id << 16) |
-                                ((uint32_t)slot_id << 24) | 1u;
-}
-
 static void test_enable_slot_advances_past_index_63(void) {
     struct xhci_controller xhci;
     struct xhci_trb cmd_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
@@ -281,312 +271,6 @@ static void test_enable_slot_skips_non_command_events(void) {
     if (xhci.evt_ring_idx != 2u) fail("event ring must consume skipped and completion events");
 }
 
-static void test_control_transfer_queues_get_descriptor_trbs(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb ep0_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    uint8_t data[18];
-    struct usb_setup_packet setup;
-    uint64_t setup_param;
-    memset(&xhci, 0, sizeof(xhci));
-    memset(ep0_ring, 0, sizeof(ep0_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    memset(data, 0, sizeof(data));
-    if (usb_build_get_descriptor_request(USB_DESC_TYPE_DEVICE, 0, 0, sizeof(data), &setup) != 0) {
-        fail("setup request prerequisite failed");
-        return;
-    }
-    seed_transfer_event(evt_ring, 0, 3u, 1u);
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.ep0_rings[3] = ep0_ring;
-    xhci.ep0_ring_cycle[3] = 1;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    if (xhci_control_transfer(&xhci, 3u, &setup, data, sizeof(data), 1) != 0) {
-        fail("control transfer must complete from seeded transfer event");
-        return;
-    }
-    setup_param = ((uint64_t)setup.bmRequestType) |
-                  ((uint64_t)setup.bRequest << 8) |
-                  ((uint64_t)setup.wValue << 16) |
-                  ((uint64_t)setup.wIndex << 32) |
-                  ((uint64_t)setup.wLength << 48);
-    if (ep0_ring[0].param != setup_param) fail("setup TRB must inline setup packet");
-    if (((ep0_ring[0].control >> 10) & 0x3Fu) != TRB_TYPE_SETUP) fail("first EP0 TRB must be setup");
-    if (((ep0_ring[0].control >> 16) & 0x3u) != 3u) fail("setup TRB must declare IN data stage");
-    if ((ep0_ring[0].control & 1u) != 1u) fail("setup TRB must carry EP0 cycle bit");
-    if (ep0_ring[1].param != (uint64_t)(uintptr_t)data) fail("data TRB must point at data buffer");
-    if (ep0_ring[1].status != sizeof(data)) fail("data TRB must encode length");
-    if (((ep0_ring[1].control >> 10) & 0x3Fu) != TRB_TYPE_DATA) fail("second EP0 TRB must be data");
-    if (((ep0_ring[1].control >> 16) & 1u) != 1u) fail("data TRB must be IN");
-    if (((ep0_ring[2].control >> 10) & 0x3Fu) != TRB_TYPE_STATUS) fail("third EP0 TRB must be status");
-    if (((ep0_ring[2].control >> 16) & 1u) != 0u) fail("status TRB must be OUT for IN transfer");
-    if (xhci.ep0_ring_idx[3] != 3u) fail("EP0 ring index must advance by three TRBs");
-    if (doorbells[3] != 1u) fail("control transfer must ring slot doorbell for EP0");
-}
-
-static void test_control_transfer_wraps_ep0_ring(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb ep0_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    uint8_t data[8];
-    struct usb_setup_packet setup;
-    memset(&xhci, 0, sizeof(xhci));
-    memset(ep0_ring, 0, sizeof(ep0_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    memset(data, 0, sizeof(data));
-    usb_build_get_descriptor_request(USB_DESC_TYPE_DEVICE, 0, 0, sizeof(data), &setup);
-    seed_transfer_event(evt_ring, 0, 4u, 1u);
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.ep0_rings[4] = ep0_ring;
-    xhci.ep0_ring_idx[4] = XHCI_CMD_RING_TRBS - 2u;
-    xhci.ep0_ring_cycle[4] = 1;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    if (xhci_control_transfer(&xhci, 4u, &setup, data, sizeof(data), 1) != 0) {
-        fail("control transfer at EP0 tail must complete");
-        return;
-    }
-    if (((ep0_ring[XHCI_CMD_RING_TRBS - 2u].control >> 10) & 0x3Fu) != TRB_TYPE_SETUP) {
-        fail("tail EP0 TRB must contain setup stage");
-    }
-    if (((ep0_ring[0].control >> 10) & 0x3Fu) != TRB_TYPE_DATA) {
-        fail("wrapped EP0 TRB 0 must contain data stage");
-    }
-    if (((ep0_ring[1].control >> 10) & 0x3Fu) != TRB_TYPE_STATUS) {
-        fail("wrapped EP0 TRB 1 must contain status stage");
-    }
-    if (xhci.ep0_ring_idx[4] != 2u) fail("EP0 ring index must wrap and advance");
-    if (xhci.ep0_ring_cycle[4] != 0) fail("EP0 ring cycle must toggle on wrap");
-}
-
-static void test_control_transfer_set_configuration_no_data(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb ep0_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    struct usb_setup_packet setup;
-    memset(&xhci, 0, sizeof(xhci));
-    memset(ep0_ring, 0, sizeof(ep0_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    setup.bmRequestType = 0x00u;
-    setup.bRequest = USB_REQ_SET_CONFIGURATION;
-    setup.wValue = 1u;
-    setup.wIndex = 0;
-    setup.wLength = 0;
-    seed_transfer_event(evt_ring, 0, 5u, 1u);
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.ep0_rings[5] = ep0_ring;
-    xhci.ep0_ring_cycle[5] = 1;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    if (xhci_control_transfer(&xhci, 5u, &setup, NULL, 0, 0) != 0) {
-        fail("SET_CONFIGURATION no-data control transfer must complete");
-        return;
-    }
-    if (((ep0_ring[0].control >> 10) & 0x3Fu) != TRB_TYPE_SETUP) {
-        fail("SET_CONFIGURATION first TRB must be setup");
-    }
-    if (((ep0_ring[0].control >> 16) & 0x3u) != 0u) {
-        fail("SET_CONFIGURATION setup TRB must have no data stage");
-    }
-    if (((ep0_ring[1].control >> 10) & 0x3Fu) != TRB_TYPE_STATUS) {
-        fail("SET_CONFIGURATION second TRB must be status");
-    }
-    if (((ep0_ring[1].control >> 16) & 1u) != 1u) {
-        fail("SET_CONFIGURATION status stage must be IN");
-    }
-    if (xhci.ep0_ring_idx[5] != 2u) fail("SET_CONFIGURATION must queue two TRBs");
-    if (doorbells[5] != 1u) fail("SET_CONFIGURATION must ring EP0 doorbell");
-}
-
-static void test_control_transfer_preserves_unmatched_transfer_event(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb ep0_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    struct usb_setup_packet setup;
-    memset(&xhci, 0, sizeof(xhci));
-    memset(ep0_ring, 0, sizeof(ep0_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    setup.bmRequestType = 0x00u;
-    setup.bRequest = USB_REQ_SET_CONFIGURATION;
-    setup.wValue = 1u;
-    setup.wIndex = 0;
-    setup.wLength = 0;
-    seed_transfer_event(evt_ring, 0, 7u, 1u);
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.ep0_rings[5] = ep0_ring;
-    xhci.ep0_ring_cycle[5] = 1;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    if (xhci_control_transfer(&xhci, 5u, &setup, NULL, 0, 0) == 0) {
-        fail("control transfer must reject event for another slot");
-    }
-    if (xhci.evt_ring_idx != 0u) fail("unmatched control transfer event must remain pending");
-}
-
-static void test_control_transfer_hid_set_protocol_no_data(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb ep0_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    struct usb_setup_packet setup;
-    uint64_t setup_param;
-    memset(&xhci, 0, sizeof(xhci));
-    memset(ep0_ring, 0, sizeof(ep0_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    setup.bmRequestType = 0x21u;
-    setup.bRequest = USB_HID_REQ_SET_PROTOCOL;
-    setup.wValue = 0;
-    setup.wIndex = 2u;
-    setup.wLength = 0;
-    seed_transfer_event(evt_ring, 0, 6u, 1u);
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.ep0_rings[6] = ep0_ring;
-    xhci.ep0_ring_cycle[6] = 1;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    if (xhci_control_transfer(&xhci, 6u, &setup, NULL, 0, 0) != 0) {
-        fail("HID SET_PROTOCOL no-data control transfer must complete");
-        return;
-    }
-    setup_param = ((uint64_t)setup.bmRequestType) |
-                  ((uint64_t)setup.bRequest << 8) |
-                  ((uint64_t)setup.wValue << 16) |
-                  ((uint64_t)setup.wIndex << 32) |
-                  ((uint64_t)setup.wLength << 48);
-    if (ep0_ring[0].param != setup_param) fail("HID SET_PROTOCOL setup packet must be inlined");
-    if (((ep0_ring[1].control >> 10) & 0x3Fu) != TRB_TYPE_STATUS) {
-        fail("HID SET_PROTOCOL second TRB must be status");
-    }
-    if (((ep0_ring[1].control >> 16) & 1u) != 1u) {
-        fail("HID SET_PROTOCOL status stage must be IN");
-    }
-    if (doorbells[6] != 1u) fail("HID SET_PROTOCOL must ring EP0 doorbell");
-}
-
-static void test_configure_interrupt_endpoint_queues_command_and_primes_ring(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb cmd_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    uint32_t dummy_device_context;
-    struct usb_endpoint_info ep;
-    memset(&xhci, 0, sizeof(xhci));
-    memset(cmd_ring, 0, sizeof(cmd_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    seed_command_completion(evt_ring, 0, 0u);
-    ep.address = 0x81u;
-    ep.type = 3u;
-    ep.max_packet_size = 8u;
-    ep.interval = 10u;
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.context_size = 32u;
-    xhci.cmd_ring = cmd_ring;
-    xhci.cmd_ring_cycle = 1;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    xhci.device_contexts[5] = &dummy_device_context;
-    if (xhci_configure_interrupt_endpoint(&xhci, 5u, &ep, 8u) != 0) {
-        fail("configure interrupt endpoint must consume seeded command completion");
-        return;
-    }
-    if (((cmd_ring[0].control >> 10) & 0x3Fu) != TRB_TYPE_CONFIG_EP) {
-        fail("configure endpoint must queue Configure Endpoint command");
-    }
-    if (((cmd_ring[0].control >> 24) & 0xFFu) != 5u) fail("configure command must encode slot id");
-    if (!xhci.intr_rings[5]) fail("interrupt ring must be retained on success");
-    if (!xhci.intr_buffers[5]) fail("interrupt report buffer must be retained on success");
-    if (xhci.intr_ep_dci[5] != xhci_endpoint_dci(0x81u)) fail("interrupt endpoint DCI must be stored");
-    if (((xhci.intr_rings[5][0].control >> 10) & 0x3Fu) != TRB_TYPE_NORMAL) {
-        fail("interrupt ring must be primed with normal TRB");
-    }
-    if (doorbells[5] != xhci_endpoint_dci(0x81u)) fail("configure must ring endpoint doorbell");
-}
-
-static void test_poll_interrupt_copies_report_and_rearms(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb intr_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint32_t doorbells[16];
-    uint8_t report[8] = {0x02u, 0, 4u, 0, 0, 0, 0, 0};
-    uint8_t out[8];
-    memset(&xhci, 0, sizeof(xhci));
-    memset(intr_ring, 0, sizeof(intr_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(doorbells, 0xFF, sizeof(doorbells));
-    memset(out, 0, sizeof(out));
-    seed_transfer_event(evt_ring, 0, 6u, xhci_endpoint_dci(0x81u));
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.db_base = (volatile uint8_t *)doorbells;
-    xhci.intr_rings[6] = intr_ring;
-    xhci.intr_buffers[6] = report;
-    xhci.intr_buffer_len[6] = sizeof(report);
-    xhci.intr_ep_addr[6] = 0x81u;
-    xhci.intr_ep_dci[6] = xhci_endpoint_dci(0x81u);
-    xhci.intr_ring_cycle[6] = 1;
-    if (xhci_poll_interrupt(&xhci, 6u, 0x81u, out, sizeof(out)) != (int)sizeof(out)) {
-        fail("poll interrupt must return copied report length");
-        return;
-    }
-    if (out[0] != 0x02u || out[2] != 4u) fail("poll interrupt must copy report bytes");
-    if (((intr_ring[0].control >> 10) & 0x3Fu) != TRB_TYPE_NORMAL) {
-        fail("poll interrupt must rearm a normal TRB");
-    }
-    if (doorbells[6] != xhci_endpoint_dci(0x81u)) fail("poll interrupt must ring endpoint doorbell");
-    if (xhci.evt_ring_idx != 1u) fail("poll interrupt must consume transfer event");
-}
-
-static void test_poll_interrupt_preserves_unmatched_transfer_event(void) {
-    struct xhci_controller xhci;
-    struct xhci_trb intr_ring[XHCI_CMD_RING_TRBS] __attribute__((aligned(16)));
-    struct xhci_trb evt_ring[XHCI_EVT_RING_TRBS] __attribute__((aligned(16)));
-    uint8_t report[8] = {0};
-    uint8_t out[8];
-    memset(&xhci, 0, sizeof(xhci));
-    memset(intr_ring, 0, sizeof(intr_ring));
-    memset(evt_ring, 0, sizeof(evt_ring));
-    memset(out, 0, sizeof(out));
-    seed_transfer_event(evt_ring, 0, 7u, xhci_endpoint_dci(0x81u));
-    xhci.initialized = 1;
-    xhci.max_slots = 8u;
-    xhci.evt_ring = evt_ring;
-    xhci.evt_ring_cycle = 1;
-    xhci.intr_rings[6] = intr_ring;
-    xhci.intr_buffers[6] = report;
-    xhci.intr_buffer_len[6] = sizeof(report);
-    xhci.intr_ep_addr[6] = 0x81u;
-    xhci.intr_ep_dci[6] = xhci_endpoint_dci(0x81u);
-    if (xhci_poll_interrupt(&xhci, 6u, 0x81u, out, sizeof(out)) != 0) {
-        fail("poll interrupt must not report data for another slot");
-    }
-    if (xhci.evt_ring_idx != 0u) fail("unmatched transfer event must remain pending");
-}
-
 int run_xhci_address_device_tests(void) {
     g_failures = 0;
     test_port_speed_extracts_portsc_speed_field();
@@ -601,14 +285,6 @@ int run_xhci_address_device_tests(void) {
     test_enable_slot_wraps_on_link_trb_boundary();
     test_enable_slot_toggles_event_cycle_on_wrap();
     test_enable_slot_skips_non_command_events();
-    test_control_transfer_queues_get_descriptor_trbs();
-    test_control_transfer_wraps_ep0_ring();
-    test_control_transfer_set_configuration_no_data();
-    test_control_transfer_preserves_unmatched_transfer_event();
-    test_control_transfer_hid_set_protocol_no_data();
-    test_configure_interrupt_endpoint_queues_command_and_primes_ring();
-    test_poll_interrupt_copies_report_and_rearms();
-    test_poll_interrupt_preserves_unmatched_transfer_event();
     if (g_failures == 0) printf("[tests] xhci_address_device OK\n");
     return g_failures;
 }

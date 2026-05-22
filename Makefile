@@ -170,6 +170,9 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/boot_splash.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_io_helpers.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_services.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_services_capypkg.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_services_work.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_services_recovery.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_runtime_ops.o \
 	$(BUILD)/x86_64/arch/x86_64/native_runtime_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_platform_runtime.o \
@@ -316,8 +319,13 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/net/vmxnet3.o \
 	$(BUILD)/x86_64/drivers/net/net_probe.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme.o \
+	$(BUILD)/x86_64/drivers/nvme/nvme_commands.o \
 	$(BUILD)/x86_64/drivers/hyperv/hyperv_stage.o \
 	$(BUILD)/x86_64/drivers/usb/xhci.o \
+	$(BUILD)/x86_64/drivers/usb/xhci_context.o \
+	$(BUILD)/x86_64/drivers/usb/xhci_event.o \
+	$(BUILD)/x86_64/drivers/usb/xhci_port_slot.o \
+	$(BUILD)/x86_64/drivers/usb/xhci_transfer.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_core.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_offers.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_channel_runtime.o \
@@ -329,6 +337,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/input/keyboard/layouts/us.o \
 	$(BUILD)/x86_64/drivers/input/keyboard/layouts/br_abnt2.o \
 	$(BUILD)/x86_64/drivers/storage/ahci.o \
+	$(BUILD)/x86_64/drivers/storage/ahci_commands.o \
+	$(BUILD)/x86_64/drivers/storage/ahci_slot_allocator.o \
+	$(BUILD)/x86_64/drivers/storage/block_error.o \
+	$(BUILD)/x86_64/drivers/storage/storage_smoke.o \
+	$(BUILD)/x86_64/drivers/storage/storage_smoke_io.o \
 	$(BUILD)/x86_64/drivers/storage/efi_block.o \
 	$(BUILD)/x86_64/drivers/storage/ramdisk.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_backend.o \
@@ -584,6 +597,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/usb/usb_core.o \
 	$(BUILD)/x86_64/drivers/usb/usb_descriptors.o \
 	$(BUILD)/x86_64/drivers/usb/usb_hid.o \
+	$(BUILD)/x86_64/drivers/usb/usb_hid_smoke.o \
+	$(BUILD)/x86_64/drivers/usb/usb_hid_smoke_io.o \
 	$(BUILD)/x86_64/drivers/gpu/gpu_core.o \
 	$(BUILD)/x86_64/drivers/rtc/rtc.o \
 	$(BUILD)/x86_64/drivers/serial/serial_com1.o \
@@ -1444,8 +1459,21 @@ TEST_SRCS   := \
                tests/drivers/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
                tests/drivers/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
                tests/drivers/test_usb_hid_init.c src/drivers/usb/usb_hid.c \
+                   src/drivers/usb/usb_hid_smoke.c tests/stubs/stub_usb_hid_smoke_io.c \
+               tests/drivers/test_usb_hid_smoke_gate.c \
                tests/drivers/test_xhci_address_device.c src/drivers/usb/xhci.c \
+                   src/drivers/usb/xhci_context.c src/drivers/usb/xhci_event.c \
+                   src/drivers/usb/xhci_port_slot.c src/drivers/usb/xhci_transfer.c \
+               tests/drivers/test_xhci_transfers.c \
+               tests/drivers/test_xhci_event_pump.c \
+               tests/drivers/test_xhci_release_slot.c \
                tests/drivers/test_usb_descriptor_parse.c src/drivers/usb/usb_descriptors.c \
+               tests/drivers/test_ahci_commands.c src/drivers/storage/ahci_commands.c \
+               tests/drivers/test_nvme_commands.c src/drivers/nvme/nvme_commands.c \
+               tests/drivers/test_block_error.c src/drivers/storage/block_error.c \
+               tests/fs/test_block_retry.c \
+               tests/drivers/test_ahci_slot_allocator.c src/drivers/storage/ahci_slot_allocator.c \
+               tests/drivers/test_storage_smoke_gate.c src/drivers/storage/storage_smoke.c tests/stubs/stub_storage_smoke_io.c \
                \
                tests/kernel/test_klog.c src/kernel/log/klog.c \
                tests/kernel/test_pmm.c src/memory/pmm.c \
@@ -1695,6 +1723,40 @@ smoke-x64-vmware-mouse-events: all64 iso-uefi manifest64
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] gui-session ready" \
 		--marker "[smoke] mouse-events ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 3 — Slice 3D external validation gate.
+# Boots the official VMware+UEFI+E1000 VM with a virtual USB HID
+# keyboard attached, expects the operator (or release CI) to send at
+# least one keystroke into the guest, and verifies that the kernel's
+# USB stack delivered the keystroke end-to-end through the configured
+# interrupt endpoint. The marker is emitted by
+# src/drivers/usb/usb_hid_smoke_io.c after kbd_buffer_push has accepted
+# at least one ASCII character from a USB_DEV_CONFIGURED HID keyboard.
+# Required reading before invoking this gate:
+# docs/operations/etapa-3-external-validation-playbook.md.
+smoke-x64-vmware-usb-hid-keyboard: all64 iso-uefi manifest64
+	@echo "Executando smoke test VMware+E1000 usb-hid-keyboard..."
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] usb-hid-keyboard ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 3 — Slice 3E.5 external validation gate.
+# Boots the official VMware+UEFI+E1000 VM with storage (AHCI or NVMe
+# depending on the operator's profile.ini) and validates that the
+# unified block I/O stack delivers at least one successful read or
+# write before timeout. The marker is emitted by
+# src/drivers/storage/storage_smoke_io.c the first time an
+# ahci_read_block_ex / ahci_write_block_ex / nvme_block_read_ex /
+# nvme_block_write_ex returns BLOCK_IO_OK (see Slice 3E.4).
+# Required reading before invoking this gate:
+# docs/operations/etapa-3-slice-3e-validation-playbook.md.
+smoke-x64-vmware-storage-resilience: all64 iso-uefi manifest64
+	@echo "Executando smoke test VMware+E1000 storage-resilience..."
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] storage-stack ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
 smoke-x64-cli-nvme: all64 iso-uefi manifest64
@@ -1996,6 +2058,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

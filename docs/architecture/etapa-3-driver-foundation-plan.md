@@ -1,10 +1,10 @@
 # Etapa 3 — Driver foundation plan (XHCI + USB HID + storage)
 
-**Status:** Etapa 3 ativa desde 2026-05-18 após aceite operacional externo da Etapa 2 informado pelo operador. Slices 3A-3D foram implementados em código sem validação externa própria nesta máquina. Próximo gate ativo: validação externa do Slice 3D antes de liberar 3E.
+**Status:** Etapa 3 **concluída** em 2026-05-21 (alpha.253) após aprovação externa do gate `make smoke-x64-vmware-storage-resilience`. Etapa 4 abriu na mesma data (CapyDisplay 2D + scheduler/multithread). Este documento permanece como referência histórica e operacional dos sub-slices entregues; também documenta os follow-ups não-bloqueantes (3F-3J + 3E.4.C + 3E.5.B) que ficam como bug fixes oportunísticos.
 
 **Escopo:** detalha a primeira onda de trabalho da Etapa 3 nova (Driver framework + entrada USB HID + storage estável), conforme `docs/plans/active/capyos-master-plan.md` §6.
 
-**Audiência:** desenvolvedor que vai continuar a Etapa 3 ativa.
+**Audiência:** desenvolvedor que precisa entender o que foi entregue na Etapa 3 ou que vai tocar follow-ups (Slices 3F-3J, sub-slices 3E.4.C e 3E.5.B).
 
 ## Implementation log
 
@@ -13,7 +13,7 @@
 | 3A | Código entregue 2026-05-15, validação externa própria pendente | bug de state machine corrigido; 6 testes host-side adicionados |
 | 3B | Código entregue 2026-05-18, validação externa própria pendente | XHCI Address Device + enumeração até ADDRESSED + testes host-side de contexto/ring |
 | 3C | Código entregue 2026-05-18, validação externa própria pendente | control transfer GET_DESCRIPTOR + descriptor parsing; device permanece ADDRESSED enriquecido até Configure Endpoint |
-| 3D | Código entregue 2026-05-18, validação externa própria pendente | SET_CONFIGURATION + HID boot protocol + Configure Endpoint + interrupt transfer + HID polling real |
+| 3D | Código entregue 2026-05-18, scaffolding de gate entregue 2026-05-21, validação externa pendente | SET_CONFIGURATION + HID boot protocol + Configure Endpoint + interrupt transfer + HID polling real + marker `[smoke] usb-hid-keyboard ready` |
 
 ## 1. Estado atual auditado (2026-05-18)
 
@@ -316,3 +316,395 @@ Este plano deve continuar sem executar comandos nesta máquina de review/edit. A
 1. Usar o aceite operacional da Etapa 2 registrado em 2026-05-18 como pré-requisito já atendido.
 2. Re-ler `docs/plans/active/capyos-master-plan.md §6` para confirmar a Etapa 3 ainda está como definida.
 3. Executar externamente o gate USB HID completo do Slice 3D e registrar resultado antes de aplicar Slice 3E.
+4. Quando o gate de Slice 3D fechar, abrir o plano subordinado
+   [`etapa-3-slice-3e-plan.md`](etapa-3-slice-3e-plan.md) (rascunho
+   entregue em 2026-05-21) e seguir o checklist de pré-requisitos
+   antes de começar Slice 3E.1.
+
+## 13. Slice 3D — scaffolding de gate externo (entregue 2026-05-21)
+
+Para destravar a execução externa do Slice 3D, o seguinte foi
+acrescentado no workspace de review/edit (sem rodar comandos):
+
+- **Gate puro host-testável** em `include/drivers/usb/usb_hid_smoke.h` +
+  `src/drivers/usb/usb_hid_smoke.c`: `usb_hid_keyboard_smoke_gate_observed`
+  + `usb_hid_keyboard_smoke_observe` com latch idempotente
+  (`USB_HID_KEYBOARD_SMOKE_GATE_VERSION = 1`).
+- **Marker canônico** `USB_HID_KEYBOARD_SMOKE_MARKER = "[smoke] usb-hid-keyboard ready"`.
+- **I/O kernel-only** em `src/drivers/usb/usb_hid_smoke_io.c`
+  (chama `com1_puts`) + **stub host-side** em
+  `tests/stubs/stub_usb_hid_smoke_io.c` (no-op) para manter
+  `usb_hid.c` host-testável.
+- **Wiring** em `src/drivers/usb/usb_hid.c`: `usb_hid_init` conta HID
+  keyboards em `USB_DEV_CONFIGURED` no campo
+  `g_hid.kbd_configured_count`; `kbd_buffer_push` incrementa
+  `g_hid.kbd_chars_received` em cada caractere ASCII real bufferizado
+  e chama `usb_hid_keyboard_smoke_observe`; o emissor é acionado
+  exatamente uma vez na primeira transição.
+- **Host test** em `tests/drivers/test_usb_hid_smoke_gate.c`
+  registrado em `tests/test_runner.c` como
+  `run_usb_hid_smoke_gate_tests`. Cobre: gate bloqueado por qualquer
+  metade ausente; gate observa apenas com as duas metades; latch
+  emite uma vez; observe atualiza contadores mesmo bloqueado;
+  NULL state sem UB; estabilidade do literal do marker.
+- **Alvo Makefile** `smoke-x64-vmware-usb-hid-keyboard` que reusa
+  `tools/scripts/smoke_x64_vmware.py` com dois markers em ordem:
+  `[net] DHCP: lease acquired.` + `[smoke] usb-hid-keyboard ready`.
+- **Runbook** em
+  `docs/operations/etapa-3-external-validation-playbook.md`
+  orquestrando host gates, build gates e o smoke externo, com
+  matriz de triagem por sintoma.
+
+Próxima ação externa (operador / release CI): executar a Section 1
+do runbook na plataforma oficial VMware + UEFI + E1000 com teclado
+USB HID real anexado.
+
+## 14. Follow-ups conhecidos (não bloqueiam o gate de 3D)
+
+Itens descobertos durante a inspeção estática do Slice 3D e
+explicitamente fora do escopo do gate atual. Devem ser tratados
+em slices futuras quando a Etapa 3 abrir o device manager
+unificado, ou já na Etapa 4 conforme o caso.
+
+### 14.1 USB como input backend do runtime (endereçado em 2026-05-21)
+
+**Estado original:** o dispatcher central em
+`src/arch/x86_64/input_runtime/backend_management.c` reconhecia
+apenas EFI/PS2/HYPERV/COM1. `usb_hid_keyboard_poll` existia e era
+alimentado por `SYSTEM_WORK_USB_POLL`, mas nenhum chamador do
+shell drenava esse ring buffer. O critério forte do plano Etapa 3
+§6 ("teclado USB funcional fora do `EFI ConIn`") permanecia
+aberto.
+
+**Refatoração entregue (2026-05-21):**
+
+- Novo enum value `X64_INPUT_BACKEND_USB` em
+  `include/arch/x86_64/input_runtime.h:18`, com `order[]`
+  expandido de 4 para 5 entradas para acomodar todos os backends
+  possíveis sem dropar registros silenciosos.
+- Novos campos `has_usb` em `x64_input_config` e
+  `x64_input_runtime`.
+- `x64_input_runtime_init`
+  (`src/arch/x86_64/input_runtime/backend_management.c:218-307`)
+  agora trata USB como native: quando `prefer_native` está
+  ativo, registra a ordem `PS/2 → Hyper-V → USB → EFI`. No
+  caminho de firmware-preferred (raro pós-ExitBootServices),
+  a ordem fica `EFI → PS/2 → Hyper-V → USB`. COM1 segue como
+  canal auxiliar sempre ao fim.
+- `prefer_native` agora considera `has_usb` (qualquer backend
+  nativo retira a preferência por firmware).
+- `x64_input_probe_backends` (`backend_management.c:92-105`)
+  detecta o controlador XHCI via `xhci_find` em qualquer cenário
+  (não apenas no caminho "last resort"). Apenas detecção; a
+  inicialização real (`xhci_init` + `xhci_start`) continua
+  centralizada em `usb_core_init` (`kernel_work_usb_bringup`)
+  para evitar leak duplo de DCBAA/rings.
+- `polling.c::x64_input_poll_char`
+  (`src/arch/x86_64/input_runtime/polling.c:213-228`) drena o
+  ring USB via `usb_hid_keyboard_poll`. A classe HID já produz
+  ASCII (`'\n'` para Enter, `'\b'` para Backspace, etc.), então o
+  forwarding é direto — sem retradução de scancode.
+- `x64_input_backend_name(USB)` retorna `"usb"` em
+  `status_hyperv.c:55-56`.
+- `kernel_main.c:748,761` encaminha `input_probe.has_usb` ao
+  config.
+
+**Critério Etapa 3 §6 atingido:** com USB no order[] do native
+group, após `retire_firmware_backend` o desktop session opera
+sem `EFI ConIn`. O smoke marker `[smoke] usb-hid-keyboard ready`
+continua autoritativo para validar a entrega XHCI; o shell
+gráfico agora consome do mesmo ring que alimenta o marker.
+
+**Cobertura ausente:** `backend_management.c` e `polling.c` têm
+dependências MMIO/firmware pesadas (xhci, ps/2, hyperv, efi),
+fora do alcance do host build. A integração USB é validada por:
+
+- inspeção estática contra os contratos do enum/struct;
+- o gate externo `smoke-x64-vmware-usb-hid-keyboard` já
+  testemunha que `usb_hid_keyboard_poll` recebe caracteres
+  reais;
+- novo critério de aceite no runbook: digitar uma letra no
+  shell gráfico produz o caractere correto (encerra o critério
+  Etapa 3 §6 quando observado externamente).
+
+### 14.2 Cantos do event ring com múltiplos endpoints ativos (endereçado em 2026-05-21)
+
+**Estado original:** `xhci_wait_transfer_completion` retornava `-4`
+quando encontrava um Transfer Event não-matching SEM consumir o
+ring; `xhci_poll_interrupt` retornava `0` no mesmo cenário sem
+consumir. Para o gate de Slice 3D (um único teclado USB) o caminho
+de boot só dispara um TRB/IOC por vez, mas em uma VM com teclado +
+mouse + composite HID o ring estagnava.
+
+**Refatoração entregue (2026-05-21):** o consumo do event ring foi
+unificado em `xhci_event_pump` + `xhci_dispatch_event`
+(`src/drivers/usb/xhci.c:176-255`). O dispatcher rotea cada evento
+para seu dono:
+
+- `TRB_TYPE_CMD_COMPLETE` → `xhci->cmd_pending`;
+- `TRB_TYPE_TRANSFER` com EP0 owner → `xhci->ep0_pending[slot]`;
+- `TRB_TYPE_TRANSFER` com interrupt EP owner →
+  `xhci->intr_pending[slot]`;
+- demais eventos → contados em `xhci->event_stray_count` e o ring
+  avança normalmente.
+
+`xhci_event_pump` para em `type == 0` (Reserved per xHCI 1.2 §6.4.4)
+para não consumir memória zerada após um wrap do consumidor. Os
+três pontos de espera (`xhci_wait_command_completion`,
+`xhci_wait_transfer_completion`, `xhci_poll_interrupt`) agora
+delegam ao pump e consultam seu próprio `*_pending[]`, eliminando
+a estagnação multi-endpoint.
+
+**Cobertura de teste:** 5 novos testes em
+`tests/drivers/test_xhci_address_device.c` exercitam o dispatcher
+diretamente (`test_event_pump_*`). Os dois testes antigos que
+travavam a semântica "preserve unmatched" foram reescritos para
+travar a nova semântica "drena strays e conta em
+`event_stray_count`" (`test_*_drains_stray_transfer_event`).
+
+**Risco residual:** o pump ainda não notifica via `klog` quando
+`event_stray_count` cresce. Em produção, um stray persistente
+indica device released vs. evento em voo, vale logar. Follow-up
+menor para Etapa 3 Slice 3F.
+
+### 14.3 Hotplug não desaloca rings de interrupt (endereçado em 2026-05-21)
+
+**Estado original:** `usb_enumerate_devices` em
+`src/drivers/usb/usb_core.c` reusava `g_devices` mas, quando um
+device desaparecia (CCS=0) ou um port reset substituía o device,
+o slot antigo permanecia com `intr_rings[old_slot_id]`,
+`intr_buffers[old_slot_id]`, `ep0_rings[old_slot_id]`,
+`device_contexts[old_slot_id]` e `dcbaa[old_slot_id]` em uso.
+Leak determinístico por ciclo de desconexão.
+
+**Refatoração entregue (2026-05-21):**
+
+- Nova API pública `xhci_release_slot(xhci, slot_id)` em
+  `src/drivers/usb/xhci.c:697-755`. Emite `Disable Slot` per xHCI
+  1.2 §4.6.4, libera EP0 ring + device context + interrupt ring +
+  interrupt buffer, zera DCBAA entry e estado por-slot (índices,
+  cycle bits, EP address/DCI, buffer length), e invalida latches
+  pendentes em `ep0_pending[slot]`/`intr_pending[slot]`. Tolera
+  falha do command (devices já desconectados frequentemente
+  retornam CC != SUCCESS) — sempre libera os ponteiros para
+  evitar leak.
+- Novo helper interno `usb_release_stale_slots` em
+  `src/drivers/usb/usb_core.c:189-221`. Para cada slot do snapshot
+  anterior cuja porta perdeu o device (CCS=0) ou foi
+  status-changed (CSC=1), chama `xhci_release_slot`. Integrado ao
+  INÍCIO de `usb_enumerate_devices` (não ao fim — ver "Correção
+  pós-audit" abaixo).
+
+**Cobertura de teste:** 6 novos testes em
+`tests/drivers/test_xhci_address_device.c` (`test_release_slot_*`)
+cobrem: rejeição de inputs inválidos, free do estado ADDRESSED,
+free do estado CONFIGURED completo, limpeza de latches pendentes,
+tolerância a falha do Disable Slot, e idempotência em slot limpo.
+Os tests usam `kmalloc_aligned`/`kfree_aligned` reais via
+`tests/stubs/stub_kmem.c` para exercitar o caminho de free
+completo.
+
+**Cobertura ausente:** o helper `usb_release_stale_slots`
+não é diretamente host-testado porque `usb_core.c` inteiro é
+stubbado em host tests (`tests/stubs/stub_usb_core.c`). A lógica
+é linear (varredura O(N) sobre snapshot, port-status MMIO por
+entrada), validada por inspeção estática e pelo gate externo.
+
+**Correção pós-audit (2026-05-21):** a primeira implementação
+chamava o teardown ao FINAL de `usb_enumerate_devices` e
+comparava `previous.slot_id` com `current.slot_id`. Inspeção
+identificou colisão de slot reuse: se o controlador xHCI
+recicla um slot ID logo após o port-cycle, a nova
+`xhci_enable_slot` retorna o ID antigo, mas
+`xhci->device_contexts[slot]` ainda aponta ao device velho,
+fazendo `xhci_address_device` retornar -1 antes do teardown
+rodar. Corrigido movendo `usb_release_stale_slots` para o
+início de `usb_enumerate_devices` e usando o estado de porta
+(CCS=0 ou CSC=1) como gatilho ao invés de comparar slot_ids.
+
+## 15. Achados do audit pós-Slice 3D (2026-05-21, não bloqueiam)
+
+Inspeção dirigida descobriu issues menores fora do escopo dos
+follow-ups §14.1-§14.3. Cataloguei aqui para tratamento em
+slices futuras quando a Etapa 3 abrir o device manager
+unificado.
+
+### 15.1 Hotplug periódico não está armado (endereçado em 2026-05-21)
+
+**Estado original:** `usb_hotplug_check` em `src/drivers/usb/usb_core.c`
+fazia varredura passiva por CSC e chamava `usb_enumerate_devices`,
+mas nenhum work item ou loop do kernel a invocava. Sub-bug
+descoberto durante o fix: a função NÃO limpava CSC após detecção
+(write 0 a RW1C bit não tem efeito), então mesmo se fosse armada
+ficaria em loop infinito.
+
+**Refatoração entregue (2026-05-21):**
+
+- Nova API `xhci_port_ack_csc` em `src/drivers/usb/xhci.c:615-633`.
+  Read-modify-write da PORTSC preservando RW/RWS bits e mascarando
+  todos os change bits (CSC/PEC/WRC/OCC/PRC/PLC/CEC) exceto CSC,
+  que é setado para ack via RW1C. Garante que apenas CSC é
+  limpo, nenhum outro change bit é colateralmente afetado.
+- Novos constants em `include/drivers/usb/xhci.h:58-67`:
+  `XHCI_PORTSC_PEC/WRC/OCC/PLC/CEC` e `XHCI_PORTSC_CHANGE_BITS`
+  (máscara composta).
+- `usb_hotplug_check` reescrito
+  (`src/drivers/usb/usb_core.c:332-354`): itera portas, ack'a CSC
+  via helper, e chama `usb_enumerate_devices` UMA vez no fim se
+  qualquer porta mudou (não N vezes — single re-enumeração
+  cobre todos via `usb_release_stale_slots` já implementado em
+  §14.3).
+- `kernel_work_usb_poll` (`src/arch/x86_64/kernel_services.c:663-678`)
+  agora chama `usb_hotplug_check()` ANTES de `usb_poll_all()`. Custo
+  steady-state: N×MMIO read por tick (N = max_ports, tipicamente 4-8).
+  Re-enumeração só roda quando CSC realmente fora setado.
+
+**Cobertura de teste:** 2 novos testes em
+`tests/drivers/test_xhci_address_device.c`:
+- `test_port_ack_csc_rejects_invalid_inputs` (NULL/port out of
+  range/uninitialized controller).
+- `test_port_ack_csc_clears_only_csc_bit` (mock PORTSC,
+  verifica write pattern: CSC=1, outros change bits=0, RW bits
+  preservados; segunda porta não corrompida).
+
+**Interação com smoke gate:** o latch idempotente em
+`usb_hid_keyboard_smoke_state` garante que o marker emite no
+máximo uma vez por boot, independentemente de hot-plug. Se o
+keyboard inicial já fez fire, hot-plug de um novo keyboard não
+re-emite. Se o keyboard chegou só depois do boot, o smoke gate
+ainda vai emitir na primeira tecla.
+
+**Limitação aceita:** `usb_hid_init` não é re-invocado após
+hot-plug, então `g_hid.kbd_configured_count` não bumps para
+keyboards adicionados pós-boot. `usb_hid_keyboard_available()`
+fica stale mas o caminho de dados via `usb_poll_all` continua
+funcional (identifica HID por descriptor, não por slot
+armazenado). Fix completo (re-init usb_hid em hot-plug) fica
+para slice de "input device manager" no futuro.
+
+### 15.2 Slot leak quando `xhci_address_device` falha (endereçado em 2026-05-21)
+
+**Estado original:** em `src/drivers/usb/xhci.c`, quando o command
+de Address Device falhava, a função zerava DCBAA local e
+liberava `device_ctx`/`ep0_ring`, mas NÃO emitia `Disable Slot`
+no controlador. O slot ficava "Enabled" do lado xHCI, lingering
+até um teardown explícito vir de `usb_release_stale_slots`
+(somente quando o port subsequente reportasse CCS=0/CSC=1).
+
+**Refatoração entregue (2026-05-21):** os ponteiros per-slot
+(`dcbaa[slot]`, `device_contexts[slot]`, `ep0_rings[slot]`)
+agora são armazenados ANTES da emissão do Address Device TRB. Na
+branch de falha, `xhci_release_slot` é invocado para centralizar
+o teardown: emite Disable Slot ao controlador (recuperando a
+ownership do slot), libera as alocações via os ponteiros já
+armazenados, e zera o estado do slot. Tolera falha do Disable
+Slot (CC != SUCCESS) — devices em estado intermediário
+frequentemente respondem assim.
+
+Arquivos tocados: `src/drivers/usb/xhci.c:673-701`.
+
+**Cobertura de teste:** não há host test direto da branch de
+falha de `xhci_address_device` (requer mock de portsc MMIO).
+A correção é exercitada indiretamente pelos testes existentes
+de `xhci_release_slot` (`test_release_slot_frees_addressed_state`,
+`test_release_slot_tolerates_disable_failure`) e validada por
+inspeção contra o gate externo.
+
+### 15.3 LEDs de teclado não dirigidos (endereçado em 2026-05-21)
+
+**Estado original:** `usb_hid.c` não enviava `Set Report` (output
+0x21/0x09) para acender Caps Lock / Num Lock / Scroll Lock. Caps
+Lock também não afetava a tradução de letras — pressionar Caps e
+depois 'a' continuava emitindo 'a' minúsculo. UX problema mas
+não bug de segurança/correctness.
+
+**Refatoração entregue (2026-05-21):**
+
+- Nova API pública `usb_hid_send_led_report(slot_id, interface,
+  bitmap)` em `include/drivers/usb/usb_core.h:119-125` e impl
+  em `src/drivers/usb/usb_core.c:332-348`. Constroi o setup
+  packet HID Class (`bmRequestType=0x21`, `bRequest=0x09`,
+  `wValue=0x0200` ReportType=Output ReportID=0, `wIndex=interface`,
+  payload=1 byte) e despacha via `xhci_control_transfer`.
+- `struct usb_hid_state` ganhou `led_state`, `kbd_slot_id`,
+  `kbd_interface` (`src/drivers/usb/usb_hid.c:57-67`).
+- `usb_hid_init` captura `slot_id` + `interface_number` do
+  device descriptor quando encontra o keyboard.
+- `usb_hid_handle_keyboard_report` detecta presses de Caps Lock
+  (usage 0x39), Num Lock (0x53), Scroll Lock (0x47) — toggle do
+  bit correspondente em `led_state`, despacha SET_REPORT uma vez
+  ao fim do processamento do report.
+- Caps Lock agora afeta a tradução de letras (a→A, A→a). Shift
+  inverte (Shift+a sob Caps = a). Símbolos (`1`, `!`, etc.) não
+  são afetados.
+
+Arquivos tocados: `include/drivers/usb/usb_core.h`,
+`src/drivers/usb/usb_core.c`, `src/drivers/usb/usb_hid.c`,
+`tests/stubs/stub_usb_core.c`.
+
+**Cobertura de teste:** 2 novos testes em
+`tests/drivers/test_usb_hid_init.c`:
+- `test_keyboard_report_handler_toggles_caps_lock_led` verifica
+  que primeira pressão dispatcha SET_REPORT com bitmap=0x02,
+  release sozinho não dispatcha, segunda pressão limpa CapsLock,
+  e slot_id/interface vêm do device descriptor capturado.
+- `test_keyboard_report_handler_caps_lock_affects_letters`
+  verifica 'a' lowercase pré-Caps, 'A' uppercase com Caps,
+  Shift+a sob Caps = 'a' (inversão), '1' não afetado por Caps.
+
+**Limitação aceita:** Num Lock e Scroll Lock só atualizam LEDs;
+não há keypad numérico para Num Lock afetar funcionalmente.
+Scroll Lock é UX-only em sistemas modernos.
+
+### 15.4 Ctrl combinations não traduzidas (endereçado em 2026-05-21)
+
+**Estado original:** `usb_hid_handle_keyboard_report` aplicava
+apenas Shift (`modifiers & 0x22`). Ctrl, Alt, GUI eram ignorados
+na tradução para ASCII. O shell não recebia Ctrl+C / Ctrl+D /
+Ctrl+L corretamente — uma limitação fundamental de UX shell.
+
+**Refatoração entregue (2026-05-21):** detecta Ctrl modifier
+(`modifiers & 0x11` — bit 0 = Left Ctrl, bit 4 = Right Ctrl per
+USB HID Usage Tables §10) e traduz alpha keys para control codes
+(Ctrl+A → 0x01, …, Ctrl+Z → 0x1A). Funciona com Shift simultâneo
+(Ctrl+Shift+A ainda emite 0x01). Non-alpha keys sob Ctrl
+passam inalteradas — sem mutação espúria.
+
+Arquivos tocados: `src/drivers/usb/usb_hid.c:152-189`.
+
+**Cobertura de teste:** 2 novos testes em
+`tests/drivers/test_usb_hid_init.c`:
+- `test_keyboard_report_handler_translates_ctrl_combinations`
+  cobre Left Ctrl+A, Right Ctrl+C, Ctrl+Shift+A.
+- `test_keyboard_report_handler_passes_ctrl_with_non_alpha`
+  cobre Ctrl+1 e Ctrl+Space (passagem inalterada).
+
+**Limitação conhecida:** Alt/GUI modifiers continuam ignorados.
+Slice de teclado layouts (Etapa 5+) vai expandir o mapeamento.
+
+### 15.5 Port reset não espera explicitamente por PED (endereçado em 2026-05-21)
+
+**Estado original:** `xhci_port_reset` esperava por PRC (Port Reset
+Change) e retornava, mas não verificava PED (Port Enabled/
+Disabled). Per xHCI 1.2 §4.3 step 6, o controlador auto-seta PED
+após reset, mas existe uma janela pequena. `xhci_address_device`
+então rejeitava com -2 se PED ainda não estivesse setado. Em
+VMware funcionava; em hardware real ou emuladores menos
+compliant podia falhar 1 em 1000 tentativas.
+
+**Refatoração entregue (2026-05-21):** após observar PRC e
+limpá-lo, `xhci_port_reset` agora busy-waits por até 10000
+iterações até PED ser observado. Bounded — retorna -3
+explicitamente se PED nunca for setado (cenário de controlador
+não-compliant). Para VMware nenhuma mudança observável (PED já
+está setado atomicamente com PRC).
+
+Arquivos tocados: `src/drivers/usb/xhci.c:587-612`.
+
+### 15.6 Interrupter modo polling (intencional, documentar)
+
+`xhci_init` não habilita o controller-wide `INTE` bit nem o
+interrupter-zero `IMAN.IE`. O kernel usa polling do event ring
+via `SYSTEM_WORK_USB_POLL` (10ms tick). Adequado para Slice
+3D; para low-latency input em Etapa 5+ vai precisar trocar
+para interrupt-driven.

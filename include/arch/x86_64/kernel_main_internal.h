@@ -222,6 +222,7 @@ void kernel_capypkg_bind_runtime_adapters(void);
 int kernel_work_recovery_snapshot(void *ctx);
 int kernel_work_gpu_discovery(void *ctx);
 int kernel_work_usb_bringup(void *ctx);
+int kernel_work_usb_poll(void *ctx);
 int kernel_work_update_agent_warmup(void *ctx);
 void kernel_update_recovery_snapshot_work(int schedule_now);
 void kernel_schedule_background_boot_work(int shell_runtime_ready);

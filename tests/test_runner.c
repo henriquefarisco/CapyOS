@@ -60,7 +60,17 @@ int run_storvsc_runtime_tests(void);
 int run_storage_runtime_hyperv_plan_tests(void);
 int run_usb_hid_init_tests(void);
 int run_xhci_address_device_tests(void);
+int run_xhci_transfers_tests(void);
+int run_xhci_event_pump_tests(void);
+int run_xhci_release_slot_tests(void);
 int run_usb_descriptor_parse_tests(void);
+int run_ahci_commands_tests(void);
+int run_nvme_commands_tests(void);
+int run_block_error_tests(void);
+int run_block_retry_tests(void);
+int run_ahci_slot_allocator_tests(void);
+int run_storage_smoke_gate_tests(void);
+int run_usb_hid_smoke_gate_tests(void);
 
 int test_pmm_run(void);
 int test_task_run(void);
@@ -240,8 +250,18 @@ int main(void) {
     failures += run_storvsc_runtime_tests();
     failures += run_storage_runtime_hyperv_plan_tests();
     failures += run_usb_hid_init_tests();
+    failures += run_usb_hid_smoke_gate_tests();
     failures += run_xhci_address_device_tests();
+    failures += run_xhci_transfers_tests();
+    failures += run_xhci_event_pump_tests();
+    failures += run_xhci_release_slot_tests();
     failures += run_usb_descriptor_parse_tests();
+    failures += run_ahci_commands_tests();
+    failures += run_nvme_commands_tests();
+    failures += run_block_error_tests();
+    failures += run_block_retry_tests();
+    failures += run_ahci_slot_allocator_tests();
+    failures += run_storage_smoke_gate_tests();
 
     failures += test_pmm_run();
     failures += test_task_run();
