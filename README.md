@@ -7,7 +7,7 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.8.0-alpha.256` (build `0.8.0-alpha.256+20260522`; canal `alpha`; ver `VERSION.yaml`)
+Versao de referencia: `0.8.0-alpha.257` (build `0.8.0-alpha.257+20260523`; canal `alpha`; ver `VERSION.yaml`)
 
 ## Destaques
 
@@ -39,27 +39,92 @@ Mais imagens oficiais:
 | BIOS/MBR 32-bit | legado, fora da trilha de release |
 | Hyper-V | investigacao, sem suporte oficial |
 
-## Build Rapido
+## Dependencias e Build Rapido
 
-Dependencias principais: `make`, `nasm`, `xorriso`, `gnu-efi` e toolchain
-`x86_64-linux-gnu-*` ou `x86_64-elf-*`.
+Dependencias principais: `make`, `python3`, `nasm`, `xorriso`, `gnu-efi`,
+QEMU/OVMF para smokes e toolchain `x86_64-elf-*` para builds
+reprodutiveis.
+
+### Linux / WSL
 
 ```bash
-python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+./install-linux.sh
+source ~/.bashrc
 make test
-make all64
-make iso-uefi
-make smoke-x64-iso TOOLCHAIN64=host
+make all64 TOOLCHAIN64=elf
+make iso-uefi TOOLCHAIN64=elf
+make smoke-x64-iso TOOLCHAIN64=elf
 ```
 
-Para release local mais completa:
+`./install.sh` tambem despacha para o instalador Linux quando executado em
+Linux/WSL.
+
+Nao execute `make`, `./install.sh` ou `./install-linux.sh` com `sudo` dentro do
+workspace. O build recusa execucao como root por padrao para evitar artefatos
+`build/` root-owned. Se um checkout antigo ja tiver artefatos bloqueados,
+corrija a posse uma vez antes de continuar:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" build ../CapyUI/build 2>/dev/null || true
+```
+
+### macOS
+
+```bash
+bash install-macos.sh --local-deps Dependencias
+make test HOST_CC=clang
+```
+
+O modo acima usa apenas ferramentas ja presentes no macOS e arquivos aprovados
+em `Dependencias/`; ele nao usa Homebrew, nao baixa fontes, nao instala QEMU e
+nao compila a toolchain cruzada.
+
+Quando a compilacao local longa de GCC/binutils for permitida:
+
+```bash
+bash install-macos.sh --local-deps Dependencias --with-cross
+source ~/.zprofile
+make all64 TOOLCHAIN64=elf
+```
+
+Quando `gnu-efi`, `xorriso` e a toolchain estiverem aprovados/localmente
+disponiveis:
+
+```bash
+make iso-uefi TOOLCHAIN64=elf
+make smoke-x64-iso TOOLCHAIN64=elf
+```
+
+Se o `gnu-efi` local nao for detectado automaticamente, informe `EFI_PREFIX`,
+por exemplo:
+
+```bash
+make iso-uefi TOOLCHAIN64=elf EFI_PREFIX=/Users/t808981/opt/gnu-efi
+```
+
+### Windows
+
+Windows e suportado pelo caminho WSL. Execute em PowerShell:
+
+```powershell
+.\install-windows.ps1 -SkipSmoke
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/caminho/para/CapyOS && source ~/.bashrc && make test"
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/caminho/para/CapyOS && source ~/.bashrc && make all64 TOOLCHAIN64=elf"
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/caminho/para/CapyOS && source ~/.bashrc && make iso-uefi TOOLCHAIN64=elf"
+```
+
+Use `-Distro <Nome>` se a distro WSL nao se chamar `Ubuntu`, e
+`-ProjectPath /mnt/.../CapyOS` se o caminho automatico precisar ser
+sobrescrito.
+
+### Gates comuns
 
 ```bash
 make layout-audit
 make version-audit
 make boot-perf-baseline-selftest
 make smoke-marker-policy-selftest
-make verify-release-checksums TOOLCHAIN64=host
+make release-check TOOLCHAIN64=elf
 ```
 
 ## Documentacao

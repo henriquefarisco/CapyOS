@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-05-22 · **Versão:** `0.8.0-alpha.256+20260522` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
+**Data:** 2026-05-23 · **Versão:** `0.8.0-alpha.257+20260523` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -32,21 +32,21 @@
 - **Audit fix entregue em 2026-05-21 (alpha.252):** revisão crítica de Slices 3E.1–3E.5 identificou e corrigiu dois bugs críticos antes da execução externa: (1) double-emission do smoke marker em VMs dual-storage; (2) NVMe Controller Level Reset não reemitia Create I/O CQ/SQ após CC.EN=1. 4 novos host tests de regressão.
 - **Sub-slice 3E.4.B entregue em 2026-05-21 (alpha.253):** migração mecânica de `dbg_puts`/`dbg_hex*`/`dbg_label_hex32` para `klog(KLOG_*, ...)` / `klog_hex(...)` em `ahci.c` e `nvme.c` (108 call sites em 2 arquivos). Helpers locais file-static removidos; output migra de port 0xE9 (QEMU-only) para o klog ring (recuperável em runtime). Como efeito colateral, **corrige bug latente**: 2 chamadas a `dbg_label_hex32` em `nvme_controller_reset` referenciavam o helper static de ahci.c (undefined-reference no escopo de TU). Outros 13 arquivos do projeto com ~126 sites `dbg_*` ficam como sub-slice 3E.4.C (follow-up).
 - **Etapa 3 fechada formalmente em 2026-05-21 (alpha.253):** gate externo `make smoke-x64-vmware-storage-resilience` aprovado em VMware + UEFI + E1000 com marker `[smoke] storage-stack ready` no COM1. Encerrou os 8 sub-slices 3D + 3E.1-3E.5 + audit fix + 3E.4.B. Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes.
-- **Próximo bloco da Etapa 4:** scaffolding do contrato `capy-ui-widget` (widget/display-list ABI v1) entre core CapyOS e sister repo `CapyUI` + integração do scheduler cooperativo no runtime. Conforme `docs/operations/etapa-4-external-validation-playbook.md`.
+- **Próximo bloco da Etapa 4:** ligar o adapter `capy-ui-widget` v2.13/schema v7 ao fluxo desktop/window real + integração do scheduler cooperativo no runtime. Conforme `docs/operations/etapa-4-external-validation-playbook.md`.
 - **Etapas bloqueadas:** Etapas 5-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.255, Etapa 4 ativa; ver pendência de sincronização)
+## Repositórios apartados (estado em alpha.256, Etapa 4 ativa)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A
 matriz pinada está em
 [`compatibility-matrix.md`](../reference/integration/compatibility-matrix.md)
 e o snapshot técnico atual está em
-[`compatibility-audit-2026-05-21.md`](../reference/integration/compatibility-audit-2026-05-21.md).
+[`compatibility-audit-2026-05-22.md`](../reference/integration/compatibility-audit-2026-05-22.md).
 
 | Repo apartado | Versão atual | Owner autoritativo | Gate de integração CapyOS |
 |---|---|---|---|
-| [`CapyUI`](../../../CapyUI) | `0.7.3` | widget model (`capy-ui-widget` v0.6) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
+| [`CapyUI`](../../../CapyUI) | `2.13.0` | widget model (`capy-ui-widget` v2.13, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
 | [`CapyAgent`](../../../CapyAgent) | `0.0.4` | formato `.capypkg`, component-index, resolver, futuro signer Ed25519 (`capy-agent-component-index` v1) | Etapas 8-9 |
 | [`CapyBrowser`](../../../CapyBrowser) | `0.0.4` | browser-core text/HTML estático (`capy-browser-core` v1 planejado) | Etapas 6-7 |
 | [`CapyCodecs`](../../../CapyCodecs) | `0.0.4` | image codecs portáveis (`capy-codec-image` v1) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
@@ -160,7 +160,8 @@ via módulo capypkg `org.capyos.ui.desktop-session` (compositor session,
 window manager, apps). O CapyOS mantém in-tree um fallback de build em
 `src/gui/desktop/`, `src/gui/window/` e `src/apps/` para sustentar o
 caminho `make all64` quando o sibling `../CapyUI` não está presente,
-mas o owner de feature é o repo `CapyUI` (versão `0.7.3`+).
+mas o owner de feature é o repo `CapyUI` (versão `2.13.0`+ no pin
+vigente da Etapa 4).
 
 ### Etapa 2 — Sessão gráfica operacional (concluída em `alpha.237`)
 
@@ -206,7 +207,7 @@ Resumo executivo vigente:
 | 1 | CapyUI Shell Polish v1 | Concluída | owner pós-alpha.241: `CapyUI` |
 | 2 | Sessão gráfica operacional | Concluída | desktop session: `CapyUI`; auth/crypto/runtime: core |
 | 3 | Driver framework + entrada USB HID + storage estável | Concluída | fechada em alpha.253 (2026-05-21); follow-ups 3F-3J não-bloqueantes |
-| 4 | CapyDisplay 2D + scheduler/multithread runtime | **Em andamento** | etapa atual; abre contrato `capy-ui-widget` v1 com sister repo `CapyUI` |
+| 4 | CapyDisplay 2D + scheduler/multithread runtime | **Em andamento** | etapa atual; consome `capy-ui-widget` v2.13/schema v7 do sister repo `CapyUI` |
 | 5 | TLS userland real | Bloqueada | depende da Etapa 4; sem repo apartado |
 | 6 | Apps básicos do desktop maduros | Bloqueada | inclui integração de `CapyBrowser` (HTML-to-text core) e `CapyCodecs` (image) por contrato |
 | 7 | Browser usável com web estática moderna | Bloqueada | integra `CapyBrowser` core + `CapyCodecs` imagem |
@@ -275,7 +276,8 @@ prevenir reincidência em Etapas futuras.
 
 A etapa ativa entrega CapyDisplay 2D + scheduler/multithread runtime e
 **abre o primeiro gate cross-repo com sister** depois do fechamento da
-Etapa 3: o contrato `capy-ui-widget` v1 com o repo `CapyUI`.
+Etapa 3: o contrato real `capy-ui-widget` v2.13 / display-list schema v7
+com o repo `CapyUI`.
 
 **Runbook autoritativo:**
 [`../operations/etapa-4-external-validation-playbook.md`](../operations/etapa-4-external-validation-playbook.md).
@@ -284,8 +286,8 @@ Etapa 3: o contrato `capy-ui-widget` v1 com o repo `CapyUI`.
 
 | Fase | Sub-gate | Owner |
 |---|---|---|
-| A | Scaffolding do contrato `capy-ui-widget` v1 no core | CapyOS core |
-| B | Sister `CapyUI` publica `capy-ui-widget` v1 | CapyUI |
+| A | Adapter CapyOS-side consumindo `capy-ui-widget` v2.13/schema v7 | CapyOS core |
+| B | Integração visual do produtor real CapyUI com o adapter | CapyOS core + CapyUI |
 | C | Scheduler cooperativo + multithread runtime + smoke `scheduler-fairness` | CapyOS core |
 | D | Damage tracking + double buffering + smoke `compositor-damage-track` | CapyOS core |
 | E | Política de panic/oops para thread de app + smoke `thread-crash-survives` | CapyOS core |
@@ -293,25 +295,20 @@ Etapa 3: o contrato `capy-ui-widget` v1 com o repo `CapyUI`.
 
 **Fase A revertida em alpha.255 (2026-05-21):** o scaffolding entregue
 em alpha.254 era um contrato paralelo + incompatível com a ABI real
-do sister `CapyUI`. Descoberta por inspeção do sister sibling em
-`/Users/t808981/Desktop/PR/CapyUI/`: `capy-ui-widget` já está em v2.7
-com display-list schema v7, struct nativo `capy_dl_cmd` (não byte-tagged),
-12 opcodes (RECT, BORDER, TEXT, CLIP_PUSH, CLIP_POP, IMAGE_REF,
-FOCUS_RING, DIRTY_HINT, DPI_SCOPE, TRANSFORM_PUSH, TRANSFORM_POP,
-PLUGIN_OP). Header autoritativo é `CapyUI/src/widget/capy_display_list.h`,
-não um header novo no CapyOS. Arquivos do alpha.254 foram removidos.
+do sister `CapyUI`.
 
-**Pendência crítica identificada (não resolvida nesta sessão):** a
-matriz cross-repo no CapyOS continua **stale**: pina CapyUI em 0.7.3
-enquanto o sister real está em **2.7.0** com `capy-ui-widget` **v2.7**.
-Sincronizar isso requer workflow `cross-repo-contract-sync` completo +
-novo audit em `docs/reference/integration/compatibility-audit-<date>.md`.
+**Fase A corrigida nesta janela:** a matriz foi sincronizada para
+`CapyUI` `2.13.0` / `capy-ui-widget` v2.13 e o core ganhou
+`include/gui/capyui_display_adapter.h` +
+`src/gui/widgets/capyui_display_adapter.c`, que consome
+`CapyUI/src/widget/capy_display_list.h` quando o sibling existe via
+Makefile sibling detection. O adapter renderiza o subconjunto 2D
+básico e ignora/falha de forma segura para ops que exigem providers
+dedicados.
 
-**Próximo passo bloqueador (Fase A correta):** implementar adapter
-CapyOS-side que **CONSUMA** `CapyUI/src/widget/capy_display_list.h`
-(struct nativo, schema v7) via Makefile sibling detection, não
-invente um schema paralelo. Combinado com sincronização cross-repo
-completa (pin de CapyUI atualizado).
+**Próximo passo bloqueador:** ligar o adapter a produtores reais de
+display-list no fluxo desktop/window e avançar o damage tracking +
+double buffering sem reintroduzir ABI paralela.
 
 **Critérios de aceite (a fechar):**
 
@@ -323,16 +320,17 @@ completa (pin de CapyUI atualizado).
 - [ ] Widget model desacoplado consegue renderizar display list por
       adaptador CapyOS sem acessar compositor diretamente.
 
-**Cross-repo handshake esperado:** quando Fase A fechar, invocar
-workflow `cross-repo-contract-sync` para coordenar a publicação do
-`capy-ui-widget` v1 no sister `../CapyUI`.
+**Cross-repo handshake esperado:** qualquer nova alteração no layout
+do display-list ou no pin do sister deve passar pelo workflow
+`cross-repo-contract-sync`; o consumo atual é do header real v2.13
+já publicado no sibling `../CapyUI`.
 
 ## Bloqueio das etapas 5-16
 
 Todas dependem do fechamento integral da etapa anterior conforme
 [`active/capyos-master-plan.md`](active/capyos-master-plan.md). Repositórios
-apartados podem evoluir em paralelo (CapyUI já entregou v0.7.3 com
-desktop session; CapyLang continua em S1 lexer; demais permanecem em
+apartados podem evoluir em paralelo (CapyUI já entregou v2.13.1 com
+desktop session e widget/display-list schema v7; CapyLang continua em S1 lexer; demais permanecem em
 ABI host-only ou planejada) — mas só contam como progresso oficial
 quando a etapa correspondente abrir e o adapter + gate externo aceitarem
 a integração.

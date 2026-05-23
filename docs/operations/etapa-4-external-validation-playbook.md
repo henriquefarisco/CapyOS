@@ -3,7 +3,7 @@
 **Etapa:** 4 — CapyDisplay 2D + scheduler/multithread runtime.
 **Status de abertura:** 2026-05-21 (alpha.253), imediatamente após o fechamento formal da Etapa 3.
 **Plataforma oficial:** VMware Workstation/ESXi + UEFI + E1000.
-**Sister repo abrindo gate:** `CapyUI` (contrato `capy-ui-widget` v1).
+**Sister repo abrindo gate:** `CapyUI` (contrato `capy-ui-widget` v2.13, display-list schema v7).
 **Documento autoritativo upstream:** `docs/plans/active/capyos-master-plan.md` §7.
 
 Este playbook é operator-facing. Sirva-o como referência sequencial
@@ -18,8 +18,8 @@ e com o audit técnico vigente.
 A Etapa 4 abre o primeiro gate cross-repo com um sister depois do
 fechamento da Etapa 3. Ela:
 
-1. Estabelece o contrato `capy-ui-widget` v1 (widget/display-list)
-   entre o core CapyOS e o sister `CapyUI`.
+1. Consome o contrato real `capy-ui-widget` v2.13 (widget/display-list
+   schema v7) entre o core CapyOS e o sister `CapyUI`.
 2. Introduz scheduler cooperativo + multithread runtime no core.
 3. Maduros o caminho 2D (damage tracking, double buffering,
    clipping, glyph cache).
@@ -47,12 +47,12 @@ autoritativo.
 
 Adicionalmente, requisitos cross-repo:
 
-- [ ] `CapyUI` publica `capy-ui-widget` v1 conforme o contrato
-      acordado no scaffolding inicial.
-- [ ] Matriz cross-repo bumpa o pin de `CapyUI` para a versão que
-      publica `capy-ui-widget` v1.
-- [ ] `docs/reference/integration/external-core-repositories.md`
-      marca `capy-ui-widget` como "starts active".
+- [x] Matriz cross-repo pina `CapyUI` `2.13.0` e
+      `capy-ui-widget` v2.13/schema v7.
+- [x] `docs/reference/integration/external-core-repositories.md`
+      marca `capy-ui-widget` como ativo na Etapa 4 via adapter.
+- [ ] Fluxo desktop/window real produz display-lists consumidas pelo
+      adapter CapyOS-side.
 
 ---
 
@@ -65,8 +65,8 @@ abra.
 
 | Fase | Sub-gate | Owner | Saída esperada |
 |---|---|---|---|
-| A | Scaffolding do contrato `capy-ui-widget` v1 no core | CapyOS core | `include/gui/widget/` + adapter `src/gui/widget/`; sem implementação completa ainda |
-| B | Sister repo `CapyUI` publica `capy-ui-widget` v1 | CapyUI | release de `CapyUI` que conforma com o contrato escrito na fase A |
+| A | Adapter CapyOS-side para `capy-ui-widget` v2.13/schema v7 | CapyOS core | `include/gui/capyui_display_adapter.h` + `src/gui/widgets/capyui_display_adapter.c`; subconjunto 2D básico |
+| B | Integração visual do produtor real CapyUI com o adapter | CapyOS core + CapyUI | desktop/window emite display-lists reais para o adapter sem acessar compositor diretamente |
 | C | Scheduler cooperativo no runtime CapyOS | CapyOS core | `src/kernel/sched/` com cooperative scheduler + multithread runtime + smoke gate `scheduler-fairness` |
 | D | Damage tracking + double buffering no compositor | CapyOS core | redraw apenas regiões damaged; cursor não pisca; smoke gate `compositor-damage-track` |
 | E | Política de panic/oops controlada para threads de app | CapyOS core | thread crash não derruba kernel/desktop; smoke gate `thread-crash-survives` |
@@ -114,15 +114,17 @@ re-execução determinística do mesmo cenário.
 
 ## 5. Fases detalhadas
 
-### 5.1 Fase A — Scaffolding do contrato `capy-ui-widget` v1 no core
+### 5.1 Fase A — Adapter para `capy-ui-widget` v2.13/schema v7 no core
 
 **Entrega esperada:**
-- `include/gui/widget/widget_contract.h` declarando display-list
-  primitives (rect, glyph, image, clip stack).
-- `src/gui/widget/widget_adapter.c` recebendo display lists do
-  CapyUI e renderizando via API interna do compositor.
-- Documento `docs/architecture/capy-ui-widget-v1-contract.md`
-  formalizando o contrato.
+- `include/gui/capyui_display_adapter.h` expondo o contrato CapyOS-side
+  com `struct capy_display_list` opaco.
+- `src/gui/widgets/capyui_display_adapter.c` recebendo `struct
+  capy_display_list` do CapyUI e renderizando via `struct gui_surface`.
+- `Makefile` detectando `../CapyUI/src/widget/capy_display_list.h` e
+  definindo `CAPYOS_HAVE_CAPYUI_WIDGET` somente quando o sibling existe.
+- Audit/matriz sincronizados para `CapyUI` `2.13.0` /
+  `capy-ui-widget` v2.13.
 
 **Gates esperados (host):**
 
@@ -132,7 +134,8 @@ make layout-audit
 make test
 ```
 
-Tests adicionais para o adapter (host-testable) devem rodar limpos.
+Tests adicionais para o adapter (host-testable) devem rodar limpos:
+`tests/gui/test_capyui_display_adapter.c`.
 
 **Gates esperados (VMware):** nenhum exclusivo desta fase; a
 regressão da Etapa 3 deve continuar passando:
@@ -142,15 +145,30 @@ make smoke-x64-vmware-usb-hid-keyboard
 make smoke-x64-vmware-storage-resilience
 ```
 
-**Cross-repo handshake:** ao fim da fase A, invocar o workflow
-`cross-repo-contract-sync` para preparar o contrato no sister
-`../CapyUI`. Não bumpar o pin ainda — só na fase B.
+**Cross-repo handshake:** a Fase A consome o header real já publicado
+no sister `../CapyUI`; novas mudanças no layout do display-list ou no
+pin de versão devem passar pelo workflow `cross-repo-contract-sync`.
 
-### 5.2 Fase B — Sister repo CapyUI publica `capy-ui-widget` v1
+### 5.2 Fase B — Integração visual do produtor real CapyUI
 
-**Entrega esperada (no sister `../CapyUI`):**
-- Implementação que conforma com o contrato declarado na fase A.
-- Release tag em `CapyUI` (gerenciado pelo workflow `cross-repo-contract-sync`).
+**Entrega esperada:**
+- Fluxo desktop/window emite `struct capy_display_list` real do CapyUI.
+- Adapter CapyOS-side consome essa display-list sem acesso direto do
+  widget model ao compositor.
+- Ops sem provider dedicado (`IMAGE_REF`, transforms, plugins) ficam
+  explicitamente degradadas ou recebem provider antes de serem
+  declaradas suportadas.
+
+**Status parcial implementado:** o core já expõe o seam
+`capyui_display_adapter_render_producer_window`, que recebe um produtor
+CapyUI-side por callback e renderiza o `struct capy_display_list` na janela
+via adapter/damage rect. O teste host-side usa `capy_widget_emit` real do
+sibling `../CapyUI`. Os primeiros fluxos reais conectados são Calculator,
+Text Editor, Settings, File Manager, Task Manager, Taskbar, Taskbar menu/recent
+popups e Notification overlay do `../CapyUI`, além de Desktop icons via callback
+de wallpaper, que emitem `capy_display_list` schema v7 quando compilados pelo
+CapyOS com `CAPYOS_HAVE_CAPYUI_WIDGET`; ainda falta migrar os demais fluxos
+desktop/app de produção para alimentar esse seam.
 
 **Gates esperados (sister):**
 
@@ -159,8 +177,8 @@ cd ../CapyUI && make validate && make package
 ```
 
 **Atualização cross-repo no core:**
-- Bump da pinagem de `CapyUI` em `docs/reference/integration/compatibility-matrix.md` §1.
-- Adicionar nota "starts active" para `capy-ui-widget` v1 em `external-core-repositories.md`.
+- Manter a pinagem de `CapyUI` em `docs/reference/integration/compatibility-matrix.md` §1 alinhada ao sister real.
+- Atualizar `external-core-repositories.md` se o escopo suportado pelo adapter crescer.
 - Atualizar `compatibility-audit-<date>.md` ou criar novo.
 
 ### 5.3 Fase C — Scheduler cooperativo no runtime CapyOS
@@ -290,7 +308,7 @@ oficial ou em CI provisionada.
   autoritativa da Etapa 4.
 - `docs/reference/integration/compatibility-matrix.md` — versões
   pinadas cross-repo.
-- `docs/reference/integration/compatibility-audit-2026-05-21.md` —
+- `docs/reference/integration/compatibility-audit-2026-05-22.md` —
   snapshot técnico vigente.
 - `docs/architecture/smoke-marker-pattern.md` — pattern canônico
   para os markers novos que esta Etapa introduz.

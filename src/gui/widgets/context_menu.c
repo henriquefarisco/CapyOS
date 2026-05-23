@@ -110,6 +110,31 @@ static uint32_t cm_total_height(void) {
   return h;
 }
 
+static int cm_item_rect(int32_t index, struct gui_rect *out) {
+  int32_t ey = 2;
+  if (!g_ctx.win || !out || index < 0) return 0;
+  for (uint32_t i = 0; i < g_ctx.count; i++) {
+    int sep = (g_ctx.items[i].label[0] == '\0');
+    uint32_t row_h = sep ? CONTEXT_MENU_SEP_H : CONTEXT_MENU_ITEM_H;
+    if ((int32_t)i == index) {
+      out->x = 0;
+      out->y = ey;
+      out->width = g_ctx.win->surface.width;
+      out->height = row_h;
+      return sep ? 0 : 1;
+    }
+    ey += (int32_t)row_h;
+  }
+  return 0;
+}
+
+static void cm_invalidate_item(int32_t index) {
+  struct gui_rect rect;
+  if (g_ctx.win && cm_item_rect(index, &rect)) {
+    compositor_invalidate_rect(g_ctx.win->id, &rect);
+  }
+}
+
 static void cm_paint(struct gui_window *win) {
   if (!win || win != g_ctx.win) return;
   const struct gui_theme_palette *theme = compositor_theme();
@@ -273,7 +298,9 @@ void context_menu_handle_hover(int32_t screen_x, int32_t screen_y) {
     }
   }
   if (new_hover != g_ctx.hover_index) {
+    int32_t old_hover = g_ctx.hover_index;
     g_ctx.hover_index = new_hover;
-    if (g_ctx.win) compositor_invalidate(g_ctx.win->id);
+    cm_invalidate_item(old_hover);
+    cm_invalidate_item(new_hover);
   }
 }

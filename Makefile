@@ -3,6 +3,19 @@ BUILD     = build
 BUILD_GEN = $(BUILD)/generated
 SRC_DIR   = src
 BEARSSL_DIR = third_party/bearssl
+CURRENT_UID := $(shell id -u 2>/dev/null || echo unknown)
+CURRENT_GID := $(shell id -g 2>/dev/null || echo unknown)
+ALLOW_ROOT_BUILD ?= 0
+ifeq ($(CURRENT_UID),0)
+  ifneq ($(ALLOW_ROOT_BUILD),1)
+    $(error Refusing to run make as root; run as your normal user to avoid root-owned build artifacts)
+  endif
+endif
+ifneq ($(wildcard $(BUILD)),)
+  ifneq ($(shell test -w "$(BUILD)" -a -x "$(BUILD)" && echo ok),ok)
+    $(error $(BUILD) is not writable by the current user; fix ownership with: sudo chown -R $(CURRENT_UID):$(CURRENT_GID) $(BUILD))
+  endif
+endif
 BEARSSL_SRCS := $(filter-out $(BEARSSL_DIR)/src/rand/sysrng.c,$(shell find $(BEARSSL_DIR)/src -type f -name '*.c' | sort))
 BEARSSL_OBJS := $(patsubst $(BEARSSL_DIR)/%.c,$(BUILD)/x86_64/third_party/bearssl/%.o,$(BEARSSL_SRCS))
 
@@ -11,26 +24,17 @@ CROSS64 ?= x86_64-elf
 TOOLCHAIN64 ?= host
 
 # Toolchain 64-bit
-# Caminho oficial suportado em WSL/Linux host: make all64 iso-uefi
+# Caminho oficial suportado em Linux/WSL/macOS host: make all64 iso-uefi
 # No WSL, alguns builds do x86_64-linux-gnu-ld.gold abortam no link do kernel.
 # O host toolchain (x86_64-linux-gnu-*) fica como padrao; use TOOLCHAIN64=elf
 # apenas quando quiser forcar a toolchain cruzada.
 ifeq ($(TOOLCHAIN64),elf)
   ifeq ($(shell which $(CROSS64)-gcc 2>/dev/null),)
-    $(warning Using x86_64-linux-gnu fallback toolchain; release reproducibility still requires x86_64-elf-*)
-    CC64      := x86_64-linux-gnu-gcc
-    LD64      := x86_64-linux-gnu-ld
-    OBJCOPY64 := x86_64-linux-gnu-objcopy
-    STACKPROTECT64 := -fno-stack-protector
-    $(warning Fallback toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
+    $(error TOOLCHAIN64=elf requires $(CROSS64)-gcc in PATH; run the OS dependency installer or set CROSS64 to an installed cross-toolchain prefix)
   else
     CC64      := $(CROSS64)-gcc
     ifeq ($(origin LD64), undefined)
-      ifneq ($(shell which x86_64-linux-gnu-ld 2>/dev/null),)
-        LD64 := x86_64-linux-gnu-ld
-      else
-        LD64 := $(CROSS64)-ld
-      endif
+      LD64 := $(CROSS64)-ld
     endif
     OBJCOPY64 := $(CROSS64)-objcopy
     STACKPROTECT64 := -fstack-protector-strong
@@ -113,12 +117,25 @@ ifeq ($(PROFILE),core-only)
   $(info [build] PROFILE=core-only: kernel ELF will NOT include desktop+window+apps)
 endif
 
+CAPYUI_WIDGET_DIR :=
+ifneq ($(strip $(CAPYUI_DIR)),)
+  ifneq ($(wildcard $(CAPYUI_DIR)/src/widget/capy_display_list.h),)
+    CAPYUI_WIDGET_DIR := $(CAPYUI_DIR)/src/widget
+    CFLAGS64 += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
+    $(info [build] CapyUI widget display-list detected at $(CAPYUI_WIDGET_DIR))
+  endif
+endif
+
 # Toolchain EFI (gnu-efi)
-EFI_CC := x86_64-linux-gnu-gcc
-EFI_LD := x86_64-linux-gnu-ld
-EFI_CFLAGS := -I/usr/include/efi -I/usr/include/efi/x86_64 -Iinclude -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
-EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L/usr/lib -T /usr/lib/elf_x86_64_efi.lds
-EFI_LIBS := /usr/lib/crt0-efi-x86_64.o -lefi -lgnuefi
+EFI_PREFIX ?= $(shell if [ -f /usr/include/efi/efi.h ]; then printf /usr; elif command -v brew >/dev/null 2>&1; then brew --prefix gnu-efi 2>/dev/null; elif [ -d /opt/homebrew/opt/gnu-efi ]; then printf /opt/homebrew/opt/gnu-efi; elif [ -d /usr/local/opt/gnu-efi ]; then printf /usr/local/opt/gnu-efi; elif [ -d /opt/brew-master/opt/gnu-efi ]; then printf /opt/brew-master/opt/gnu-efi; fi)
+EFI_INCLUDE_DIR := $(EFI_PREFIX)/include/efi
+EFI_LIB_DIR := $(EFI_PREFIX)/lib
+EFI_CC ?= $(CC64)
+EFI_LD ?= $(LD64)
+EFI_OBJCOPY ?= $(OBJCOPY64)
+EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
+EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L$(EFI_LIB_DIR) -T $(EFI_LIB_DIR)/elf_x86_64_efi.lds
+EFI_LIBS := $(EFI_LIB_DIR)/crt0-efi-x86_64.o -lefi -lgnuefi
 
 # --- Host compiler (used by C host tools and unit tests) ---
 HOST_CC     ?= gcc
@@ -581,9 +598,11 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/core/event.o \
 	$(BUILD)/x86_64/gui/core/font.o \
 	$(BUILD)/x86_64/gui/core/compositor.o \
+	$(BUILD)/x86_64/gui/core/compositor_damage.o \
 	$(BUILD)/x86_64/gui/core/compositor_theme.o \
 	$(BUILD)/x86_64/gui/core/compositor_render.o \
 	$(BUILD)/x86_64/gui/widgets/widget.o \
+	$(BUILD)/x86_64/gui/widgets/capyui_display_adapter.o \
 	$(BUILD)/x86_64/gui/widgets/context_menu.o \
 	$(BUILD)/x86_64/gui/widgets/inline_prompt.o \
 	$(BUILD)/x86_64/gui/terminal/terminal.o \
@@ -623,10 +642,18 @@ DESKTOP_OBJS := \
 	$(BUILD)/x86_64/capyui-desktop/taskbar.o \
 	$(BUILD)/x86_64/capyui-desktop/taskbar_menu.o \
 	$(BUILD)/x86_64/capyui-desktop/taskbar_menu_input.o
+ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
+DESKTOP_OBJS += $(BUILD)/x86_64/capyui-desktop/taskbar_display_list.o \
+                $(BUILD)/x86_64/capyui-desktop/taskbar_menu_display_list.o \
+                $(BUILD)/x86_64/capyui-desktop/desktop_icons_display_list.o
+endif
 WINDOW_OBJS := \
 	$(BUILD)/x86_64/capyui-window/window_manager.o \
 	$(BUILD)/x86_64/capyui-window/window_dispatcher.o \
 	$(BUILD)/x86_64/capyui-window/notification.o
+ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
+WINDOW_OBJS += $(BUILD)/x86_64/capyui-window/notification_display_list.o
+endif
 APPS_OBJS := \
 	$(BUILD)/x86_64/capyui-apps/calculator.o \
 	$(BUILD)/x86_64/capyui-apps/file_manager.o \
@@ -637,6 +664,12 @@ APPS_OBJS := \
 	$(BUILD)/x86_64/capyui-apps/settings.o \
 	$(BUILD)/x86_64/capyui-apps/settings_view.o \
 	$(BUILD)/x86_64/capyui-apps/settings_actions.o
+ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
+APPS_OBJS += $(BUILD)/x86_64/capyui-apps/app_display_list_bridge.o \
+             $(BUILD)/x86_64/capyui-apps/file_manager_display_list.o \
+             $(BUILD)/x86_64/capyui-apps/settings_display_list.o \
+             $(BUILD)/x86_64/capyui-apps/task_manager_display_list.o
+endif
 else
 DESKTOP_OBJS :=
 WINDOW_OBJS :=
@@ -916,21 +949,21 @@ endif
 # UEFI loader (stub) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compila sÃƒÆ’Ã‚Â³ quando iso-uefi for chamado e gnu-efi estiver presente
 $(BUILD)/boot/uefi_loader/%.o: $(SRC_DIR)/boot/uefi_loader/%.c | $(BUILD) $(BUILD)/boot
 	@mkdir -p $(dir $@)
-	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
+	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
 	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(UEFI_LOADER_ELF): $(EFI_LOADER_OBJS) | $(BUILD) $(BUILD)/boot
-	@if [ ! -f /usr/include/efi/efi.h ]; then echo \"gnu-efi headers ausentes. Instale gnu-efi.\"; exit 1; fi
+	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
 	$(EFI_LD) $(EFI_LDFLAGS) -o $(UEFI_LOADER_ELF) $(EFI_LOADER_OBJS) $(EFI_LIBS)
 
 $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
 	# UEFI espera PE/COFF (nÃƒÆ’Ã‚Â£o ELF). Converte o ELF gerado pelo gnu-efi em BOOTX64.EFI.
-	x86_64-linux-gnu-objcopy --subsystem=efi-app \
+	$(EFI_OBJCOPY) --subsystem=efi-app \
 	  -j .text -j .rodata -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
 	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
 
 .PHONY: iso-uefi
-# Official WSL/Linux host path: make all64 iso-uefi
+# Official Linux/WSL/macOS host path: make all64 iso-uefi
 iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
@@ -1307,6 +1340,9 @@ run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Isrc -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
+HOST_CFLAGS += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
+endif
 TEST_BIN    := $(BUILD)/tests/unit_tests
 # --- Host test sources, organized by domain to mirror the
 #     tests/<domain>/ folder layout introduced on 2026-05-15.
@@ -1405,7 +1441,10 @@ TEST_SRCS   := \
                tests/fs/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
                \
                tests/gui/test_gui_event.c tests/gui/test_gui_event_helpers.c src/gui/core/event.c \
-               tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_theme.c \
+               tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_damage.c src/gui/core/compositor_theme.c src/gui/core/compositor_render.c \
+               tests/gui/test_widget_damage.c src/gui/widgets/widget.c \
+               tests/gui/test_overlay_damage.c src/gui/widgets/context_menu.c src/gui/widgets/inline_prompt.c src/lang/app_language.c \
+               tests/gui/test_capyui_display_adapter.c src/gui/widgets/capyui_display_adapter.c src/gui/core/font.c \
                tests/gui/test_gui_window_dispatcher.c tests/gui/test_gui_window_dispatcher_lifecycle.c $(WINDOW_SRC_ROOT)/window_dispatcher.c \
                tests/gui/test_desktop_smoke_readiness.c $(DESKTOP_SRC_ROOT)/desktop_smoke_readiness.c \
                \
@@ -1590,6 +1629,11 @@ TEST_SRCS   := \
                tests/lang/test_localization.c src/lang/localization.c \
                \
                third_party/tinf/tinflate.c third_party/tinf/tinfgzip.c third_party/tinf/tinfzlib.c third_party/tinf/adler32.c third_party/tinf/crc32.c
+
+ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
+TEST_SRCS += $(CAPYUI_WIDGET_DIR)/capy_display_list.c \
+             $(CAPYUI_WIDGET_DIR)/capy_widget.c
+endif
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
 	@mkdir -p $(BUILD)/tools

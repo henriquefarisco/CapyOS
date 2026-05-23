@@ -68,22 +68,57 @@ void widget_destroy(struct widget *w) {
   kfree(w);
 }
 
+static void widget_invalidate_rect(struct widget *w, const struct gui_rect *rect) {
+  struct gui_rect dirty;
+  if (!w || !w->window || !w->window->id || !rect) return;
+  if (rect->width == 0u || rect->height == 0u) return;
+  dirty = *rect;
+  compositor_invalidate_rect(w->window->id, &dirty);
+}
+
+static void widget_invalidate_bounds(struct widget *w) {
+  if (!w) return;
+  widget_invalidate_rect(w, &w->bounds);
+}
+
 void widget_set_bounds(struct widget *w, int32_t x, int32_t y,
                        uint32_t width, uint32_t height) {
+  struct gui_rect old_bounds;
   if (!w) return;
+  if (w->bounds.x == x && w->bounds.y == y &&
+      w->bounds.width == width && w->bounds.height == height) return;
+  old_bounds = w->bounds;
   w->bounds.x = x; w->bounds.y = y; w->bounds.width = width; w->bounds.height = height;
+  widget_invalidate_rect(w, &old_bounds);
+  widget_invalidate_bounds(w);
 }
 
 void widget_set_text(struct widget *w, const char *text) {
   if (!w || !text) return;
+  if (kstreq(w->text, text)) return;
   kstrcpy(w->text, WIDGET_MAX_TEXT, text);
+  widget_invalidate_bounds(w);
 }
 
-void widget_set_visible(struct widget *w, int visible) { if (w) w->visible = visible; }
-void widget_set_enabled(struct widget *w, int enabled) { if (w) w->enabled = enabled; }
+void widget_set_visible(struct widget *w, int visible) {
+  int normalized = visible ? 1 : 0;
+  if (!w || w->visible == normalized) return;
+  w->visible = normalized;
+  widget_invalidate_bounds(w);
+}
+
+void widget_set_enabled(struct widget *w, int enabled) {
+  int normalized = enabled ? 1 : 0;
+  if (!w || w->enabled == normalized) return;
+  w->enabled = normalized;
+  widget_invalidate_bounds(w);
+}
 
 void widget_set_style(struct widget *w, const struct widget_style *style) {
-  if (w && style) w->style = *style;
+  if (!w || !style) return;
+  if (kmemcmp(&w->style, style, sizeof(*style)) == 0) return;
+  w->style = *style;
+  widget_invalidate_bounds(w);
 }
 
 void widget_add_child(struct widget *parent, struct widget *child) {
@@ -232,7 +267,12 @@ int widget_handle_event(struct widget *w, const struct gui_event *ev) {
 
   if (ev->type == GUI_EVENT_MOUSE_MOVE) {
     int hover = point_in_rect(ev->mouse.x, ev->mouse.y, &w->bounds);
-    w->hovered = hover;
+    if (w->hovered != hover) {
+      w->hovered = hover;
+      widget_invalidate_bounds(w);
+    } else {
+      w->hovered = hover;
+    }
     /* Propagate hover tracking to children */
     for (uint32_t i = 0; i < w->child_count; i++)
       widget_handle_event(w->children[i], ev);
@@ -254,6 +294,7 @@ int widget_handle_event(struct widget *w, const struct gui_event *ev) {
         w->on_click(w, w->user_data);
       if (w->type == WIDGET_CHECKBOX) {
         w->checked = !w->checked;
+        widget_invalidate_bounds(w);
         if (w->on_change) w->on_change(w, w->user_data);
       }
       return 1;

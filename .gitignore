@@ -4,6 +4,7 @@ QEMU.sh
 !compile_flags.txt
 *.log
 /build/
+/Dependencias/
 scripts.py
 __pycache__/
 *.pyc

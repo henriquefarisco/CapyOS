@@ -168,6 +168,12 @@ Current runtime rule:
   browser core, package format, widget model, codecs and benchmarks are allowed
   to evolve outside this repository only through the contracts in
   `docs/reference/integration/`.
+- The current UI boundary is semi-decoupled, not a generic third-party UI SDK:
+  CapyUI owns the desktop session/widget model, while CapyOS owns compositor,
+  windows, input, surfaces, fonts, damage tracking and final activation. Any
+  alternative UI must be introduced through a versioned integration contract,
+  package/activation fallback policy and official gate rather than by extending
+  the in-tree fallback.
 
 ## 10. Immediate architecture priorities
 

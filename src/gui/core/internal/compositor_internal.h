@@ -32,6 +32,7 @@
  * region. */
 #define COMP_CURSOR_WIDTH  16
 #define COMP_CURSOR_HEIGHT 16
+#define COMP_DIRTY_RECT_MAX 32u
 
 /* Window corner radius (px). The title bar's TOP corners and the
  * body's BOTTOM corners are masked to this radius in
@@ -58,6 +59,9 @@ extern int      comp_full_presented;
 extern int      comp_cursor_valid;
 extern int32_t  comp_cursor_x;
 extern int32_t  comp_cursor_y;
+extern struct gui_rect comp_dirty_rects[COMP_DIRTY_RECT_MAX];
+extern uint32_t comp_dirty_rect_count;
+extern int      comp_full_redraw_pending;
 /* Etapa F4 cursors (2026-05-03): kind do cursor atual; default
  * COMP_CURSOR_ARROW. Setado via compositor_set_cursor() pelo
  * desktop loop conforme hit-test sobre janelas. Lido por
@@ -67,14 +71,18 @@ extern uint8_t  comp_cursor_kind_active;
 extern uint8_t  comp_cursor_kind_rendered;
 
 /* === Shared helpers =================================================== */
-/* All implemented in `compositor.c`. Definitions stay there (the
- * "owner" TU); the other TUs only call. */
+/* Implemented by the compositor core TUs; callers only use this header. */
 
 void     comp_memset32(uint32_t *dst, uint32_t val, size_t count);
 void     comp_memcpy(void *dst, const void *src, size_t len);
 int      comp_streq(const char *a, const char *b);
+int      comp_dirty_append_rect(const struct gui_rect *rect);
+void     comp_dirty_mark_full_redraw(void);
 
 uint32_t comp_window_title_height(void);
+int      comp_window_rect_to_screen(struct gui_window *win,
+                                    const struct gui_rect *rect,
+                                    struct gui_rect *out);
 
 /* Returns 1 if (col,row) lies inside the rounded-rect mask of
  * size (w, total_h) with corner radius `r`. See compositor.c for

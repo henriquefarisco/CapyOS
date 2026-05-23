@@ -2,6 +2,7 @@
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 
 PREFERRED_TOOLCHAIN = [
@@ -21,16 +22,62 @@ REQUIRED_RUNTIME_TOOLS = [
     "python3",
 ]
 
-REQUIRED_RELEASE_FILES = [
-    "/usr/include/efi/efi.h",
-    "/usr/include/efi/x86_64/efibind.h",
-    "/usr/lib/crt0-efi-x86_64.o",
-    "/usr/lib/elf_x86_64_efi.lds",
+REQUIRED_RELEASE_SUFFIXES = [
+    "include/efi/efi.h",
+    "include/efi/x86_64/efibind.h",
+    "lib/crt0-efi-x86_64.o",
+    "lib/elf_x86_64_efi.lds",
 ]
 
 def check_tool(tool):
     """Checks if a tool is available in the PATH."""
     return shutil.which(tool) is not None
+
+def add_unique(items, value):
+    if value and value not in items:
+        items.append(value)
+
+def brew_gnu_efi_prefix():
+    brew = shutil.which("brew")
+    if not brew:
+        return None
+    try:
+        return subprocess.check_output(
+            [brew, "--prefix", "gnu-efi"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+def gnu_efi_prefixes():
+    prefixes = []
+    add_unique(prefixes, os.environ.get("EFI_PREFIX"))
+    if sys.platform == "darwin":
+        add_unique(prefixes, brew_gnu_efi_prefix())
+        add_unique(prefixes, "/opt/homebrew/opt/gnu-efi")
+        add_unique(prefixes, "/usr/local/opt/gnu-efi")
+        add_unique(prefixes, "/opt/brew-master/opt/gnu-efi")
+        add_unique(prefixes, "/usr")
+    else:
+        add_unique(prefixes, "/usr")
+        add_unique(prefixes, brew_gnu_efi_prefix())
+    return prefixes
+
+def release_files_for(prefix):
+    return [os.path.join(prefix, suffix) for suffix in REQUIRED_RELEASE_SUFFIXES]
+
+def find_release_files():
+    prefixes = gnu_efi_prefixes()
+    if not prefixes:
+        return "", [], REQUIRED_RELEASE_SUFFIXES
+    for prefix in prefixes:
+        files = release_files_for(prefix)
+        missing = [path for path in files if not os.path.exists(path)]
+        if not missing:
+            return prefix, files, []
+    files = release_files_for(prefixes[0])
+    return prefixes[0], files, [path for path in files if not os.path.exists(path)]
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Check CapyOS build dependencies")
@@ -47,11 +94,12 @@ def main():
     missing_release_files = []
     missing_preferred = []
     fallback_missing = []
+    release_prefix, release_files, missing_release_files = find_release_files()
     print("Checking build dependencies...")
-    
+
     if os.name == 'nt':
-        print("[WARNING] Running on Windows. Ensure you are using WSL for 'make'.")
-        
+        print("[WARNING] Running on Windows. Use install-windows.ps1 to bootstrap WSL for 'make'.")
+
     print("Preferred release toolchain:")
     for tool in PREFERRED_TOOLCHAIN:
         if check_tool(tool):
@@ -77,13 +125,12 @@ def main():
             print(f"  [MISSING] {tool}")
             missing_runtime.append(tool)
 
-    print("UEFI release files:")
-    for path in REQUIRED_RELEASE_FILES:
+    print(f"UEFI release files (prefix: {release_prefix or 'not found'}):")
+    for path in release_files:
         if os.path.exists(path):
             print(f"  [OK] {path}")
         else:
             print(f"  [MISSING] {path}")
-            missing_release_files.append(path)
 
     if missing_runtime or missing_release_files:
         print("\nERROR: Missing required runtime/build dependencies:")
@@ -91,9 +138,14 @@ def main():
             print(f" - {t}")
         for path in missing_release_files:
             print(f" - {path}")
-        print("\nPlease install them in your WSL environment.")
+        print("\nPlease install them with the OS-specific bootstrap script.")
         if missing_release_files:
-            print("On Debian/Ubuntu, install the gnu-efi package.")
+            if sys.platform == "darwin":
+                print("On macOS, run: bash install-macos.sh --skip-brew-update")
+            elif os.name == "nt":
+                print("On Windows, run: .\\install-windows.ps1")
+            else:
+                print("On Debian/Ubuntu, run: ./install-linux.sh")
         sys.exit(1)
 
     if missing_preferred:

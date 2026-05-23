@@ -10,6 +10,7 @@ GCC_VERSION="${GCC_VERSION:-13.2.0}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 INSTALL_SMOKE_DEPS=1
 INSTALL_CROSS_TOOLCHAIN=1
+ALLOW_ROOT_INSTALL="${ALLOW_ROOT_INSTALL:-0}"
 
 usage() {
     cat <<EOF
@@ -73,6 +74,11 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+if [[ "${EUID}" -eq 0 && "$ALLOW_ROOT_INSTALL" != "1" ]]; then
+    echo "[err] Nao execute install-linux.sh/install.sh com sudo/root; rode como usuario normal para evitar artefatos root-owned no workspace." >&2
+    exit 1
+fi
+
 if [[ "${EUID}" -eq 0 ]]; then
     SUDO=""
 else
@@ -85,7 +91,9 @@ PATH_EXPORT="export PATH=\"$PREFIX/bin:\$PATH\""
 APT_PACKAGES=(
     build-essential
     binutils
+    binutils-x86-64-linux-gnu
     gcc
+    gcc-x86-64-linux-gnu
     make
     python3
     curl
@@ -253,14 +261,14 @@ main() {
     verify_tool python3
     verify_tool xorriso
     verify_tool grub-mkrescue
-    verify_tool x86_64-linux-gnu-gcc
-    verify_tool x86_64-linux-gnu-ld
-    verify_tool x86_64-linux-gnu-objcopy
-
     if [[ "$INSTALL_CROSS_TOOLCHAIN" -eq 1 ]]; then
         verify_tool "$TARGET-gcc"
         verify_tool "$TARGET-ld"
         verify_tool "$TARGET-objcopy"
+    else
+        verify_tool x86_64-linux-gnu-gcc
+        verify_tool x86_64-linux-gnu-ld
+        verify_tool x86_64-linux-gnu-objcopy
     fi
 
     if [[ -f "$PROJECT_ROOT/tools/scripts/check_deps.py" ]]; then

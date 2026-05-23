@@ -121,6 +121,13 @@ static uint32_t ip_visible_chars_for_width(const struct font *f,
   return (uint32_t)(input_width - 8) / gw;
 }
 
+static void ip_invalidate_input(void) {
+  if (g_p.win) {
+    struct gui_rect rect = { 8, 24, INLINE_PROMPT_WIDTH - 16u, 18u };
+    compositor_invalidate_rect(g_p.win->id, &rect);
+  }
+}
+
 static void ip_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
                           uint32_t w, uint32_t h, uint32_t color) {
   if (!s) return;
@@ -281,33 +288,33 @@ int inline_prompt_handle_key(uint32_t keycode, char ch) {
         g_p.cursor--;
       }
     }
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   if (keycode == KEY_LEFT) {
     if (g_p.cursor > 0) g_p.cursor--;
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   if (keycode == KEY_RIGHT) {
     uint32_t len = ip_strlen(g_p.text);
     if (g_p.cursor < len) g_p.cursor++;
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   if (keycode == KEY_HOME) {
     g_p.cursor = 0;
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   if (keycode == KEY_END) {
     g_p.cursor = ip_strlen(g_p.text);
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   if (keycode == KEY_DELETE) {
     ip_delete_at_cursor();
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   /* Printable ASCII -> insert at cursor. */
@@ -321,7 +328,7 @@ int inline_prompt_handle_key(uint32_t keycode, char ch) {
       g_p.cursor++;
       g_p.text[len + 1u] = '\0';
     }
-    if (g_p.win) compositor_invalidate(g_p.win->id);
+    ip_invalidate_input();
     return 1;
   }
   /* Outras teclas sao absorvidas pelo prompt sem efeito. */
@@ -356,7 +363,7 @@ int inline_prompt_handle_click(int32_t screen_x, int32_t screen_y) {
       if (rel > 0) col = (uint32_t)(rel + (int32_t)(gw / 2u)) / gw;
       g_p.cursor = start + col;
       if (g_p.cursor > len) g_p.cursor = len;
-      compositor_invalidate(g_p.win->id);
+      ip_invalidate_input();
     }
   }
   return 1;

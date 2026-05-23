@@ -158,8 +158,11 @@ deve ficar em `tools/scripts/` ou `tools/host/`.
 
 Exemplo atual:
 
-- `install.sh` e wrapper.
-- `tools/scripts/install_deps.sh` contem a logica de instalacao.
+- `install.sh`, `install-linux.sh`, `install-macos.sh` e
+  `install-windows.ps1` sao wrappers.
+- `tools/scripts/install_deps.sh`, `tools/scripts/install_deps_macos.sh`
+  e `tools/scripts/install_deps_windows.ps1` contem a logica de
+  instalacao.
 
 ## Processo de refactor
 

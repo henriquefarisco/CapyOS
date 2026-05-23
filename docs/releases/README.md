@@ -4,13 +4,13 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.256+20260522.md`
-  - Corrige instalacao remota full/custom de modulos via GitHub Release: payloads ate 8 MiB, falhas isoladas por pacote, logs com rc+label, marker de sweep parcial e perfil personalizado com checkboxes para pacotes oficiais.
+- `capyos-0.8.0-alpha.257+20260523.md`
+  - Consolida o deploy modular com novos adaptadores de display-list e damage tracking, fecha o caminho de instalacao remota e publica o release corrente em sincronia com o sister `CapyUI`.
 
 ## Historico recente
 
 - `capyos-0.8.0-alpha.255+20260521.md`
-  - **Roll-back honesto de alpha.254.** O scaffolding entregue inventou ABI paralela ao sister `CapyUI`, mas a ABI real `capy-ui-widget` já está publicada em v2.7 (display-list schema v7) com header autoritativo em `CapyUI/src/widget/capy_display_list.h`. Arquivos do alpha.254 removidos; wiring revertido. Pendência cross-repo documentada: matriz CapyOS continua stale.
+  - **Roll-back honesto de alpha.254.** O scaffolding entregue inventou ABI paralela ao sister `CapyUI`, mas a ABI real `capy-ui-widget` já estava publicada com display-list schema v7 e header autoritativo em `CapyUI/src/widget/capy_display_list.h`. Arquivos do alpha.254 removidos; wiring revertido. A sincronização da matriz foi retomada em alpha.256.
 
 - `capyos-0.8.0-alpha.254+20260521.md` — **REVOGADO em alpha.255.** Scaffolding incorreto de Fase A da Etapa 4 (declarou ABI paralela em vez de consumir a do sister CapyUI).
 
@@ -587,3 +587,6 @@ As releases anteriores a `0.8.0-alpha.0` pertencem ao periodo de transicao
 entre os fluxos legados e a trilha atual `UEFI/GPT/x86_64`. Elas podem citar
 identificadores tecnicos antigos de boot e layout de disco. Leia essas notas
 como historico, nao como guia de setup atual.
+- `capyos-0.8.0-alpha.256+20260522.md`
+  - Corrige instalacao remota full/custom de modulos via GitHub Release: payloads ate 8 MiB, falhas isoladas por pacote, logs com rc+label, marker de sweep parcial e perfil personalizado com checkboxes para pacotes oficiais.
+  - Sincroniza a Fase A correta da Etapa 4 com `CapyUI` `2.13.0` / `capy-ui-widget` v2.13 (display-list schema v7) e adiciona adapter CapyOS-side inicial para consumir o header real do sister.

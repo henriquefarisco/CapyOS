@@ -26,6 +26,57 @@
 #include "internal/compositor_internal.h"
 #include "gui/font.h"
 
+static int render_clip_enabled = 0;
+static int render_skip_window_paint = 0;
+static struct gui_rect render_clip = { 0, 0, 0u, 0u };
+
+static int render_point_in_clip(int32_t x, int32_t y) {
+  if (!render_clip_enabled) return 1;
+  return x >= render_clip.x &&
+         y >= render_clip.y &&
+         x < render_clip.x + (int32_t)render_clip.width &&
+         y < render_clip.y + (int32_t)render_clip.height;
+}
+
+static int render_rects_intersect(int32_t x, int32_t y, uint32_t w,
+                                  uint32_t h, const struct gui_rect *rect) {
+  int32_t x1;
+  int32_t y1;
+  int32_t rx1;
+  int32_t ry1;
+  if (!rect || w == 0u || h == 0u || rect->width == 0u || rect->height == 0u) {
+    return 0;
+  }
+  x1 = x + (int32_t)w;
+  y1 = y + (int32_t)h;
+  rx1 = rect->x + (int32_t)rect->width;
+  ry1 = rect->y + (int32_t)rect->height;
+  return x < rx1 && rect->x < x1 && y < ry1 && rect->y < y1;
+}
+
+static int render_rect_intersects_clip(int32_t x, int32_t y,
+                                       uint32_t w, uint32_t h) {
+  if (!render_clip_enabled) return 1;
+  return render_rects_intersect(x, y, w, h, &render_clip);
+}
+
+static int render_window_intersects_damage(struct gui_window *win) {
+  uint32_t title_h;
+  int32_t y;
+  uint32_t h;
+  if (!win) return 0;
+  title_h = win->decorated ? comp_window_title_height() : 0u;
+  y = win->frame.y - (int32_t)title_h;
+  h = win->frame.height + title_h;
+  for (uint32_t i = 0u; i < comp_dirty_rect_count; ++i) {
+    if (render_rects_intersect(win->frame.x, y, win->frame.width, h,
+                               &comp_dirty_rects[i])) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /* Pixel-perfect 1 px outline around a window (title bar + body)
  * that follows the rounded mask. A pixel is on the perimeter if
  * it is inside the shape and at least one orthogonal neighbour
@@ -91,6 +142,7 @@ static void render_window_outline(struct gui_window *win,
 
       int32_t px = origin_x + (int32_t)col;
       if (px < 0 || (uint32_t)px >= comp_width) continue;
+      if (!render_point_in_clip(px, py)) continue;
       buf[py * buf_stride + px] = color;
     }
   }
@@ -138,6 +190,7 @@ static void render_fill_rect_clip(uint32_t *buf, uint32_t buf_stride,
     for (uint32_t col = 0; col < w; col++) {
       int32_t px = x + (int32_t)col;
       if (px < 0 || (uint32_t)px >= comp_width) continue;
+      if (!render_point_in_clip(px, py)) continue;
       buf[py * buf_stride + px] = color;
     }
   }
@@ -270,6 +323,7 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
     for (uint32_t col = 0; col < w; col++) {
       int32_t px = x + (int32_t)col;
       if (px < 0 || (uint32_t)px >= comp_width) continue;
+      if (!render_point_in_clip(px, py)) continue;
       if (corner_r != 0u &&
           !comp_window_pixel_inside(col, row, w, total_h, corner_r)) {
         continue;
@@ -291,6 +345,7 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
       for (uint32_t col = 0; col < w; col++) {
         int32_t px = x + (int32_t)col;
         if (px < 0 || (uint32_t)px >= comp_width) continue;
+        if (!render_point_in_clip(px, py)) continue;
         if (corner_r != 0u &&
             !comp_window_pixel_inside(col, row, w, total_h, corner_r)) {
           continue;
@@ -311,7 +366,7 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
       uint32_t text_max = (w > control_w + 12u) ? (w - control_w - 12u) : 0u;
       char title_fit[64];
       render_fit_title(f, win->title, text_max, title_fit, sizeof(title_fit));
-      if (title_fit[0]) {
+      if (title_fit[0] && !render_clip_enabled) {
         font_draw_string(&title_surf, f, x + 6,
                          y - (int32_t)title_h + 4,
                          title_fit,
@@ -363,11 +418,13 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
 
   if (!buf || buf_stride == 0) return;
 
-  for (uint32_t y = 0; y < comp_height; y++) {
-    comp_memset32(buf + y * buf_stride, comp_wallpaper, comp_width);
+  if (!render_clip_enabled) {
+    for (uint32_t y = 0; y < comp_height; y++) {
+      comp_memset32(buf + y * buf_stride, comp_wallpaper, comp_width);
+    }
   }
 
-  if (comp_desktop_paint_cb) {
+  if (!render_clip_enabled && comp_desktop_paint_cb) {
     struct gui_surface desktop = { buf, comp_width, comp_height, buf_stride * 4 };
     comp_desktop_paint_cb(&desktop);
   }
@@ -384,8 +441,14 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
       struct gui_window *win = &comp_windows[i];
       if (!win->id || !win->visible || win->z_order != z) continue;
       if (!win->surface.pixels) continue;
+      if (!render_rect_intersects_clip(win->frame.x,
+                                       win->frame.y - (int32_t)(win->decorated ? comp_window_title_height() : 0u),
+                                       win->frame.width,
+                                       win->frame.height + (win->decorated ? comp_window_title_height() : 0u))) {
+        continue;
+      }
 
-      if (win->on_paint) win->on_paint(win);
+      if (!render_skip_window_paint && win->on_paint) win->on_paint(win);
       render_window_decoration(win, buf, buf_stride);
 
       {
@@ -415,6 +478,16 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
           px_start = wx < 0 ? 0 : wx;
           px_end = wx + (int32_t)win->frame.width;
           if (px_end > (int32_t)comp_width) px_end = (int32_t)comp_width;
+          if (render_clip_enabled) {
+            if (py < render_clip.y ||
+                py >= render_clip.y + (int32_t)render_clip.height) {
+              continue;
+            }
+            if (px_start < render_clip.x) px_start = render_clip.x;
+            if (px_end > render_clip.x + (int32_t)render_clip.width) {
+              px_end = render_clip.x + (int32_t)render_clip.width;
+            }
+          }
           if (px_start >= px_end) continue;
           col_start = (uint32_t)(px_start - wx);
           copy_len = (uint32_t)(px_end - px_start);
@@ -456,6 +529,15 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
       }
     }
   }
+}
+
+static void compose_scene_rect(uint32_t *buf, uint32_t buf_stride,
+                               const struct gui_rect *rect) {
+  if (!rect || rect->width == 0u || rect->height == 0u) return;
+  render_clip = *rect;
+  render_clip_enabled = 1;
+  compose_scene(buf, buf_stride);
+  render_clip_enabled = 0;
 }
 
 static void present_full_frame_from_backbuffer(void) {
@@ -603,14 +685,45 @@ void compositor_render(void) {
   if (!comp_scene_dirty) return;
 
   if (comp_backbuffer) {
-    compose_scene(comp_backbuffer, comp_backbuffer_stride);
-    present_full_frame_from_backbuffer();
+    int full_present = comp_full_redraw_pending || comp_dirty_rect_count == 0u;
+    if (full_present) {
+      render_skip_window_paint = 0;
+      compose_scene(comp_backbuffer, comp_backbuffer_stride);
+      present_full_frame_from_backbuffer();
+    } else {
+      render_skip_window_paint = 0;
+      for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
+        struct gui_window *win = &comp_windows[i];
+        if (win->id && win->visible && win->surface.pixels && win->on_paint &&
+            render_window_intersects_damage(win)) {
+          win->on_paint(win);
+        }
+      }
+      render_skip_window_paint = 1;
+      for (uint32_t i = 0u; i < comp_dirty_rect_count; ++i) {
+        compose_scene_rect(comp_backbuffer, comp_backbuffer_stride,
+                           &comp_dirty_rects[i]);
+        copy_backbuffer_rect_to_front(comp_dirty_rects[i].x,
+                                      comp_dirty_rects[i].y,
+                                      comp_dirty_rects[i].width,
+                                      comp_dirty_rects[i].height);
+      }
+      if (comp_cursor_valid) {
+        copy_backbuffer_rect_to_front(comp_cursor_x, comp_cursor_y,
+                                      COMP_CURSOR_WIDTH, COMP_CURSOR_HEIGHT);
+      }
+      render_skip_window_paint = 0;
+    }
+    comp_full_presented = 1;
   } else {
+    render_skip_window_paint = 0;
     compose_scene(comp_fb, front_stride);
+    comp_full_presented = 1;
   }
 
   comp_scene_dirty = 0;
-  comp_full_presented = 1;
+  comp_dirty_rect_count = 0;
+  comp_full_redraw_pending = 0;
   comp_stats.frames_rendered++;
 }
 

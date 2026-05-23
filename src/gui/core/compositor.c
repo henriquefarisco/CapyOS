@@ -117,6 +117,7 @@ int compositor_cursor_needs_render(int32_t x, int32_t y) {
 void comp_request_scene_redraw(void) {
   comp_scene_dirty = 1;
   comp_full_presented = 0;
+  comp_dirty_mark_full_redraw();
   comp_stats.dirty_rects++;
 }
 
@@ -233,6 +234,7 @@ void compositor_init(uint32_t *framebuffer, uint32_t width, uint32_t height,
   comp_stats.frames_rendered = 0;
   comp_stats.dirty_rects = 0;
   comp_scene_dirty = 1;
+  comp_dirty_mark_full_redraw();
   comp_full_presented = 0;
   comp_cursor_valid = 0;
   comp_cursor_x = 0;
@@ -261,6 +263,7 @@ void compositor_shutdown(void) {
   comp_stats.dirty_rects = 0;
   comp_desktop_paint_cb = NULL;
   comp_scene_dirty = 1;
+  comp_dirty_mark_full_redraw();
   comp_full_presented = 0;
   comp_cursor_valid = 0;
   comp_cursor_x = 0;
@@ -459,14 +462,36 @@ void compositor_set_title(uint32_t window_id, const char *title) {
 }
 
 void compositor_invalidate(uint32_t window_id) {
-  if (!comp_find_window(window_id)) return;
+  struct gui_window *win = comp_find_window(window_id);
+  struct gui_rect local;
+  struct gui_rect dirty;
+  if (!win) return;
   gui_event_push_paint(window_id, 0);
-  comp_request_scene_redraw();
+  local.x = 0;
+  local.y = 0;
+  local.width = win->surface.width;
+  local.height = win->surface.height;
+  if (!comp_window_rect_to_screen(win, &local, &dirty)) {
+    comp_request_scene_redraw();
+    return;
+  }
+  comp_dirty_append_rect(&dirty);
 }
 
 void compositor_invalidate_rect(uint32_t window_id, struct gui_rect *rect) {
-  (void)rect;
-  compositor_invalidate(window_id);
+  struct gui_window *win = comp_find_window(window_id);
+  struct gui_rect dirty;
+  if (!win) return;
+  if (!rect) {
+    compositor_invalidate(window_id);
+    return;
+  }
+  if (rect->width == 0u || rect->height == 0u) return;
+  if (!comp_window_rect_to_screen(win, rect, &dirty)) {
+    return;
+  }
+  gui_event_push_paint(window_id, 0);
+  comp_dirty_append_rect(&dirty);
 }
 
 /* Etapa UX W7-ish (2026-05-03): redraw global. Util para o

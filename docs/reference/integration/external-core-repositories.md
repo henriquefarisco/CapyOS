@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry for decoupled core projects (updated 2026-05-20).
+**Status:** migration registry for decoupled core projects (updated 2026-05-22).
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
 a versioned in-tree adapter and an external gate.
@@ -19,7 +19,7 @@ completed in-tree hygiene pass.
 | `CapyLang` | `0.1.3` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work (lexer S1 delivered) |
 | `CapyAgent` | `0.0.4` | package format, resolver, component index, release manifest model, declarative install/rollback plan | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary; CapyAgent Ed25519 signer **not yet published** (verifier slot NULL by design) |
 | `CapyCodecs` | `0.0.4` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders until an image adapter lands |
-| `CapyUI` | `0.7.3` | retained widget model + **desktop session, window manager and apps** (`org.capyos.ui.desktop-session` published in `alpha.241`) | widget tree/event model extracted (`capy-ui-widget` v0.6); desktop/window/apps extracted (`capy-ui-desktop-session` v1); compositor/font/input plumbing **stays in CapyOS** |
+| `CapyUI` | `2.13.0` | retained widget model + **desktop session, window manager and apps** (`org.capyos.ui.desktop-session` published in `alpha.241`) | widget/display-list model active for Etapa 4 via `capy-ui-widget` v2.13 schema v7 adapter; desktop/window/apps extracted (`capy-ui-desktop-session` v1); compositor/font/input plumbing **stays in CapyOS** |
 | `CapyBenchmark` | `0.0.4` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator initialized externally |
 
 ## Migrated snapshots
@@ -97,8 +97,8 @@ External repo entry points (unchanged):
 **Expanded in `alpha.241`.** CapyUI now owns two installable modules:
 
 - `org.capyos.ui.widget-core` — portable retained widget model, layout,
-  display-list schema v2, focus traversal, text editing, animation,
-  theme tokens v2 (`capy-ui-widget` v0.6).
+  display-list schema v7, focus traversal, text editing, animation,
+  theme tokens and widget extensions (`capy-ui-widget` v2.13).
 - `org.capyos.ui.desktop-session` — desktop runtime, taskbar, window
   manager, dispatcher, notifications and built-in apps (calculator,
   file manager, settings, task manager, text editor)
@@ -112,6 +112,14 @@ the in-tree fallback under `src/gui/desktop/`, `src/gui/window/` and
 the `CapyUI` repository; the in-tree fallback exists only to sustain
 `make all64` without the sibling and to ease the migration path.
 
+For Etapa 4, the Makefile also detects
+`../CapyUI/src/widget/capy_display_list.h` and enables the
+CapyOS-side display-list adapter under
+`include/gui/capyui_display_adapter.h` and
+`src/gui/widgets/capyui_display_adapter.c`. The adapter consumes the
+real `capy_display_list` / `capy_dl_cmd` ABI instead of defining a
+parallel schema.
+
 CapyOS keeps in the core: compositor, fonts, rendering surface, theme
 provider, input plumbing, framebuffer, kernel module gate
 (`kernel/module_gate.c`) that checks
@@ -122,6 +130,7 @@ module is missing.
 External entry points:
 
 - `CapyUI/src/widget/capy_widget.h` and `CapyUI/src/widget/capy_widget.c`
+- `CapyUI/src/widget/capy_display_list.h`
 - `CapyUI/src/desktop/desktop_runtime.c` (and the rest of `desktop/`,
   `window/`, `apps/` when migrated)
 - `CapyUI/Makefile` (targets `make package` and `make validate`)

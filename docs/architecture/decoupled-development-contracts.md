@@ -81,6 +81,31 @@ Estado inicial:
 - `CapyLang`: repositório inicializado; um protótipo in-tree foi identificado
   e fica fora do link padrão até migração por host ABI na etapa correta.
 
+## CapyUI e UIs alternativas
+
+O estado atual da UI é semi-desacoplado: `CapyUI` é o owner autoritativo da
+desktop session, widgets de alto nível e apps gráficos migrados, enquanto o
+CapyOS base continua dono do compositor, janelas, input real, fontes, surfaces,
+framebuffer, damage tracking, module gate e ativação final.
+
+Isso permite evolução externa do CapyUI e de modelos de widget/display-list,
+mas ainda não constitui um SDK público genérico para substituir a shell inteira
+por qualquer UI de terceiro. Uma UI alternativa só deve ser aceita como novo
+contrato versionado quando declarar:
+
+- nome de módulo e ABI canônicos;
+- formato de renderização ou display-list;
+- lifecycle de sessão, janelas, eventos e cleanup;
+- chamadas permitidas ao host sem acesso a internals do kernel/compositor;
+- limites de tempo por frame, memória, input e profundidade de árvore;
+- política de ativação, fallback e recuperação se a UI falhar;
+- testes host-side e gate externo em VM oficial.
+
+O fallback in-tree de desktop/apps existe para clones sem o sibling `../CapyUI`
+e para continuidade de build; ele não é caminho de feature nem base para uma UI
+paralela. Qualquer UI alternativa deve passar por `docs/reference/integration/`,
+matriz de compatibilidade, pacote/marker de ativação e gate de etapa próprio.
+
 Distribuição modular alpha:
 
 - usar tags de release GitHub, sha256 e ABI mínima como fluxo inicial;
