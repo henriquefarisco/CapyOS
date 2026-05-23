@@ -4,10 +4,13 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.257+20260523.md`
-  - Consolida o deploy modular com novos adaptadores de display-list e damage tracking, fecha o caminho de instalacao remota e publica o release corrente em sincronia com o sister `CapyUI`.
+- `capyos-0.8.0-alpha.258+20260523.md`
+  - Corrige a esteira do deploy modular ao alinhar o sibling remoto `CapyUI` `2.13.1` em `main` e refaz a release CapyOS sobre a pinagem correta.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.257+20260523.md`
+  - Consolida o deploy modular com novos adaptadores de display-list e damage tracking, mas a tag inicial quebrou na esteira porque o runner clonava `CapyUI` `main` ainda sem os fontes display-list publicados em `2.13.1`.
 
 - `capyos-0.8.0-alpha.255+20260521.md`
   - **Roll-back honesto de alpha.254.** O scaffolding entregue inventou ABI paralela ao sister `CapyUI`, mas a ABI real `capy-ui-widget` já estava publicada com display-list schema v7 e header autoritativo em `CapyUI/src/widget/capy_display_list.h`. Arquivos do alpha.254 removidos; wiring revertido. A sincronização da matriz foi retomada em alpha.256.

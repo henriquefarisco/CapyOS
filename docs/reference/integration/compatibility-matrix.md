@@ -1,9 +1,9 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo desde 2026-05-19; atualização técnica em 2026-05-22.
+**Status:** autoritativo desde 2026-05-19; atualização técnica em 2026-05-23.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
-**Auditoria atual:** [`compatibility-audit-2026-05-22.md`](compatibility-audit-2026-05-22.md).
-**Auditoria anterior (snapshot histórico):** [`compatibility-audit-2026-05-21.md`](compatibility-audit-2026-05-21.md).
+**Auditoria atual:** [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md).
+**Auditoria anterior (snapshot histórico):** [`compatibility-audit-2026-05-22.md`](compatibility-audit-2026-05-22.md).
 
 Esta matriz pina as versões mínimas que o CapyOS core suporta para cada
 projeto desacoplado. Atualize esta tabela junto com qualquer release de
@@ -14,11 +14,11 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.257+20260523` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.8.0-alpha.258+20260523` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.0.4` | `capy-agent-component-index` v1 | `0.0.4` | `0.0.4` |
 | `CapyBrowser` | `0.0.4` | `capy-browser-core` v1 (planejada) | n/a (sem runtime ativo) | n/a |
 | `CapyCodecs` | `0.0.4` | `capy-codec-image` v1 (`CAPY_IMAGE_ABI_VERSION`) | `0.0.4` (host-only) | `0.0.4` |
-| `CapyUI` | `2.13.0` | `capy-ui-widget` v2.13 (display-list schema v7) + `capy-ui-desktop-session` v1 | `2.13.0` (cross-repo build / capypkg módulo / display-list adapter Etapa 4) | `2.13.0` (static adapter coverage; external gate pending) |
+| `CapyUI` | `2.13.1` | `capy-ui-widget` v2.13 (display-list schema v7) + `capy-ui-desktop-session` v1 | `2.13.1` (cross-repo build / capypkg modulo / display-list adapter Etapa 4) | `2.13.1` (CI release gates com sibling remoto em main) |
 | `CapyLang` | `0.1.3` | `capy-lang-host` v0 (parcial, S1 lexer) | n/a (roadmap-blocked) | n/a |
 | `CapyBenchmark` | `0.0.4` | `capy-benchmark-report` v1 (planejada) | n/a (roadmap-blocked) | n/a |
 

@@ -47,7 +47,7 @@ autoritativo.
 
 Adicionalmente, requisitos cross-repo:
 
-- [x] Matriz cross-repo pina `CapyUI` `2.13.0` e
+- [x] Matriz cross-repo pina `CapyUI` `2.13.1` e
       `capy-ui-widget` v2.13/schema v7.
 - [x] `docs/reference/integration/external-core-repositories.md`
       marca `capy-ui-widget` como ativo na Etapa 4 via adapter.
@@ -123,7 +123,7 @@ re-execução determinística do mesmo cenário.
   capy_display_list` do CapyUI e renderizando via `struct gui_surface`.
 - `Makefile` detectando `../CapyUI/src/widget/capy_display_list.h` e
   definindo `CAPYOS_HAVE_CAPYUI_WIDGET` somente quando o sibling existe.
-- Audit/matriz sincronizados para `CapyUI` `2.13.0` /
+- Audit/matriz sincronizados para `CapyUI` `2.13.1` /
   `capy-ui-widget` v2.13.
 
 **Gates esperados (host):**

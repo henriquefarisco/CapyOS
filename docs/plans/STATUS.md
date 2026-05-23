@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-05-23 · **Versão:** `0.8.0-alpha.257+20260523` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
+**Data:** 2026-05-23 · **Versão:** `0.8.0-alpha.258+20260523` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -46,7 +46,7 @@ e o snapshot técnico atual está em
 
 | Repo apartado | Versão atual | Owner autoritativo | Gate de integração CapyOS |
 |---|---|---|---|
-| [`CapyUI`](../../../CapyUI) | `2.13.0` | widget model (`capy-ui-widget` v2.13, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
+| [`CapyUI`](../../../CapyUI) | `2.13.1` | widget model (`capy-ui-widget` v2.13, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
 | [`CapyAgent`](../../../CapyAgent) | `0.0.4` | formato `.capypkg`, component-index, resolver, futuro signer Ed25519 (`capy-agent-component-index` v1) | Etapas 8-9 |
 | [`CapyBrowser`](../../../CapyBrowser) | `0.0.4` | browser-core text/HTML estático (`capy-browser-core` v1 planejado) | Etapas 6-7 |
 | [`CapyCodecs`](../../../CapyCodecs) | `0.0.4` | image codecs portáveis (`capy-codec-image` v1) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
@@ -160,7 +160,7 @@ via módulo capypkg `org.capyos.ui.desktop-session` (compositor session,
 window manager, apps). O CapyOS mantém in-tree um fallback de build em
 `src/gui/desktop/`, `src/gui/window/` e `src/apps/` para sustentar o
 caminho `make all64` quando o sibling `../CapyUI` não está presente,
-mas o owner de feature é o repo `CapyUI` (versão `2.13.0`+ no pin
+mas o owner de feature é o repo `CapyUI` (versão `2.13.1`+ no pin
 vigente da Etapa 4).
 
 ### Etapa 2 — Sessão gráfica operacional (concluída em `alpha.237`)
@@ -298,7 +298,7 @@ em alpha.254 era um contrato paralelo + incompatível com a ABI real
 do sister `CapyUI`.
 
 **Fase A corrigida nesta janela:** a matriz foi sincronizada para
-`CapyUI` `2.13.0` / `capy-ui-widget` v2.13 e o core ganhou
+`CapyUI` `2.13.1` / `capy-ui-widget` v2.13 e o core ganhou
 `include/gui/capyui_display_adapter.h` +
 `src/gui/widgets/capyui_display_adapter.c`, que consome
 `CapyUI/src/widget/capy_display_list.h` quando o sibling existe via
