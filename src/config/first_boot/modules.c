@@ -382,6 +382,7 @@ static void modules_sleep_ticks(uint32_t ticks) {
     uint64_t target = pit_ticks() + (uint64_t)ticks;
     while (pit_ticks() < target) {
         /* spin */
+        __asm__ volatile("pause");
     }
 }
 
@@ -446,7 +447,13 @@ static int modules_run_bootstrap_with_retry(const char *setup_language,
             1, &installed, &failed, modules_render_progress, &st);
         if (out_installed) *out_installed = installed;
         if (out_failed) *out_failed = failed;
-        if (rc == INSTALL_PROFILE_OK || rc == INSTALL_PROFILE_ERR_NOT_READY) {
+        if (rc == INSTALL_PROFILE_OK && failed == 0) {
+            return rc;
+        }
+        if (rc == INSTALL_PROFILE_OK && failed > 0) {
+            rc = INSTALL_PROFILE_ERR_STORAGE;
+        }
+        if (rc == INSTALL_PROFILE_ERR_NOT_READY) {
             return rc;
         }
         if (attempt + 1u < MODULES_RETRY_MAX) {
@@ -684,18 +691,18 @@ int first_boot_module_selection_step(const char *setup_language) {
         int failed = 0;
         int rc = modules_run_bootstrap_with_retry(setup_language,
                                                   &installed, &failed);
+        if (rc == INSTALL_PROFILE_OK && failed > 0) {
+            config_print_line(L(setup_language,
+                                "[modules] instalacao parcial detectada; tentando novamente.",
+                                "[modules] partial install detected; retrying.",
+                                "[modules] instalacion parcial detectada; reintentando."));
+            rc = INSTALL_PROFILE_ERR_STORAGE;
+        }
         if (rc == INSTALL_PROFILE_OK) {
-            if (failed > 0) {
-                config_print_line(L(setup_language,
-                                    "[modules] instalacao parcial; pacotes com falha foram ignorados.",
-                                    "[modules] partial install; failed packages were skipped.",
-                                    "[modules] instalacion parcial; se omitieron paquetes con fallo."));
-            } else {
-                config_print_line(L(setup_language,
-                                    "[modules] instalacao concluida; reinicio recomendado para ativar.",
-                                    "[modules] install complete; reboot recommended to activate.",
-                                    "[modules] instalacion completa; se recomienda reiniciar para activar."));
-            }
+            config_print_line(L(setup_language,
+                                "[modules] instalacao concluida; reinicio recomendado para ativar.",
+                                "[modules] install complete; reboot recommended to activate.",
+                                "[modules] instalacion completa; se recomienda reiniciar para activar."));
             return installed > 0 ? 1 : 0;
         }
         if (rc == INSTALL_PROFILE_ERR_NOT_READY) {
@@ -706,7 +713,7 @@ int first_boot_module_selection_step(const char *setup_language) {
             return 0;
         }
         /* Bootstrap returned a soft failure (network / repo / index /
-         * per-package). profile.ini stays on disk and the kernel poll
+         * per-package / marker). profile.ini stays on disk and the kernel poll
          * will keep retrying in the background regardless of the
          * choice made here. The dialogue is purely about whether to
          * keep the wizard occupying the screen. */

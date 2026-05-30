@@ -144,6 +144,8 @@ struct task *task_at_index(size_t index) {
 int task_kill(uint32_t pid) {
   struct task *t = task_by_pid(pid);
   if (!t || t->state == TASK_STATE_UNUSED) return -1;
+  if (t == current_task) return -2;
+  scheduler_remove(t);
   t->state = TASK_STATE_DEAD;
   if (t->kernel_stack) {
     kfree(t->kernel_stack);

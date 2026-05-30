@@ -71,8 +71,8 @@ truth and ALSO asks about modules to install.
 
 6. Subsequent boots:
    - /system/first-run.done is present → wizard skipped.
-   - /system/install/bootstrap.done is present → capypkg kernel
-     poll returns idle.
+   - /system/install/bootstrap.done is present as a file → capypkg
+     kernel poll returns idle.
 ```
 
 If the profile selection picks BASIC, step 4 only writes
@@ -103,6 +103,9 @@ and `/system/install/bootstrap.done` and re-runs
 `capy wizard --modules` skips the personal data prompts and only
 re-runs the module selection step (it clears
 `/system/install/bootstrap.done` but leaves the user/config alone).
+If the module bootstrap reports an incomplete retryable state, the
+command returns an error and the kernel auto-bootstrap poll continues
+retrying from the same `profile.ini`.
 
 ## 5. Failure modes and recovery
 

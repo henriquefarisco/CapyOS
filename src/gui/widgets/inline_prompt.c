@@ -17,6 +17,15 @@
 #include "lang/app_language.h"
 #include <stddef.h>
 
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+int inline_prompt_render_display_list(struct gui_window *win,
+                                      const char *title,
+                                      const char *text,
+                                      uint32_t cursor,
+                                      int secret);
+void inline_prompt_display_list_reset(void);
+#endif
+
 static struct {
   struct gui_window *win;
   char  title[INLINE_PROMPT_TITLE_MAX];
@@ -145,6 +154,10 @@ static void ip_fill_rect(struct gui_surface *s, int32_t x, int32_t y,
 
 static void ip_paint(struct gui_window *win) {
   if (!win || win != g_p.win) return;
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  if (inline_prompt_render_display_list(win, g_p.title, g_p.text, g_p.cursor,
+                                        g_p.secret) == 0) return;
+#endif
   const struct gui_theme_palette *theme = compositor_theme();
   const struct font *f = font_default();
   struct gui_surface *s = &win->surface;
@@ -195,6 +208,9 @@ static int inline_prompt_show_mode(const char *title, const char *default_text,
                                    inline_prompt_submit_fn on_submit,
                                    void *ctx, int secret) {
   inline_prompt_close();
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  inline_prompt_display_list_reset();
+#endif
   ip_strcpy(g_p.title, title ? title : "", INLINE_PROMPT_TITLE_MAX);
   ip_strcpy(g_p.text, default_text ? default_text : "",
             INLINE_PROMPT_TEXT_MAX);
@@ -252,6 +268,9 @@ void inline_prompt_close(void) {
   g_p.secret = 0;
   g_p.on_submit = NULL;
   g_p.ctx = NULL;
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  inline_prompt_display_list_reset();
+#endif
 }
 
 int inline_prompt_is_open(void) {

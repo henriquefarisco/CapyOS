@@ -143,12 +143,12 @@ static int bootstrap_ramdisk_runtime(
              "assistente.\n");
   }
 
-  /* Keep RAM fallback available, but let the authoritative first-boot
-   * wizard run later via system_login() instead of completing setup here. */
+  /* Keep RAM fallback available, but require persistent storage before
+   * the authoritative first-boot wizard can complete setup. */
   if (system_detect_first_boot() != 0) {
     io_print(io,
-             "[setup] Primeira inicializacao detectada (RAM); o assistente "
-             "sera executado no login.\n");
+             "[setup] Primeira inicializacao pendente; storage persistente "
+             "necessario para concluir configuracao.\n");
   }
 
   *state->shell_persistent_storage = 0;
@@ -202,7 +202,14 @@ static int shell_bootstrap_filesystem(
 
   data_dev = x64_storage_runtime_open_handoff_data_device(
       state->handoff, &storage_io, state->data_io_probe);
-  ops->after_native_runtime_ready();
+  if (data_dev && x64_storage_runtime_uses_firmware() &&
+      x64_storage_runtime_hyperv_present()) {
+    io_print(io,
+             "[fs] Hyper-V DATA via EFI BlockIO; adiando ExitBootServices "
+             "para preservar persistencia.\n");
+  } else {
+    ops->after_native_runtime_ready();
+  }
 
   if (state->handoff &&
       (!data_dev || x64_storage_runtime_uses_firmware())) {

@@ -67,6 +67,14 @@ int vmbus_write_inband_packet_runtime(
     uint64_t trans_id, vmbus_signal_relid_fn signal_relid,
     vmbus_signal_monitor_fn signal_monitor,
     vmbus_signal_event_fn signal_event);
+int vmbus_write_prebuilt_packet_runtime(
+    uint32_t child_relid, uint32_t connection_id, uint8_t monitor_id,
+    uint8_t monitor_allocated, uint16_t is_dedicated_interrupt,
+    volatile struct hv_ring_buffer *send_ring, uint32_t send_ring_size,
+    const void *packet, uint32_t packet_len,
+    vmbus_signal_relid_fn signal_relid,
+    vmbus_signal_monitor_fn signal_monitor,
+    vmbus_signal_event_fn signal_event);
 int vmbus_read_raw_packet_runtime(volatile struct hv_ring_buffer *recv_ring,
                                   uint32_t recv_ring_size, void *buffer,
                                   uint32_t buffer_size,

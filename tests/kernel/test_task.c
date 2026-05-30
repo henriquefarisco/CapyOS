@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "kernel/task.h"
+#include "kernel/scheduler.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -56,6 +57,45 @@ void test_task_kill(void) {
   else { FAIL("count should be 0"); }
 }
 
+void test_task_kill_unlinks_run_queue(void) {
+  task_system_init();
+  scheduler_init(SCHED_POLICY_COOPERATIVE);
+  struct task *t = task_create("queued", dummy_entry, NULL, TASK_PRIORITY_NORMAL);
+  uint32_t pid = t->pid;
+  scheduler_add(t);
+  (void)task_kill(pid);
+  struct task *next = task_create("next", dummy_entry, NULL, TASK_PRIORITY_NORMAL);
+  if (next) scheduler_add(next);
+
+  TEST("task_kill unlinks queued task");
+  if (next && scheduler_pick_next() == next &&
+      next->next == NULL && next->prev == NULL) { PASS(); }
+  else { FAIL("queued task left stale links"); }
+  scheduler_init(SCHED_POLICY_COOPERATIVE);
+}
+
+void test_scheduler_tick_reaps_zombie_run_queue(void) {
+  task_system_init();
+  scheduler_init(SCHED_POLICY_COOPERATIVE);
+  struct task *zombie =
+      task_create("zombie", dummy_entry, NULL, TASK_PRIORITY_NORMAL);
+  struct task *next = task_create("survivor", dummy_entry, NULL,
+                                  TASK_PRIORITY_NORMAL);
+  uint32_t zombie_pid = zombie ? zombie->pid : 0u;
+  if (zombie) scheduler_add(zombie);
+  if (next) scheduler_add(next);
+  if (zombie) zombie->state = TASK_STATE_ZOMBIE;
+  scheduler_tick();
+
+  TEST("scheduler_tick reaps zombie run-queue task");
+  if (zombie_pid != 0u && task_by_pid(zombie_pid) == NULL &&
+      next && scheduler_pick_next() == next && task_count() == 1) {
+    PASS();
+  }
+  else { FAIL("zombie task was not safely reaped"); }
+  scheduler_init(SCHED_POLICY_COOPERATIVE);
+}
+
 void test_task_name(void) {
   task_system_init();
   TEST("task name preserved");
@@ -83,6 +123,8 @@ int test_task_run(void) {
   test_task_init();
   test_task_create();
   test_task_kill();
+  test_task_kill_unlinks_run_queue();
+  test_scheduler_tick_reaps_zombie_run_queue();
   test_task_name();
   test_task_max();
   printf("  %d/%d passed\n", tests_passed, tests_run);

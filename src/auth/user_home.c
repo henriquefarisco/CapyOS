@@ -1,7 +1,49 @@
 #include "auth/user_home.h"
 
+#include <stddef.h>
+
 #include "auth/session.h"
+#include "auth/user.h"
 #include "fs/vfs.h"
+
+/* Standard folder structure provisioned inside every user's home, mirroring
+ * the familiar desktop layout (Windows/Ubuntu-like). "Desktop" is the folder
+ * the graphical desktop session renders; the others organize user content. */
+static const char *const k_home_subdirs[] = {
+    "Desktop", "Documents", "Personal", "Professional"};
+
+/* Join `<base>/<name>` into `out` (bounded). Returns 0 on success, -1 if the
+ * result would not fit. `base` is an absolute home path without trailing
+ * slash (e.g. "/home/ana"); `name` is a single path component. */
+static int home_join_child(char *out, size_t out_size, const char *base,
+                           const char *name) {
+  size_t j = 0;
+  size_t i = 0;
+
+  if (!out || out_size == 0 || !base || !name) {
+    return -1;
+  }
+  for (i = 0; base[i] != '\0'; ++i) {
+    if (j + 1 >= out_size) {
+      return -1;
+    }
+    out[j++] = base[i];
+  }
+  if (j == 0 || out[j - 1] != '/') {
+    if (j + 1 >= out_size) {
+      return -1;
+    }
+    out[j++] = '/';
+  }
+  for (i = 0; name[i] != '\0'; ++i) {
+    if (j + 1 >= out_size) {
+      return -1;
+    }
+    out[j++] = name[i];
+  }
+  out[j] = '\0';
+  return 0;
+}
 
 static int ensure_directory_with_metadata(const char *path,
                                           const struct vfs_metadata *meta) {
@@ -71,6 +113,20 @@ int user_home_prepare(const char *path, uint32_t uid, uint32_t gid) {
     rc = -1;
   } else if (ensure_directory_with_metadata(path, &home_meta) != 0) {
     rc = -1;
+  } else {
+    /* Provision the standard user folder structure inside the home. Each
+     * folder inherits the home's owner and stays private (0700). Best
+     * effort: a single failing folder marks rc but the rest are still
+     * attempted so the structure is as complete as possible. */
+    struct vfs_metadata sub_meta = {uid, gid, 0700};
+    size_t k = 0;
+    for (k = 0; k < sizeof(k_home_subdirs) / sizeof(k_home_subdirs[0]); ++k) {
+      char child[USER_HOME_MAX + 16];
+      if (home_join_child(child, sizeof(child), path, k_home_subdirs[k]) != 0 ||
+          ensure_directory_with_metadata(child, &sub_meta) != 0) {
+        rc = -1;
+      }
+    }
   }
 
   session_set_active(previous_session);

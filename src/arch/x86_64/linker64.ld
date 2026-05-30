@@ -4,11 +4,11 @@ ENTRY(_start)
 
 SECTIONS
 {
-    /* Carregar em 64M: a imagem em memoria inclui uma .bss grande
+    /* Carregar em 256M: a imagem em memoria inclui uma .bss grande
        (heap estatico + caches) e precisa de uma janela contigua de
-       dezenas de MiB. Em QEMU/OVMF, a janela baixa iniciando em 4M
-       pode cruzar regioes ocupadas pelo firmware no boot pelo disco. */
-    . = 64M;
+       dezenas de MiB. Em QEMU/OVMF/Hyper-V, janelas baixas como 4M/64M
+       podem cruzar regioes ocupadas pelo firmware no boot pelo disco. */
+    . = 256M;
     PROVIDE(__kernel_image_start = .);
 
     .text : ALIGN(4K) {

@@ -25,6 +25,7 @@
 
 #include "internal/compositor_internal.h"
 #include "gui/font.h"
+#include "gui/compositor_smoke.h"
 
 static int render_clip_enabled = 0;
 static int render_skip_window_paint = 0;
@@ -60,6 +61,34 @@ static int render_rect_intersects_clip(int32_t x, int32_t y,
   return render_rects_intersect(x, y, w, h, &render_clip);
 }
 
+int compositor_current_render_clip(struct gui_rect *out) {
+  if (!render_clip_enabled || !out) return 0;
+  *out = render_clip;
+  return 1;
+}
+
+static void render_fill_wallpaper_rect(uint32_t *buf, uint32_t buf_stride,
+                                       const struct gui_rect *rect) {
+  int64_t x0;
+  int64_t y0;
+  int64_t x1;
+  int64_t y1;
+  if (!buf || buf_stride == 0u || !rect) return;
+  x0 = rect->x;
+  y0 = rect->y;
+  x1 = (int64_t)rect->x + (int64_t)rect->width;
+  y1 = (int64_t)rect->y + (int64_t)rect->height;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > (int32_t)comp_width) x1 = (int32_t)comp_width;
+  if (y1 > (int32_t)comp_height) y1 = (int32_t)comp_height;
+  if (x0 >= x1 || y0 >= y1) return;
+  for (int32_t y = (int32_t)y0; y < (int32_t)y1; ++y) {
+    comp_memset32(buf + (uint32_t)y * buf_stride + (uint32_t)x0,
+                  comp_wallpaper, (size_t)(x1 - x0));
+  }
+}
+
 static int render_window_intersects_damage(struct gui_window *win) {
   uint32_t title_h;
   int32_t y;
@@ -70,6 +99,36 @@ static int render_window_intersects_damage(struct gui_window *win) {
   h = win->frame.height + title_h;
   for (uint32_t i = 0u; i < comp_dirty_rect_count; ++i) {
     if (render_rects_intersect(win->frame.x, y, win->frame.width, h,
+                               &comp_dirty_rects[i])) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* Etapa 4 Fase D follow-up (2026-05-25): the cursor sits in the
+ * front buffer above the composed scene. In partial-damage mode the
+ * presenter used to unconditionally copy the cursor rect from the
+ * backbuffer to the front, which (a) wasted a memcpy when the
+ * cursor area was not touched by any dirty rect and (b) briefly
+ * removed the cursor pixels from the front buffer before the
+ * desktop loop redrew them via `compositor_render_cursor`.
+ *
+ * On hosts with slow framebuffer paths (Hyper-V Gen2 in particular)
+ * that brief erase showed up as a flicker between two frames.
+ * Limiting the cursor erase to frames where the cursor actually
+ * overlaps a dirty rect closes the criterion "cursor e texto não
+ * piscam sob resize/move de janela" for the no-cursor-move case.
+ *
+ * The helper is also exposed via `compositor_stats_get` (through a
+ * counter increment) so external smokes can observe how often the
+ * cursor erase was actually needed across a session. */
+static int render_cursor_overlaps_damage(void) {
+  for (uint32_t i = 0u; i < comp_dirty_rect_count; ++i) {
+    if (render_rects_intersect((int32_t)comp_cursor_x,
+                               (int32_t)comp_cursor_y,
+                               (uint32_t)COMP_CURSOR_WIDTH,
+                               (uint32_t)COMP_CURSOR_HEIGHT,
                                &comp_dirty_rects[i])) {
       return 1;
     }
@@ -422,9 +481,11 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
     for (uint32_t y = 0; y < comp_height; y++) {
       comp_memset32(buf + y * buf_stride, comp_wallpaper, comp_width);
     }
+  } else {
+    render_fill_wallpaper_rect(buf, buf_stride, &render_clip);
   }
 
-  if (!render_clip_enabled && comp_desktop_paint_cb) {
+  if (comp_desktop_paint_cb) {
     struct gui_surface desktop = { buf, comp_width, comp_height, buf_stride * 4 };
     comp_desktop_paint_cb(&desktop);
   }
@@ -679,6 +740,8 @@ static void draw_cursor_on_front(int32_t x, int32_t y) {
 
 void compositor_render(void) {
   uint32_t front_stride = comp_pitch / 4;
+  uint32_t smoke_dirty_rect_count = 0u;
+  int smoke_partial_frame = 0;
   if (!comp_fb || front_stride == 0) return;
 
   comp_full_presented = 0;
@@ -690,7 +753,12 @@ void compositor_render(void) {
       render_skip_window_paint = 0;
       compose_scene(comp_backbuffer, comp_backbuffer_stride);
       present_full_frame_from_backbuffer();
+      comp_stats.full_frames_presented++;
     } else {
+      smoke_partial_frame = 1;
+      smoke_dirty_rect_count = comp_dirty_rect_count;
+      comp_stats.partial_frames_presented++;
+      comp_stats.dirty_rects_presented += comp_dirty_rect_count;
       render_skip_window_paint = 0;
       for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
         struct gui_window *win = &comp_windows[i];
@@ -708,9 +776,17 @@ void compositor_render(void) {
                                       comp_dirty_rects[i].width,
                                       comp_dirty_rects[i].height);
       }
-      if (comp_cursor_valid) {
+      /* Only erase the cursor area when at least one dirty rect
+       * actually touches it; otherwise leave the front-buffer
+       * pixels alone so the cursor never blinks during partial
+       * presents that did not affect its region. The desktop loop
+       * still invokes `compositor_render_cursor` afterwards, which
+       * is now a no-op when both the cursor position and the front
+       * pixels are unchanged. */
+      if (comp_cursor_valid && render_cursor_overlaps_damage()) {
         copy_backbuffer_rect_to_front(comp_cursor_x, comp_cursor_y,
                                       COMP_CURSOR_WIDTH, COMP_CURSOR_HEIGHT);
+        comp_stats.cursor_erases_partial++;
       }
       render_skip_window_paint = 0;
     }
@@ -718,6 +794,7 @@ void compositor_render(void) {
   } else {
     render_skip_window_paint = 0;
     compose_scene(comp_fb, front_stride);
+    comp_stats.full_frames_presented++;
     comp_full_presented = 1;
   }
 
@@ -725,9 +802,14 @@ void compositor_render(void) {
   comp_dirty_rect_count = 0;
   comp_full_redraw_pending = 0;
   comp_stats.frames_rendered++;
+  if (compositor_damage_smoke_try_latch_global(smoke_dirty_rect_count,
+                                               smoke_partial_frame)) {
+    compositor_damage_smoke_emit_marker();
+  }
 }
 
 void compositor_render_cursor(int32_t x, int32_t y) {
+  int cursor_moved;
   if (!comp_fb) return;
 
   if (!comp_full_presented && comp_cursor_valid &&
@@ -735,7 +817,23 @@ void compositor_render_cursor(int32_t x, int32_t y) {
     return;
   }
 
-  if (comp_backbuffer && !comp_full_presented && comp_cursor_valid) {
+  /* Etapa 4 Fase D follow-up (2026-05-25): the old "erase only when
+   * !comp_full_presented" assumption assumed compositor_render
+   * unconditionally erased the cursor area in partial mode. Since
+   * that erase is now scoped to dirty-rect overlap, we cannot rely
+   * on comp_full_presented alone to mean "old cursor pixels are
+   * gone from the front buffer". When the cursor MOVES we must
+   * erase the OLD position regardless of comp_full_presented;
+   * otherwise the stale cursor sprite stays painted at the old
+   * spot. When the cursor stays put, the existing
+   * `compositor_render` overlap check has already handled the
+   * erase (or correctly skipped it when no dirty rect touched the
+   * cursor area). */
+  cursor_moved = comp_cursor_valid && (comp_cursor_x != x ||
+                                        comp_cursor_y != y);
+
+  if (comp_backbuffer && comp_cursor_valid &&
+      (cursor_moved || !comp_full_presented)) {
     copy_backbuffer_rect_to_front(comp_cursor_x, comp_cursor_y,
                                   COMP_CURSOR_WIDTH, COMP_CURSOR_HEIGHT);
   }

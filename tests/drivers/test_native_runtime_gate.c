@@ -164,13 +164,22 @@ int run_native_runtime_gate_tests(void) {
   fails += expect_gate("failed", SYSTEM_EXIT_BOOT_SERVICES_GATE_FAILED, 7u,
                        &handoff, 1, 0, 7u, 0);
 
-  /* Hyper-V Gen2 deferred input: hyperv_deferred alone should pass both
-   * the input gate and the storage gate (both are synthetic on Gen2),
-   * reaching READY directly. */
+  /* Hyper-V Gen2 deferred input with no firmware DATA device still has to
+   * reach READY so the kernel can try StorVSC after EBS. */
   prepare_handoff(&handoff);
   reset_fixtures();
   fails += expect_gate_deferred("deferred-hyperv-skips-to-ready",
                                 SYSTEM_EXIT_BOOT_SERVICES_GATE_READY,
+                                0u, &handoff, 0, 0, 0u);
+
+  /* If firmware DATA is already active, do not exit BootServices yet: doing
+   * so invalidates EFI BlockIO and sends first-boot writes to RAM. */
+  prepare_handoff(&handoff);
+  reset_fixtures();
+  g_storage_device = 1;
+  g_storage_firmware = 1;
+  fails += expect_gate_deferred("deferred-hyperv-keeps-firmware-data",
+                                SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_STORAGE_FIRMWARE,
                                 0u, &handoff, 0, 0, 0u);
 
   /* Deferred input + storage already present = still READY. */

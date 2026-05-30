@@ -21,6 +21,7 @@
 
 #include "internal/compositor_internal.h"
 #include "gui/event.h"
+#include "gui/compositor_smoke.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 
@@ -152,6 +153,29 @@ static void free_surface(uint32_t *pixels) {
   if (pixels) kfree(pixels);
 }
 
+static int clip_rect_to_screen(const struct gui_rect *rect,
+                               struct gui_rect *out) {
+  int64_t x0;
+  int64_t y0;
+  int64_t x1;
+  int64_t y1;
+  if (!rect || !out || rect->width == 0u || rect->height == 0u) return 0;
+  x0 = rect->x;
+  y0 = rect->y;
+  x1 = (int64_t)rect->x + (int64_t)rect->width;
+  y1 = (int64_t)rect->y + (int64_t)rect->height;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > (int32_t)comp_width) x1 = (int32_t)comp_width;
+  if (y1 > (int32_t)comp_height) y1 = (int32_t)comp_height;
+  if (x0 >= x1 || y0 >= y1) return 0;
+  out->x = (int32_t)x0;
+  out->y = (int32_t)y0;
+  out->width = (uint32_t)(x1 - x0);
+  out->height = (uint32_t)(y1 - y0);
+  return 1;
+}
+
 static void reset_window_slot(struct gui_window *win) {
   if (!win) return;
   win->id = 0;
@@ -233,12 +257,17 @@ void compositor_init(uint32_t *framebuffer, uint32_t width, uint32_t height,
   comp_stats.visible_count = 0;
   comp_stats.frames_rendered = 0;
   comp_stats.dirty_rects = 0;
+  comp_stats.full_frames_presented = 0;
+  comp_stats.partial_frames_presented = 0;
+  comp_stats.dirty_rects_presented = 0;
+  comp_stats.cursor_erases_partial = 0;
   comp_scene_dirty = 1;
   comp_dirty_mark_full_redraw();
   comp_full_presented = 0;
   comp_cursor_valid = 0;
   comp_cursor_x = 0;
   comp_cursor_y = 0;
+  compositor_damage_smoke_global_reset();
 }
 
 void compositor_shutdown(void) {
@@ -261,6 +290,10 @@ void compositor_shutdown(void) {
   comp_stats.visible_count = 0;
   comp_stats.frames_rendered = 0;
   comp_stats.dirty_rects = 0;
+  comp_stats.full_frames_presented = 0;
+  comp_stats.partial_frames_presented = 0;
+  comp_stats.dirty_rects_presented = 0;
+  comp_stats.cursor_erases_partial = 0;
   comp_desktop_paint_cb = NULL;
   comp_scene_dirty = 1;
   comp_dirty_mark_full_redraw();
@@ -268,6 +301,7 @@ void compositor_shutdown(void) {
   comp_cursor_valid = 0;
   comp_cursor_x = 0;
   comp_cursor_y = 0;
+  compositor_damage_smoke_global_reset();
 }
 
 struct gui_window *compositor_create_window(const char *title, int32_t x,
@@ -491,6 +525,16 @@ void compositor_invalidate_rect(uint32_t window_id, struct gui_rect *rect) {
     return;
   }
   gui_event_push_paint(window_id, 0);
+  comp_dirty_append_rect(&dirty);
+}
+
+void compositor_invalidate_desktop_rect(const struct gui_rect *rect) {
+  struct gui_rect dirty;
+  if (!rect) {
+    compositor_invalidate_all();
+    return;
+  }
+  if (!clip_rect_to_screen(rect, &dirty)) return;
   comp_dirty_append_rect(&dirty);
 }
 

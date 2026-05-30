@@ -26,5 +26,7 @@ void vmbus_offer_cache_store(const struct vmbus_offer_guid_key *guid,
                              const struct vmbus_offer_data *offer);
 int vmbus_offer_cache_lookup(const struct vmbus_offer_guid_key *guid,
                              struct vmbus_offer_data *out);
+int vmbus_offer_cache_lookup_by_data1(uint32_t data1,
+                                      struct vmbus_offer_data *out);
 
 #endif /* VMBUS_OFFERS_H */

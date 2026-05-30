@@ -97,3 +97,18 @@ int vmbus_offer_cache_lookup(const struct vmbus_offer_guid_key *guid,
   }
   return -1;
 }
+
+int vmbus_offer_cache_lookup_by_data1(uint32_t data1,
+                                      struct vmbus_offer_data *out) {
+  if (!data1 || !out) {
+    return -1;
+  }
+
+  for (uint32_t i = 0; i < VMBUS_OFFER_CACHE_CAPACITY; ++i) {
+    if (g_offer_cache[i].valid && g_offer_cache[i].guid.data1 == data1) {
+      *out = g_offer_cache[i].offer;
+      return 0;
+    }
+  }
+  return -1;
+}

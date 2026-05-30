@@ -302,7 +302,13 @@ int usb_device_is_hid_mouse(const struct usb_device_info *dev) {
 
 void usb_poll_all(void) {
   if (!g_usb_initialized) return;
-  for (int i = 0; i < g_device_count; i++) {
+  /* P1-F fix (2026-05-25): defense-in-depth bound. `g_device_count`
+   * is normally capped at `USB_MAX_DEVICES` by `usb_enumerate_devices`,
+   * but a stray write elsewhere could push it above the array size
+   * and the per-frame poll path would then read past `g_devices[]`
+   * indefinitely. The redundant `i < USB_MAX_DEVICES` clamp keeps
+   * the loop honest at zero cost per iteration. */
+  for (int i = 0; i < g_device_count && i < USB_MAX_DEVICES; i++) {
     struct usb_device_info *dev = &g_devices[i];
     const struct usb_endpoint_info *ep;
     uint8_t report[8];

@@ -14,8 +14,9 @@
  *
  * The subcommands forward into the existing `pkg-*` handlers so the
  * underlying behaviour, audit log lines and error codes are shared.
- * The wizard re-run path unlinks `/system/first-run.done` (and
- * `/system/install/bootstrap.done` when `--modules` is omitted), then
+ * The wizard re-run path unlinks `/system/install/bootstrap.done`
+ * before any module retry, and unlinks `/system/first-run.done` when
+ * `--modules` is omitted, then
  * calls `system_run_first_boot_setup()` which delegates to the same
  * TUI used on first boot.
  *
@@ -78,21 +79,24 @@ static void capy_print_help(struct shell_context *ctx) {
 /* ── wizard re-run helpers ──────────────────────────────────────────── */
 
 static int capy_unlink_marker(const char *path) {
-    struct dentry *d = NULL;
+    struct vfs_stat st;
     struct session_context *previous_session = session_active();
     int rc = 0;
-    if (vfs_lookup(path, &d) != 0) {
-        return 0; /* not present is OK */
-    }
     session_set_active(NULL);
-    rc = vfs_unlink(path);
+    if (vfs_stat_path(path, &st) != 0) {
+        goto done; /* not present is OK */
+    }
+    rc = (st.mode & VFS_MODE_DIR) ? vfs_rmdir(path) : vfs_unlink(path);
+done:
     session_set_active(previous_session);
     return rc;
 }
 
 static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
-    (void)ctx;
     const char *language = shell_current_language();
+    struct session_context *previous_session = NULL;
+    int rc = 0;
+    (void)ctx;
 
     /* Always clear the per-bootstrap marker so the next bootstrap
      * sweep runs from scratch. The first-run.done marker is only
@@ -108,11 +112,11 @@ static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
     if (modules_only) {
         /* Drive only capypkg_bootstrap_run with force=1; the user
          * already provided a profile.ini we trust. */
-        struct session_context *previous_session = session_active();
         int installed = 0;
         int failed = 0;
+        previous_session = session_active();
         session_set_active(NULL);
-        int rc = capypkg_bootstrap_run(1, &installed, &failed);
+        rc = capypkg_bootstrap_run(1, &installed, &failed);
         session_set_active(previous_session);
         if (rc == INSTALL_PROFILE_OK) {
             shell_print_ok(localization_select(language,
@@ -120,6 +124,17 @@ static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
                 "module bootstrap complete\n",
                 "bootstrap de modulos completo\n"));
             return 0;
+        }
+        if (rc == INSTALL_PROFILE_ERR_STORAGE) {
+            shell_print_error(localization_select(language,
+                "bootstrap de modulos incompleto; o sistema tentara novamente. instalados=",
+                "module bootstrap incomplete; the system will retry. installed=",
+                "bootstrap de modulos incompleto; el sistema reintentara. instalados="));
+            shell_print_number((uint32_t)installed);
+            shell_print(localization_select(language, " falhas=", " failures=", " fallos="));
+            shell_print_number((uint32_t)failed);
+            shell_newline();
+            return -1;
         }
         shell_print_error(localization_select(language,
             "bootstrap de modulos falhou; veja klog [audit] [capypkg]\n",
@@ -140,9 +155,9 @@ static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
         "Reabrindo assistente de primeiro boot...\n",
         "Reopening first-boot wizard...\n",
         "Reabriendo asistente inicial...\n"));
-    struct session_context *previous_session = session_active();
+    previous_session = session_active();
     session_set_active(NULL);
-    int rc = system_run_first_boot_setup();
+    rc = system_run_first_boot_setup();
     session_set_active(previous_session);
     return (rc == 0) ? 0 : -1;
 }

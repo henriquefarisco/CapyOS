@@ -106,7 +106,7 @@ void sha512_final(struct sha512_ctx *ctx, uint8_t hash[SHA512_DIGEST_SIZE]) {
   uint64_t total_bits_hi = ctx->bitlen[1];
   if (total_bits_lo < ctx->bitlen[0]) total_bits_hi++;
 
-  for (int b = 7; b >= 0; b--) ctx->data[112+b] = 0;
+  for (int b = 0; b < 8; b++) ctx->data[112+b] = (uint8_t)(total_bits_hi >> (56 - b*8));
   for (int b = 0; b < 8; b++) ctx->data[120+b] = (uint8_t)(total_bits_lo >> (56 - b*8));
 
   sha512_transform(ctx, ctx->data);

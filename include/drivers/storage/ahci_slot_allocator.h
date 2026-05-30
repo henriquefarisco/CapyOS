@@ -56,6 +56,21 @@ int ahci_slot_release(struct ahci_slot_allocator *alloc, int slot);
  * Returns 0 if `alloc` is NULL. */
 uint8_t ahci_slot_inflight_count(const struct ahci_slot_allocator *alloc);
 
+/* Bitmask of slots currently inflight (allocated but not released).
+ * Bit `i` is set iff slot `i` has been handed out by
+ * `ahci_slot_alloc` and not yet released by `ahci_slot_release`.
+ * Bits at positions >= `slot_count` are always zero so the result
+ * is safe to feed into `ahci_dispatch_completed_slots` (declared
+ * in `drivers/storage/ahci_dispatch.h`) without further masking.
+ *
+ * Returns 0 if `alloc` is NULL or the allocator is unconfigured
+ * (`slot_count == 0`). Pure: no allocations, no side effects.
+ *
+ * Slice 3F prep: the future multi-slot dispatch path will sample
+ * this mask before each CI register read so the completion fan-in
+ * can filter out spurious clears the host never owned. */
+uint32_t ahci_slot_inflight_mask(const struct ahci_slot_allocator *alloc);
+
 /* True (1) if `slot` is currently free, 0 otherwise. Returns 0
  * for any invalid input. */
 int ahci_slot_is_free(const struct ahci_slot_allocator *alloc, int slot);

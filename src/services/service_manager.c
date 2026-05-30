@@ -120,6 +120,7 @@ void service_manager_bootstrap_defaults(void) {
                   (1u << SYSTEM_SERVICE_NETWORKD));
   seed_target(SYSTEM_SERVICE_TARGET_MAINTENANCE, "maintenance",
               (1u << SYSTEM_SERVICE_LOGGER) |
+                  (1u << SYSTEM_SERVICE_NETWORKD) |
                   (1u << SYSTEM_SERVICE_UPDATE_AGENT));
   seed_target(SYSTEM_SERVICE_TARGET_FULL, "full",
               (1u << SYSTEM_SERVICE_LOGGER) |

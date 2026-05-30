@@ -6,6 +6,9 @@
 #include "drivers/net/virtio_net.h"
 #include "drivers/net/rtl8139.h"
 #include "drivers/net/vmxnet3.h"
+#ifndef UNIT_TEST
+#include "drivers/net/efi_snp.h"
+#endif
 
 #include <stdint.h>
 
@@ -29,12 +32,14 @@ int net_stack_driver_send_frame(const struct net_nic_probe *nic,
   if (nic->kind == NET_NIC_KIND_VMXNET3) {
     return vmxnet3_send_frame(frame, len);
   }
-  /* NetVSC TX stub: the VMBus data-path for frame send is not yet wired.
-   * Once delivery N5/N6 complete the TX/RX integration, this will delegate
-   * to the VMBus ring send path. */
   if (nic->kind == NET_NIC_KIND_HYPERV_NETVSC) {
-    return 0;
+    return -2;
   }
+#ifndef UNIT_TEST
+  if (nic->kind == NET_NIC_KIND_EFI_SNP) {
+    return efi_snp_send_frame(frame, len);
+  }
+#endif
   return -1;
 }
 
@@ -58,10 +63,14 @@ int net_stack_driver_poll_frame(const struct net_nic_probe *nic, uint8_t *out,
   if (nic->kind == NET_NIC_KIND_VMXNET3) {
     return vmxnet3_poll_frame(out, cap, len);
   }
-  /* NetVSC RX stub: no frames available until VMBus data-path is wired. */
   if (nic->kind == NET_NIC_KIND_HYPERV_NETVSC) {
     return 0;
   }
+#ifndef UNIT_TEST
+  if (nic->kind == NET_NIC_KIND_EFI_SNP) {
+    return efi_snp_poll_frame(out, cap, len);
+  }
+#endif
   return 0;
 }
 
@@ -118,6 +127,18 @@ int net_stack_driver_init_runtime(const struct net_nic_probe *nic,
       klog(KLOG_ERROR, "[drv] VMXNET3 driver init FAILED.");
       return -1;
     }
+#ifndef UNIT_TEST
+    if (nic->kind == NET_NIC_KIND_EFI_SNP) {
+      uint16_t mtu = nic->mtu;
+      klog(KLOG_INFO, "[drv] Initializing UEFI SNP network backend...");
+      if (efi_snp_init(mac, &mtu) == 0 && efi_snp_ready()) {
+        klog(KLOG_INFO, "[drv] UEFI SNP network backend ready.");
+        return 0;
+      }
+      klog(KLOG_ERROR, "[drv] UEFI SNP network backend init FAILED.");
+      return -1;
+    }
+#endif
   }
   /* NetVSC uses deferred initialization: the real handshake happens later
    * through the Hyper-V runtime state machine. Return success here so the
@@ -129,4 +150,27 @@ int net_stack_driver_init_runtime(const struct net_nic_probe *nic,
   }
   klog(KLOG_WARN, "[drv] No driver matched for NIC kind.");
   return -1;
+}
+
+int net_stack_driver_data_path_ready(const struct net_nic_probe *nic) {
+  if (!nic || !nic->found) {
+    return 0;
+  }
+  if (nic->kind == NET_NIC_KIND_HYPERV_NETVSC) {
+#ifdef CAPYOS_HYPERV_NETVSC_DATA_PATH
+    return 1;
+#else
+    return 0;
+#endif
+  }
+#ifndef UNIT_TEST
+  if (nic->kind == NET_NIC_KIND_EFI_SNP) {
+    return efi_snp_ready();
+  }
+#else
+  if (nic->kind == NET_NIC_KIND_EFI_SNP) {
+    return 0;
+  }
+#endif
+  return nic->runtime_supported ? 1 : 0;
 }

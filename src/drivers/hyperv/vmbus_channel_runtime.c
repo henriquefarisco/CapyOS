@@ -13,8 +13,20 @@ extern void kfree_aligned(void *ptr);
 #ifndef UNIT_TEST
 #endif
 
+static int runtime_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 static void runtime_log(const char *s) {
 #ifndef UNIT_TEST
+  if (!runtime_verbose_io()) {
+    (void)s;
+    return;
+  }
   fbcon_print(s);
 #else
   (void)s;
@@ -23,6 +35,10 @@ static void runtime_log(const char *s) {
 
 static void runtime_log_hex(uint64_t value) {
 #ifndef UNIT_TEST
+  if (!runtime_verbose_io()) {
+    (void)value;
+    return;
+  }
   fbcon_print_hex(value);
 #else
   (void)value;
@@ -647,6 +663,21 @@ int vmbus_channel_runtime_send_inband_common(
       (volatile struct hv_ring_buffer *)channel->send_ring,
       channel->send_ring_size, payload, payload_len,
       VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED, trans_id, ops->signal_relid,
+      ops->signal_monitor, ops->signal_event);
+}
+
+int vmbus_channel_runtime_send_prebuilt_common(
+    struct vmbus_channel_runtime *channel, const void *packet,
+    uint32_t packet_len, const struct vmbus_channel_runtime_ops *ops) {
+  if (!channel || !channel->opened || !channel->send_ring || !ops ||
+      !ops->signal_event) {
+    return -1;
+  }
+  return vmbus_write_prebuilt_packet_runtime(
+      channel->child_relid, channel->connection_id, channel->monitor_id,
+      channel->monitor_allocated, channel->is_dedicated_interrupt,
+      (volatile struct hv_ring_buffer *)channel->send_ring,
+      channel->send_ring_size, packet, packet_len, ops->signal_relid,
       ops->signal_monitor, ops->signal_event);
 }
 

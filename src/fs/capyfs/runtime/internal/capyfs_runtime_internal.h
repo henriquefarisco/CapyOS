@@ -18,19 +18,13 @@ struct capyfs_mount {
   struct capy_super super;
 };
 
-static inline void dbg_putc_serial(char ch) {
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-}
-static inline void dbg_hex32_serial(uint32_t value) {
-  static const char hex[] = "0123456789ABCDEF";
-  for (int shift = 28; shift >= 0; shift -= 4)
-    dbg_putc_serial(hex[(value >> shift) & 0xFu]);
-}
-static inline uint32_t dbg_be32_serial_load(const uint8_t *src) {
-  if (!src) return 0;
-  return ((uint32_t)src[0] << 24) | ((uint32_t)src[1] << 16) |
-         ((uint32_t)src[2] << 8) | (uint32_t)src[3];
-}
+/* Slice 3E.4.C (2026-05-25) — `dbg_putc_serial`/`dbg_hex32_serial`
+ * removed. The QEMU-only port 0xE9 debug console was the
+ * historical sink; production output now lives in the in-memory
+ * klog ring (`include/kernel/log/klog.h`), so format_mount.c emits
+ * `klog(KLOG_INFO, ...)` + `klog_hex(KLOG_INFO, ...)` directly. The
+ * companion `dbg_be32_serial_load` was inlined at the single call
+ * site rather than left as a header-only helper without callers. */
 static inline void store_u32_le_volatile(volatile uint8_t *dst, uint32_t value) {
   if (!dst) return;
   dst[0] = (uint8_t)(value & 0xFFu);

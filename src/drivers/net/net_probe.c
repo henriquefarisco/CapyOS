@@ -1,6 +1,10 @@
 #include "drivers/net/net_probe.h"
 
 #include "kernel/log/klog.h"
+#ifndef UNIT_TEST
+#include "core/system_init.h"
+#include "drivers/net/efi_snp.h"
+#endif
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/pcie.h"
 
@@ -86,6 +90,42 @@ static void probe_fill_hyperv_fallback(struct net_nic_probe *out) {
   probe_set_fallback_mac(out);
 }
 
+#ifndef UNIT_TEST
+static int probe_try_efi_snp(struct net_nic_probe *out) {
+  struct system_runtime_platform platform;
+  uint8_t mac[6] = {0};
+  uint16_t mtu = 1500;
+
+  if (!out) {
+    return -1;
+  }
+
+  system_runtime_platform_get(&platform);
+  if (!platform.boot_services_active) {
+    return -1;
+  }
+  if (efi_snp_probe(mac, &mtu) != 0) {
+    return -1;
+  }
+
+  probe_zero(out);
+  out->found = 1;
+  out->kind = NET_NIC_KIND_EFI_SNP;
+  out->runtime_supported = 1;
+  out->vendor_id = 0xEF1u;
+  out->device_id = 0x05A9u;
+  out->mtu = mtu ? mtu : 1500;
+  for (uint32_t i = 0; i < 6u; ++i) {
+    out->mac[i] = mac[i];
+  }
+  if (out->mac[0] == 0 && out->mac[1] == 0 && out->mac[2] == 0 &&
+      out->mac[3] == 0 && out->mac[4] == 0 && out->mac[5] == 0) {
+    probe_set_fallback_mac(out);
+  }
+  return 0;
+}
+#endif
+
 int net_probe_kind_runtime_supported(uint8_t kind) {
   switch (kind) {
   case NET_NIC_KIND_E1000:
@@ -94,6 +134,7 @@ int net_probe_kind_runtime_supported(uint8_t kind) {
   case NET_NIC_KIND_VIRTIO_NET:
   case NET_NIC_KIND_RTL8139:
   case NET_NIC_KIND_VMXNET3:
+  case NET_NIC_KIND_EFI_SNP:
     return 1;
   default:
     return 0;
@@ -143,6 +184,12 @@ int net_probe_first_supported(struct net_nic_probe *out) {
   }
   probe_zero(out);
   probe_zero(&fallback);
+#ifndef UNIT_TEST
+  if (probe_try_efi_snp(out) == 0) {
+    klog(KLOG_INFO, "[probe] UEFI SNP network backend selected.");
+    return 0;
+  }
+#endif
   pci_init();
   klog(KLOG_INFO, "[probe] PCI bus scan starting...");
 
@@ -224,6 +271,8 @@ const char *net_probe_kind_name(uint8_t kind) {
     return "tulip-2114x";
   case NET_NIC_KIND_VMXNET3:
     return "vmxnet3";
+  case NET_NIC_KIND_EFI_SNP:
+    return "efi-snp";
   default:
     return "unknown";
   }

@@ -1,8 +1,13 @@
 #pragma GCC optimize("O0")
 #include "kernel/scheduler.h"
+#include "kernel/scheduler_smoke.h"
 #include "kernel/task.h"
 #include "kernel/arch_sched_hooks.h"
 #include <stddef.h>
+
+#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
+#include "kernel/thread_crash_smoke.h"
+#endif
 
 static struct task *run_queue_head = NULL;
 static struct task *run_queue_tail = NULL;
@@ -10,6 +15,9 @@ static struct task *idle_task = NULL;
 static enum scheduler_policy current_policy = SCHED_POLICY_COOPERATIVE;
 static struct scheduler_stats stats;
 static int sched_running = 0;
+#ifdef CAPYOS_SCHEDULER_FAIRNESS_SMOKE
+static int fairness_smoke_helpers_started = 0;
+#endif
 
 /* SCHED_DEFAULT_QUANTUM is defined in include/kernel/scheduler.h so that
  * task_create() can reuse the same constant when initialising
@@ -30,6 +38,9 @@ void scheduler_init(enum scheduler_policy policy) {
   stats.blocked_count = 0;
   stats.sleeping_count = 0;
   sched_running = 0;
+#ifdef CAPYOS_SCHEDULER_FAIRNESS_SMOKE
+  fairness_smoke_helpers_started = 0;
+#endif
 }
 
 static void idle_entry(void *arg) {
@@ -59,7 +70,16 @@ void scheduler_add(struct task *t) {
 }
 
 void scheduler_remove(struct task *t) {
+  struct task *cursor = NULL;
   if (!t) return;
+  for (cursor = run_queue_head; cursor; cursor = cursor->next) {
+    if (cursor == t) break;
+  }
+  if (!cursor) {
+    t->next = NULL;
+    t->prev = NULL;
+    return;
+  }
   if (t->prev) t->prev->next = t->next;
   else run_queue_head = t->next;
   if (t->next) t->next->prev = t->prev;
@@ -91,9 +111,43 @@ struct task *scheduler_pick_next(void) {
   return best ? best : idle_task;
 }
 
+static struct task *scheduler_pick_next_after(struct task *current) {
+  struct task *t = NULL;
+  if (!current) return scheduler_pick_next();
+  for (t = current->next; t; t = t->next) {
+    if (t->state == TASK_STATE_READY) return t;
+  }
+  for (t = run_queue_head; t && t != current; t = t->next) {
+    if (t->state == TASK_STATE_READY) return t;
+  }
+  return idle_task;
+}
+
+static struct task *scheduler_pick_priority_after(struct task *current) {
+  struct task *best = NULL;
+  struct task *t = NULL;
+  if (!current) return scheduler_pick_next();
+  for (t = current->next; t; t = t->next) {
+    if (t->state != TASK_STATE_READY) continue;
+    if (!best || t->priority > best->priority) best = t;
+  }
+  for (t = run_queue_head; t && t != current; t = t->next) {
+    if (t->state != TASK_STATE_READY) continue;
+    if (!best || t->priority > best->priority) best = t;
+  }
+  return best ? best : idle_task;
+}
+
+static struct task *scheduler_pick_next_for_current(struct task *current) {
+  if (current_policy == SCHED_POLICY_PRIORITY) {
+    return scheduler_pick_priority_after(current);
+  }
+  return scheduler_pick_next_after(current);
+}
+
 static void schedule(void) {
   struct task *current = task_current();
-  struct task *next = scheduler_pick_next();
+  struct task *next = scheduler_pick_next_for_current(current);
 
   if (!next || next == current) return;
 
@@ -104,6 +158,10 @@ static void schedule(void) {
   next->state = TASK_STATE_RUNNING;
   task_set_current(next);
   stats.total_switches++;
+  if (current &&
+      scheduler_fairness_smoke_try_latch_global(current->pid, next->pid)) {
+    scheduler_fairness_smoke_emit_marker();
+  }
 
   if (next == idle_task) {
     stats.idle_ticks++;
@@ -126,6 +184,29 @@ void scheduler_yield(void) {
   if (!sched_running) return;
   schedule();
 }
+
+#ifdef CAPYOS_SCHEDULER_FAIRNESS_SMOKE
+static void fairness_smoke_helper_entry(void *arg) {
+  (void)arg;
+  for (;;) scheduler_yield();
+}
+
+static void fairness_smoke_maybe_start_helpers(void) {
+  struct task *a = NULL;
+  struct task *b = NULL;
+  if (fairness_smoke_helpers_started || !task_current()) return;
+  a = task_create_kernel("sched-fair-1", fairness_smoke_helper_entry, NULL);
+  b = task_create_kernel("sched-fair-2", fairness_smoke_helper_entry, NULL);
+  if (!a || !b) {
+    if (a) task_kill(a->pid);
+    if (b) task_kill(b->pid);
+    return;
+  }
+  scheduler_add(a);
+  scheduler_add(b);
+  fairness_smoke_helpers_started = 1;
+}
+#endif
 
 void scheduler_block_current(void *channel) {
   struct task *current = task_current();
@@ -158,6 +239,18 @@ void scheduler_sleep_current(uint64_t ticks) {
 void scheduler_tick(void) {
   stats.total_ticks++;
 
+#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
+  /* Etapa 4 Fase E: every scheduler tick after the first observed
+   * fault-killed process exit counts as evidence that the kernel
+   * survived the crash. The latch only fires on the edge that flips
+   * the gate from "not ready" to "ready"; subsequent ticks are
+   * no-ops. The emit hook lives behind the same flag as the
+   * process_exit hook to keep production builds at zero cost. */
+  if (thread_crash_smoke_try_latch_tick_global()) {
+    thread_crash_smoke_emit_marker();
+  }
+#endif
+
   for (struct task *t = run_queue_head; t; t = t->next) {
     if (t->state == TASK_STATE_SLEEPING && t->wake_tick <= stats.total_ticks) {
       t->state = TASK_STATE_READY;
@@ -166,13 +259,15 @@ void scheduler_tick(void) {
     }
   }
 
-  for (struct task *t = run_queue_head; t; t = t->next) {
-    if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+  {
+    struct task *t = run_queue_head;
+    while (t) {
       struct task *next = t->next;
-      scheduler_remove(t);
-      t->state = TASK_STATE_UNUSED;
+      if ((t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) &&
+          t != task_current()) {
+        (void)task_kill(t->pid);
+      }
       t = next;
-      if (!t) break;
     }
   }
 
@@ -206,6 +301,12 @@ void scheduler_tick(void) {
 
 void scheduler_set_running(int running) {
   sched_running = running ? 1 : 0;
+#ifdef CAPYOS_SCHEDULER_FAIRNESS_SMOKE
+  if (sched_running) fairness_smoke_maybe_start_helpers();
+#endif
+#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
+  if (sched_running) thread_crash_smoke_maybe_start_helper();
+#endif
 }
 
 void scheduler_set_policy(enum scheduler_policy policy) {

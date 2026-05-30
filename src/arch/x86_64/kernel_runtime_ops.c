@@ -3,7 +3,6 @@
  *
  * Split from kernel_main.c to keep each TU ≤ 500 lines.
  */
-#pragma GCC optimize("O0")
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +24,7 @@
 #include "boot/handoff.h"
 #include "core/system_init.h"
 #include "drivers/hyperv/hyperv.h"
+#include "drivers/timer/pit.h"
 #include "fs/block.h"
 #include "fs/capyfs.h"
 #include "kernel/log/klog.h"
@@ -74,6 +74,18 @@ void klog_print_adapter_flush(void) {
 
 /* ── input ───────────────────────────────────────────────────────────── */
 
+#define HYPERV_PROMOTION_POLL_INTERVAL_TICKS 4u
+
+static int kernel_hyperv_promotions_due(uint64_t now_ticks) {
+  static uint64_t next_due_tick = 0u;
+
+  if (now_ticks < next_due_tick) {
+    return 0;
+  }
+  next_due_tick = now_ticks + HYPERV_PROMOTION_POLL_INTERVAL_TICKS;
+  return 1;
+}
+
 int kernel_input_trygetc(char *out_char) {
   if (!out_char) return 0;
   return x64_input_poll_char(&g_input_runtime, out_char);
@@ -84,10 +96,13 @@ int kernel_input_getc(char *out_char) {
     return 0;
   for (;;) {
     struct x64_hyperv_runtime_coordinator_ops ops;
+    uint64_t now_ticks = pit_ticks();
     kernel_hyperv_runtime_coordinator_ops_init(&ops);
     int hyperv_was_ready = g_input_runtime.has_hyperv;
     kernel_service_poll();
-    (void)x64_hyperv_runtime_poll_promotions(&g_input_runtime, &ops);
+    if (kernel_hyperv_promotions_due(now_ticks)) {
+      (void)x64_hyperv_runtime_poll_promotions(&g_input_runtime, &ops);
+    }
     if (x64_input_poll_char(&g_input_runtime, out_char)) {
       return 1;
     }

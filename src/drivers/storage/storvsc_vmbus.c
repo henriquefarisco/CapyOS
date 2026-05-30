@@ -6,6 +6,14 @@
 #ifndef UNIT_TEST
 #endif
 
+static int storvsc_vmbus_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 struct storvsc_vmbus_packet_desc {
   uint16_t type;
   uint16_t offset8;
@@ -16,6 +24,10 @@ struct storvsc_vmbus_packet_desc {
 
 static void storvsc_vmbus_log(const char *s) {
 #ifndef UNIT_TEST
+  if (!storvsc_vmbus_verbose_io()) {
+    (void)s;
+    return;
+  }
   fbcon_print(s);
 #else
   (void)s;
@@ -24,6 +36,10 @@ static void storvsc_vmbus_log(const char *s) {
 
 static void storvsc_vmbus_log_hex(uint64_t value) {
 #ifndef UNIT_TEST
+  if (!storvsc_vmbus_verbose_io()) {
+    (void)value;
+    return;
+  }
   fbcon_print_hex(value);
 #else
   (void)value;

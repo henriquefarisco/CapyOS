@@ -10,7 +10,7 @@ O plano mestre continua definindo quando uma integração pode entrar no sistema
 
 - [`compatibility-matrix.md`](compatibility-matrix.md) — matriz de versões pinadas e ABIs por repositório
 - [`capypkg-publisher-manifest-format.md`](capypkg-publisher-manifest-format.md) — formato canônico do manifest line-oriented que o adapter consome
-- [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md) — auditoria de correção da esteira cross-repo vigente (Etapa 4 / CapyUI v2.13.1)
+- [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md) — auditoria cross-repo vigente (Etapa 4 / CapyOS alpha.261 / CapyUI v2.19.0; inclui addenda alpha.260 e alpha.261)
 - [`compatibility-audit-2026-05-22.md`](compatibility-audit-2026-05-22.md) — auditoria estática cross-repo histórica (Etapa 4 / CapyUI v2.13)
 - [`compatibility-audit-2026-05-19.md`](compatibility-audit-2026-05-19.md) — auditoria estática cross-repo histórica (2026-05-19)
 - [`../../operations/manual-module-deploy-runbook.md`](../../operations/manual-module-deploy-runbook.md) — runbook de deploy manual de módulos remotos

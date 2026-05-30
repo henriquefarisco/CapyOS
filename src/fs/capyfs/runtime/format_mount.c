@@ -1,5 +1,6 @@
 #include "internal/capyfs_runtime_internal.h"
 #include "fs/capyfs_journal_integration.h"
+#include "kernel/log/klog.h"
 
 int capyfs_format(struct block_device *dev,
                   uint32_t inode_count,
@@ -50,12 +51,28 @@ int capyfs_format(struct block_device *dev,
     store_u32_le_volatile(vscratch + 24, imap_start);
     store_u32_le_volatile(vscratch + 28, inode_start);
     store_u32_le_volatile(vscratch + 32, data_start);
-    dbg_putc_serial('F');
-    dbg_putc_serial(' ');
-    dbg_hex32_serial(dbg_be32_serial_load(scratch));
-    dbg_putc_serial(' ');
-    dbg_hex32_serial(dbg_be32_serial_load(scratch + 4));
-    dbg_putc_serial('\n');
+    /* Slice 3E.4.C (2026-05-25) — superblock checkpoint formerly
+     * written byte-by-byte to the QEMU debug port 0xE9 via
+     * `dbg_putc_serial`/`dbg_hex32_serial`. Routed through klog so
+     * the trace lands in the kernel log ring (recoverable via
+     * `klog_dump` and persisted by the kernel logger service).
+     * `dbg_be32_serial_load` was inlined as the two-line big-endian
+     * loads below to make the value provenance explicit. */
+    {
+      uint32_t magic_be = ((uint32_t)scratch[0] << 24) |
+                          ((uint32_t)scratch[1] << 16) |
+                          ((uint32_t)scratch[2] << 8) |
+                          (uint32_t)scratch[3];
+      uint32_t version_be = ((uint32_t)scratch[4] << 24) |
+                            ((uint32_t)scratch[5] << 16) |
+                            ((uint32_t)scratch[6] << 8) |
+                            (uint32_t)scratch[7];
+      klog(KLOG_INFO, "[capyfs] format superblock prepared");
+      klog_hex(KLOG_INFO, "[capyfs] format superblock magic_be=",
+               (uint64_t)magic_be);
+      klog_hex(KLOG_INFO, "[capyfs] format superblock version_be=",
+               (uint64_t)version_be);
+    }
     if (block_device_write(dev, 0, scratch) != 0) {
         return capyfs_format_finish(scratch, scratch_heap, -12);
     }

@@ -50,6 +50,42 @@ function Export-JsonFile {
     $Value | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -Path $Path
 }
 
+function Get-FirstAvailableEventLog {
+    param([string[]]$Names)
+
+    foreach ($candidate in $Names) {
+        if (Get-WinEvent -ListLog $candidate -ErrorAction SilentlyContinue) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Get-HyperVPreflightEvents {
+    param(
+        [string[]]$LogNames,
+        [string]$VmName
+    )
+
+    $logName = Get-FirstAvailableEventLog -Names $LogNames
+    if ($null -eq $logName) {
+        return [ordered]@{
+            log_name = $null
+            events = @()
+        }
+    }
+
+    $events = @(Get-WinEvent -LogName $logName -MaxEvents 200 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -like "*$VmName*" } |
+        Select-Object -First 40 TimeCreated, Id, LevelDisplayName, Message)
+
+    return [ordered]@{
+        log_name = $logName
+        events = $events
+    }
+}
+
 if (-not (Test-IsElevated)) {
     Write-ErrorLine "Hyper-V preflight requires an elevated PowerShell session."
     Write-Info "Open PowerShell as Administrator and run this script again."
@@ -104,9 +140,18 @@ if ($Name -ne "") {
         version = $vm.Version
         automatic_start_action = [string]$vm.AutomaticStartAction
         automatic_stop_action = [string]$vm.AutomaticStopAction
-        secure_boot = Get-OptionalProperty $firmware "SecureBoot"
-        secure_boot_template = Get-OptionalProperty $firmware "SecureBootTemplate"
+        secure_boot = [string](Get-OptionalProperty $firmware "SecureBoot")
+        secure_boot_template = [string](Get-OptionalProperty $firmware "SecureBootTemplate")
         preferred_network_boot_protocol = [string](Get-OptionalProperty $firmware "PreferredNetworkBootProtocol")
+        boot_order = @(
+            foreach ($entry in @($firmware.BootOrder)) {
+                [ordered]@{
+                    boot_type = [string](Get-OptionalProperty $entry "BootType")
+                    description = [string](Get-OptionalProperty $entry "Description")
+                    device = [string](Get-OptionalProperty $entry "Device")
+                }
+            }
+        )
         dynamic_memory_enabled = Get-OptionalProperty $memory "DynamicMemoryEnabled"
         startup_memory = Get-OptionalProperty $memory "Startup"
         minimum_memory = Get-OptionalProperty $memory "Minimum"
@@ -145,22 +190,30 @@ if ($Name -ne "") {
         )
         com_ports = @(
             foreach ($port in $comPorts) {
+                $portName = [string](Get-OptionalProperty $port "Name")
+                $portNumber = $null
+                if ($portName -match "COM\s+([0-9]+)") {
+                    $portNumber = [int]$Matches[1]
+                }
+                $portPath = [string](Get-OptionalProperty $port "Path")
                 [ordered]@{
-                    number = Get-OptionalProperty $port "Number"
-                    path = Get-OptionalProperty $port "Path"
-                    disconnected = Get-OptionalProperty $port "Disconnected"
+                    name = $portName
+                    number = $portNumber
+                    path = $portPath
+                    debugger_mode = [string](Get-OptionalProperty $port "DebuggerMode")
+                    disconnected = [string]::IsNullOrEmpty($portPath)
                 }
             }
         )
     }
 
     if ($IncludeEvents) {
-        $workerEvents = @(Get-WinEvent -LogName "Microsoft-Windows-Hyper-V-Worker/Admin" -MaxEvents 200 |
-            Where-Object { $_.Message -like "*$Name*" } |
-            Select-Object -First 40 TimeCreated, Id, LevelDisplayName, Message)
-        $vmmsEvents = @(Get-WinEvent -LogName "Microsoft-Windows-Hyper-V-VMMS/Admin" -MaxEvents 200 |
-            Where-Object { $_.Message -like "*$Name*" } |
-            Select-Object -First 40 TimeCreated, Id, LevelDisplayName, Message)
+        $workerEvents = Get-HyperVPreflightEvents `
+            -LogNames @("Microsoft-Windows-Hyper-V-Worker-Admin", "Microsoft-Windows-Hyper-V-Worker/Admin") `
+            -VmName $Name
+        $vmmsEvents = Get-HyperVPreflightEvents `
+            -LogNames @("Microsoft-Windows-Hyper-V-VMMS-Admin", "Microsoft-Windows-Hyper-V-VMMS/Admin") `
+            -VmName $Name
 
         $report.events = [ordered]@{
             worker_admin = $workerEvents
@@ -195,6 +248,11 @@ if ($report.Contains("vm")) {
     $lines.Add("secure_boot=$($vmData.secure_boot)")
     $lines.Add("secure_boot_template=$($vmData.secure_boot_template)")
     $lines.Add("preferred_network_boot_protocol=$($vmData.preferred_network_boot_protocol)")
+    $bootIndex = 0
+    foreach ($entry in $vmData.boot_order) {
+        $lines.Add("boot_order[$bootIndex] type=$($entry.boot_type) description=$($entry.description) device=$($entry.device)")
+        $bootIndex++
+    }
     $lines.Add("dynamic_memory_enabled=$($vmData.dynamic_memory_enabled)")
     $lines.Add("startup_memory=$($vmData.startup_memory)")
     $lines.Add("minimum_memory=$($vmData.minimum_memory)")
@@ -210,7 +268,7 @@ if ($report.Contains("vm")) {
         $lines.Add("dvd number=$($dvd.controller_number) location=$($dvd.controller_location) path=$($dvd.path)")
     }
     foreach ($port in $vmData.com_ports) {
-        $lines.Add("com number=$($port.number) path=$($port.path) disconnected=$($port.disconnected)")
+        $lines.Add("com name=$($port.name) number=$($port.number) path=$($port.path) debugger_mode=$($port.debugger_mode) disconnected=$($port.disconnected)")
     }
 }
 

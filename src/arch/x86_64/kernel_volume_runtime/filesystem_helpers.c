@@ -1,5 +1,7 @@
 #include "internal/kernel_volume_runtime_internal.h"
 
+#include "kernel/log/klog.h"
+
 int x64_kernel_volume_runtime_load_handoff_key(
     struct x64_kernel_volume_runtime_state *state) {
   uint8_t key_hash[SHA256_DIGEST_SIZE];
@@ -17,9 +19,12 @@ int x64_kernel_volume_runtime_load_handoff_key(
     return -1;
   }
   if (compute_volume_key_hash(state->handoff_volume_key, key_hash) == 0) {
-    dbg_puts("[kvr] handoff key hash=");
-    dbg_hex32(dbg_be32_local(key_hash));
-    dbg_putc('\n');
+    /* Slice 3E.4.C (2026-05-25) — `dbg_puts`/`dbg_hex32`/`dbg_putc`
+     * trio replaced with a single structured `klog_hex` entry. The
+     * `dbg_be32_local` helper survives as a utility for reading the
+     * first 4 hash bytes in big-endian (audit signature). */
+    klog_hex(KLOG_INFO, "[kvr] handoff key hash=",
+             (uint64_t)dbg_be32_local(key_hash));
     secure_memzero(key_hash, sizeof(key_hash));
   }
   *state->handoff_volume_key_ready = 1;

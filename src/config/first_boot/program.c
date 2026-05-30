@@ -1,5 +1,7 @@
 #include "../internal/first_boot_internal.h"
 
+#include "auth/user_home.h"
+
 static const char *g_cli_reference_text =
     "CapyCLI - Referencia Rapida\n"
     "============================\n"
@@ -465,6 +467,19 @@ static int first_boot_setup_interactive(void) {
       config_print_line(
           system_ui_text(setup_language, SYS_UI_ADMIN_HOME_PERM_WARNING));
     }
+  }
+  /* Provision the standard per-user folder structure (Desktop, Documents,
+   * Personal, Professional) inside the admin home so the desktop session
+   * and file manager show the familiar layout on first login. This is the
+   * same provisioning the `add-user` command and the recovery path already
+   * perform; the first-boot wizard previously skipped it, so the install
+   * (primary) user ended up with an empty home and no folders on the
+   * desktop or in the UI. Runs for both freshly created and pre-existing
+   * admins (idempotent via ensure_directory_with_metadata). Best effort:
+   * a failure is non-fatal, so warn and continue rather than aborting. */
+  if (user_home_prepare(admin_home, admin_uid, admin_gid) != 0) {
+    config_print_line(
+        system_ui_text(setup_language, SYS_UI_ADMIN_HOME_PERM_WARNING));
   }
   config_sync_root_device();
 

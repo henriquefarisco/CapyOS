@@ -18,6 +18,38 @@ static void hyperv_runtime_zero(void *ptr, uint32_t len) {
   }
 }
 
+static int hyperv_runtime_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+static void hyperv_runtime_log(const char *s) {
+#ifndef UNIT_TEST
+  if (!hyperv_runtime_verbose_io()) {
+    (void)s;
+    return;
+  }
+  fbcon_print(s);
+#else
+  (void)s;
+#endif
+}
+
+static void hyperv_runtime_log_hex(uint64_t value) {
+#ifndef UNIT_TEST
+  if (!hyperv_runtime_verbose_io()) {
+    (void)value;
+    return;
+  }
+  fbcon_print_hex(value);
+#else
+  (void)value;
+#endif
+}
+
 static void apply_snapshot(struct net_hyperv_runtime_state *state,
                            const struct net_hyperv_runtime_snapshot *snapshot) {
   if (!state || !snapshot) {
@@ -58,21 +90,21 @@ static void log_runtime_checkpoint(const struct net_hyperv_runtime_state *state)
     return;
   }
 
-  fbcon_print("[netvsc] build=");
-  fbcon_print(CAPYOS_VERSION_FULL);
-  fbcon_print(" feature=");
-  fbcon_print(CAPYOS_FEATURE_HYPERV_RUNTIME);
-  fbcon_print(" stage=");
-  fbcon_print(hyperv_vmbus_stage_label(state->stage));
-  fbcon_print(" action=0x");
-  fbcon_print_hex((uint64_t)state->last_action);
-  fbcon_print(" result=0x");
-  fbcon_print_hex((uint64_t)(uint32_t)state->last_result);
-  fbcon_print(" relid=0x");
-  fbcon_print_hex((uint64_t)state->offer.child_relid);
-  fbcon_print(" conn=0x");
-  fbcon_print_hex((uint64_t)state->offer.connection_id);
-  fbcon_print("\n");
+  hyperv_runtime_log("[netvsc] build=");
+  hyperv_runtime_log(CAPYOS_VERSION_FULL);
+  hyperv_runtime_log(" feature=");
+  hyperv_runtime_log(CAPYOS_FEATURE_HYPERV_RUNTIME);
+  hyperv_runtime_log(" stage=");
+  hyperv_runtime_log(hyperv_vmbus_stage_label(state->stage));
+  hyperv_runtime_log(" action=0x");
+  hyperv_runtime_log_hex((uint64_t)state->last_action);
+  hyperv_runtime_log(" result=0x");
+  hyperv_runtime_log_hex((uint64_t)(uint32_t)state->last_result);
+  hyperv_runtime_log(" relid=0x");
+  hyperv_runtime_log_hex((uint64_t)state->offer.child_relid);
+  hyperv_runtime_log(" conn=0x");
+  hyperv_runtime_log_hex((uint64_t)state->offer.connection_id);
+  hyperv_runtime_log("\n");
 
   last_stage = state->stage;
   last_action = state->last_action;

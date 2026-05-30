@@ -22,6 +22,9 @@ int vmbus_channel_runtime_send_inband_common(
     struct vmbus_channel_runtime *channel, const void *payload,
     uint32_t payload_len, uint64_t trans_id,
     const struct vmbus_channel_runtime_ops *ops);
+int vmbus_channel_runtime_send_prebuilt_common(
+    struct vmbus_channel_runtime *channel, const void *packet,
+    uint32_t packet_len, const struct vmbus_channel_runtime_ops *ops);
 int vmbus_channel_runtime_read_common(struct vmbus_channel_runtime *channel,
                                       void *buffer, uint32_t buffer_size,
                                       uint32_t *out_packet_len);

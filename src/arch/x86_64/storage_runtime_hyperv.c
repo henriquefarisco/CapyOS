@@ -9,6 +9,38 @@
 
 static const char *bool_label(int value) { return value ? "yes" : "no"; }
 
+static int storage_hyperv_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+static void storage_hyperv_log(const char *s) {
+#ifndef UNIT_TEST
+  if (!storage_hyperv_verbose_io()) {
+    (void)s;
+    return;
+  }
+  fbcon_print(s);
+#else
+  (void)s;
+#endif
+}
+
+static void storage_hyperv_log_hex(uint64_t value) {
+#ifndef UNIT_TEST
+  if (!storage_hyperv_verbose_io()) {
+    (void)value;
+    return;
+  }
+  fbcon_print_hex(value);
+#else
+  (void)value;
+#endif
+}
+
 static const char *storvsc_phase_label(uint8_t phase) {
   switch (phase) {
   case STORVSC_RUNTIME_DISABLED:
@@ -115,43 +147,43 @@ static void log_runtime_plan(const struct x64_storage_hyperv_runtime_state *stat
     return;
   }
 
-  fbcon_print("[storvsc-plan] gate=");
-  fbcon_print(x64_storage_hyperv_gate_label(plan->gate_state));
-  fbcon_print(" next=");
-  fbcon_print(x64_storage_hyperv_action_label(plan->next_action));
-  fbcon_print(" block=");
-  fbcon_print(block);
-  fbcon_print(" bootsvc=");
-  fbcon_print(bool_label(boot_services_active));
-  fbcon_print(" firmware=");
-  fbcon_print(bool_label(uses_firmware));
-  fbcon_print(" allow=");
-  fbcon_print(bool_label(state->hybrid_prepare_allowed));
-  fbcon_print(" prepared=");
-  fbcon_print(bool_label(prepared));
-  fbcon_print(" connected=");
-  fbcon_print(bool_label(connected));
-  fbcon_print(" offer=");
-  fbcon_print(bool_label(cached_offer));
-  fbcon_print(" cfg=");
-  fbcon_print(bool_label(status.configured));
-  fbcon_print(" enabled=");
-  fbcon_print(bool_label(status.enabled));
-  fbcon_print(" cooloff=0x");
-  fbcon_print_hex((uint64_t)state->cooldown_remaining);
-  fbcon_print(" phase=");
-  fbcon_print(storvsc_phase_label(status.phase));
+  storage_hyperv_log("[storvsc-plan] gate=");
+  storage_hyperv_log(x64_storage_hyperv_gate_label(plan->gate_state));
+  storage_hyperv_log(" next=");
+  storage_hyperv_log(x64_storage_hyperv_action_label(plan->next_action));
+  storage_hyperv_log(" block=");
+  storage_hyperv_log(block);
+  storage_hyperv_log(" bootsvc=");
+  storage_hyperv_log(bool_label(boot_services_active));
+  storage_hyperv_log(" firmware=");
+  storage_hyperv_log(bool_label(uses_firmware));
+  storage_hyperv_log(" allow=");
+  storage_hyperv_log(bool_label(state->hybrid_prepare_allowed));
+  storage_hyperv_log(" prepared=");
+  storage_hyperv_log(bool_label(prepared));
+  storage_hyperv_log(" connected=");
+  storage_hyperv_log(bool_label(connected));
+  storage_hyperv_log(" offer=");
+  storage_hyperv_log(bool_label(cached_offer));
+  storage_hyperv_log(" cfg=");
+  storage_hyperv_log(bool_label(status.configured));
+  storage_hyperv_log(" enabled=");
+  storage_hyperv_log(bool_label(status.enabled));
+  storage_hyperv_log(" cooloff=0x");
+  storage_hyperv_log_hex((uint64_t)state->cooldown_remaining);
+  storage_hyperv_log(" phase=");
+  storage_hyperv_log(storvsc_phase_label(status.phase));
   if (status.offer_ready) {
-    fbcon_print(" relid=0x");
-    fbcon_print_hex((uint64_t)status.offer.child_relid);
-    fbcon_print(" conn=0x");
-    fbcon_print_hex((uint64_t)status.offer.connection_id);
+    storage_hyperv_log(" relid=0x");
+    storage_hyperv_log_hex((uint64_t)status.offer.child_relid);
+    storage_hyperv_log(" conn=0x");
+    storage_hyperv_log_hex((uint64_t)status.offer.connection_id);
   }
   if (status.last_error != 0) {
-    fbcon_print(" last_error=0x");
-    fbcon_print_hex((uint64_t)(uint32_t)status.last_error);
+    storage_hyperv_log(" last_error=0x");
+    storage_hyperv_log_hex((uint64_t)(uint32_t)status.last_error);
   }
-  fbcon_print("\n");
+  storage_hyperv_log("\n");
 
   last_gate = plan->gate_state;
   last_next = plan->next_action;
@@ -224,21 +256,21 @@ static int finish_runtime_action(
     if (stage != last_stage || action != last_action || result != last_result ||
         status.offer.child_relid != last_relid ||
         status.offer.connection_id != last_conn) {
-      fbcon_print("[storvsc] build=");
-      fbcon_print(CAPYOS_VERSION_FULL);
-      fbcon_print(" feature=");
-      fbcon_print(CAPYOS_FEATURE_HYPERV_RUNTIME);
-      fbcon_print(" stage=");
-      fbcon_print(hyperv_vmbus_stage_label(stage));
-      fbcon_print(" action=0x");
-      fbcon_print_hex((uint64_t)action);
-      fbcon_print(" result=0x");
-      fbcon_print_hex((uint64_t)(uint32_t)result);
-      fbcon_print(" relid=0x");
-      fbcon_print_hex((uint64_t)status.offer.child_relid);
-      fbcon_print(" conn=0x");
-      fbcon_print_hex((uint64_t)status.offer.connection_id);
-      fbcon_print("\n");
+      storage_hyperv_log("[storvsc] build=");
+      storage_hyperv_log(CAPYOS_VERSION_FULL);
+      storage_hyperv_log(" feature=");
+      storage_hyperv_log(CAPYOS_FEATURE_HYPERV_RUNTIME);
+      storage_hyperv_log(" stage=");
+      storage_hyperv_log(hyperv_vmbus_stage_label(stage));
+      storage_hyperv_log(" action=0x");
+      storage_hyperv_log_hex((uint64_t)action);
+      storage_hyperv_log(" result=0x");
+      storage_hyperv_log_hex((uint64_t)(uint32_t)result);
+      storage_hyperv_log(" relid=0x");
+      storage_hyperv_log_hex((uint64_t)status.offer.child_relid);
+      storage_hyperv_log(" conn=0x");
+      storage_hyperv_log_hex((uint64_t)status.offer.connection_id);
+      storage_hyperv_log("\n");
       last_stage = stage;
       last_action = action;
       last_result = result;

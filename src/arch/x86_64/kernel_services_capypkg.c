@@ -21,9 +21,12 @@
 #include "net/http.h"
 #include "net/stack.h"
 #include "services/capypkg.h"
+#include "services/capypkg_local_bundle.h"
 #include "services/capypkg_bootstrap.h"
 #include "services/capypkg_runtime.h"
 #include "services/service_manager.h"
+
+extern uint64_t pit_ticks(void);
 
 /* VFS-backed adapters; mirror update_agent's pattern but kept local
  * because the function signatures are slightly different. */
@@ -76,12 +79,19 @@ static int capypkg_runtime_write_bytes(const char *path, const uint8_t *data,
   previous_session = session_active();
   session_set_active(NULL);
   if (vfs_lookup(path, &d) == 0) {
+    if (d && d->refcount) {
+      d->refcount--;
+    }
+    d = NULL;
     (void)vfs_unlink(path);
   }
   if (vfs_create(path, VFS_MODE_FILE, NULL) != 0 &&
       vfs_lookup(path, &d) != 0) {
     rc = -1;
     goto done;
+  }
+  if (d && d->refcount) {
+    d->refcount--;
   }
   file = vfs_open(path, VFS_OPEN_WRITE);
   if (!file) {
@@ -110,6 +120,9 @@ static int capypkg_runtime_remove(const char *path) {
   session_set_active(NULL);
   if (vfs_lookup(path, &d) != 0) {
     goto done;
+  }
+  if (d && d->refcount) {
+    d->refcount--;
   }
   rc = vfs_unlink(path);
 done:
@@ -225,6 +238,9 @@ static void capypkg_runtime_log_fetch_failure(const char *url, int http_rc,
 static int capypkg_runtime_fetch_text(const char *url, char *buffer,
                                       size_t buffer_size, size_t *out_len) {
   struct http_response resp = {0};
+  if (capypkg_local_bundle_fetch_text(url, buffer, buffer_size, out_len) == 0) {
+    return 0;
+  }
   /* -1 maps to HTTP_ERR_INVALID_ARGUMENT in http_error_string(). The
    * enum itself lives in the http internal header and is not part of
    * the public ABI, so we use the numeric value here. */
@@ -261,6 +277,9 @@ static int capypkg_runtime_fetch_text(const char *url, char *buffer,
 
 static int capypkg_runtime_fetch_bytes(const char *url, uint8_t *buffer,
                                        size_t buffer_size, size_t *out_len) {
+  if (capypkg_local_bundle_fetch_bytes(url, buffer, buffer_size, out_len) == 0) {
+    return 0;
+  }
   if (!url || !buffer || buffer_size == 0u) {
     capypkg_runtime_log_fetch_failure(url, -1, 0);
     return -1;
@@ -322,21 +341,29 @@ void kernel_update_capypkg_service_status(int rc) {
  *   - the function is fully idempotent and writes its own marker
  *     once a profile is fully applied (or explicitly basic), so
  *     subsequent polls are essentially free;
- *   - per-call failure does NOT short-circuit subsequent polls:
- *     the bootstrap function only persists the marker when the
- *     profile said "basic" or when the index fetch + install
- *     sweep completed (even with per-package failures); HTTP
- *     fetch errors during network warm-up will retry on the next
- *     poll without surfacing as a service error.
+ *   - per-call failure backs off the automatic hook: the bootstrap
+ *     function only persists the marker when the profile said "basic"
+ *     or when the index fetch + install sweep completed without
+ *     per-package failures and the marker was written; HTTP/package/
+ *     marker errors remain retryable without surfacing as a service
+ *     error.
  *
- * `g_capypkg_bootstrap_attempted_marker` is a soft hint to avoid
- * spamming the audit log on every poll when nothing is going to
- * change. The bootstrap.done marker in the VFS is the durable
- * source of truth.
+ * `g_capypkg_bootstrap_logged_*` are soft hints to avoid spamming
+ * the audit log on every poll when nothing is going to change. The
+ * bootstrap.done marker in the VFS is the durable source of truth.
  */
 
 static int g_capypkg_bootstrap_logged_idle = 0;
 static int g_capypkg_bootstrap_logged_waiting_net = 0;
+static uint64_t g_capypkg_bootstrap_retry_after_tick = 0u;
+static uint32_t g_capypkg_bootstrap_failure_count = 0u;
+
+static uint32_t kernel_capypkg_bootstrap_backoff_ticks(void) {
+  uint32_t shift = g_capypkg_bootstrap_failure_count > 3u
+                       ? 3u
+                       : g_capypkg_bootstrap_failure_count;
+  return 300u << shift;
+}
 
 /* Return 1 if the kernel network stack is in a usable state for
  * capypkg index/payload fetching. DHCP-mode installs additionally
@@ -348,6 +375,9 @@ static int g_capypkg_bootstrap_logged_waiting_net = 0;
  * silently every 60 seconds while the kernel is still in network
  * warm-up. */
 static int kernel_capypkg_network_is_usable(void) {
+  if (capypkg_local_bundle_available()) {
+    return 1;
+  }
   struct net_stack_status status;
   if (net_stack_status(&status) != 0) {
     return 0;
@@ -363,6 +393,12 @@ static int kernel_capypkg_network_is_usable(void) {
 }
 
 static void kernel_capypkg_maybe_bootstrap(void) {
+  uint64_t now_ticks = pit_ticks();
+
+  if (g_capypkg_bootstrap_retry_after_tick != 0u &&
+      now_ticks < g_capypkg_bootstrap_retry_after_tick) {
+    return;
+  }
   if (!kernel_capypkg_network_is_usable()) {
     if (!g_capypkg_bootstrap_logged_waiting_net) {
       klog(KLOG_INFO,
@@ -379,24 +415,32 @@ static void kernel_capypkg_maybe_bootstrap(void) {
   int failed = 0;
   int rc = capypkg_bootstrap_run(0, &installed, &failed);
   if (rc == INSTALL_PROFILE_OK) {
+    g_capypkg_bootstrap_failure_count = 0u;
+    g_capypkg_bootstrap_retry_after_tick = 0u;
     if (installed > 0 || failed > 0) {
       klog(KLOG_INFO,
            "[audit] [capypkg] bootstrap reached install sweep");
     } else if (!g_capypkg_bootstrap_logged_idle) {
       klog(KLOG_INFO,
-           "[audit] [capypkg] bootstrap idle (basic profile or marker present)");
+           "[audit] [capypkg] bootstrap idle (basic profile or marker file present)");
       g_capypkg_bootstrap_logged_idle = 1;
     }
     return;
   }
   if (rc == INSTALL_PROFILE_ERR_STORAGE) {
-    /* Transient: per-package failures or repo/index error. The
-     * bootstrap function emitted its own audit entry; the next
-     * service poll will retry. */
+    /* Transient: per-package failures, repo/index error or marker
+     * write error. The bootstrap function emitted its own audit
+     * entry; a later service poll will retry after backoff. */
+    g_capypkg_bootstrap_retry_after_tick =
+        now_ticks + (uint64_t)kernel_capypkg_bootstrap_backoff_ticks();
+    if (g_capypkg_bootstrap_failure_count < 8u) {
+      g_capypkg_bootstrap_failure_count++;
+    }
     return;
   }
-  /* Permanent failure (profile.ini malformed). The bootstrap
-   * function emitted the audit entry; avoid retry spam. */
+  /* Profile/config failure. Keep polling so an operator can correct
+   * profile.ini without rebooting; the bootstrap function emitted the
+   * audit entry for this attempt. */
   g_capypkg_bootstrap_logged_idle = 1;
 }
 

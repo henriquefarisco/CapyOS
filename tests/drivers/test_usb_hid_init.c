@@ -15,6 +15,7 @@
 
 #include "drivers/usb/usb_core.h"
 #include "drivers/usb/usb_hid.h"
+#include "drivers/input/mouse.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -214,6 +215,55 @@ static void test_mouse_report_handler_surfaces_delta(void) {
     }
     if (buttons != 1u || dx != 3 || dy != -2 || dz != 1) {
         fail("mouse poll must surface latest report");
+    }
+}
+
+static void drain_mouse_events(void) {
+    struct mouse_event event;
+    while (mouse_poll(&event) == 0) {
+    }
+}
+
+static void test_mouse_core_drains_usb_hid_reports(void) {
+    stub_usb_core_reset();
+    struct usb_device_info devs[1];
+    struct usb_hid_mouse_report report;
+    struct mouse_event event;
+    struct mouse_state state;
+    devs[0] = make_mouse_device(USB_DEV_CONFIGURED, USB_CLASS_HID);
+    stub_usb_core_set_devices(devs, 1);
+    if (usb_hid_init() != 0) {
+        fail("mouse core bridge test init failed");
+        return;
+    }
+    mouse_set_bounds(100, 100);
+    mouse_set_position(50, 50);
+    drain_mouse_events();
+    memset(&report, 0, sizeof(report));
+    usb_hid_handle_mouse_report(&report);
+    mouse_ps2_poll();
+    drain_mouse_events();
+    report.buttons = MOUSE_BUTTON_LEFT;
+    report.dx = 4;
+    report.dy = -3;
+    report.dz = 1;
+    usb_hid_handle_mouse_report(&report);
+    mouse_ps2_poll();
+    if (mouse_poll(&event) != 0) {
+        fail("mouse core must drain USB HID reports into canonical queue");
+        return;
+    }
+    if (event.dx != 4 || event.dy != -3 || event.dz != 1 ||
+        event.buttons != MOUSE_BUTTON_LEFT || event.changed != MOUSE_BUTTON_LEFT) {
+        fail("mouse core event must preserve USB HID delta/buttons");
+    }
+    mouse_get_state(&state);
+    if (state.x != 54 || state.y != 47 ||
+        state.buttons != MOUSE_BUTTON_LEFT || !state.initialized) {
+        fail("mouse core state must reflect USB HID report");
+    }
+    if (!mouse_available()) {
+        fail("mouse_available must accept USB HID mouse when PS/2 is absent");
     }
 }
 
@@ -421,6 +471,7 @@ int run_usb_hid_init_tests(void) {
     test_mixed_table_picks_correctly();
     test_keyboard_report_handler_buffers_ascii();
     test_mouse_report_handler_surfaces_delta();
+    test_mouse_core_drains_usb_hid_reports();
     test_keyboard_report_handler_translates_ctrl_combinations();
     test_keyboard_report_handler_passes_ctrl_with_non_alpha();
     test_keyboard_report_handler_toggles_caps_lock_led();

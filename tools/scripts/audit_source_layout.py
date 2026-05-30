@@ -103,7 +103,17 @@ MONOLITH_BASELINE_EXCEPTIONS = {
     # continue sharing globals/views through
     # src/services/internal/update_agent_internal.h together with the
     # pre-existing update_agent_transact.c (boot slot integration).
-    Path("src/arch/x86_64/kernel_main.c"),
+    # src/arch/x86_64/kernel_main.c was split in the 2026-05-29 refactor:
+    # the late boot-stage bodies (Linux-ABI shim registration, Stage 4
+    # keyboard/setup, Stage 7 input probe, Stage 8 network/boot-policy, and
+    # the login_runtime_ops builder) moved into the new sibling TU
+    # src/arch/x86_64/kernel_boot_stages.c (declared in
+    # include/arch/x86_64/kernel_main_internal.h, wired into CAPYOS64_OBJS
+    # next to kernel_main.o). The fragile pre-COM1 / early-post-EBS path
+    # (handoff + framebuffer validation, Stage 1-3, and the
+    # CAPYOS_BOOT_RUN_HELLO / CAPYOS_PREEMPTIVE_* #ifdef blocks) stays
+    # inline. kernel_main.c is now 655 LOC and DROPS OUT of this baseline
+    # list -- it is no longer a monolith.
     # src/gui/desktop/taskbar.c was split in the 2026-05-15 refactor
     # into taskbar.c (main bar + clock + tray + click router),
     # taskbar_menu.c (menu data model + popup rendering) and

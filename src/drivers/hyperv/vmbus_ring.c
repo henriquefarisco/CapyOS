@@ -37,8 +37,20 @@ static void ring_memcpy(void *dst, const void *src, uint32_t len) {
   }
 }
 
+static int ring_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 static void ring_log(const char *s) {
 #ifndef UNIT_TEST
+  if (!ring_verbose_io()) {
+    (void)s;
+    return;
+  }
   fbcon_print(s);
 #else
   (void)s;
@@ -47,6 +59,10 @@ static void ring_log(const char *s) {
 
 static void ring_log_hex(uint64_t value) {
 #ifndef UNIT_TEST
+  if (!ring_verbose_io()) {
+    (void)value;
+    return;
+  }
   fbcon_print_hex(value);
 #else
   (void)value;
@@ -116,64 +132,15 @@ static void ring_copy_in(volatile struct hv_ring_buffer *ring,
   }
 }
 
-int vmbus_write_inband_packet_runtime(
+static int vmbus_ring_signal_after_write(
     uint32_t child_relid, uint32_t connection_id, uint8_t monitor_id,
     uint8_t monitor_allocated, uint16_t is_dedicated_interrupt,
-    volatile struct hv_ring_buffer *send_ring, uint32_t send_ring_size,
-    const void *payload, uint32_t payload_len, uint16_t flags,
+    volatile struct hv_ring_buffer *send_ring, uint32_t write_index,
     uint64_t trans_id, vmbus_signal_relid_fn signal_relid,
     vmbus_signal_monitor_fn signal_monitor,
     vmbus_signal_event_fn signal_event) {
-  struct vmpacket_descriptor desc;
-  uint64_t prev_indices = 0u;
-  uint32_t data_size = 0;
-  uint32_t packet_len = 0;
-  uint32_t aligned_len = 0;
-  uint32_t total_len = 0;
-  uint32_t write_index = 0;
   uint32_t interrupt_mask = 0u;
   uint32_t read_index = 0u;
-
-  if (!send_ring || !payload || payload_len == 0u || !signal_event) {
-    return -1;
-  }
-
-  data_size = ring_data_size(send_ring_size);
-  if (data_size == 0u) {
-    return -2;
-  }
-
-  packet_len = (uint32_t)sizeof(desc) + payload_len;
-  aligned_len = (packet_len + 7u) & ~7u;
-  total_len = aligned_len + VMBUS_PKT_TRAILER;
-  if (ring_bytes_to_write(send_ring, data_size) <= total_len) {
-    return -3;
-  }
-
-  desc.type = VMBUS_PKT_DATA_INBAND;
-  desc.offset8 = (uint16_t)(sizeof(desc) >> 3);
-  desc.len8 = (uint16_t)(aligned_len >> 3);
-  desc.flags = flags;
-  desc.trans_id = trans_id;
-
-  write_index = send_ring->write_index;
-  prev_indices = ((uint64_t)write_index << 32);
-  ring_copy_in(send_ring, data_size, write_index, &desc,
-               (uint32_t)sizeof(desc));
-  ring_copy_in(send_ring, data_size, write_index + (uint32_t)sizeof(desc),
-               payload, payload_len);
-  if (aligned_len > packet_len) {
-    uint8_t pad[8];
-    ring_memzero(pad, sizeof(pad));
-    ring_copy_in(send_ring, data_size, write_index + packet_len, pad,
-                 aligned_len - packet_len);
-  }
-  ring_copy_in(send_ring, data_size, write_index + aligned_len, &prev_indices,
-               (uint32_t)sizeof(prev_indices));
-
-  __asm__ volatile("" ::: "memory");
-  send_ring->write_index = (write_index + total_len) % data_size;
-  __asm__ volatile("" ::: "memory");
 
   interrupt_mask = send_ring->interrupt_mask;
   if (interrupt_mask != 0u) {
@@ -230,6 +197,126 @@ int vmbus_write_inband_packet_runtime(
     ring_log("\n");
     return rc;
   }
+}
+
+int vmbus_write_inband_packet_runtime(
+    uint32_t child_relid, uint32_t connection_id, uint8_t monitor_id,
+    uint8_t monitor_allocated, uint16_t is_dedicated_interrupt,
+    volatile struct hv_ring_buffer *send_ring, uint32_t send_ring_size,
+    const void *payload, uint32_t payload_len, uint16_t flags,
+    uint64_t trans_id, vmbus_signal_relid_fn signal_relid,
+    vmbus_signal_monitor_fn signal_monitor,
+    vmbus_signal_event_fn signal_event) {
+  struct vmpacket_descriptor desc;
+  uint64_t prev_indices = 0u;
+  uint32_t data_size = 0;
+  uint32_t packet_len = 0;
+  uint32_t aligned_len = 0;
+  uint32_t total_len = 0;
+  uint32_t write_index = 0;
+
+  if (!send_ring || !payload || payload_len == 0u || !signal_event) {
+    return -1;
+  }
+
+  data_size = ring_data_size(send_ring_size);
+  if (data_size == 0u) {
+    return -2;
+  }
+
+  packet_len = (uint32_t)sizeof(desc) + payload_len;
+  aligned_len = (packet_len + 7u) & ~7u;
+  total_len = aligned_len + VMBUS_PKT_TRAILER;
+  if (ring_bytes_to_write(send_ring, data_size) <= total_len) {
+    return -3;
+  }
+
+  desc.type = VMBUS_PKT_DATA_INBAND;
+  desc.offset8 = (uint16_t)(sizeof(desc) >> 3);
+  desc.len8 = (uint16_t)(aligned_len >> 3);
+  desc.flags = flags;
+  desc.trans_id = trans_id;
+
+  write_index = send_ring->write_index;
+  prev_indices = ((uint64_t)write_index << 32);
+  ring_copy_in(send_ring, data_size, write_index, &desc,
+               (uint32_t)sizeof(desc));
+  ring_copy_in(send_ring, data_size, write_index + (uint32_t)sizeof(desc),
+               payload, payload_len);
+  if (aligned_len > packet_len) {
+    uint8_t pad[8];
+    ring_memzero(pad, sizeof(pad));
+    ring_copy_in(send_ring, data_size, write_index + packet_len, pad,
+                 aligned_len - packet_len);
+  }
+  ring_copy_in(send_ring, data_size, write_index + aligned_len, &prev_indices,
+               (uint32_t)sizeof(prev_indices));
+
+  __asm__ volatile("" ::: "memory");
+  send_ring->write_index = (write_index + total_len) % data_size;
+  __asm__ volatile("" ::: "memory");
+
+  return vmbus_ring_signal_after_write(
+      child_relid, connection_id, monitor_id, monitor_allocated,
+      is_dedicated_interrupt, send_ring, write_index, trans_id, signal_relid,
+      signal_monitor, signal_event);
+}
+
+int vmbus_write_prebuilt_packet_runtime(
+    uint32_t child_relid, uint32_t connection_id, uint8_t monitor_id,
+    uint8_t monitor_allocated, uint16_t is_dedicated_interrupt,
+    volatile struct hv_ring_buffer *send_ring, uint32_t send_ring_size,
+    const void *packet, uint32_t packet_len,
+    vmbus_signal_relid_fn signal_relid,
+    vmbus_signal_monitor_fn signal_monitor,
+    vmbus_signal_event_fn signal_event) {
+  struct vmpacket_descriptor desc;
+  uint64_t prev_indices = 0u;
+  uint32_t data_size = 0u;
+  uint32_t total_len = 0u;
+  uint32_t write_index = 0u;
+
+  if (!send_ring || !packet || packet_len < (uint32_t)sizeof(desc) ||
+      !signal_event) {
+    return -1;
+  }
+  if ((packet_len & 7u) != 0u) {
+    return -4;
+  }
+
+  ring_memcpy(&desc, packet, (uint32_t)sizeof(desc));
+  if (((uint32_t)desc.len8 << 3) != packet_len) {
+    return -5;
+  }
+  if (((uint32_t)desc.offset8 << 3) < (uint32_t)sizeof(desc) ||
+      ((uint32_t)desc.offset8 << 3) > packet_len) {
+    return -6;
+  }
+
+  data_size = ring_data_size(send_ring_size);
+  if (data_size == 0u) {
+    return -2;
+  }
+
+  total_len = packet_len + VMBUS_PKT_TRAILER;
+  if (ring_bytes_to_write(send_ring, data_size) <= total_len) {
+    return -3;
+  }
+
+  write_index = send_ring->write_index;
+  prev_indices = ((uint64_t)write_index << 32);
+  ring_copy_in(send_ring, data_size, write_index, packet, packet_len);
+  ring_copy_in(send_ring, data_size, write_index + packet_len, &prev_indices,
+               (uint32_t)sizeof(prev_indices));
+
+  __asm__ volatile("" ::: "memory");
+  send_ring->write_index = (write_index + total_len) % data_size;
+  __asm__ volatile("" ::: "memory");
+
+  return vmbus_ring_signal_after_write(
+      child_relid, connection_id, monitor_id, monitor_allocated,
+      is_dedicated_interrupt, send_ring, write_index, desc.trans_id,
+      signal_relid, signal_monitor, signal_event);
 }
 
 int vmbus_read_raw_packet_runtime(volatile struct hv_ring_buffer *recv_ring,

@@ -1,4 +1,5 @@
 #include "fs/buffer.h"
+#include "kernel/log/klog.h"
 
 #ifndef BUFFER_HASH_SIZE
 #define BUFFER_HASH_SIZE 256
@@ -14,28 +15,11 @@ static int g_last_error_valid = 0;
 static int g_last_error_code = 0;
 static struct buffer_cache_stats g_buffer_cache_stats;
 
-static inline void dbg_putc(char ch) {
-#if defined(UNIT_TEST) || !defined(__x86_64__)
-    /* Host unit tests do not have port 0xE9; the debug write is a
-     * no-op so the trace path can still be exercised. */
-    (void)ch;
-#else
-    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-#endif
-}
-
-static void dbg_puts(const char *s) {
-    while (s && *s) {
-        dbg_putc(*s++);
-    }
-}
-
-static void dbg_hex32(uint32_t value) {
-    static const char hex[] = "0123456789ABCDEF";
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        dbg_putc(hex[(value >> shift) & 0xFu]);
-    }
-}
+/* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * helpers removed. The diagnostic stream now routes through
+ * `klog(KLOG_WARN, ...)` / `klog_hex(KLOG_WARN, ...)` so the trace
+ * lands in the in-memory klog ring (persisted by the kernel logger
+ * service) instead of the QEMU-only port 0xE9 debug console. */
 
 static inline uint32_t buffer_hash(struct block_device *dev, uint32_t block_no) {
     uintptr_t key = (uintptr_t)dev;
@@ -179,7 +163,7 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
 
     bh = buffer_evict();
     if (!bh) {
-        dbg_puts("[buf] evict none\n");
+        klog(KLOG_WARN, "[buf] evict none");
         return NULL;
     }
 
@@ -189,13 +173,15 @@ struct buffer_head *buffer_get(struct block_device *dev, uint32_t block_no) {
 
     if (block_device_read(dev, block_no, bh->data) != 0) {
         g_buffer_cache_stats.read_errors++;
-        dbg_puts("[buf] read fail blk=");
-        dbg_hex32(block_no);
-        dbg_puts(" bsz=");
-        dbg_hex32(dev->block_size);
-        dbg_puts(" bcnt=");
-        dbg_hex32(dev->block_count);
-        dbg_putc('\n');
+        /* Slice 3E.4.C audit: read-failure context, formerly emitted
+         * as a single chained dbg_* line. The three values now land
+         * as three separate klog_hex entries so each can be parsed
+         * individually downstream. */
+        klog_hex(KLOG_WARN, "[buf] read fail blk=", (uint64_t)block_no);
+        klog_hex(KLOG_WARN, "[buf] read fail bsz=",
+                 (uint64_t)dev->block_size);
+        klog_hex(KLOG_WARN, "[buf] read fail bcnt=",
+                 (uint64_t)dev->block_count);
         bh->dev = NULL;
         bh->refcount = 0;
         lru_insert_front(bh);

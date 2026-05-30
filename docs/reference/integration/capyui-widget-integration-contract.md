@@ -3,7 +3,7 @@
 **Status:** referência para desenvolvimento apartado.
 **Integração planejada:** Etapas 4 e 6, com o compositor/input permanecendo no sistema base.
 **Repositório externo atual:** `CapyUI`.
-**Contrato ativo:** `capy-ui-widget` v2.13, display-list schema v7 (`CapyUI/src/widget/capy_display_list.h`).
+**Contrato ativo:** `capy-ui-widget` v2.19, display-list schema v7 (`CapyUI/src/widget/capy_display_list.h`).
 
 ## Escopo atual
 
@@ -48,10 +48,11 @@ adapter e mantém o widget model sem acesso direto ao compositor. Esse seam é
 host-testado com `capy_widget_emit` real do sibling. Os primeiros fluxos reais
 de produção conectados são Calculator, Text Editor, Settings, File Manager,
 Task Manager, Taskbar, Taskbar menu/recent popups e Notification overlay do
-`../CapyUI`, além de Desktop icons via callback de wallpaper, que emitem
-`capy_display_list` schema v7 quando compilados pelo CapyOS com
-`CAPYOS_HAVE_CAPYUI_WIDGET`; a migração dos demais fluxos desktop/app continua
-incremental.
+`../CapyUI`, além de Desktop icons via callback de wallpaper com clip de damage
+do compositor, Terminal gráfico, Context menu, Inline prompt e widgets
+genéricos do CapyOS, que emitem `capy_display_list` schema v7 quando compilados
+pelo CapyOS com `CAPYOS_HAVE_CAPYUI_WIDGET`; a migração dos demais fluxos
+desktop/app continua incremental.
 
 ## Fronteira
 

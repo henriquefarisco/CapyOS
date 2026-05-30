@@ -78,16 +78,13 @@ static inline void io_print_dec_u32(const struct x64_kernel_volume_runtime_io *i
 static inline void io_putc(const struct x64_kernel_volume_runtime_io *io, char ch) {
   if (io && io->putc) io->putc(ch);
 }
-static inline void dbg_putc(char ch) {
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-}
-static inline void dbg_puts(const char *s) {
-  while (s && *s) dbg_putc(*s++);
-}
-static inline void dbg_hex32(uint32_t value) {
-  static const char hex[] = "0123456789ABCDEF";
-  for (int shift = 28; shift >= 0; shift -= 4) dbg_putc(hex[(value >> shift) & 0xFu]);
-}
+/* Slice 3E.4.C (2026-05-25) — `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * removed. The QEMU-only port 0xE9 debug console was the historical
+ * sink; production output now goes through `klog(KLOG_*, ...)` and
+ * `klog_hex(KLOG_*, ...)` so traces are recoverable via `klog_dump`
+ * and persisted by the kernel logger service. `dbg_be32_local`
+ * stays because it is a pure utility used to extract the audit
+ * signature (first 4 bytes of a hash) for the klog line. */
 static inline uint32_t dbg_be32_local(const uint8_t *buf) {
   if (!buf) return 0;
   return ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |

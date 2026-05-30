@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-05-23 · **Versão:** `0.8.0-alpha.258+20260523` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
+**Data:** 2026-05-29 · **Versão:** `0.8.0-alpha.261+20260529` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -32,26 +32,26 @@
 - **Audit fix entregue em 2026-05-21 (alpha.252):** revisão crítica de Slices 3E.1–3E.5 identificou e corrigiu dois bugs críticos antes da execução externa: (1) double-emission do smoke marker em VMs dual-storage; (2) NVMe Controller Level Reset não reemitia Create I/O CQ/SQ após CC.EN=1. 4 novos host tests de regressão.
 - **Sub-slice 3E.4.B entregue em 2026-05-21 (alpha.253):** migração mecânica de `dbg_puts`/`dbg_hex*`/`dbg_label_hex32` para `klog(KLOG_*, ...)` / `klog_hex(...)` em `ahci.c` e `nvme.c` (108 call sites em 2 arquivos). Helpers locais file-static removidos; output migra de port 0xE9 (QEMU-only) para o klog ring (recuperável em runtime). Como efeito colateral, **corrige bug latente**: 2 chamadas a `dbg_label_hex32` em `nvme_controller_reset` referenciavam o helper static de ahci.c (undefined-reference no escopo de TU). Outros 13 arquivos do projeto com ~126 sites `dbg_*` ficam como sub-slice 3E.4.C (follow-up).
 - **Etapa 3 fechada formalmente em 2026-05-21 (alpha.253):** gate externo `make smoke-x64-vmware-storage-resilience` aprovado em VMware + UEFI + E1000 com marker `[smoke] storage-stack ready` no COM1. Encerrou os 8 sub-slices 3D + 3E.1-3E.5 + audit fix + 3E.4.B. Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes.
-- **Próximo bloco da Etapa 4:** ligar o adapter `capy-ui-widget` v2.13/schema v7 ao fluxo desktop/window real + integração do scheduler cooperativo no runtime. Conforme `docs/operations/etapa-4-external-validation-playbook.md`.
+- **Próximo bloco da Etapa 4:** validar externamente a integração do scheduler cooperativo no runtime (marker determinístico `[smoke] scheduler-fairness ready`) e avançar Fase D do compositor com o marker `[smoke] compositor-damage-track ready`, stats full/parcial de dirty rects e cache host-testável de glyphs 8x16. Conforme `docs/operations/etapa-4-external-validation-playbook.md`.
 - **Etapas bloqueadas:** Etapas 5-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.256, Etapa 4 ativa)
+## Repositórios apartados (estado em alpha.260, Etapa 4 ativa)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A
 matriz pinada está em
 [`compatibility-matrix.md`](../reference/integration/compatibility-matrix.md)
 e o snapshot técnico atual está em
-[`compatibility-audit-2026-05-22.md`](../reference/integration/compatibility-audit-2026-05-22.md).
+[`compatibility-audit-2026-05-23.md`](../reference/integration/compatibility-audit-2026-05-23.md).
 
 | Repo apartado | Versão atual | Owner autoritativo | Gate de integração CapyOS |
 |---|---|---|---|
-| [`CapyUI`](../../../CapyUI) | `2.13.1` | widget model (`capy-ui-widget` v2.13, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
-| [`CapyAgent`](../../../CapyAgent) | `0.0.4` | formato `.capypkg`, component-index, resolver, futuro signer Ed25519 (`capy-agent-component-index` v1) | Etapas 8-9 |
-| [`CapyBrowser`](../../../CapyBrowser) | `0.0.4` | browser-core text/HTML estático (`capy-browser-core` v1 planejado) | Etapas 6-7 |
-| [`CapyCodecs`](../../../CapyCodecs) | `0.0.4` | image codecs portáveis (`capy-codec-image` v1) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
-| [`CapyLang`](../../../CapyLang) | `0.1.3` | lexer S1 entregue; parser/bytecode/VM no roadmap (`capy-lang-host` v0 parcial) | Etapa 15 |
-| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.4` | harness + baseline (`capy-benchmark-report` v1 planejado) | Etapas 15-16 |
+| [`CapyUI`](../../../CapyUI) | `2.19.0` | widget model (`capy-ui-widget` v2.19, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
+| [`CapyAgent`](../../../CapyAgent) | `0.0.6` | formato `.capypkg`, component-index, resolver, futuro signer Ed25519 (`capy-agent-component-index` v1) | Etapas 8-9 |
+| [`CapyBrowser`](../../../CapyBrowser) | `0.0.6` | browser-core text/HTML estático (`capy-browser-core` v1 planejado) | Etapas 6-7 |
+| [`CapyCodecs`](../../../CapyCodecs) | `0.0.6` | image codecs portáveis (`capy-codec-image` v1) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
+| [`CapyLang`](../../../CapyLang) | `0.1.7` | lexer S1 + parser S2 + diagnostics S3 + bytecode v0 S4 + opcodes/verifier S5 + emitter + VM S6 + host bridge S7 entregues (host-only; `capy-lang-host` v0 parcial) | Etapa 15 |
+| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.6` | harness + baseline (`capy-benchmark-report` v1 planejado) | Etapas 15-16 |
 
 Regras gerais (válidas mesmo antes da etapa abrir):
 
@@ -126,6 +126,31 @@ Extensões posteriores:
 - `alpha.244` — instalação remota completa de módulos via GitHub
   Release: download HTTPS de payload grande, staging dividido no CAPYFS,
   marker de ativação e smoke ISO com desktop ativado no reboot.
+- `alpha.259` — Slices 1+2 da stack de compatibilidade Hyper-V
+  (track laboratorial, **não** promove plataforma oficial): ATA-PIO
+  promovido a backend nativo via novo `X64_STORAGE_BACKEND_ATA_PIO`
+  (append-only), habilitando Hyper-V Generation 1 + IDE legado sem
+  tocar NVMe/AHCI; boot policy troca fail-closed por fail-degraded com
+  warning ruidoso quando storage persistente é indisponível, liberando
+  wizard em RAM ao invés de aprisionar usuário em maintenance no
+  Hyper-V Gen2. Slice 3 (StorVSC I/O wire-up para Gen2) detalhada
+  em [`../architecture/hyperv-compatibility-stack-plan.md`](../architecture/hyperv-compatibility-stack-plan.md).
+  Plataforma oficial VMware + UEFI + E1000 inalterada porque o probe
+  ATA-PIO só executa quando NVMe **e** AHCI não promovem `block_device`.
+- `alpha.260` — hardening + cleanup batch sobre alpha.259 (Sub-slice 3E.4.C
+  klog migration, 3E.5.B `nvme_reset`, Etapa 4 Fases D+E smokes, P1 hardening);
+  trabalho in-tree não taggeado isoladamente.
+- `alpha.261` — **release atual (a taggear manualmente)**: corrige o
+  provisionamento das pastas padrão do usuário no first-boot wizard.
+  `src/config/first_boot/program.c` agora inclui `auth/user_home.h` e chama
+  `user_home_prepare(admin_home, admin_uid, admin_gid)` no ponto em que o home
+  do admin é confirmado, provisionando `Desktop`/`Documents`/`Personal`/
+  `Professional` para o usuário primário (antes só `add-user` e o recovery
+  chamavam, então o usuário de instalação ficava com home vazio e nada
+  aparecia no desktop nem no file manager). Compliance cross-repo: CapyUI
+  `2.13.1` → `2.19.0` (ABI `capy-ui-widget` v2.13 → v2.19; display-list schema
+  7 inalterado) propagado na matriz/STATUS/pins/.windsurf; pins do core nos 6
+  sisters movidos para `alpha.261`. Bundla o trabalho in-tree de alpha.259/260.
 
 ## Hardening cross-module ativo
 
@@ -160,7 +185,7 @@ via módulo capypkg `org.capyos.ui.desktop-session` (compositor session,
 window manager, apps). O CapyOS mantém in-tree um fallback de build em
 `src/gui/desktop/`, `src/gui/window/` e `src/apps/` para sustentar o
 caminho `make all64` quando o sibling `../CapyUI` não está presente,
-mas o owner de feature é o repo `CapyUI` (versão `2.13.1`+ no pin
+mas o owner de feature é o repo `CapyUI` (versão `2.19.0`+ no pin
 vigente da Etapa 4).
 
 ### Etapa 2 — Sessão gráfica operacional (concluída em `alpha.237`)
@@ -207,7 +232,7 @@ Resumo executivo vigente:
 | 1 | CapyUI Shell Polish v1 | Concluída | owner pós-alpha.241: `CapyUI` |
 | 2 | Sessão gráfica operacional | Concluída | desktop session: `CapyUI`; auth/crypto/runtime: core |
 | 3 | Driver framework + entrada USB HID + storage estável | Concluída | fechada em alpha.253 (2026-05-21); follow-ups 3F-3J não-bloqueantes |
-| 4 | CapyDisplay 2D + scheduler/multithread runtime | **Em andamento** | etapa atual; consome `capy-ui-widget` v2.13/schema v7 do sister repo `CapyUI` |
+| 4 | CapyDisplay 2D + scheduler/multithread runtime | **Em andamento** | etapa atual; consome `capy-ui-widget` v2.19/schema v7 do sister repo `CapyUI` |
 | 5 | TLS userland real | Bloqueada | depende da Etapa 4; sem repo apartado |
 | 6 | Apps básicos do desktop maduros | Bloqueada | inclui integração de `CapyBrowser` (HTML-to-text core) e `CapyCodecs` (image) por contrato |
 | 7 | Browser usável com web estática moderna | Bloqueada | integra `CapyBrowser` core + `CapyCodecs` imagem |
@@ -268,15 +293,274 @@ prevenir reincidência em Etapas futuras.
 - Slice 3H — VirtIO-net/block prioritização VM.
 - Slice 3I — VMware SVGA II como backend secundário.
 - Slice 3J — USB mass storage.
-- Sub-slice 3E.4.C — Migração `dbg_*` → `klog` nos 13 arquivos restantes.
-- Sub-slice 3E.5.B — Extração de `nvme_controller_reset` em passos puros
-  para unit test do BUG #2 fix.
+- Sub-slice 3E.4.C — Migração `dbg_*` → `klog` nos arquivos restantes
+  pós-3E.4.B (alpha.253). **Concluída em 2026-05-25** em dois batches:
+  - **Batch LF:** `format_mount.c` (6 sites), `filesystem_helpers.c`
+    (3), `public_mount_api.c` (6), `mount_initialize.c` (16) e
+    `crypt_aes_xts.c` (35), totalizando ~66 call sites + remoção dos
+    helpers locais `dbg_putc`/`dbg_puts`/`dbg_hex32` e variantes
+    `_serial` em `capyfs_runtime_internal.h` e
+    `kernel_volume_runtime_internal.h`. As utilidades puras
+    `dbg_be32_local` e `crypt_be32` (renomeado a partir de
+    `dbg_be32`) permanecem porque carregam u32 big-endian para as
+    novas linhas `klog_hex`.
+  - **Batch CRLF:** normalização in-place (`perl -i -pe 's/\r$//g'`)
+    seguida de migração mecânica para `ramdisk.c` (9 sites),
+    `buffer_cache.c` (13), `offset_wrapper.c` (15), `chunk_wrapper.c`
+    (19), `efi_block.c` (21) e `storage_runtime.c` (15), totalizando
+    ~92 call sites + remoção dos helpers locais homônimos. A
+    utilidade pura `ramdisk_be32` (renomeada a partir do `dbg_be32`
+    local) permanece pelo mesmo motivo do batch LF. Estes arquivos
+    também migraram de CRLF para LF, alinhando com a convenção
+    majoritária do tree.
+  - **Não migrados (por design):** `kernel_main.c` mantém
+    `dbg_hex64`/`dbg_hex8` no boot pulse anterior ao `klog_init`;
+    `capyfs_dbg_puts`/`capyfs_dbg_hex32` em `capyfs_runtime_internal.h`
+    + `format_mount.c`/`directory_entries.c`/`namespace_ops.c`
+    permanecem porque já estão gated por `CAPYFS_DEBUG_CREATE=0`
+    (no-op em builds de produção). Total migrado: ~158 sites em 11
+    TUs + 2 headers limpos.
+- Sub-slice 3E.5.B — Extração de `nvme_controller_reset` em passos
+  puros para unit test do BUG #2 fix. **Concluída em 2026-05-25:**
+  novo `include/drivers/nvme/nvme_reset.h` + `src/drivers/nvme/nvme_reset.c`
+  expõem a lógica não-MMIO em quatro símbolos puros:
+  `nvme_reset_reprime_queue_state` (zera heads/tails, seta phases=1),
+  `nvme_reset_csts_rdy_cleared` / `nvme_reset_csts_rdy_set` (predicados
+  contra o registrador CSTS) e o planner `nvme_reset_next_admin_action`
+  que retorna `enum nvme_reset_admin_action` ordenado (CREATE_IO_CQ →
+  CREATE_IO_SQ → DONE). `nvme_controller_reset` em
+  `src/drivers/nvme/nvme.c` foi refatorado para dirigir o planner em
+  loop em vez de chamar `nvme_create_io_cq`/`nvme_create_io_sq`
+  diretamente em sequência rígida; isso preserva bit-for-bit o
+  comportamento existente (incluindo o fix da BUG #2 do alpha.252) e
+  trava a ordem CQ→SQ via teste host. Novo host test
+  `tests/drivers/test_nvme_controller_reset.c` com 13 casos cobre:
+  reprime (zera heads/tails, seta phases, NULL-safe), predicados CSTS
+  (cleared/set + complementaridade XOR=1 em todas as entradas),
+  planner (NULL → DONE, vazio → CREATE_IO_CQ, CQ feito → CREATE_IO_SQ,
+  ambos → DONE, SQ-antes-de-CQ defensivo → CREATE_IO_CQ, sequência
+  completa drive-2-then-DONE, valores estáveis do enum). Makefile
+  wired (`nvme_reset.o` no `KERNEL_OBJS64`, TEST_SRCS atualizado);
+  `tests/test_runner.c` registra `run_nvme_controller_reset_tests`.
+  Zero cross-repo: tudo dentro do CapyOS core; ABI pública nova
+  (`drivers/nvme/nvme_reset.h`) é aditiva.
+  **Extension 2026-05-25:** novo predicate
+  `nvme_reset_csts_fatal(csts)` testa CSTS.CFS (Controller Fatal
+  Status, bit 1 do CSTS). `nvme_controller_reset` em
+  `src/drivers/nvme/nvme.c` agora checa CFS em **quatro pontos**
+  durante o reset path: dentro de cada um dos dois spin loops
+  (stage 2 wait RDY=0 + stage 4 wait RDY=1) E após cada spin sair.
+  Antes, se o controlador entrasse em CSTS.CFS durante reset, o
+  host spinava todo o budget de 1M iterações antes de desistir —
+  burning latency em hardware já wedged. Agora bail early com
+  log forense `[nvme] reset CSTS.CFS during/after disable/enable`
+  identificando exatamente qual stage falhou. Companheiro do
+  early-exit já existente em `nvme_wait_ready` (linha 77-80) que
+  faltava no caminho de reset. 5 testes host novos cobrem o
+  predicate (csts=0 não fatal, CFS bit 1 fatal, independente de
+  RDY, ignora bits espúrios, MSB sem CFS não é fatal).
+
+### Driver safety audit 2026-05-25 — xHCI HSE early-exit
+
+Auditoria de spin loops em todos os drivers procurando padrões
+similares ao bug de CFS-missing do nvme reset. Bug real encontrado
+em `src/drivers/usb/xhci.c`: o constante `XHCI_STS_HSE` (Host
+System Error, bit 2 do USBSTS) estava declarado em
+`include/drivers/usb/xhci.h` desde sempre mas **nunca usado**.
+Quatro spin loops do controlador xHCI ignoravam HSE
+silenciosamente:
+
+- `xhci_reset` — loop "wait for HCHalted" (100k iter) + loop
+  "wait for HCRST clear + CNR clear" (1M iter)
+- `xhci_start` — loop "wait for running" (HCH clear, 100k iter)
+- `xhci_stop` — loop "wait for halted" (HCH set, 100k iter)
+
+Per xHCI 1.2 §5.4.2, USBSTS.HSE significa que "o xHC parou de
+emitir TRBs e DMA transfers devido a erro interno sério". É o
+equivalente direto do CSTS.CFS do NVMe. Adicionado HSE check no
+topo de cada um dos 4 loops + logs forenses identificando qual
+estágio falhou (`[xhci] USBSTS.HSE during stop/reset/start`).
+Novos códigos de retorno -3/-4 para distinguir HSE de timeout
+genérico; callers existentes (`xhci_start` chamado por
+`usb_core.c`, `xhci_reset` chamado por `xhci_init`) usam `!= 0`
+então tratam corretamente como falha. xhci.c também ganhou
+`#include "kernel/log/klog.h"` (faltava antes; outros drivers já
+usam). Zero novos host tests porque xhci_reset/start/stop são
+MMIO-bound e exigem um xHC emulator para testar end-to-end; o
+padrão é o mesmo do CFS predicate em nvme_reset (que SIM tem
+testes host porque é função pura).
+
+**Code review fix 2026-05-25 — HSE precedence:** revisão crítica
+identificou que sites 1 (xhci_reset stop wait) e 4 (xhci_stop
+standalone) usavam **HSE-first precedence** que era over-eager.
+Per xHCI 1.2 §5.4.1, HCRST limpa HSE; logo, HSE pre-reset deveria
+deixar o reset prosseguir, não bailar. E em xhci_stop, se HCH+HSE
+ambos set, o intent do caller ("stop") já está satisfeito.
+Refatorado: sites 1 e 4 checam HCH primeiro; HSE só dispara erro
+se HCH for clear (anomalia). Sites 2 (xhci_reset post-HCRST wait)
+e 3 (xhci_start) mantêm HSE-first porque post-reset HSE é fatal
+e start não pode prosseguir com HSE set.
+
+Outros drivers auditados sem encontrar bug:
+
+- `ahci_port_wait_idle` — checar TFD.ERR é tentador mas semantica
+  exata depende do controller; manter as-is para evitar regressão
+  sutil. AHCI dispatch loop já usa `ahci_dispatch_classify_tick`
+  (Slice 3F initial extraction) que cobre IS.TFES + TFD.ERR.
+- `e1000`, `rtl8139`, `tulip` — descriptor-bound loops com per-
+  descriptor error bits já checados (TX status DD + ES patterns).
+- `vmbus_wait_message` — caller-controlled `timeout_loops` já
+  bounded; companheiro do P1-C fix em `vmbus_transport_drain_simp`.
+- `serial_com1` — short FIFO-empty wait, no fatal state aplica.
+- `mouse_ps2_*` — short PS/2 protocol waits, no fatal state aplica.
+
+### Hardening da revisão regressiva (não-bloqueante)
+
+A auditoria informal de 2026-05-24 identificou alguns pontos
+P1/P2 de hygiene/safety. Fatia entregue em 2026-05-25:
+
+- **P1-A — Hyper-V storage retry:** novo work item
+  `SYSTEM_WORK_STORAGE_HYPERV_RETRY` em `include/core/work_queue.h`
+  + `src/core/work_queue.c` + handler em
+  `src/arch/x86_64/kernel_services_work.c::kernel_work_storage_hyperv_retry`
+  com self-disable em non-Hyper-V e backoff exponencial.
+- **P1-E — `mouse_ps2_init` hardcoded 800×600 bounds:** removido o
+  par de atribuições estáticas que sobrescrevia qualquer
+  `mouse_set_bounds(W, H)` chamado antes da probe PS/2. O default
+  800×600 já é aplicado lazily por `mouse_ensure_bounds()` no
+  primeiro `mouse_apply_event`, então o caminho de boot continua
+  seguro mas os bounds reais do framebuffer agora sobrevivem ao
+  init do PS/2.
+- **P1-F — USB poll defense-in-depth:** adicionado guard
+  `i < USB_MAX_DEVICES` ao loop de `usb_poll_all()` em
+  `src/drivers/usb/usb_core.c`. `g_device_count` é normalmente
+  cappado por `usb_enumerate_devices`, mas a redundância
+  garante terminação mesmo se um write stray no contador
+  empurrar o valor para além do tamanho do array.
+- **P1-C — `vmbus_transport_drain_simp` unbounded loop:** loop
+  reescrito para (a) continuar apenas em retorno POSITIVO de
+  `vmbus_consume_simp_slot` (matches a semântica documentada
+  "bytes consumed"; 0=nada pra consumir, negativo=erro com slot já
+  tratado) e (b) cap de 256 iterações com log de excedência.
+  Antes o `while (consume() != 0)` poderia pinar o caller
+  indefinidamente se `g_simp_page` fosse desanexada mid-drain
+  (consume retornaria -1 a cada chamada). 256 é folgado para
+  qualquer burst real do SIMP (16 slots × handful de retries) mas
+  pequeno o suficiente para causar stall visível se atingido.
+
+**P1-B (login_runtime polls 12×)** investigado e classificado como
+**design intencional**, não bug: as 12 chamadas a
+`login_service_poll(ops)` em `src/auth/login_runtime.c` são pontos
+de drain em transições significativas do loop interativo (após
+prompt, após dispatch, após cada short-circuit de comando interno).
+Consolidação para um único ponto de drain afetaria latência sem
+ganho mensurável; mantido como-is.
+
+**P1-D (`vmbus_mouse` experimental loop)** permanece gated atrás
+de `CAPYOS_EXPERIMENTAL_HYPERV_MOUSE` (default OFF). Sem código
+ativo em produção, sem prioridade.
+
+Pendências da revisão regressiva: todos os P1 endereçados ou
+classificados.
+
+### Slice 3F (initial extraction, 2026-05-25)
+
+Fatia inicial de Slice 3F entregue: extração da lógica pura do
+dispatch loop do AHCI seguindo o padrão de 3E.5.B (nvme_reset).
+Novo `include/drivers/storage/ahci_dispatch.h` +
+`src/drivers/storage/ahci_dispatch.c` expõem **cinco** símbolos
+puros que serão o building block do futuro dispatch multi-slot:
+
+- `ahci_dispatch_classify_tick(ci, is, tfd, slot_bit)` retorna
+  `enum ahci_dispatch_observation` com três valores estáveis
+  (INFLIGHT=0, COMPLETED=1, ABORTED=2). Trava a precedência usada
+  em `ahci_exec_classified`: CI cleared > IS.TFES > TFD.ERR.
+- `ahci_dispatch_completed_slots(prev_ci, cur_ci, inflight_mask)`
+  retorna o bitmask de slots que transitaram de inflight para
+  completed entre duas amostras CI, filtrado pelo
+  `inflight_mask` autoritativo do host (defesa contra clears
+  espúrios em paths de reset).
+- `ahci_dispatch_inflight_count(inflight_mask)` — popcount via
+  Brian Kernighan (sem builtins, compila identicamente em
+  clang/gcc + kernel/host).
+- `ahci_dispatch_can_admit(inflight_mask, concurrent_limit)` —
+  gate de admissão com cap configurável; sentinel
+  `concurrent_limit=0` significa "no limit" (delegate ao
+  allocator); `>0` retorna 1 sse `popcount(inflight) < limit`.
+  Útil para backpressure tuning (e.g. throttle controlador
+  lento para 4 inflights mesmo com NCS=32) e para host tests
+  exercitar branch "all-busy" deterministicamente.
+- `ahci_dispatch_first_slot(mask)` — retorna lowest-set-bit
+  index 0..31 ou -1 se mask==0; usado para drenar completions
+  em ordem determinística (lowest-first matches AHCI 1.3.1
+  §5.3.5 recommendation).
+
+`src/drivers/storage/ahci.c::ahci_exec_classified` refatorado
+para chamar o tick classifier em vez de duplicar a lógica de
+precedência inline. Comportamento observável preservado
+bit-for-bit; o downstream `block_io_classify_ahci` continua sendo
+chamado para mapear (IS, TFD, timed_out, port_present) ->
+`enum block_io_error_class`. Os helpers de fan-in/popcount/
+admission/first-slot ainda não têm caller live — são scaffolding
+para a próxima fatia 3F (provisioning de N cmd_tables +
+IRQ-driven completion). Novo `tests/drivers/test_ahci_dispatch.c`
+com **31 casos** cobre: tick classifier (precedência COMPLETED >
+ABORTED > INFLIGHT, isolamento de slot_bit, valores estáveis do
+enum, bits espúrios de IS/TFD), completion fan-in (filtragem de
+inflight_mask, partial completion, multi-slot transitions,
+freshly-dispatched slots não contam como completed), inflight
+count (zero, single LSB/MSB, full, sparse), admission gate
+(no-limit sentinel, below/at/above/serialized), first-slot picker
+(zero→-1, sweep todas 32 posições, lowest-bit-wins, MSB-only).
+Makefile wired (`ahci_dispatch.o` adjacente a `ahci_commands.o`
+em `KERNEL_OBJS64`; TEST_SRCS atualizado); `tests/test_runner.c`
+registra `run_ahci_dispatch_tests`. Zero cross-repo: tudo
+interno; ABI pública nova (`drivers/storage/ahci_dispatch.h`) é
+aditiva. Os demais entregáveis de Slice 3F (IRQ-driven completion
++ remoção do spin-wait + dispatch de múltiplos slots simultâneos
++ N cmd_tables) permanecem pendentes — esta fatia entrega
+**toda a lógica pura** que o futuro multi-slot dispatch precisará,
+travada por testes host antes mesmo do live driver ser
+modificado.
+
+**Extension 2026-05-25 — ahci_slot_inflight_mask:** novo accessor
+`ahci_slot_inflight_mask(const struct ahci_slot_allocator *alloc)`
+em `include/drivers/storage/ahci_slot_allocator.h` retorna o
+bitmask dos slots inflight (bit `i` set sse slot `i` foi
+allocado e não released). A invariante "bits acima de slot_count
+sempre zero" é garantida pela máscara explícita
+`((1u << slot_count) - 1u)` (com special case para slot_count=32
+para evitar UB de shift). O resultado é safe para alimentar
+direto `ahci_dispatch_completed_slots(prev_ci, cur_ci,
+inflight_mask)` sem masking adicional, fechando a ponte entre o
+allocator e os helpers de Slice 3F. `ahci_slot_inflight_count`
+refatorado para reusar o novo accessor (DRY: um único lugar
+implementa a máscara, popcount lê dela). 9 testes host novos em
+`tests/drivers/test_ahci_slot_allocator.c` cobrem: mask vazia
+após init, NULL-safe, allocator sem config, single alloc, múltiplos
+allocs, post-release, bits acima de slot_count zero, full 32
+slots, cross-check popcount(mask) == count.
+
+### Gate agregado Etapa 4 (alpha.260)
+
+Novo target Makefile `smoke-x64-vmware-etapa-4` consolida a Fase F
+externa em uma única VM boot. Faz `make clean` + `make all64
+PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE
+-DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'` + `iso-uefi` + `manifest64`
+e roda `tools/scripts/smoke_x64_vmware.py` com cinco markers em
+ordem estrita (DHCP -> gui-session -> scheduler-fairness ->
+compositor-damage-track -> thread-crash-survives). Os targets
+per-Fase (`smoke-x64-vmware-scheduler-fairness`,
+`smoke-x64-vmware-compositor-damage-track`,
+`smoke-x64-vmware-thread-crash-survives`) permanecem para triagem
+isolada quando algum marker falha. Documentação completa em
+§5.6 do `docs/operations/etapa-4-external-validation-playbook.md`.
 
 ## Etapa 4 (em andamento) — detalhes operacionais
 
 A etapa ativa entrega CapyDisplay 2D + scheduler/multithread runtime e
 **abre o primeiro gate cross-repo com sister** depois do fechamento da
-Etapa 3: o contrato real `capy-ui-widget` v2.13 / display-list schema v7
+Etapa 3: o contrato real `capy-ui-widget` v2.19 / display-list schema v7
 com o repo `CapyUI`.
 
 **Runbook autoritativo:**
@@ -286,7 +570,7 @@ com o repo `CapyUI`.
 
 | Fase | Sub-gate | Owner |
 |---|---|---|
-| A | Adapter CapyOS-side consumindo `capy-ui-widget` v2.13/schema v7 | CapyOS core |
+| A | Adapter CapyOS-side consumindo `capy-ui-widget` v2.19/schema v7 | CapyOS core |
 | B | Integração visual do produtor real CapyUI com o adapter | CapyOS core + CapyUI |
 | C | Scheduler cooperativo + multithread runtime + smoke `scheduler-fairness` | CapyOS core |
 | D | Damage tracking + double buffering + smoke `compositor-damage-track` | CapyOS core |
@@ -297,8 +581,8 @@ com o repo `CapyUI`.
 em alpha.254 era um contrato paralelo + incompatível com a ABI real
 do sister `CapyUI`.
 
-**Fase A corrigida nesta janela:** a matriz foi sincronizada para
-`CapyUI` `2.13.1` / `capy-ui-widget` v2.13 e o core ganhou
+**Fase A corrigida (alpha.255+):** a matriz foi sincronizada para
+`CapyUI` `2.19.0` / `capy-ui-widget` v2.19 e o core ganhou
 `include/gui/capyui_display_adapter.h` +
 `src/gui/widgets/capyui_display_adapter.c`, que consome
 `CapyUI/src/widget/capy_display_list.h` quando o sibling existe via
@@ -322,15 +606,15 @@ double buffering sem reintroduzir ABI paralela.
 
 **Cross-repo handshake esperado:** qualquer nova alteração no layout
 do display-list ou no pin do sister deve passar pelo workflow
-`cross-repo-contract-sync`; o consumo atual é do header real v2.13
+`cross-repo-contract-sync`; o consumo atual é do header real v2.19
 já publicado no sibling `../CapyUI`.
 
 ## Bloqueio das etapas 5-16
 
 Todas dependem do fechamento integral da etapa anterior conforme
 [`active/capyos-master-plan.md`](active/capyos-master-plan.md). Repositórios
-apartados podem evoluir em paralelo (CapyUI já entregou v2.13.1 com
-desktop session e widget/display-list schema v7; CapyLang continua em S1 lexer; demais permanecem em
+apartados podem evoluir em paralelo (CapyUI já entregou v2.19.0 com
+desktop session e widget/display-list schema v7; CapyLang já entregou S1-S7 host-only (lexer/parser/diagnostics/bytecode v0/VM/host bridge); demais permanecem em
 ABI host-only ou planejada) — mas só contam como progresso oficial
 quando a etapa correspondente abrir e o adapter + gate externo aceitarem
 a integração.

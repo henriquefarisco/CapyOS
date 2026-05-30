@@ -8,6 +8,7 @@
 #include "internal/storage_runtime_hyperv.h"
 #include "arch/x86_64/storage_runtime_hyperv_plan.h"
 #include "internal/storage_runtime_native.h"
+#include "kernel/log/klog.h"
 
 static struct efi_block_device g_efi_runtime_disk;
 static struct efi_block_device g_efi_runtime_disk_alt;
@@ -18,22 +19,13 @@ static int g_storage_candidates_initialized = 0;
 static struct x64_storage_native_candidate_state g_storage_native;
 static struct x64_storage_hyperv_runtime_state g_storage_hyperv_runtime;
 
-static inline void dbg_putc(char ch) {
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-}
-
-static void dbg_puts(const char *s) {
-  while (s && *s) {
-    dbg_putc(*s++);
-  }
-}
-
-static void dbg_hex32(uint32_t value) {
-  static const char hex[] = "0123456789ABCDEF";
-  for (int shift = 28; shift >= 0; shift -= 4) {
-    dbg_putc(hex[(value >> shift) & 0xFu]);
-  }
-}
+/* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * helpers removed. The storage-runtime decision trace now routes
+ * through `klog(KLOG_INFO, ...)` / `klog_hex(KLOG_INFO, ...)` so
+ * the trace lands in the kernel klog ring (persisted by the kernel
+ * logger service) instead of the QEMU-only port 0xE9 debug
+ * console. Diagnostic strings keep the `[srt]` prefix used by the
+ * older lines so external grep targets stay stable. */
 
 static void io_print(const struct x64_storage_runtime_io *io,
                      const char *message) {
@@ -97,7 +89,7 @@ static struct block_device *try_native_fallback(
     return NULL;
   }
 
-  dbg_puts("[srt] native: probing on demand\n");
+  klog(KLOG_INFO, "[srt] native: probing on demand");
   x64_storage_runtime_native_probe(&g_storage_native, handoff, io, probe_buf,
                                    CAPYFS_BLOCK_SIZE);
 
@@ -114,51 +106,28 @@ static int probe_blockio_lba0(struct efi_block_device *dev,
                               uint32_t handoff_media_id, const char *tag,
                               const struct x64_storage_runtime_io *io,
                               void *probe_buf) {
-  uint32_t runtime_media_id = handoff_media_id;
   EFI_STATUS_K st_probe = 0;
-  int ok = 0;
+  int rc = 0;
 
   if (!dev || !dev->ctx.bio || !dev->ctx.bio->read_blocks ||
       dev->dev.block_size == 0 || !probe_buf) {
     return 0;
   }
 
-  if (dev->ctx.bio->media && dev->ctx.bio->media->media_id != 0U) {
-    runtime_media_id = dev->ctx.bio->media->media_id;
-  }
-
-  st_probe = dev->ctx.bio->read_blocks(dev->ctx.bio, handoff_media_id, 0ULL,
-                                       (uint64_t)dev->dev.block_size, probe_buf);
+  (void)handoff_media_id;
+  rc = block_device_read(&dev->dev, 0, probe_buf);
+  st_probe = dev->ctx.last_status;
   io_print(io, "[fs] Probe ");
   io_print(io, tag);
-  io_print(io, " ReadBlocks(handoff_media) status=");
+  io_print(io, " ReadBlocks(aligned) status=");
   io_print_hex64(io, st_probe);
   io_print(io, " code=");
   io_print_dec_u32(io, (uint32_t)(st_probe & 0xFFFFFFFFULL));
   io_print(io, " media=");
-  io_print_dec_u32(io, handoff_media_id);
+  io_print_dec_u32(io, dev->ctx.last_media_id);
   io_putc(io, '\n');
-  ok = ((st_probe & EFI_STATUS_ERROR_BIT_K) == 0);
 
-  if (runtime_media_id != handoff_media_id) {
-    st_probe = dev->ctx.bio->read_blocks(dev->ctx.bio, runtime_media_id, 0ULL,
-                                         (uint64_t)dev->dev.block_size,
-                                         probe_buf);
-    io_print(io, "[fs] Probe ");
-    io_print(io, tag);
-    io_print(io, " ReadBlocks(runtime_media) status=");
-    io_print_hex64(io, st_probe);
-    io_print(io, " code=");
-    io_print_dec_u32(io, (uint32_t)(st_probe & 0xFFFFFFFFULL));
-    io_print(io, " media=");
-    io_print_dec_u32(io, runtime_media_id);
-    io_putc(io, '\n');
-    if ((st_probe & EFI_STATUS_ERROR_BIT_K) == 0) {
-      ok = 1;
-    }
-  }
-
-  return ok;
+  return rc == 0;
 }
 
 static void print_efi_blockio_status(const struct efi_block_device *dev,
@@ -224,7 +193,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
 
   if (firmware_block_io_available && boot_services_active &&
       g_storage_native.ready) {
-    dbg_puts("[srt] native: ready before EFI\n");
+    klog(KLOG_INFO, "[srt] native: ready before EFI");
     return x64_storage_runtime_native_promote(
         &g_storage_native, &g_storage_backend, &g_storage_data_path,
         &g_storage_has_device, io,
@@ -234,7 +203,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
   if ((!firmware_block_io_available || !boot_services_active ||
        handoff->version < 2 || handoff->data_lba_count == 0) &&
       g_storage_native.ready) {
-    dbg_puts("[srt] native: firmware unavailable/inactive\n");
+    klog(KLOG_INFO, "[srt] native: firmware unavailable/inactive");
     return x64_storage_runtime_native_promote(
         &g_storage_native, &g_storage_backend, &g_storage_data_path,
         &g_storage_has_device, io, "firmware indisponivel ou inativo");
@@ -270,7 +239,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
           handoff->data_lba_start, handoff->data_lba_count,
           handoff->efi_disk_last_lba, &effective_data_count) != 0) {
     io_print(io, "[fs] ERRO: parametros DATA invalidos no handoff.\n");
-    dbg_puts("[srt] native: invalid EFI handoff\n");
+    klog(KLOG_WARN, "[srt] native: invalid EFI handoff");
     return try_native_fallback(handoff, io, probe_buf,
                                "handoff EFI invalido");
   }
@@ -280,7 +249,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
                             handoff->efi_disk_last_lba) != 0) {
     io_print(io,
              "[fs] ERRO: falha ao inicializar adaptador EFI BlockIO do handoff.\n");
-    dbg_puts("[srt] native: EFI init failed\n");
+    klog(KLOG_WARN, "[srt] native: EFI init failed");
     return try_native_fallback(handoff, io, probe_buf,
                                "falha ao inicializar EFI BlockIO");
   }
@@ -363,7 +332,7 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
   if (!active_probe_ok) {
     io_print(io,
              "[fs] EFI BlockIO nao passou no probe inicial da particao DATA.\n");
-    dbg_puts("[srt] native: EFI probe failed\n");
+    klog(KLOG_WARN, "[srt] native: EFI probe failed");
     return try_native_fallback(handoff, io, probe_buf,
                                "probe inicial do EFI BlockIO falhou");
   }
@@ -374,20 +343,20 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
     slice = block_offset_wrap(&g_efi_runtime_disk.dev, (uint32_t)active_data_start,
                               (uint32_t)active_data_count);
     if (!slice) {
-      dbg_puts("[srt] native: EFI slice failed\n");
+      klog(KLOG_WARN, "[srt] native: EFI slice failed");
       return try_native_fallback(handoff, io, probe_buf,
                                  "falha ao criar slice EFI da DATA");
     }
     chunked = block_chunked_wrap(slice, CAPYFS_BLOCK_SIZE);
     if (!chunked) {
-      dbg_puts("[srt] native: EFI chunk failed\n");
+      klog(KLOG_WARN, "[srt] native: EFI chunk failed");
       return try_native_fallback(handoff, io, probe_buf,
                                  "falha ao alinhar slice EFI para CAPYFS");
     }
     if (block_device_read(chunked, 0, probe_buf) != 0) {
       io_print(io,
                "[fs] EFI BlockIO abriu DATA, mas falhou na leitura validada do bloco 0.\n");
-      dbg_puts("[srt] native: EFI validated read failed\n");
+      klog(KLOG_WARN, "[srt] native: EFI validated read failed");
       return try_native_fallback(
           handoff, io, probe_buf,
           "leitura validada do bloco 0 em EFI BlockIO falhou");
@@ -398,11 +367,13 @@ struct block_device *x64_storage_runtime_open_handoff_data_device(
       g_storage_data_path = "selected";
     }
     g_storage_has_device = 1;
-    dbg_puts("[srt] efi ready start=");
-    dbg_hex32((uint32_t)active_data_start);
-    dbg_puts(" count=");
-    dbg_hex32((uint32_t)active_data_count);
-    dbg_putc('\n');
+    /* Slice 3E.4.C audit: EFI BlockIO promotion success. Each
+     * dimension (start/count) becomes its own klog_hex entry so
+     * downstream parsers can grep individually. */
+    klog_hex(KLOG_INFO, "[srt] efi ready start=",
+             (uint64_t)(uint32_t)active_data_start);
+    klog_hex(KLOG_INFO, "[srt] efi ready count=",
+             (uint64_t)(uint32_t)active_data_count);
     return chunked;
   }
 }
@@ -421,6 +392,8 @@ const char *x64_storage_runtime_backend_name(void) {
     return "ahci";
   case X64_STORAGE_BACKEND_NVME:
     return "nvme";
+  case X64_STORAGE_BACKEND_ATA_PIO:
+    return "ata-pio";
   default:
     return "none";
   }
@@ -434,6 +407,8 @@ const char *x64_storage_runtime_native_candidate_name(void) {
     return "ahci";
   case X64_STORAGE_BACKEND_NVME:
     return "nvme";
+  case X64_STORAGE_BACKEND_ATA_PIO:
+    return "ata-pio";
   default:
     return "none";
   }

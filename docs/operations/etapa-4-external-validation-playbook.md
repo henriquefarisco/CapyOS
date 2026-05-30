@@ -3,7 +3,7 @@
 **Etapa:** 4 — CapyDisplay 2D + scheduler/multithread runtime.
 **Status de abertura:** 2026-05-21 (alpha.253), imediatamente após o fechamento formal da Etapa 3.
 **Plataforma oficial:** VMware Workstation/ESXi + UEFI + E1000.
-**Sister repo abrindo gate:** `CapyUI` (contrato `capy-ui-widget` v2.13, display-list schema v7).
+**Sister repo abrindo gate:** `CapyUI` (contrato `capy-ui-widget` v2.19, display-list schema v7).
 **Documento autoritativo upstream:** `docs/plans/active/capyos-master-plan.md` §7.
 
 Este playbook é operator-facing. Sirva-o como referência sequencial
@@ -18,7 +18,7 @@ e com o audit técnico vigente.
 A Etapa 4 abre o primeiro gate cross-repo com um sister depois do
 fechamento da Etapa 3. Ela:
 
-1. Consome o contrato real `capy-ui-widget` v2.13 (widget/display-list
+1. Consome o contrato real `capy-ui-widget` v2.19 (widget/display-list
    schema v7) entre o core CapyOS e o sister `CapyUI`.
 2. Introduz scheduler cooperativo + multithread runtime no core.
 3. Maduros o caminho 2D (damage tracking, double buffering,
@@ -47,8 +47,8 @@ autoritativo.
 
 Adicionalmente, requisitos cross-repo:
 
-- [x] Matriz cross-repo pina `CapyUI` `2.13.1` e
-      `capy-ui-widget` v2.13/schema v7.
+- [x] Matriz cross-repo pina `CapyUI` `2.19.0` e
+      `capy-ui-widget` v2.19/schema v7.
 - [x] `docs/reference/integration/external-core-repositories.md`
       marca `capy-ui-widget` como ativo na Etapa 4 via adapter.
 - [ ] Fluxo desktop/window real produz display-lists consumidas pelo
@@ -65,7 +65,7 @@ abra.
 
 | Fase | Sub-gate | Owner | Saída esperada |
 |---|---|---|---|
-| A | Adapter CapyOS-side para `capy-ui-widget` v2.13/schema v7 | CapyOS core | `include/gui/capyui_display_adapter.h` + `src/gui/widgets/capyui_display_adapter.c`; subconjunto 2D básico |
+| A | Adapter CapyOS-side para `capy-ui-widget` v2.19/schema v7 | CapyOS core | `include/gui/capyui_display_adapter.h` + `src/gui/widgets/capyui_display_adapter.c`; subconjunto 2D básico |
 | B | Integração visual do produtor real CapyUI com o adapter | CapyOS core + CapyUI | desktop/window emite display-lists reais para o adapter sem acessar compositor diretamente |
 | C | Scheduler cooperativo no runtime CapyOS | CapyOS core | `src/kernel/sched/` com cooperative scheduler + multithread runtime + smoke gate `scheduler-fairness` |
 | D | Damage tracking + double buffering no compositor | CapyOS core | redraw apenas regiões damaged; cursor não pisca; smoke gate `compositor-damage-track` |
@@ -114,7 +114,7 @@ re-execução determinística do mesmo cenário.
 
 ## 5. Fases detalhadas
 
-### 5.1 Fase A — Adapter para `capy-ui-widget` v2.13/schema v7 no core
+### 5.1 Fase A — Adapter para `capy-ui-widget` v2.19/schema v7 no core
 
 **Entrega esperada:**
 - `include/gui/capyui_display_adapter.h` expondo o contrato CapyOS-side
@@ -123,8 +123,8 @@ re-execução determinística do mesmo cenário.
   capy_display_list` do CapyUI e renderizando via `struct gui_surface`.
 - `Makefile` detectando `../CapyUI/src/widget/capy_display_list.h` e
   definindo `CAPYOS_HAVE_CAPYUI_WIDGET` somente quando o sibling existe.
-- Audit/matriz sincronizados para `CapyUI` `2.13.1` /
-  `capy-ui-widget` v2.13.
+- Audit/matriz sincronizados para `CapyUI` `2.19.0` /
+  `capy-ui-widget` v2.19.
 
 **Gates esperados (host):**
 
@@ -166,8 +166,11 @@ via adapter/damage rect. O teste host-side usa `capy_widget_emit` real do
 sibling `../CapyUI`. Os primeiros fluxos reais conectados são Calculator,
 Text Editor, Settings, File Manager, Task Manager, Taskbar, Taskbar menu/recent
 popups e Notification overlay do `../CapyUI`, além de Desktop icons via callback
-de wallpaper, que emitem `capy_display_list` schema v7 quando compilados pelo
-CapyOS com `CAPYOS_HAVE_CAPYUI_WIDGET`; ainda falta migrar os demais fluxos
+de wallpaper com clip de damage do compositor, Terminal gráfico, Context menu e
+Inline prompt do CapyOS, que emitem `capy_display_list` schema v7 quando
+compilados pelo CapyOS com `CAPYOS_HAVE_CAPYUI_WIDGET`; widgets genéricos do
+CapyOS usam o mesmo adapter com fallback legado;
+ainda falta migrar os demais fluxos
 desktop/app de produção para alimentar esse seam.
 
 **Gates esperados (sister):**
@@ -189,6 +192,19 @@ cd ../CapyUI && make validate && make package
 - Política de panic/oops para thread de app falha.
 - Smoke marker novo: `[smoke] scheduler-fairness ready` (emitido após N rounds de scheduling justos).
 
+**Status parcial implementado:** a primeira fatia da Fase C formaliza a
+fairness cooperativa existente no scheduler CapyOS: `scheduler_yield()` agora
+procura o próximo `READY` após a task corrente e faz wrap para o início da fila,
+evitando starvation quando três ou mais tasks cooperativas estão prontas. A
+semântica de prioridade e o layout de `struct task_context` permanecem
+inalterados. A segunda fatia conecta o gate host-testável
+`scheduler-fairness`: o latch global emite `[smoke] scheduler-fairness ready`
+após observar 3 task IDs despachados pelo menos 2× cada, e o Makefile expõe
+`smoke-x64-vmware-scheduler-fairness`. O target compila com
+`CAPYOS_SCHEDULER_FAIRNESS_SMOKE`, que cria duas tasks auxiliares
+yield-only quando o runtime adota a task corrente; isso torna o gate
+determinístico sem mudar builds normais.
+
 **Gate externo novo:**
 
 ```bash
@@ -199,7 +215,8 @@ make smoke-x64-vmware-scheduler-fairness \
 Marcadores esperados no COM1, em ordem:
 1. `[net] DHCP: lease acquired.`
 2. `[smoke] storage-stack ready` (regressão de Etapa 3).
-3. `[smoke] scheduler-fairness ready` (novo).
+3. `[smoke] gui-session ready` (runtime desktop adotou scheduler).
+4. `[smoke] scheduler-fairness ready` (novo).
 
 ### 5.4 Fase D — Damage tracking + double buffering no compositor
 
@@ -208,6 +225,35 @@ Marcadores esperados no COM1, em ordem:
 - Double buffering com swap atômico.
 - Glyph cache para fontes.
 - Smoke marker: `[smoke] compositor-damage-track ready` (emitido após N frames com damage region não-total).
+
+**Status parcial implementado:** a primeira fatia da Fase D conecta o gate
+host-testável `compositor-damage-track`: o latch global emite
+`[smoke] compositor-damage-track ready` após observar 2 frames parciais com
+dirty rects no caminho real de `compositor_render()`. O alvo externo
+`smoke-x64-vmware-compositor-damage-track` valida DHCP → gui-session →
+compositor-damage-track em ordem. A mesma fatia inicializa um cache de
+linhas de glyphs para a fonte padrão 8x16 e expõe stats host-testáveis
+para hits/misses. A telemetria de `compositor_stats_get()` agora também
+diferencia frames full vs parciais e contabiliza dirty rects apresentados,
+travando a evidência host-side de partial damage.
+
+**Follow-up 2026-05-25 (cursor erase scoped to overlap):** na composição
+parcial o compositor passou a apagar a área do cursor apenas quando algum
+dirty rect realmente intersecta o sprite, em vez de re-copiar a área
+incondicionalmente do backbuffer. Em hosts com framebuffer lento
+(Hyper-V Gen2 reportado pelo operador) o erase incondicional aparecia
+como flicker brevíssimo do cursor entre dois frames sem mudança de cena
+na área dele. A correção fecha o critério "cursor e texto não piscam sob
+resize/move de janela" para o caso cursor parado. `compositor_render_cursor`
+ganhou um caminho de erase do retângulo antigo quando o cursor MOVE
+mesmo após `comp_full_presented=1`, preservando a invariante "sem rastro
+de cursor". `struct compositor_stats` ganhou o contador
+`cursor_erases_partial` (sempre `0` em modo full-present) que serve como
+evidência host-side de que o caminho de overlap está sendo exercitado, e
+o teste novo
+`test_compositor_cursor_erase_only_on_overlap` em
+`tests/gui/test_compositor_events.c` trava os dois casos
+(disjoint não conta; overlap conta).
 
 **Gate externo novo:**
 
@@ -227,6 +273,28 @@ Marcadores esperados, em ordem:
 - Política de panic/oops para falha de thread de app.
 - Smoke marker: `[smoke] thread-crash-survives ready` (emitido após uma thread de app falhar deliberadamente e o desktop permanecer responsivo).
 
+**Status parcial implementado:** a primeira fatia da Fase E formaliza
+o latch host-testável `thread-crash-survives` no mesmo padrão das
+Fases C e D. O kernel-side ganhou `include/kernel/thread_crash_smoke.h`,
+`src/kernel/thread_crash_smoke.c` (latch puro) e
+`src/kernel/thread_crash_smoke_io.c` (emissão COM1). A semântica do
+latch é "uma saída de processo com `exit_code >= 128` seguida de
+`THREAD_CRASH_SMOKE_REQUIRED_TICKS_AFTER_CRASH` (4) ticks de scheduler".
+O `exit_code >= 128` é o encoding POSIX-style de morte-por-sinal já
+usado por `process_exit(128 + (int)vector)` no fault dispatcher em
+`src/arch/x86_64/interrupts.c::x64_exception_dispatch`. A
+contenção de fault de user-mode em si continua locked por
+`tests/test_fault_classify.c`. A integração live alimenta o latch a
+partir de `src/kernel/process.c::process_exit` e do
+`src/kernel/scheduler.c::scheduler_tick`, ambos guardados por
+`#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE` para que builds de
+produção paguem custo zero. O target externo
+`smoke-x64-vmware-thread-crash-survives` compila com essa flag, e o
+scheduler runtime spawn um helper kernel-task one-shot que alimenta
+o latch com `128 + 14` (vetor page fault) na primeira dispatch e
+depois `task_yield()` para sempre. 10 testes host novos cobrem o
+latch (`tests/kernel/test_thread_crash_smoke_gate.c`).
+
 **Gate externo novo:**
 
 ```bash
@@ -241,17 +309,62 @@ Marcadores esperados, em ordem:
 
 ### 5.6 Fase F — Aprovação externa final + fechamento da Etapa 4
 
-Quando todas as fases anteriores fecharem:
+Quando todas as fases anteriores fecharem em código + host tests
+(estado em alpha.260: todas as 5 fases A-E atendidas), executar a
+validação externa em VMware oficial.
 
-1. Executar todos os smokes em ordem:
-   - `make smoke-x64-vmware-usb-hid-keyboard` (regressão Etapa 3)
-   - `make smoke-x64-vmware-storage-resilience` (regressão Etapa 3)
-   - `make smoke-x64-vmware-scheduler-fairness` (Etapa 4)
-   - `make smoke-x64-vmware-compositor-damage-track` (Etapa 4)
-   - `make smoke-x64-vmware-thread-crash-survives` (Etapa 4)
-2. `make release-check` deve passar limpo.
-3. Cross-check dos acceptance criteria em §2 — todos `[x]`.
-4. Invocar workflow `etapa-transition` para fechar Etapa 4 e
+**Caminho recomendado (single-boot, alpha.260+):**
+
+```bash
+make smoke-x64-vmware-etapa-4 \
+  SMOKE_X64_VMWARE_ARGS="--vmx ... --serial-log ... --timeout 600"
+```
+
+Este target agregado faz um único `make clean` + build com ambas
+as flags `CAPYOS_SCHEDULER_FAIRNESS_SMOKE` e
+`CAPYOS_THREAD_CRASH_SURVIVES_SMOKE` ativadas, depois roda uma
+única invocação do harness `smoke_x64_vmware.py` que valida cinco
+markers IN ORDER no mesmo serial log (o harness usa
+`markers_in_order` que é estrita: marker N deve aparecer DEPOIS de
+N-1):
+
+1. `[net] DHCP: lease acquired.` (regressão Etapa 2)
+2. `[smoke] gui-session ready` (regressão Etapa 2)
+3. `[smoke] scheduler-fairness ready` (Fase C)
+4. `[smoke] compositor-damage-track ready` (Fase D — latch sempre
+   live, sem flag de compilação dedicada)
+5. `[smoke] thread-crash-survives ready` (Fase E)
+
+Cada marker é emitido exatamente uma vez por boot pelos latches
+correspondentes, então a ordem é determinística para um build
+dado. Se um operador externo observar consistentemente uma ordem
+diferente entre os markers de Fase C/D/E, reordenar as linhas
+`--marker` no target `smoke-x64-vmware-etapa-4` do Makefile para
+casar com a ordem observada (cada smoke latch é "emit once" por
+boot, então a ordem nunca varia em runs subsequentes do mesmo
+build).
+
+Vantagem: uma única VM boot, um único build full. Custo: ~10 min
+de build + ~3-5 min de boot/marker capture.
+
+**Caminho triagem (per-phase, quando algum marker falhar):**
+
+Cada Fase tem seu target dedicado para isolar a falha:
+
+- `make smoke-x64-vmware-scheduler-fairness` (Fase C, clean + flag isolada)
+- `make smoke-x64-vmware-compositor-damage-track` (Fase D, sem flag)
+- `make smoke-x64-vmware-thread-crash-survives` (Fase E, clean + flag isolada)
+
+**Regressão Etapa 3 (antes ou depois do agregado):**
+
+- `make smoke-x64-vmware-usb-hid-keyboard` (Etapa 3 Slice 3D)
+- `make smoke-x64-vmware-storage-resilience` (Etapa 3 Slice 3E)
+
+**Fechamento:**
+
+1. `make release-check` deve passar limpo.
+2. Cross-check dos acceptance criteria em §2 — todos `[x]`.
+3. Invocar workflow `etapa-transition` para fechar Etapa 4 e
    abrir Etapa 5 (TLS userland real).
 
 ---

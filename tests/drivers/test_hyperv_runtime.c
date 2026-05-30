@@ -29,43 +29,6 @@ int vmbus_runtime_connected(void) { return g_vmbus_connected; }
 
 uint8_t vmbus_runtime_stage(void) { return g_vmbus_stage; }
 
-const char *hyperv_vmbus_stage_label(uint8_t stage) {
-  switch (stage) {
-  case HYPERV_VMBUS_STAGE_OFF:
-    return "off";
-  case HYPERV_VMBUS_STAGE_HYPERCALL:
-    return "hypercall";
-  case HYPERV_VMBUS_STAGE_SYNIC:
-    return "synic";
-  case HYPERV_VMBUS_STAGE_CONTACT:
-    return "contact";
-  case HYPERV_VMBUS_STAGE_OFFERS:
-    return "offers";
-  case HYPERV_VMBUS_STAGE_CHANNEL:
-    return "channel";
-  case HYPERV_VMBUS_STAGE_CONTROL:
-    return "control";
-  case HYPERV_VMBUS_STAGE_READY:
-    return "ready";
-  case HYPERV_VMBUS_STAGE_FAILED:
-    return "failed";
-  default:
-    return "unknown";
-  }
-}
-
-uint8_t hyperv_runtime_stage_for(uint8_t vmbus_stage, uint8_t configured,
-                                 uint8_t offer_ready, uint8_t channel_ready,
-                                 uint8_t runtime_phase, int32_t last_error) {
-  (void)configured;
-  (void)channel_ready;
-  (void)runtime_phase;
-  (void)last_error;
-  return offer_ready && vmbus_stage < HYPERV_VMBUS_STAGE_OFFERS
-             ? HYPERV_VMBUS_STAGE_OFFERS
-             : vmbus_stage;
-}
-
 void netvsc_vmbus_ops_init(struct netvsc_backend_ops *out) {
   if (!out) {
     return;

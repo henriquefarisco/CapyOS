@@ -1,4 +1,5 @@
 #include "fs/block.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 
 struct chunk_ctx {
@@ -6,26 +7,12 @@ struct chunk_ctx {
     uint32_t ratio;        // chunk_size / lower->block_size
 };
 
-static inline void dbg_putc(char ch) {
-#if defined(UNIT_TEST) || !defined(__x86_64__)
-    (void)ch;
-#else
-    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-#endif
-}
-
-static void dbg_puts(const char *s) {
-    while (s && *s) {
-        dbg_putc(*s++);
-    }
-}
-
-static void dbg_hex32(uint32_t value) {
-    static const char hex[] = "0123456789ABCDEF";
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        dbg_putc(hex[(value >> shift) & 0xFu]);
-    }
-}
+/* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * removed; chunk read/write failure traces now go through
+ * `klog_hex(KLOG_WARN, ...)`. Each failure emits three structured
+ * entries (chunked block, sub-block index, absolute lower-device
+ * block) so downstream parsers can correlate the chunked address
+ * with the underlying lower-device address. */
 
 static int chunk_read(void *ctx, uint32_t block_no, void *buffer){
     struct chunk_ctx *c = (struct chunk_ctx *)ctx;
@@ -33,13 +20,10 @@ static int chunk_read(void *ctx, uint32_t block_no, void *buffer){
     uint32_t start = block_no * c->ratio;
     for (uint32_t i = 0; i < c->ratio; ++i){
         if (block_device_read(c->lower, start + i, dst + i * c->lower->block_size) != 0) {
-            dbg_puts("[chunk] read fail blk=");
-            dbg_hex32(block_no);
-            dbg_puts(" sub=");
-            dbg_hex32(i);
-            dbg_puts(" abs=");
-            dbg_hex32(start + i);
-            dbg_putc('\n');
+            klog_hex(KLOG_WARN, "[chunk] read fail blk=", (uint64_t)block_no);
+            klog_hex(KLOG_WARN, "[chunk] read fail sub=", (uint64_t)i);
+            klog_hex(KLOG_WARN, "[chunk] read fail abs=",
+                     (uint64_t)(start + i));
             return -1;
         }
     }
@@ -52,13 +36,10 @@ static int chunk_write(void *ctx, uint32_t block_no, const void *buffer){
     uint32_t start = block_no * c->ratio;
     for (uint32_t i = 0; i < c->ratio; ++i){
         if (block_device_write(c->lower, start + i, src + i * c->lower->block_size) != 0) {
-            dbg_puts("[chunk] write fail blk=");
-            dbg_hex32(block_no);
-            dbg_puts(" sub=");
-            dbg_hex32(i);
-            dbg_puts(" abs=");
-            dbg_hex32(start + i);
-            dbg_putc('\n');
+            klog_hex(KLOG_WARN, "[chunk] write fail blk=", (uint64_t)block_no);
+            klog_hex(KLOG_WARN, "[chunk] write fail sub=", (uint64_t)i);
+            klog_hex(KLOG_WARN, "[chunk] write fail abs=",
+                     (uint64_t)(start + i));
             return -1;
         }
     }

@@ -18,6 +18,10 @@
 #define HV_X64_MSR_SCONTROL 0x40000080
 #define HV_X64_MSR_SVERSION 0x40000081
 
+#define HYPERV_VMBUS_VERSION_WIN10 0x00050000u
+#define HYPERV_VMBUS_MESSAGE_CONNECTION_ID 1u
+#define HYPERV_VMBUS_MESSAGE_CONNECTION_ID_4 4u
+
 /* Hyper-V Synthetic Keyboard GUID: {F912AD6D-2B17-48EA-BD65-F927A61C7684} */
 #define HV_KBD_GUID_DATA1 0xF912AD6D
 #define HV_KBD_GUID_DATA2 0x2B17
@@ -56,6 +60,18 @@
 #define HV_STORAGE_GUID_DATA4_5 0xB1
 #define HV_STORAGE_GUID_DATA4_6 0xDC
 #define HV_STORAGE_GUID_DATA4_7 0x7F
+
+#define HV_MOUSE_GUID_DATA1 0x9E5EBAE4
+#define HV_MOUSE_GUID_DATA2 0x3B2F
+#define HV_MOUSE_GUID_DATA3 0x4A6B
+#define HV_MOUSE_GUID_DATA4_0 0x8E
+#define HV_MOUSE_GUID_DATA4_1 0x9E
+#define HV_MOUSE_GUID_DATA4_2 0xE9
+#define HV_MOUSE_GUID_DATA4_3 0xCE
+#define HV_MOUSE_GUID_DATA4_4 0xF7
+#define HV_MOUSE_GUID_DATA4_5 0x4C
+#define HV_MOUSE_GUID_DATA4_6 0x0F
+#define HV_MOUSE_GUID_DATA4_7 0x4D
 
 /* VMBus connection states */
 #define VMBUS_CONNECT_STATE_INIT 0
@@ -196,6 +212,16 @@ struct synth_kbd_event {
 /* O estado real do teclado VMBus vive no driver; consumidores usam apenas ponteiro opaco. */
 struct vmbus_keyboard;
 
+struct hyperv_mouse_report {
+  uint8_t absolute;
+  uint8_t buttons;
+  int16_t dx;
+  int16_t dy;
+  int8_t dz;
+  uint16_t abs_x;
+  uint16_t abs_y;
+};
+
 /* Function prototypes */
 int hyperv_detect(void);
 int vmbus_init(void);
@@ -212,7 +238,11 @@ const char *hyperv_vmbus_stage_label(uint8_t stage);
 uint8_t hyperv_runtime_stage_for(uint8_t vmbus_stage, uint8_t configured,
                                  uint8_t offer_ready, uint8_t channel_ready,
                                  uint8_t runtime_phase, int32_t last_error);
+uint32_t hyperv_vmbus_sanitize_msg_conn_id(uint32_t version,
+                                           uint32_t response_conn_id,
+                                           uint32_t fallback_conn_id);
 int vmbus_query_offer(const struct hv_guid *guid, struct vmbus_offer_info *out);
+int vmbus_query_offer_by_data1(uint32_t data1, struct vmbus_offer_info *out);
 int vmbus_query_cached_offer(const struct hv_guid *guid,
                              struct vmbus_offer_info *out);
 int vmbus_refresh_connected_offer(const struct hv_guid *guid,
@@ -223,6 +253,9 @@ int vmbus_channel_runtime_send_inband(struct vmbus_channel_runtime *channel,
                                       const void *payload,
                                       uint32_t payload_len,
                                       uint64_t trans_id);
+int vmbus_channel_runtime_send_prebuilt(struct vmbus_channel_runtime *channel,
+                                        const void *packet,
+                                        uint32_t packet_len);
 int vmbus_channel_runtime_read(struct vmbus_channel_runtime *channel,
                                void *buffer, uint32_t buffer_size,
                                uint32_t *out_packet_len);
@@ -237,6 +270,11 @@ int vmbus_keyboard_init(struct vmbus_keyboard *kbd);
 int vmbus_keyboard_poll(struct vmbus_keyboard *kbd, uint8_t *scancode,
                         int *is_break, int *is_extended);
 struct vmbus_keyboard *vmbus_get_keyboard(void);
+int hyperv_mouse_init(void);
+int hyperv_mouse_available(void);
+int hyperv_mouse_poll(struct hyperv_mouse_report *out);
+int hyperv_mouse_parse_hid_report(const void *report, uint32_t report_len,
+                                  struct hyperv_mouse_report *out);
 
 /* MSR helpers */
 static inline void wrmsr(uint32_t msr, uint64_t value) {

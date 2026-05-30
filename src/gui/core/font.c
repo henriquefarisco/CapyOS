@@ -236,14 +236,41 @@ static const uint8_t font_bitmap_data[] = {
 };
 
 static struct font default_font;
+static uint8_t glyph_row_cache[FONT_GLYPH_COUNT][FONT_GLYPH_HEIGHT];
+static struct font_cache_stats glyph_cache_stats;
+static int glyph_cache_ready = 0;
 
 void font_init(void) {
+  for (uint32_t glyph = 0; glyph < FONT_GLYPH_COUNT; glyph++) {
+    for (uint32_t row = 0; row < FONT_GLYPH_HEIGHT; row++) {
+      glyph_row_cache[glyph][row] =
+          font_bitmap_data[glyph * FONT_GLYPH_HEIGHT + row];
+    }
+  }
+  glyph_cache_stats.glyphs_cached = FONT_GLYPH_COUNT;
+  glyph_cache_stats.rows_cached = FONT_GLYPH_COUNT * FONT_GLYPH_HEIGHT;
+  glyph_cache_stats.cache_hits = 0u;
+  glyph_cache_stats.cache_misses = 0u;
+  glyph_cache_ready = 1;
+
   default_font.data = font_bitmap_data;
   default_font.glyph_width = FONT_GLYPH_WIDTH;
   default_font.glyph_height = FONT_GLYPH_HEIGHT;
   default_font.first_char = FONT_FIRST_CHAR;
   default_font.last_char = FONT_LAST_CHAR;
   default_font.bytes_per_glyph = FONT_GLYPH_HEIGHT;
+}
+
+static const uint8_t *font_glyph_rows(const struct font *f, uint32_t idx) {
+  uint32_t offset;
+  if (!f || !f->data || idx < f->first_char || idx > f->last_char) return NULL;
+  if (f == &default_font && glyph_cache_ready) {
+    glyph_cache_stats.cache_hits++;
+    return glyph_row_cache[idx - f->first_char];
+  }
+  offset = (idx - f->first_char) * f->bytes_per_glyph;
+  glyph_cache_stats.cache_misses++;
+  return f->data + offset;
 }
 
 const struct font *font_default(void) {
@@ -254,13 +281,25 @@ const struct font *font_default(void) {
   return &default_font;
 }
 
+int font_glyph_cached(const struct font *f, char c) {
+  uint32_t idx = (uint32_t)(uint8_t)c;
+  if (!f || idx < f->first_char || idx > f->last_char) return 0;
+  return (f == &default_font && glyph_cache_ready) ? 1 : 0;
+}
+
+void font_cache_stats_get(struct font_cache_stats *out) {
+  if (!out) return;
+  *out = glyph_cache_stats;
+}
+
 void font_draw_char(struct gui_surface *surface, const struct font *f,
                     int32_t x, int32_t y, char c, uint32_t color) {
+  const uint8_t *glyph;
   if (!surface || !f || !f->data) return;
   uint32_t idx = (uint32_t)(uint8_t)c;
   if (idx < f->first_char || idx > f->last_char) return;
-  uint32_t glyph_offset = (idx - f->first_char) * f->bytes_per_glyph;
-  const uint8_t *glyph = f->data + glyph_offset;
+  glyph = font_glyph_rows(f, idx);
+  if (!glyph) return;
 
   for (uint32_t row = 0; row < f->glyph_height; row++) {
     int32_t py = y + (int32_t)row;
@@ -278,7 +317,7 @@ void font_draw_char(struct gui_surface *surface, const struct font *f,
 
 void font_draw_string(struct gui_surface *surface, const struct font *f,
                       int32_t x, int32_t y, const char *text, uint32_t color) {
-  if (!text) return;
+  if (!surface || !f || !f->data || !text) return;
   int32_t cx = x;
   while (*text) {
     if (*text == '\n') {

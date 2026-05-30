@@ -13,6 +13,10 @@ enum x64_storage_backend {
   X64_STORAGE_BACKEND_EFI_BLOCK_IO,
   X64_STORAGE_BACKEND_AHCI,
   X64_STORAGE_BACKEND_NVME,
+  /* Append-only: ATA-PIO is a broad-hardware-compatibility fallback for
+   * hypervisors that expose legacy IDE/ATA emulation (e.g. Hyper-V Gen1).
+   * It never replaces NVMe/AHCI on the VMware + UEFI + E1000 track. */
+  X64_STORAGE_BACKEND_ATA_PIO,
 };
 
 struct x64_storage_runtime_io {

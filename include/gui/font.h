@@ -27,8 +27,17 @@ struct font_metrics {
   uint32_t avg_width;
 };
 
+struct font_cache_stats {
+  uint32_t glyphs_cached;
+  uint32_t rows_cached;
+  uint64_t cache_hits;
+  uint64_t cache_misses;
+};
+
 void font_init(void);
 const struct font *font_default(void);
+int font_glyph_cached(const struct font *f, char c);
+void font_cache_stats_get(struct font_cache_stats *out);
 void font_draw_char(struct gui_surface *surface, const struct font *f,
                     int32_t x, int32_t y, char c, uint32_t color);
 void font_draw_string(struct gui_surface *surface, const struct font *f,

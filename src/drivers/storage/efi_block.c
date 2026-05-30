@@ -2,28 +2,15 @@
 
 #include <stdint.h>
 
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 
-static inline void dbg_putc(char ch) {
-#if defined(UNIT_TEST) || !defined(__x86_64__)
-  (void)ch;
-#else
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-#endif
-}
-
-static void dbg_puts(const char *s) {
-  while (s && *s) {
-    dbg_putc(*s++);
-  }
-}
-
-static void dbg_hex32(uint32_t value) {
-  static const char hex[] = "0123456789ABCDEF";
-  for (int shift = 28; shift >= 0; shift -= 4) {
-    dbg_putc(hex[(value >> shift) & 0xFu]);
-  }
-}
+/* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * removed. The EFI block-IO failure traces (io-fail + verify-fail)
+ * now go through `klog(KLOG_*, ...)` / `klog_hex(KLOG_*, ...)`.
+ * Each failure emits multiple structured entries (op, blk, media,
+ * code) so downstream parsers can correlate without splitting a
+ * chained debug line. */
 
 static void *align_ptr_local(void *ptr, uint32_t align) {
   if (!ptr || align <= 1) {
@@ -188,15 +175,16 @@ static int efi_do_io(struct efi_block_ctx *bctx, uint32_t block_no, void *buffer
     bctx->last_error_block_no = block_no;
     bctx->last_error_media_id = bctx->last_media_id;
     bctx->error_count += 1U;
-    dbg_puts("[efi] io fail op=");
-    dbg_putc(is_write ? 'w' : 'r');
-    dbg_puts(" blk=");
-    dbg_hex32(block_no);
-    dbg_puts(" media=");
-    dbg_hex32(bctx->last_media_id);
-    dbg_puts(" code=");
-    dbg_hex32((uint32_t)(st & 0xFFFFFFFFULL));
-    dbg_putc('\n');
+    /* Slice 3E.4.C audit: each failure field becomes its own klog
+     * entry so a downstream parser can grep for any individual
+     * dimension (op/blk/media/code) without splitting a single
+     * line. The op letter ('w'/'r') stays in the prefix string. */
+    klog(KLOG_WARN, is_write ? "[efi] io fail op=w" : "[efi] io fail op=r");
+    klog_hex(KLOG_WARN, "[efi] io fail blk=", (uint64_t)block_no);
+    klog_hex(KLOG_WARN, "[efi] io fail media=",
+             (uint64_t)bctx->last_media_id);
+    klog_hex(KLOG_WARN, "[efi] io fail code=",
+             (uint64_t)(uint32_t)(st & 0xFFFFFFFFULL));
     return -1;
   }
 
@@ -258,13 +246,14 @@ static int efi_block_write(void *ctx, uint32_t block_no, const void *buffer) {
   bctx->last_error_block_no = block_no;
   bctx->last_error_media_id = verify_media_id;
   bctx->error_count += 1U;
-  dbg_puts("[efi] verify fail blk=");
-  dbg_hex32(block_no);
-  dbg_puts(" media=");
-  dbg_hex32(verify_media_id);
-  dbg_puts(" code=");
-  dbg_hex32((uint32_t)(bctx->last_error_status & 0xFFFFFFFFULL));
-  dbg_putc('\n');
+  /* Slice 3E.4.C audit: post-write verify failure context. Three
+   * fields (blk/media/code) emitted as separate klog_hex entries
+   * keeping parity with the io-fail path above. */
+  klog_hex(KLOG_WARN, "[efi] verify fail blk=", (uint64_t)block_no);
+  klog_hex(KLOG_WARN, "[efi] verify fail media=",
+           (uint64_t)verify_media_id);
+  klog_hex(KLOG_WARN, "[efi] verify fail code=",
+           (uint64_t)(uint32_t)(bctx->last_error_status & 0xFFFFFFFFULL));
   return -1;
 }
 

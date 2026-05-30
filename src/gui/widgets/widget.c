@@ -4,6 +4,10 @@
 #include "memory/kmem.h"
 #include <stddef.h>
 
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+int widget_render_display_list(struct widget *w, struct gui_surface *surface);
+#endif
+
 static uint32_t next_widget_id = 1;
 
 struct widget_style widget_default_style(void) {
@@ -197,6 +201,9 @@ static void fit_text_for_width(const struct font *f, const char *src,
 
 void widget_paint(struct widget *w, struct gui_surface *surface) {
   if (!w || !surface || !w->visible) return;
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  if (widget_render_display_list(w, surface) == 0) return;
+#endif
 
   int32_t x = w->bounds.x;
   int32_t y = w->bounds.y;
@@ -244,13 +251,21 @@ void widget_paint(struct widget *w, struct gui_surface *surface) {
   if (w->type == WIDGET_PROGRESS) {
     int32_t bx = x + w->style.padding;
     int32_t by = y + (int32_t)bh - 12;
-    uint32_t bar_w = bw - 2 * w->style.padding;
+    uint32_t inset = 2u * w->style.padding;
+    uint32_t bar_w = bw > inset ? bw - inset : 0u;
     fill_rect(surface, bx, by, bar_w, 8, compositor_theme()->accent_alt);
     uint32_t fill_w = 0;
-    if (w->max_value > w->min_value)
-      fill_w = (uint32_t)((int64_t)(w->value - w->min_value) * (int64_t)bar_w /
-                           (w->max_value - w->min_value));
-    if (fill_w > bar_w) fill_w = bar_w;
+    if (w->max_value > w->min_value) {
+      if (w->value <= w->min_value) {
+        fill_w = 0u;
+      } else if (w->value >= w->max_value) {
+        fill_w = bar_w;
+      } else {
+        fill_w = (uint32_t)((int64_t)(w->value - w->min_value) *
+                            (int64_t)bar_w /
+                            (w->max_value - w->min_value));
+      }
+    }
     fill_rect(surface, bx, by, fill_w, 8, compositor_theme()->accent);
   }
 

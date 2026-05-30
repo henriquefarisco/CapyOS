@@ -63,19 +63,27 @@ int ahci_slot_release(struct ahci_slot_allocator *alloc, int slot) {
     return 0;
 }
 
-uint8_t ahci_slot_inflight_count(const struct ahci_slot_allocator *alloc) {
-    uint32_t inflight_mask;
-    uint8_t count = 0;
+uint32_t ahci_slot_inflight_mask(const struct ahci_slot_allocator *alloc) {
     if (!alloc || alloc->slot_count == 0u) {
-        return 0;
+        return 0u;
     }
     /* Inflight = slots in [0, slot_count) that are NOT in the free
-     * mask. We do not consult bits above slot_count. */
+     * mask. Bits at positions >= slot_count are explicitly cleared
+     * so the result is a clean bitmask that downstream helpers
+     * (`ahci_dispatch_completed_slots`) can consume directly. */
     if (alloc->slot_count == AHCI_MAX_SLOTS) {
-        inflight_mask = ~alloc->free_mask;
-    } else {
-        inflight_mask = ((1u << alloc->slot_count) - 1u) & ~alloc->free_mask;
+        return ~alloc->free_mask;
     }
+    return ((1u << alloc->slot_count) - 1u) & ~alloc->free_mask;
+}
+
+uint8_t ahci_slot_inflight_count(const struct ahci_slot_allocator *alloc) {
+    /* Reuse the new mask accessor + Brian Kernighan popcount. The
+     * old inline computation was bitwise-identical; this version
+     * just shares the masking logic with `ahci_slot_inflight_mask`
+     * so a future fix to one fixes both. */
+    uint32_t inflight_mask = ahci_slot_inflight_mask(alloc);
+    uint8_t count = 0;
     while (inflight_mask) {
         inflight_mask &= inflight_mask - 1u; /* clear lowest set bit */
         count++;

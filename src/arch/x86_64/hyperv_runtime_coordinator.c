@@ -108,9 +108,5 @@ int x64_hyperv_runtime_poll_promotions(
     }
   }
 
-  if (coordinator_promote_storage(ops) != 0) {
-    changed = 1;
-  }
-
   return changed;
 }

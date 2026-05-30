@@ -116,11 +116,14 @@ int net_stack_init(void) {
 
     if (net_stack_driver_init_runtime(&g_net.nic, g_net.ipv4.mac) == 0) {
       g_net.ready =
-          (uint8_t)(g_net.nic.kind != NET_NIC_KIND_HYPERV_NETVSC ? 1 : 0);
+          (uint8_t)(net_stack_driver_data_path_ready(&g_net.nic) ? 1 : 0);
       if (g_net.ready) {
         klog(KLOG_INFO, "[net] Driver runtime ready (immediate).");
       } else {
         klog(KLOG_INFO, "[net] Driver runtime deferred (NetVSC path).");
+        if (g_net.nic.kind == NET_NIC_KIND_HYPERV_NETVSC) {
+          g_net.unavailable_reason = "Hyper-V NetVSC datapath pending";
+        }
       }
     } else {
       klog(KLOG_WARN, "[net] Driver runtime init failed; stack not ready.");
@@ -185,13 +188,12 @@ int net_stack_refresh_runtime(void) {
                                         &g_net.nic, &g_net.hyperv_runtime);
   net_hyperv_runtime_state_apply_nic(&g_net.hyperv_runtime, &g_net.nic);
 
-  /* Late promotion: once the NetVSC backend has completed its VMBus channel
-   * open and NetVSP/RNDIS control handshake, promote the stack to ready so
-   * that hey, net-mode dhcp, and other commands can proceed. */
+  /* Late promotion: the NetVSC control handshake is necessary but not enough
+   * for user traffic. Do not advertise the stack as ready until the packet
+   * TX/RX datapath is compiled in; otherwise DHCP and ping report confusing
+   * timeouts while no frames can leave the guest. */
   if (!g_net.ready &&
       g_net.hyperv_runtime.runtime_phase == NETVSC_RUNTIME_READY) {
-    g_net.ready = 1;
-    /* Propagate real MAC and MTU from the NetVSC control handshake. */
     if (g_net.hyperv_runtime.controller.backend.session.control.mac_valid) {
       net_stack_mem_copy(
           g_net.ipv4.mac,
@@ -201,6 +203,13 @@ int net_stack_refresh_runtime(void) {
       g_net.ipv4.mtu =
           (uint16_t)g_net.hyperv_runtime.controller.backend.session.control.mtu;
       g_net.nic.mtu = g_net.ipv4.mtu;
+    }
+    if (net_stack_driver_data_path_ready(&g_net.nic)) {
+      g_net.ready = 1;
+      g_net.unavailable_reason = NULL;
+    } else {
+      g_net.unavailable_reason =
+          "Hyper-V NetVSC control ready; packet datapath unavailable";
     }
   }
   return rc;

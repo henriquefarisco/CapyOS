@@ -15,6 +15,10 @@ struct fake_entry {
 static struct fake_entry g_entries[] = {
     {.path = "/home"},
     {.path = "/home/admin"},
+    {.path = "/home/admin/Desktop"},
+    {.path = "/home/admin/Documents"},
+    {.path = "/home/admin/Personal"},
+    {.path = "/home/admin/Professional"},
 };
 
 static struct session_context g_session_a;
@@ -127,9 +131,25 @@ int run_user_home_tests(void) {
                        "admin home should be owned by the provisioned user");
   fails += expect_true(admin->inode.perm == 0700,
                        "admin home should receive restrictive permissions");
-  fails += expect_true(g_create_calls == 2,
-                       "missing /home and /home/admin should both be created");
-  fails += expect_true(g_set_metadata_calls == 2,
+  {
+    static const char *const subs[] = {
+        "/home/admin/Desktop", "/home/admin/Documents",
+        "/home/admin/Personal", "/home/admin/Professional"};
+    size_t si = 0;
+    for (si = 0; si < sizeof(subs) / sizeof(subs[0]); ++si) {
+      struct fake_entry *sd = find_entry(subs[si]);
+      fails += expect_true(sd && sd->exists,
+                           "home subfolder should be created");
+      fails += expect_true(sd && sd->inode.uid == 1000 &&
+                               sd->inode.gid == 1000,
+                           "home subfolder should be owned by the user");
+      fails += expect_true(sd && sd->inode.perm == 0700,
+                           "home subfolder should be private (0700)");
+    }
+  }
+  fails += expect_true(g_create_calls == 6,
+                       "/home, /home/admin and the four subfolders are created");
+  fails += expect_true(g_set_metadata_calls == 6,
                        "created directories should be normalized with metadata");
   fails += expect_true(g_active_session == &g_session_a,
                        "active session should be restored after provisioning");
@@ -151,10 +171,10 @@ int run_user_home_tests(void) {
 
   fails += expect_true(user_home_prepare("/home/admin", 1000, 1000) == 0,
                        "should repair ownership on an existing admin home");
-  fails += expect_true(g_create_calls == 0,
-                       "existing directories should not be recreated");
-  fails += expect_true(g_set_metadata_calls == 2,
-                       "existing directories should be normalized with metadata");
+  fails += expect_true(g_create_calls == 4,
+                       "the four home subfolders are created on an existing home");
+  fails += expect_true(g_set_metadata_calls == 6,
+                       "home, admin and the four subfolders are normalized");
   fails += expect_true(admin->inode.uid == 1000 && admin->inode.gid == 1000,
                        "existing admin home should be re-owned");
   fails += expect_true(admin->inode.perm == 0700,

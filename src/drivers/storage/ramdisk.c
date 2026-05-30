@@ -1,4 +1,5 @@
 #include "fs/ramdisk.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 
 static uint8_t *storage = NULL;
@@ -19,18 +20,12 @@ static void copy_bytes(uint8_t *dst, const uint8_t *src, size_t len) {
     }
 }
 
-static inline void dbg_putc(char ch) {
-    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-}
-
-static void dbg_hex32(uint32_t value) {
-    static const char hex[] = "0123456789ABCDEF";
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        dbg_putc(hex[(value >> shift) & 0xFu]);
-    }
-}
-
-static uint32_t dbg_be32(const uint8_t *src) {
+/* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_hex32` removed
+ * in favor of `klog(KLOG_INFO, ...)` / `klog_hex(KLOG_INFO, ...)`.
+ * `ramdisk_be32` (renamed from `dbg_be32`) survives as a pure
+ * utility because the block-0 write audit loads the first two
+ * big-endian u32 words of the buffer for the klog line. */
+static uint32_t ramdisk_be32(const uint8_t *src) {
     if (!src) {
         return 0;
     }
@@ -58,12 +53,14 @@ static int ramdisk_write(void *ctx, uint32_t block_no, const void *buffer) {
     }
     const uint8_t *src = (const uint8_t *)buffer;
     if (block_no == 0) {
-        dbg_putc('R');
-        dbg_putc(' ');
-        dbg_hex32(dbg_be32(src));
-        dbg_putc(' ');
-        dbg_hex32(dbg_be32(src + 4));
-        dbg_putc('\n');
+        /* Slice 3E.4.C audit: block-0 write snapshot. The chained
+         * "R W0 W1\n" dbg_* sequence collapses into two structured
+         * klog entries that the kernel logger persists alongside
+         * other ramdisk telemetry. */
+        klog_hex(KLOG_INFO, "[ramdisk] blk0 write word0=",
+                 (uint64_t)ramdisk_be32(src));
+        klog_hex(KLOG_INFO, "[ramdisk] blk0 write word1=",
+                 (uint64_t)ramdisk_be32(src + 4));
     }
     uint8_t *dst = &storage[block_no * RAMDISK_BLOCK_SIZE];
     for (uint32_t i = 0; i < RAMDISK_BLOCK_SIZE; ++i) {

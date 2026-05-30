@@ -133,6 +133,38 @@ static volatile int g_vmbus_eoi_pending = 0;
 static int g_vmbus_aeoi_deprecated = 0;
 static int g_vmbus_manual_eoi = 0;
 
+static int vmbus_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+static void vmbus_transport_log(const char *s) {
+#ifndef UNIT_TEST
+  if (!vmbus_verbose_io()) {
+    (void)s;
+    return;
+  }
+  fbcon_print(s);
+#else
+  (void)s;
+#endif
+}
+
+static void vmbus_transport_log_hex(uint64_t value) {
+#ifndef UNIT_TEST
+  if (!vmbus_verbose_io()) {
+    (void)value;
+    return;
+  }
+  fbcon_print_hex(value);
+#else
+  (void)value;
+#endif
+}
+
 static inline void cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
                          uint32_t *ecx, uint32_t *edx) {
   __asm__ volatile("cpuid"
@@ -182,13 +214,13 @@ static int vmbus_enable_x2apic_for_manual_eoi(void) {
   /* Require CPUID.1:ECX[21] (x2APIC) so we can safely touch MSR 0x80B. */
   cpuid(1u, &eax, &ebx, &ecx, &edx);
   if (!(ecx & (1u << 21))) {
-    fbcon_print("[vmbus] x2APIC indisponivel; mantendo caminho AUTO_EOI.\n");
+    vmbus_transport_log("[vmbus] x2APIC indisponivel; mantendo caminho AUTO_EOI.\n");
     return -1;
   }
 
   apic_base = rdmsr(IA32_APIC_BASE_MSR);
   if (!(apic_base & IA32_APIC_BASE_EN)) {
-    fbcon_print("[vmbus] LAPIC desativado; nao e possivel usar EOI manual.\n");
+    vmbus_transport_log("[vmbus] LAPIC desativado; nao e possivel usar EOI manual.\n");
     return -2;
   }
 
@@ -199,7 +231,7 @@ static int vmbus_enable_x2apic_for_manual_eoi(void) {
     wrmsr(IA32_APIC_BASE_MSR, apic_base | IA32_APIC_BASE_EXTD);
     apic_base = rdmsr(IA32_APIC_BASE_MSR);
     if (!(apic_base & IA32_APIC_BASE_EXTD)) {
-      fbcon_print("[vmbus] Falha ao habilitar x2APIC; revertendo para AUTO_EOI.\n");
+      vmbus_transport_log("[vmbus] Falha ao habilitar x2APIC; revertendo para AUTO_EOI.\n");
       return -3;
     }
   }
@@ -209,16 +241,16 @@ static int vmbus_enable_x2apic_for_manual_eoi(void) {
    * not deliver any interrupt, including SINTs. */
   {
     uint64_t svr = rdmsr(0x80Fu);
-    fbcon_print("[vmbus] x2APIC SVR=");
-    fbcon_print_hex(svr);
+    vmbus_transport_log("[vmbus] x2APIC SVR=");
+    vmbus_transport_log_hex(svr);
     if (!(svr & (1u << 8))) {
-      fbcon_print(" (LAPIC DISABLED, enabling)");
+      vmbus_transport_log(" (LAPIC DISABLED, enabling)");
       wrmsr(0x80Fu, svr | (1u << 8));
       svr = rdmsr(0x80Fu);
-      fbcon_print(" new SVR=");
-      fbcon_print_hex(svr);
+      vmbus_transport_log(" new SVR=");
+      vmbus_transport_log_hex(svr);
     }
-    fbcon_print("\n");
+    vmbus_transport_log("\n");
   }
 
   return 0;
@@ -261,13 +293,13 @@ static int vmbus_consume_simp_slot(uint32_t sint, void *buf, uint32_t maxlen) {
   flags = msg->flags;
   if (mtype != HVMSG_VMBUS) {
     if (!g_vmbus_non_vmbus_msg_logged) {
-      fbcon_print("[vmbus] Ignorando SIMP msg nao-VMBus no SINT=");
-      fbcon_print_hex((uint64_t)sint);
-      fbcon_print(" type=");
-      fbcon_print_hex((uint64_t)mtype);
-      fbcon_print(" len=");
-      fbcon_print_hex((uint64_t)len);
-      fbcon_print("\n");
+      vmbus_transport_log("[vmbus] Ignorando SIMP msg nao-VMBus no SINT=");
+      vmbus_transport_log_hex((uint64_t)sint);
+      vmbus_transport_log(" type=");
+      vmbus_transport_log_hex((uint64_t)mtype);
+      vmbus_transport_log(" len=");
+      vmbus_transport_log_hex((uint64_t)len);
+      vmbus_transport_log("\n");
       g_vmbus_non_vmbus_msg_logged = 1;
     }
     msg->type = 0;
@@ -279,16 +311,17 @@ static int vmbus_consume_simp_slot(uint32_t sint, void *buf, uint32_t maxlen) {
     return -2;
   }
 
-  /* Log HVMSG_VMBUS message details for diagnostics. */
-  fbcon_print("[vmbus] SIMP SINT=");
-  fbcon_print_hex((uint64_t)sint);
-  fbcon_print(" hvtype=");
-  fbcon_print_hex((uint64_t)mtype);
-  fbcon_print(" len=");
-  fbcon_print_hex((uint64_t)len);
-  fbcon_print(" flags=");
-  fbcon_print_hex((uint64_t)flags);
-  fbcon_print("\n");
+  if (vmbus_verbose_io()) {
+    vmbus_transport_log("[vmbus] SIMP SINT=");
+    vmbus_transport_log_hex((uint64_t)sint);
+    vmbus_transport_log(" hvtype=");
+    vmbus_transport_log_hex((uint64_t)mtype);
+    vmbus_transport_log(" len=");
+    vmbus_transport_log_hex((uint64_t)len);
+    vmbus_transport_log(" flags=");
+    vmbus_transport_log_hex((uint64_t)flags);
+    vmbus_transport_log("\n");
+  }
 
   if (!buf) {
     msg->type = 0;
@@ -401,7 +434,7 @@ static int hyperv_init_hypercall(void) {
 
   cpuid(0x40000003, &eax, &ebx, &ecx, &edx);
   if (!(eax & (1u << 5))) {
-    fbcon_print("[vmbus] Hypercall nao suportado.\n");
+    vmbus_transport_log("[vmbus] Hypercall nao suportado.\n");
     return -1;
   }
 
@@ -420,7 +453,7 @@ static int hyperv_init_hypercall(void) {
            HV_HYPERCALL_ENABLE;
   wrmsr(HV_X64_MSR_HYPERCALL, hc_msr);
   if (!(rdmsr(HV_X64_MSR_HYPERCALL) & HV_HYPERCALL_ENABLE)) {
-    fbcon_print("[vmbus] Falha ao habilitar hypercall.\n");
+    vmbus_transport_log("[vmbus] Falha ao habilitar hypercall.\n");
     return -3;
   }
 
@@ -485,15 +518,15 @@ static int vmbus_init_synic(void) {
   /* Diagnostic: compare VA (what the kernel reads) with the GPA written to
    * the MSR (what the hypervisor writes to). If VA != GPA the guest will
    * never see SIMP messages because identity mapping is broken. */
-  fbcon_print("[vmbus] SIMP VA=");
-  fbcon_print_hex((uint64_t)(uintptr_t)g_simp_page);
-  fbcon_print(" GPA=");
-  fbcon_print_hex(simp & ~0xFFFULL);
-  fbcon_print(" SIEFP VA=");
-  fbcon_print_hex((uint64_t)(uintptr_t)g_siefp_page);
-  fbcon_print(" GPA=");
-  fbcon_print_hex(siefp & ~0xFFFULL);
-  fbcon_print("\n");
+  vmbus_transport_log("[vmbus] SIMP VA=");
+  vmbus_transport_log_hex((uint64_t)(uintptr_t)g_simp_page);
+  vmbus_transport_log(" GPA=");
+  vmbus_transport_log_hex(simp & ~0xFFFULL);
+  vmbus_transport_log(" SIEFP VA=");
+  vmbus_transport_log_hex((uint64_t)(uintptr_t)g_siefp_page);
+  vmbus_transport_log(" GPA=");
+  vmbus_transport_log_hex(siefp & ~0xFFFULL);
+  vmbus_transport_log("\n");
 
   /* Detect HV_DEPRECATING_AEOI_RECOMMENDED (CPUID 0x40000004.EAX[9]). Modern
    * Hyper-V (Win 10 20H1+, Server 2019+, Win 11) silently ignores the
@@ -528,15 +561,15 @@ static int vmbus_init_synic(void) {
   /* Readback SINT2 to verify the hypervisor accepted our vector/flags. */
   {
     uint64_t sint2_rb = rdmsr(HV_X64_MSR_SINT2);
-    fbcon_print("[vmbus] SINT2 rb=");
-    fbcon_print_hex(sint2_rb);
-    fbcon_print(" (vec=");
-    fbcon_print_hex(sint2_rb & 0xFFu);
-    fbcon_print(" masked=");
-    fbcon_print_hex((sint2_rb >> 16) & 1u);
-    fbcon_print(" aeoi=");
-    fbcon_print_hex((sint2_rb >> 17) & 1u);
-    fbcon_print(")\n");
+    vmbus_transport_log("[vmbus] SINT2 rb=");
+    vmbus_transport_log_hex(sint2_rb);
+    vmbus_transport_log(" (vec=");
+    vmbus_transport_log_hex(sint2_rb & 0xFFu);
+    vmbus_transport_log(" masked=");
+    vmbus_transport_log_hex((sint2_rb >> 16) & 1u);
+    vmbus_transport_log(" aeoi=");
+    vmbus_transport_log_hex((sint2_rb >> 17) & 1u);
+    vmbus_transport_log(")\n");
   }
 
   /* VMBus usa apenas o SINT2. Deixar o SINT0 ativo em 0x20 conflita com o
@@ -566,17 +599,17 @@ static int vmbus_init_synic(void) {
   if (g_vmbus_manual_eoi) {
     klog(KLOG_INFO,
          "[vmbus] AUTO_EOI deprecated; x2APIC habilitado, ISR fara LAPIC EOI manual (sem EOM).");
-    fbcon_print(
+    vmbus_transport_log(
         "[vmbus] AUTO_EOI deprecated: usando x2APIC EOI manual na ISR.\n");
   } else if (g_vmbus_aeoi_deprecated) {
     klog(KLOG_INFO,
          "[vmbus] AUTO_EOI deprecated mas x2APIC indisponivel; usando AUTO_EOI como fallback.");
-    fbcon_print(
+    vmbus_transport_log(
         "[vmbus] AUTO_EOI deprecated e x2APIC indisponivel; fallback AUTO_EOI.\n");
   } else {
     klog(KLOG_INFO,
          "[vmbus] Host permite AUTO_EOI; SINTs com bit AEOI, ISR sem EOI manual.");
-    fbcon_print("[vmbus] Host permite AUTO_EOI; mantendo bit AEOI.\n");
+    vmbus_transport_log("[vmbus] Host permite AUTO_EOI; mantendo bit AEOI.\n");
   }
 
   if (!g_vmbus_synic_irq_registered) {
@@ -584,7 +617,7 @@ static int vmbus_init_synic(void) {
     g_vmbus_synic_irq_registered = 1;
   }
 
-  fbcon_print("[vmbus] SINT0 mascarado; SINT2 dedicado ao VMBus.\n");
+  vmbus_transport_log("[vmbus] SINT0 mascarado; SINT2 dedicado ao VMBus.\n");
 
   return 0;
 }
@@ -594,16 +627,16 @@ int vmbus_transport_init(void) {
     return 0;
   }
   if (vmbus_transport_prepare_hypercall() != 0) {
-    fbcon_print("[vmbus] Falha no hypercall.\n");
+    vmbus_transport_log("[vmbus] Falha no hypercall.\n");
     return -1;
   }
-  fbcon_print("[vmbus] Hypercall OK.\n");
+  vmbus_transport_log("[vmbus] Hypercall OK.\n");
 
   if (vmbus_transport_prepare_synic() != 0) {
-    fbcon_print("[vmbus] Falha no SynIC.\n");
+    vmbus_transport_log("[vmbus] Falha no SynIC.\n");
     return -2;
   }
-  fbcon_print("[vmbus] SynIC OK.\n");
+  vmbus_transport_log("[vmbus] SynIC OK.\n");
 
   g_vmbus_transport_initialized = 1;
   return 0;
@@ -700,13 +733,13 @@ int vmbus_transport_post_msg(void *msg, uint32_t len, uint32_t conn_id) {
   }
 
   code = (uint32_t)(status & 0xFFFFu);
-  fbcon_print("[vmbus] post_msg falhou status=");
-  fbcon_print_hex((uint64_t)code);
-  fbcon_print(" conn_id=");
-  fbcon_print_hex((uint64_t)conn_id);
-  fbcon_print(" msgtype=");
-  fbcon_print_hex((uint64_t)(hdr ? hdr->msgtype : 0u));
-  fbcon_print("\n");
+  vmbus_transport_log("[vmbus] post_msg falhou status=");
+  vmbus_transport_log_hex((uint64_t)code);
+  vmbus_transport_log(" conn_id=");
+  vmbus_transport_log_hex((uint64_t)conn_id);
+  vmbus_transport_log(" msgtype=");
+  vmbus_transport_log_hex((uint64_t)(hdr ? hdr->msgtype : 0u));
+  vmbus_transport_log("\n");
   kfree_aligned(pm);
   return -(int)code;
 }
@@ -759,9 +792,11 @@ int vmbus_transport_wait_message(void *buf, uint32_t maxlen, int timeout_loops) 
     return -1;
   }
 
-  fbcon_print("[vmbus] wait_msg enter isr=");
-  fbcon_print_hex((uint64_t)g_vmbus_isr_count);
-  fbcon_print("\n");
+  if (vmbus_verbose_io()) {
+    vmbus_transport_log("[vmbus] wait_msg enter isr=");
+    vmbus_transport_log_hex((uint64_t)g_vmbus_isr_count);
+    vmbus_transport_log("\n");
+  }
 
   __asm__ volatile("" ::: "memory");
   for (int i = 0; i < timeout_loops; ++i) {
@@ -771,15 +806,15 @@ int vmbus_transport_wait_message(void *buf, uint32_t maxlen, int timeout_loops) 
     }
 
     /* Progress diagnostic every 100000 iterations. */
-    if (i != 0 && (i % 100000) == 0) {
+    if (vmbus_verbose_io() && i != 0 && (i % 100000) == 0) {
       volatile struct hv_message *dbg = vmbus_simp_slot(VMBUS_MESSAGE_SINT);
-      fbcon_print("[vmbus] poll i=");
-      fbcon_print_hex((uint64_t)i);
-      fbcon_print(" isr=");
-      fbcon_print_hex((uint64_t)g_vmbus_isr_count);
-      fbcon_print(" t=");
-      fbcon_print_hex((uint64_t)dbg->type);
-      fbcon_print("\n");
+      vmbus_transport_log("[vmbus] poll i=");
+      vmbus_transport_log_hex((uint64_t)i);
+      vmbus_transport_log(" isr=");
+      vmbus_transport_log_hex((uint64_t)g_vmbus_isr_count);
+      vmbus_transport_log(" t=");
+      vmbus_transport_log_hex((uint64_t)dbg->type);
+      vmbus_transport_log("\n");
     }
 
     for (volatile int d = 0; d < 500; ++d) {
@@ -789,9 +824,9 @@ int vmbus_transport_wait_message(void *buf, uint32_t maxlen, int timeout_loops) 
 
   /* Timeout — release LAPIC ISR bit so future SINTs can still deliver. */
   vmbus_transport_eoi();
-  fbcon_print("[vmbus] wait_msg timeout isr=");
-  fbcon_print_hex((uint64_t)g_vmbus_isr_count);
-  fbcon_print("\n");
+  vmbus_transport_log("[vmbus] wait_msg timeout isr=");
+  vmbus_transport_log_hex((uint64_t)g_vmbus_isr_count);
+  vmbus_transport_log("\n");
   return 0;
 }
 
@@ -808,11 +843,37 @@ uint64_t vmbus_transport_monitor_page2(void) {
 }
 
 void vmbus_transport_drain_simp(void) {
+  /* P1-C fix (2026-05-25): the previous `while (consume() != 0)`
+   * loop continued forever on any non-zero return, including the
+   * negative error returns from `vmbus_consume_simp_slot` (-1 on
+   * `g_simp_page == NULL`, -2 on a non-VMBus message slot). The
+   * non-VMBus path clears the slot before returning -2 so two
+   * iterations would normally terminate, but a sudden detach of
+   * `g_simp_page` mid-drain would pin the calling thread on -1
+   * forever. The fix is:
+   *
+   *   - Only continue while the consume returns POSITIVE (matches
+   *     the function's documented "bytes consumed" semantic; 0 means
+   *     no slot ready, negative means an error path that already
+   *     handled the slot).
+   *   - Cap total iterations at `VMBUS_DRAIN_MAX_ITERATIONS` so even
+   *     an adversarial state (consume returns a positive that never
+   *     advances the slot) cannot wedge the drain. 256 is well
+   *     above any realistic burst on the SIMP page (16 slots × a
+   *     handful of retries) but small enough to be a noticeable
+   *     stall if reached. */
+  enum { VMBUS_DRAIN_MAX_ITERATIONS = 256 };
+  int iterations = 0;
   if (!g_simp_page) {
     return;
   }
 
   __asm__ volatile("" ::: "memory");
-  while (vmbus_consume_simp_slot(VMBUS_MESSAGE_SINT, NULL, 0u) != 0) {
+  while (iterations < VMBUS_DRAIN_MAX_ITERATIONS &&
+         vmbus_consume_simp_slot(VMBUS_MESSAGE_SINT, NULL, 0u) > 0) {
+    iterations++;
+  }
+  if (iterations >= VMBUS_DRAIN_MAX_ITERATIONS) {
+    vmbus_transport_log("[vmbus] drain_simp iteration cap reached\n");
   }
 }

@@ -31,7 +31,9 @@ struct terminal {
   uint32_t scroll_offset;
   uint32_t scrollback_lines;
   uint32_t fg_color;
+  uint32_t fg_base_color;
   uint32_t bg_color;
+  uint8_t attrs;
   int cursor_visible;
   int cursor_blink;
   uint64_t cursor_blink_tick;

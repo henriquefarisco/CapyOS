@@ -4,8 +4,20 @@
 #ifndef UNIT_TEST
 #endif
 
+static int storvsc_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 static void storvsc_log(const char *s) {
 #ifndef UNIT_TEST
+  if (!storvsc_verbose_io()) {
+    (void)s;
+    return;
+  }
   fbcon_print(s);
 #else
   (void)s;
@@ -14,6 +26,10 @@ static void storvsc_log(const char *s) {
 
 static void storvsc_log_hex(uint64_t value) {
 #ifndef UNIT_TEST
+  if (!storvsc_verbose_io()) {
+    (void)value;
+    return;
+  }
   fbcon_print_hex(value);
 #else
   (void)value;

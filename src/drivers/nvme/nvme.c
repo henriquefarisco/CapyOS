@@ -3,6 +3,7 @@
  */
 #include "drivers/nvme.h"
 #include "drivers/nvme/nvme_commands.h"
+#include "drivers/nvme/nvme_reset.h"
 #include "drivers/pcie.h"
 #include "drivers/storage/block_error.h"
 #include "drivers/storage/storage_smoke.h"
@@ -515,53 +516,110 @@ static enum block_io_error_class nvme_block_write_ex(void *opaque,
 static int nvme_controller_reset(struct nvme_device *dev) {
   uint32_t cc;
   uint32_t csts;
+  struct nvme_reset_queue_state qs;
+  struct nvme_reset_progress progress = {0u, 0u};
   if (!dev || !dev->bar) {
     return -1;
   }
   klog(KLOG_INFO, "[nvme] controller reset begin");
   cc = mmio_read32(dev->bar + NVME_CC);
   mmio_write32(dev->bar + NVME_CC, cc & ~NVME_CC_EN);
+  /* Stage 2 spin: wait for CSTS.RDY=0 after CC.EN=0. Bail early
+   * on CSTS.CFS (Controller Fatal Status) so a wedged controller
+   * does not burn the full 1M-iteration budget — the host can
+   * surface the failure to the upper retry loop immediately. */
   for (uint32_t spin = 0; spin < 1000000u; ++spin) {
     csts = mmio_read32(dev->bar + NVME_CSTS);
-    if ((csts & NVME_CSTS_RDY) == 0u) {
+    if (nvme_reset_csts_fatal(csts)) {
+      klog_hex(KLOG_ERROR, "[nvme] reset CSTS.CFS during disable, csts=",
+               csts);
+      return -1;
+    }
+    if (nvme_reset_csts_rdy_cleared(csts)) {
       break;
     }
     cpu_relax();
   }
   csts = mmio_read32(dev->bar + NVME_CSTS);
-  if (csts & NVME_CSTS_RDY) {
+  if (nvme_reset_csts_fatal(csts)) {
+    klog_hex(KLOG_ERROR, "[nvme] reset CSTS.CFS after disable, csts=", csts);
+    return -1;
+  }
+  if (!nvme_reset_csts_rdy_cleared(csts)) {
     klog_hex(KLOG_ERROR, "[nvme] reset CSTS still RDY=", csts);
     return -1;
   }
   mmio_write32(dev->bar + NVME_CC, cc | NVME_CC_EN);
+  /* Stage 4 spin: wait for CSTS.RDY=1 after CC.EN=1. Same CFS
+   * early-exit applies; a controller that comes back with CFS=1
+   * means the reset itself failed and the host must escalate
+   * (likely a hardware-level reset path that this driver does
+   * not implement). */
   for (uint32_t spin = 0; spin < 1000000u; ++spin) {
     csts = mmio_read32(dev->bar + NVME_CSTS);
-    if (csts & NVME_CSTS_RDY) {
+    if (nvme_reset_csts_fatal(csts)) {
+      klog_hex(KLOG_ERROR, "[nvme] reset CSTS.CFS during enable, csts=",
+               csts);
+      return -1;
+    }
+    if (nvme_reset_csts_rdy_set(csts)) {
       break;
     }
     cpu_relax();
   }
   csts = mmio_read32(dev->bar + NVME_CSTS);
-  if ((csts & NVME_CSTS_RDY) == 0u) {
+  if (nvme_reset_csts_fatal(csts)) {
+    klog_hex(KLOG_ERROR, "[nvme] reset CSTS.CFS after enable, csts=", csts);
+    return -1;
+  }
+  if (!nvme_reset_csts_rdy_set(csts)) {
     klog_hex(KLOG_ERROR, "[nvme] reset RDY never came back, csts=", csts);
     return -1;
   }
-  /* Re-prime phase tracking. The next CQE will flip the phase bit. */
-  dev->admin_cq_head = 0;
-  dev->admin_cq_phase = 1;
-  dev->admin_sq_tail = 0;
-  dev->io_cq_head = 0;
-  dev->io_cq_phase = 1;
-  dev->io_sq_tail = 0;
-  /* alpha.252 audit fix BUG #2: recreate I/O queues. The controller
-   * discarded them when CC.EN dropped; without these the next I/O
-   * command would pend forever and burn the retry budget. */
-  if (nvme_create_io_cq(dev, 1) != 0) {
-    klog(KLOG_ERROR, "[nvme] controller reset: failed to recreate I/O CQ");
-    return -1;
-  }
-  if (nvme_create_io_sq(dev, 1, 1) != 0) {
-    klog(KLOG_ERROR, "[nvme] controller reset: failed to recreate I/O SQ");
+  /* Reprime queue tracking through the pure helper so the host
+   * tests can observe the exact baseline the controller expects
+   * after the CC.EN toggle (heads/tails=0, phases=1). */
+  nvme_reset_reprime_queue_state(&qs);
+  dev->admin_sq_tail = qs.admin_sq_tail;
+  dev->admin_cq_head = qs.admin_cq_head;
+  dev->admin_cq_phase = qs.admin_cq_phase;
+  dev->io_sq_tail = qs.io_sq_tail;
+  dev->io_cq_head = qs.io_cq_head;
+  dev->io_cq_phase = qs.io_cq_phase;
+  /* alpha.252 audit fix BUG #2: recreate I/O queues via the pure
+   * planner so the order (CQ first, then SQ) is locked by host
+   * tests in tests/drivers/test_nvme_controller_reset.c. The
+   * controller validates the target CQ id during Create I/O SQ;
+   * inverting the order would burn the retry budget on every
+   * timeout-triggered reset. */
+  for (;;) {
+    enum nvme_reset_admin_action action =
+        nvme_reset_next_admin_action(&progress);
+    if (action == NVME_RESET_ADMIN_DONE) {
+      break;
+    }
+    if (action == NVME_RESET_ADMIN_CREATE_IO_CQ) {
+      if (nvme_create_io_cq(dev, 1) != 0) {
+        klog(KLOG_ERROR,
+             "[nvme] controller reset: failed to recreate I/O CQ");
+        return -1;
+      }
+      progress.io_cq_recreated = 1u;
+      continue;
+    }
+    if (action == NVME_RESET_ADMIN_CREATE_IO_SQ) {
+      if (nvme_create_io_sq(dev, 1, 1) != 0) {
+        klog(KLOG_ERROR,
+             "[nvme] controller reset: failed to recreate I/O SQ");
+        return -1;
+      }
+      progress.io_sq_recreated = 1u;
+      continue;
+    }
+    /* Unreachable: the planner enum is closed. Treat as failure to
+     * stop the loop should a new action be added without wiring. */
+    klog(KLOG_ERROR,
+         "[nvme] controller reset: unknown admin action from planner");
     return -1;
   }
   klog(KLOG_INFO, "[nvme] controller reset ok (I/O queues restored)");

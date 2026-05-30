@@ -370,6 +370,7 @@ static void test_invalidate_rect_overflow_falls_back_to_full_redraw(void) {
 static void test_partial_present_copies_only_dirty_rect(void) {
   struct gui_window *win;
   struct gui_rect rect = { 0, 0, 1u, 1u };
+  struct compositor_stats stats;
   reset_fixture();
   win = compositor_create_window("P", 10, 30, 16, 16);
   if (!win) {
@@ -386,11 +387,15 @@ static void test_partial_present_copies_only_dirty_rect(void) {
   win->surface.pixels[1] = 0x0000BB22u;
   compositor_invalidate_rect(win->id, &rect);
   compositor_render();
+  compositor_stats_get(&stats);
   TEST("compositor_render: partial present copies only dirty rect");
   if (framebuffer[30u * 320u + 10u] == 0x0000AA11u &&
       framebuffer[30u * 320u + 11u] != 0x0000BB22u &&
-      comp_dirty_rect_count == 0u &&
-      comp_full_redraw_pending == 0) PASS();
+      comp_dirty_rect_count == 0u && comp_full_redraw_pending == 0 &&
+      stats.frames_rendered == 2u &&
+      stats.full_frames_presented == 1u &&
+      stats.partial_frames_presented == 1u &&
+      stats.dirty_rects_presented == 1u) PASS();
   else FAIL("partial present");
   shutdown_fixture();
 }
@@ -474,6 +479,114 @@ static void test_partial_compose_paints_intersecting_windows_only(void) {
       comp_dirty_rect_count == 0u &&
       comp_full_redraw_pending == 0) PASS();
   else FAIL("partial compose intersection");
+  shutdown_fixture();
+}
+
+static void test_compositor_stats_track_full_and_partial_frames(void) {
+  struct gui_window *win;
+  struct gui_rect rect = { 0, 0, 2u, 2u };
+  struct compositor_stats stats;
+  reset_fixture();
+  win = compositor_create_window("S", 10, 30, 16, 16);
+  if (!win) {
+    TEST("compositor stats: fixture creates window");
+    FAIL("create window");
+    shutdown_fixture();
+    return;
+  }
+  win->decorated = 0;
+  win->corner_radius = 0;
+  compositor_show_window(win->id);
+  compositor_render();
+  compositor_stats_get(&stats);
+  TEST("compositor_stats_get: initial render is full-frame");
+  if (stats.frames_rendered == 1u &&
+      stats.full_frames_presented == 1u &&
+      stats.partial_frames_presented == 0u &&
+      stats.dirty_rects_presented == 0u) PASS();
+  else FAIL("initial full-frame stats");
+
+  compositor_invalidate_rect(win->id, &rect);
+  compositor_render();
+  compositor_stats_get(&stats);
+  TEST("compositor_stats_get: dirty rect render is partial-frame");
+  if (stats.frames_rendered == 2u &&
+      stats.full_frames_presented == 1u &&
+      stats.partial_frames_presented == 1u &&
+      stats.dirty_rects_presented == 1u) PASS();
+  else FAIL("partial-frame stats");
+
+  compositor_invalidate_all();
+  compositor_render();
+  compositor_stats_get(&stats);
+  TEST("compositor_stats_get: invalidate_all records another full-frame");
+  if (stats.frames_rendered == 3u &&
+      stats.full_frames_presented == 2u &&
+      stats.partial_frames_presented == 1u &&
+      stats.dirty_rects_presented == 1u) PASS();
+  else FAIL("second full-frame stats");
+  shutdown_fixture();
+}
+
+/* Etapa 4 Fase D follow-up (2026-05-25): the cursor area in
+ * partial-damage mode is now only erased when at least one dirty
+ * rect overlaps it. Two cases:
+ *
+ *  - cursor disjoint from the dirty rect: counter stays put;
+ *    fewer back-to-front memcpys and no brief no-cursor frame.
+ *  - cursor inside the dirty rect: counter increments so external
+ *    observers can see the path is actually exercised.
+ *
+ * Both branches assert through `compositor_stats_get`, the public
+ * surface we already use for partial vs full frame accounting. */
+static void test_compositor_cursor_erase_only_on_overlap(void) {
+  struct gui_window *win;
+  struct gui_rect rect = { 0, 0, 4u, 4u };
+  struct compositor_stats baseline;
+  struct compositor_stats stats;
+  reset_fixture();
+  win = compositor_create_window("C", 10, 30, 16, 16);
+  if (!win) {
+    TEST("compositor cursor erase: fixture creates window");
+    FAIL("create window");
+    shutdown_fixture();
+    return;
+  }
+  win->decorated = 0;
+  win->corner_radius = 0;
+  compositor_show_window(win->id);
+  /* First full render presents the cursor area to the front. */
+  compositor_render_cursor(200, 150);
+  compositor_render();
+  compositor_render_cursor(200, 150);
+  compositor_stats_get(&baseline);
+
+  /* Cursor is far from the invalidated rectangle: erase counter
+   * must not move. The partial-frame counter still increments
+   * because the dirty rect itself is rendered. */
+  compositor_invalidate_rect(win->id, &rect);
+  compositor_render();
+  compositor_stats_get(&stats);
+  TEST("compositor cursor erase: disjoint dirty rect leaves cursor untouched");
+  if (stats.partial_frames_presented == baseline.partial_frames_presented + 1u &&
+      stats.cursor_erases_partial == baseline.cursor_erases_partial) PASS();
+  else FAIL("disjoint erase counter drifted");
+
+  /* Move cursor onto the dirty rect and re-invalidate. The erase
+   * counter must now advance because the cursor area overlaps the
+   * dirty rect at screen (10, 30, 4, 4). Cursor at (8, 28) with
+   * the 16x16 sprite covers x=[8,24) y=[28,44), which overlaps
+   * the dirty rect both on x and y. */
+  compositor_render_cursor(8, 28);
+  compositor_stats_get(&baseline);
+  compositor_invalidate_rect(win->id, &rect);
+  compositor_render();
+  compositor_stats_get(&stats);
+  TEST("compositor cursor erase: overlapping dirty rect increments counter");
+  if (stats.partial_frames_presented == baseline.partial_frames_presented + 1u &&
+      stats.cursor_erases_partial == baseline.cursor_erases_partial + 1u) PASS();
+  else FAIL("overlap erase counter drifted");
+
   shutdown_fixture();
 }
 
@@ -596,6 +709,8 @@ int test_compositor_events_run(void) {
   test_partial_present_copies_only_dirty_rect();
   test_partial_compose_paints_window_once();
   test_partial_compose_paints_intersecting_windows_only();
+  test_compositor_stats_track_full_and_partial_frames();
+  test_compositor_cursor_erase_only_on_overlap();
   test_visibility_blur_events();
   test_destroy_events();
   printf("  -> %d/%d passed\n", tests_passed, tests_run);

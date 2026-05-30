@@ -1,4 +1,4 @@
-/* Unified block-I/O error classifier (Slice 3E.2).
+/* Unified block-I/O error classifier (Slice 3E.2 + Hyper-V StorVSC prep).
  *
  * Pure logic — no MMIO, no kmalloc, no klog. Suitable for the host
  * runner and for the runtime drivers alike.
@@ -32,6 +32,33 @@
 #define BLK_NVME_SCT_SHIFT 9u
 #define BLK_NVME_SCT_MASK 0x7u
 #define BLK_NVME_DNR_BIT (1u << 15)
+
+#define BLK_SCSI_STATUS_GOOD 0x00u
+#define BLK_SCSI_STATUS_CHECK_CONDITION 0x02u
+#define BLK_SCSI_STATUS_BUSY 0x08u
+#define BLK_SCSI_STATUS_RESERVATION_CONFLICT 0x18u
+#define BLK_SCSI_STATUS_TASK_SET_FULL 0x28u
+#define BLK_SCSI_STATUS_ACA_ACTIVE 0x30u
+#define BLK_SCSI_STATUS_TASK_ABORTED 0x40u
+
+#define BLK_SRB_STATUS_MASK 0x3Fu
+#define BLK_SRB_STATUS_SUCCESS 0x01u
+#define BLK_SRB_STATUS_ABORTED 0x02u
+#define BLK_SRB_STATUS_BUSY 0x05u
+#define BLK_SRB_STATUS_INVALID_PATH_ID 0x07u
+#define BLK_SRB_STATUS_NO_DEVICE 0x08u
+#define BLK_SRB_STATUS_TIMEOUT 0x09u
+#define BLK_SRB_STATUS_SELECTION_TIMEOUT 0x0Au
+#define BLK_SRB_STATUS_COMMAND_TIMEOUT 0x0Bu
+#define BLK_SRB_STATUS_BUS_RESET 0x0Eu
+#define BLK_SRB_STATUS_PARITY_ERROR 0x0Fu
+#define BLK_SRB_STATUS_NO_HBA 0x11u
+#define BLK_SRB_STATUS_UNEXPECTED_BUS_FREE 0x13u
+#define BLK_SRB_STATUS_PHASE_SEQUENCE_FAILURE 0x14u
+#define BLK_SRB_STATUS_REQUEST_FLUSHED 0x16u
+#define BLK_SRB_STATUS_INVALID_LUN 0x20u
+#define BLK_SRB_STATUS_INVALID_TARGET_ID 0x21u
+#define BLK_SRB_STATUS_ERROR_RECOVERY 0x23u
 
 enum block_io_error_class block_io_classify_ahci(uint32_t pxis, uint32_t pxtfd,
                                                  int timed_out,
@@ -98,6 +125,59 @@ enum block_io_error_class block_io_classify_nvme(uint16_t status,
   /* Default — Generic / Command Specific without DNR is treated as
    * recoverable; the caller's retry budget bounds the loop. */
   return BLOCK_IO_ERR_TRANSIENT;
+}
+
+enum block_io_error_class block_io_classify_scsi(uint8_t scsi_status,
+                                                 uint8_t srb_status,
+                                                 int timed_out,
+                                                 int device_present) {
+  uint8_t srb_base;
+  if (!device_present) {
+    return BLOCK_IO_ERR_DEVICE_GONE;
+  }
+  if (timed_out) {
+    return BLOCK_IO_ERR_TIMEOUT;
+  }
+  srb_base = srb_status & BLK_SRB_STATUS_MASK;
+  switch (srb_base) {
+  case 0u:
+  case BLK_SRB_STATUS_SUCCESS:
+    break;
+  case BLK_SRB_STATUS_TIMEOUT:
+  case BLK_SRB_STATUS_COMMAND_TIMEOUT:
+    return BLOCK_IO_ERR_TIMEOUT;
+  case BLK_SRB_STATUS_SELECTION_TIMEOUT:
+  case BLK_SRB_STATUS_INVALID_PATH_ID:
+  case BLK_SRB_STATUS_NO_DEVICE:
+  case BLK_SRB_STATUS_NO_HBA:
+  case BLK_SRB_STATUS_INVALID_LUN:
+  case BLK_SRB_STATUS_INVALID_TARGET_ID:
+    return BLOCK_IO_ERR_DEVICE_GONE;
+  case BLK_SRB_STATUS_ABORTED:
+  case BLK_SRB_STATUS_BUSY:
+  case BLK_SRB_STATUS_BUS_RESET:
+  case BLK_SRB_STATUS_PARITY_ERROR:
+  case BLK_SRB_STATUS_UNEXPECTED_BUS_FREE:
+  case BLK_SRB_STATUS_PHASE_SEQUENCE_FAILURE:
+  case BLK_SRB_STATUS_REQUEST_FLUSHED:
+  case BLK_SRB_STATUS_ERROR_RECOVERY:
+    return BLOCK_IO_ERR_TRANSIENT;
+  default:
+    return BLOCK_IO_ERR_PERMANENT;
+  }
+  switch (scsi_status) {
+  case BLK_SCSI_STATUS_GOOD:
+    return BLOCK_IO_OK;
+  case BLK_SCSI_STATUS_BUSY:
+  case BLK_SCSI_STATUS_TASK_SET_FULL:
+  case BLK_SCSI_STATUS_ACA_ACTIVE:
+  case BLK_SCSI_STATUS_TASK_ABORTED:
+    return BLOCK_IO_ERR_TRANSIENT;
+  case BLK_SCSI_STATUS_CHECK_CONDITION:
+  case BLK_SCSI_STATUS_RESERVATION_CONFLICT:
+  default:
+    return BLOCK_IO_ERR_PERMANENT;
+  }
 }
 
 const char *block_io_error_class_name(enum block_io_error_class cls) {

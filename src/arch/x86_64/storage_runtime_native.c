@@ -4,6 +4,7 @@
 
 #include "drivers/nvme.h"
 #include "drivers/storage/ahci.h"
+#include "drivers/storage/ata_pio.h"
 #include "fs/capyfs.h"
 #include "memory/kmem.h"
 #include "internal/storage_runtime_gpt.h"
@@ -289,18 +290,43 @@ void x64_storage_runtime_native_probe(
     native_io_print(
         io,
         "[storage] AHCI nativo indisponivel: inicializacao do controlador falhou.\n");
-    return;
-  }
-  if (ahci_device_count() <= 0) {
+  } else if (ahci_device_count() <= 0) {
     native_io_print(
         io, "[storage] AHCI nativo indisponivel: nenhum disco SATA pronto.\n");
-    return;
+  } else {
+    raw_ahci = ahci_get_block_device(0);
+    if (probe_native_storage_backend_from_raw(
+            state, handoff, io, probe_buf, probe_buf_size, raw_ahci,
+            X64_STORAGE_BACKEND_AHCI, "AHCI")) {
+      return;
+    }
   }
 
-  raw_ahci = ahci_get_block_device(0);
-  (void)probe_native_storage_backend_from_raw(
-      state, handoff, io, probe_buf, probe_buf_size, raw_ahci,
-      X64_STORAGE_BACKEND_AHCI, "AHCI");
+  /* ATA-PIO is the broad-hardware-compatibility fallback for hypervisor
+   * environments that expose legacy IDE/ATA emulation instead of (or in
+   * addition to) NVMe/AHCI. Concrete targets:
+   *
+   *   - Hyper-V Generation 1 with IDE-attached VHD;
+   *   - older QEMU/Bochs/VirtualBox legacy IDE machines;
+   *   - bare-metal hosts with firmware that exposes ATA legacy fallback.
+   *
+   * On the VMware + UEFI + E1000 official validation track this branch is
+   * unreachable because AHCI/NVMe always probe first. */
+  if (ata_devices_count() <= 0) {
+    ata_init();
+  }
+  if (ata_devices_count() > 0) {
+    struct block_device *raw_ata = ata_primary_device();
+    if (raw_ata && probe_native_storage_backend_from_raw(
+                       state, handoff, io, probe_buf, probe_buf_size, raw_ata,
+                       X64_STORAGE_BACKEND_ATA_PIO, "ATA-PIO")) {
+      return;
+    }
+  } else {
+    native_io_print(
+        io,
+        "[storage] ATA-PIO nativo indisponivel: nenhum disco IDE detectado.\n");
+  }
 }
 
 struct block_device *x64_storage_runtime_native_promote(

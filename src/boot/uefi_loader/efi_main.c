@@ -1,5 +1,47 @@
 #include "internal/uefi_loader_internal.h"
 
+static VOID cpuid_leaf(UINT32 leaf, UINT32 subleaf, UINT32 *eax, UINT32 *ebx,
+                       UINT32 *ecx, UINT32 *edx) {
+  UINT32 a = 0, b = 0, c = 0, d = 0;
+  __asm__ __volatile__("cpuid"
+                       : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                       : "a"(leaf), "c"(subleaf));
+  if (eax) *eax = a;
+  if (ebx) *ebx = b;
+  if (ecx) *ecx = c;
+  if (edx) *edx = d;
+}
+
+static BOOLEAN uefi_loader_running_on_hyperv(void) {
+  UINT32 eax = 0, ebx = 0, ecx = 0, edx = 0;
+  char vendor[13];
+
+  cpuid_leaf(1u, 0u, &eax, &ebx, &ecx, &edx);
+  if ((ecx & (1u << 31)) == 0u) {
+    return FALSE;
+  }
+
+  cpuid_leaf(0x40000000u, 0u, &eax, &ebx, &ecx, &edx);
+  vendor[0] = (char)(ebx & 0xFFu);
+  vendor[1] = (char)((ebx >> 8) & 0xFFu);
+  vendor[2] = (char)((ebx >> 16) & 0xFFu);
+  vendor[3] = (char)((ebx >> 24) & 0xFFu);
+  vendor[4] = (char)(ecx & 0xFFu);
+  vendor[5] = (char)((ecx >> 8) & 0xFFu);
+  vendor[6] = (char)((ecx >> 16) & 0xFFu);
+  vendor[7] = (char)((ecx >> 24) & 0xFFu);
+  vendor[8] = (char)(edx & 0xFFu);
+  vendor[9] = (char)((edx >> 8) & 0xFFu);
+  vendor[10] = (char)((edx >> 16) & 0xFFu);
+  vendor[11] = (char)((edx >> 24) & 0xFFu);
+  vendor[12] = '\0';
+
+  return vendor[0] == 'M' && vendor[1] == 'i' && vendor[2] == 'c' &&
+         vendor[3] == 'r' && vendor[4] == 'o' && vendor[5] == 's' &&
+         vendor[6] == 'o' && vendor[7] == 'f' && vendor[8] == 't' &&
+         vendor[9] == ' ' && vendor[10] == 'H' && vendor[11] == 'v';
+}
+
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   InitializeLib(image, systab);
   Print(L"CapyOS UEFI loader: iniciando [DBG-BUILD-V2]\r\n");
@@ -41,18 +83,18 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
 
   // Modo instalador: ISO de instalacao contem um marcador (CAPYOS.INI).
   // Se o boot config ja possui SETUP_DATA, o sistema foi configurado por uma
-  // instalacao anterior — pular modo instalador mesmo que readonly/marker.
+  // instalacao anterior — pular modo instalador mesmo que o marker exista.
   BOOLEAN install_marker = boot_volume_has_marker(image, systab);
   BOOLEAN install_ro = boot_volume_is_readonly(image, systab);
   BOOLEAN install_cdrom = boot_device_is_cdrom(image, systab);
   BOOLEAN already_installed = (g_runtime_boot_cfg_valid &&
       (g_runtime_boot_cfg.flags & BOOT_CONFIG_FLAG_HAS_SETUP_DATA));
-  if (already_installed && (install_marker || install_ro || install_cdrom)) {
+  if (already_installed && install_marker) {
     Print(L"[UEFI] Instalacao anterior detectada; ignorando modo instalador "
           L"(marker=%d readonly=%d cdrom=%d)\r\n",
           install_marker ? 1 : 0, install_ro ? 1 : 0, install_cdrom ? 1 : 0);
   }
-  if (!already_installed && (install_marker || install_ro || install_cdrom)) {
+  if (!already_installed && install_marker) {
     kernel_release_fixed_window(systab);
     Print(L"[UEFI] Modo instalador detectado (marker=%d readonly=%d cdrom=%d)\r\n",
           install_marker ? 1 : 0, install_ro ? 1 : 0, install_cdrom ? 1 : 0);
@@ -168,6 +210,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   UINT64 runtime_last_lba = 0;
   UINT32 runtime_media_id_raw = 0;
   UINT64 runtime_last_lba_raw = 0;
+  BOOLEAN hyperv_hybrid_requested = FALSE;
+  BOOLEAN boot_services_kept_active = FALSE;
   EFI_STATUS runtime_st =
       choose_runtime_disk_with_data(image, systab, &runtime_disk,
                                     &runtime_data_lba, &runtime_data_count,
@@ -189,6 +233,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     }
   } else {
     Print(L"[UEFI] Runtime disk nao detectado (fallback RAM).\r\n");
+  }
+  hyperv_hybrid_requested =
+      (uefi_loader_running_on_hyperv() && runtime_disk &&
+       runtime_data_count != 0);
+  if (hyperv_hybrid_requested) {
+    Print(L"[UEFI] Hyper-V detectado; mantendo BootServices ativo para "
+          L"EFI BlockIO/SNP no primeiro boot.\r\n");
   }
   Print(L"[UEFI] Preparando handoff/runtime...\r\n");
 
@@ -391,6 +442,32 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     dbgcon_putc('n');
     Print(L"[UEFI] Memory map buffer reservado addr=0x%lx pages=%lu cap=%lu\r\n",
           (UINT64)map_addr, (UINT64)pages, (UINT64)map_capacity);
+    if (hyperv_hybrid_requested) {
+      UINTN got = map_capacity;
+      dbgcon_putc('H');
+      st = uefi_call_wrapper(systab->BootServices->GetMemoryMap, 5, &got, map,
+                             &map_key, &desc_sz, &desc_ver);
+      if (st == EFI_BUFFER_TOO_SMALL) {
+        map_sz = got;
+        uefi_call_wrapper(systab->BootServices->FreePages, 2, map_addr, pages);
+        map = NULL;
+        map_addr = 0;
+        pages = 0;
+        map_capacity = 0;
+        continue;
+      }
+      if (EFI_ERROR(st)) {
+        Print(L"[UEFI] GetMemoryMap(hybrid) falhou: %r\r\n", st);
+        log_close(&logf);
+        return st;
+      }
+      map_sz = got;
+      boot_services_kept_active = TRUE;
+      exited_boot_services = TRUE;
+      Print(L"[UEFI] Handoff hibrido Hyper-V pronto; ExitBootServices sera "
+            L"adiado ao kernel.\r\n");
+      break;
+    }
     if (attempt == 0) {
       Print(L"[UEFI] Iniciando ExitBootServices (silencio ate o kernel)...\r\n");
     }
@@ -470,14 +547,22 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->efi_system_table = (UINT64)(UINTN)systab;
   handoff->efi_image_handle = (UINT64)(UINTN)image;
   handoff->efi_map_key = (UINT64)map_key;
-  handoff->runtime_flags = 0;
-  handoff->efi_block_io = 0;
+  handoff->runtime_flags =
+      boot_services_kept_active
+          ? (BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE |
+             BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT |
+             BOOT_HANDOFF_RUNTIME_FIRMWARE_BLOCK_IO |
+             BOOT_HANDOFF_RUNTIME_HYBRID_BOOT)
+          : 0;
+  handoff->efi_block_io =
+      boot_services_kept_active ? (UINT64)(UINTN)runtime_disk : 0;
   handoff->efi_disk_last_lba = runtime_last_lba;
   handoff->data_lba_start = runtime_data_lba;
   handoff->data_lba_count = runtime_data_count;
   handoff->efi_block_size = runtime_block_size;
   handoff->efi_media_id = runtime_media_id;
-  handoff->efi_block_io_raw = 0;
+  handoff->efi_block_io_raw =
+      boot_services_kept_active ? (UINT64)(UINTN)runtime_disk_raw : 0;
   handoff->efi_disk_last_lba_raw = runtime_last_lba_raw;
   handoff->data_lba_start_raw = runtime_data_lba_raw;
   handoff->data_lba_count_raw = runtime_data_count_raw;

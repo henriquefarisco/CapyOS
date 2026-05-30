@@ -11,6 +11,7 @@ enum net_nic_kind {
   NET_NIC_KIND_HYPERV_NETVSC = 4,
   NET_NIC_KIND_TULIP = 5,
   NET_NIC_KIND_VMXNET3 = 6,
+  NET_NIC_KIND_EFI_SNP = 7,
 };
 
 struct net_nic_probe {

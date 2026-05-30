@@ -21,6 +21,38 @@ static struct vmbus_keyboard g_kbd = {0};
 
 static inline void cpu_relax(void) { __asm__ volatile("pause" ::: "memory"); }
 
+static int keyboard_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+static void keyboard_log(const char *s) {
+#ifndef UNIT_TEST
+  if (!keyboard_verbose_io()) {
+    (void)s;
+    return;
+  }
+  fbcon_print(s);
+#else
+  (void)s;
+#endif
+}
+
+static void keyboard_log_hex(uint64_t value) {
+#ifndef UNIT_TEST
+  if (!keyboard_verbose_io()) {
+    (void)value;
+    return;
+  }
+  fbcon_print_hex(value);
+#else
+  (void)value;
+#endif
+}
+
 static void keyboard_memzero(void *ptr, uint32_t len) {
   uint8_t *p = (uint8_t *)ptr;
   if (!p) {
@@ -118,27 +150,27 @@ static int vmbus_keyboard_open_runtime(struct vmbus_keyboard *kbd) {
     return -1;
   }
 
-  fbcon_print("[vmbus] keyboard: preparando canal runtime.\n");
+  keyboard_log("[vmbus] keyboard: preparando canal runtime.\n");
   vmbus_keyboard_channel_from_device(kbd, &channel);
-  fbcon_print("[vmbus] keyboard: params relid=");
-  fbcon_print_hex((uint64_t)channel.child_relid);
-  fbcon_print(" conn=");
-  fbcon_print_hex((uint64_t)channel.connection_id);
-  fbcon_print(" mon=");
-  fbcon_print_hex((uint64_t)channel.monitor_id);
-  fbcon_print(" alloc=");
-  fbcon_print_hex((uint64_t)channel.monitor_allocated);
-  fbcon_print(" openid=");
-  fbcon_print_hex((uint64_t)channel.open_id);
-  fbcon_print(" gpadl=");
-  fbcon_print_hex((uint64_t)channel.gpadl_handle);
-  fbcon_print("\n");
+  keyboard_log("[vmbus] keyboard: params relid=");
+  keyboard_log_hex((uint64_t)channel.child_relid);
+  keyboard_log(" conn=");
+  keyboard_log_hex((uint64_t)channel.connection_id);
+  keyboard_log(" mon=");
+  keyboard_log_hex((uint64_t)channel.monitor_id);
+  keyboard_log(" alloc=");
+  keyboard_log_hex((uint64_t)channel.monitor_allocated);
+  keyboard_log(" openid=");
+  keyboard_log_hex((uint64_t)channel.open_id);
+  keyboard_log(" gpadl=");
+  keyboard_log_hex((uint64_t)channel.gpadl_handle);
+  keyboard_log("\n");
   if (vmbus_channel_runtime_open(&channel) != 0) {
-    fbcon_print("[vmbus] keyboard: falha ao abrir canal runtime.\n");
+    keyboard_log("[vmbus] keyboard: falha ao abrir canal runtime.\n");
     return -2;
   }
   vmbus_keyboard_channel_apply(kbd, &channel);
-  fbcon_print("[vmbus] keyboard: canal runtime pronto.\n");
+  keyboard_log("[vmbus] keyboard: canal runtime pronto.\n");
   return 0;
 }
 
@@ -163,26 +195,26 @@ int vmbus_keyboard_init(struct vmbus_keyboard *kbd) {
     return -3;
   }
   vmbus_keyboard_protocol_fill_ops(&protocol_ops);
-  fbcon_print("[vmbus] keyboard: drenando mensagens pendentes SIMP.\n");
+  keyboard_log("[vmbus] keyboard: drenando mensagens pendentes SIMP.\n");
   vmbus_transport_drain_simp();
-  fbcon_print("[vmbus] keyboard: enviando handshake de protocolo.\n");
-  fbcon_print("[vmbus] keyboard: mantendo IRQs ativas durante handshake.\n");
+  keyboard_log("[vmbus] keyboard: enviando handshake de protocolo.\n");
+  keyboard_log("[vmbus] keyboard: mantendo IRQs ativas durante handshake.\n");
   send_rc = vmbus_keyboard_protocol_send_request(kbd, &protocol_ops);
   if (send_rc != 0) {
-    fbcon_print("[vmbus] keyboard: envio do handshake falhou.\n");
-    fbcon_print("[vmbus] keyboard: send_rc=");
-    fbcon_print_hex((uint64_t)(uint32_t)send_rc);
-    fbcon_print("\n");
+    keyboard_log("[vmbus] keyboard: envio do handshake falhou.\n");
+    keyboard_log("[vmbus] keyboard: send_rc=");
+    keyboard_log_hex((uint64_t)(uint32_t)send_rc);
+    keyboard_log("\n");
     vmbus_keyboard_reset_buffers(kbd);
     return -4;
   }
-  fbcon_print("[vmbus] keyboard: aguardando resposta do protocolo.\n");
+  keyboard_log("[vmbus] keyboard: aguardando resposta do protocolo.\n");
   wait_rc = vmbus_keyboard_protocol_wait(kbd, &protocol_ops);
   if (wait_rc != 0) {
-    fbcon_print("[vmbus] keyboard: resposta do protocolo falhou.\n");
-    fbcon_print("[vmbus] keyboard: wait_rc=");
-    fbcon_print_hex((uint64_t)(uint32_t)wait_rc);
-    fbcon_print("\n");
+    keyboard_log("[vmbus] keyboard: resposta do protocolo falhou.\n");
+    keyboard_log("[vmbus] keyboard: wait_rc=");
+    keyboard_log_hex((uint64_t)(uint32_t)wait_rc);
+    keyboard_log("\n");
     vmbus_keyboard_reset_buffers(kbd);
     return -5;
   }
@@ -245,16 +277,16 @@ int hyperv_keyboard_init(void) {
     return 0;
   }
 
-  fbcon_print("[vmbus] === Driver VMBus Hyper-V ===\n");
+  keyboard_log("[vmbus] === Driver VMBus Hyper-V ===\n");
 
   if (vmbus_runtime_connect() != 0) {
-    fbcon_print("[vmbus] Falha ao conectar barramento.\n");
+    keyboard_log("[vmbus] Falha ao conectar barramento.\n");
     return -2;
   }
 
   if ((g_kbd.child_relid == 0u || g_kbd.connection_id == 0u) &&
       vmbus_query_offer(&k_hyperv_kbd_guid, &offer) != 0) {
-    fbcon_print("[vmbus] Teclado nao encontrado.\n");
+    keyboard_log("[vmbus] Teclado nao encontrado.\n");
     return -3;
   }
   if (g_kbd.child_relid == 0u || g_kbd.connection_id == 0u) {
@@ -265,15 +297,15 @@ int hyperv_keyboard_init(void) {
     g_kbd.is_dedicated_interrupt = offer.is_dedicated_interrupt;
   }
 
-  fbcon_print("[vmbus] TECLADO encontrado! relid=");
-  fbcon_print_hex(g_kbd.child_relid);
-  fbcon_print("\n");
+  keyboard_log("[vmbus] TECLADO encontrado! relid=");
+  keyboard_log_hex(g_kbd.child_relid);
+  keyboard_log("\n");
 
   if (vmbus_keyboard_init(&g_kbd) != 0) {
-    fbcon_print("[vmbus] Falha ao preparar canal do teclado.\n");
+    keyboard_log("[vmbus] Falha ao preparar canal do teclado.\n");
     return -4;
   }
 
-  fbcon_print("[vmbus] Teclado VMBus configurado!\n");
+  keyboard_log("[vmbus] Teclado VMBus configurado!\n");
   return 0;
 }

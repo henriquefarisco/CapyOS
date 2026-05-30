@@ -61,6 +61,13 @@ CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone 
 # Ver kernel/scheduler.c::scheduler_yield e
 # arch/x86_64/preemptive_boot.c::capyos_preemptive_mark_running.
 CFLAGS64  += -DCAPYOS_PREEMPTIVE_SCHEDULER
+CAPYOS_LOCAL_MODULES ?= 0
+CAPYPKG_LOCAL_BUNDLE_BASE_URL ?= https://local.capyos.invalid/capypkg/
+CAPYPKG_LOCAL_INDEX_URL := $(CAPYPKG_LOCAL_BUNDLE_BASE_URL)modules-index.txt
+ifeq ($(CAPYOS_LOCAL_MODULES),1)
+  CFLAGS64 += -DCAPYOS_LOCAL_CAPYPKG_BUNDLE -DCAPYOS_DEFAULT_MODULES_INDEX_URL=\"$(CAPYPKG_LOCAL_INDEX_URL)\"
+  $(info [build] CAPYOS_LOCAL_MODULES=1: embedding local capypkg bundle for lab ISO)
+endif
 # EXTRA_CFLAGS64 is appended last so callers can flip build-time
 # feature flags without editing CFLAGS64 in place. Examples:
 #   make all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
@@ -118,11 +125,19 @@ ifeq ($(PROFILE),core-only)
 endif
 
 CAPYUI_WIDGET_DIR :=
-ifneq ($(strip $(CAPYUI_DIR)),)
-  ifneq ($(wildcard $(CAPYUI_DIR)/src/widget/capy_display_list.h),)
-    CAPYUI_WIDGET_DIR := $(CAPYUI_DIR)/src/widget
-    CFLAGS64 += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
-    $(info [build] CapyUI widget display-list detected at $(CAPYUI_WIDGET_DIR))
+CAPYUI_DISPLAY_ADAPTER_OBJS :=
+ifneq ($(PROFILE),core-only)
+  ifneq ($(strip $(CAPYUI_DIR)),)
+    ifneq ($(wildcard $(CAPYUI_DIR)/src/widget/capy_display_list.h),)
+      CAPYUI_WIDGET_DIR := $(CAPYUI_DIR)/src/widget
+      CAPYUI_DISPLAY_ADAPTER_OBJS := \
+        $(BUILD)/x86_64/gui/widgets/context_menu_display_list.o \
+        $(BUILD)/x86_64/gui/widgets/inline_prompt_display_list.o \
+        $(BUILD)/x86_64/gui/widgets/terminal_display_list.o \
+        $(BUILD)/x86_64/gui/widgets/widget_display_list.o
+      CFLAGS64 += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
+      $(info [build] CapyUI widget display-list detected at $(CAPYUI_WIDGET_DIR))
+    endif
   endif
 endif
 
@@ -179,6 +194,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_input_gate.o \
 	$(BUILD)/x86_64/arch/x86_64/hyperv_runtime_coordinator.o \
 	$(BUILD)/x86_64/arch/x86_64/kernel_main.o \
+	$(BUILD)/x86_64/arch/x86_64/kernel_boot_stages.o \
 	$(BUILD)/x86_64/arch/x86_64/preemptive_boot.o \
 	$(BUILD)/x86_64/arch/x86_64/preemptive_demo.o \
 	$(BUILD)/x86_64/arch/x86_64/tss.o \
@@ -304,6 +320,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/capypkg/capypkg_manifest.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_repo.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_install.o \
+	$(BUILD)/x86_64/services/capypkg_local_bundle.o \
 	$(BUILD)/x86_64/services/capypkg_bootstrap.o \
 	$(BUILD)/x86_64/services/install_profile.o \
 	$(BUILD)/x86_64/auth/user.o \
@@ -323,6 +340,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
+	$(BUILD)/x86_64/drivers/net/efi_snp.o \
 	$(BUILD)/x86_64/drivers/net/netvsc_backend.o \
 	$(BUILD)/x86_64/drivers/net/netvsc_runtime.o \
 	$(BUILD)/x86_64/drivers/net/netvsc_session.o \
@@ -337,6 +355,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/net/net_probe.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme.o \
 	$(BUILD)/x86_64/drivers/nvme/nvme_commands.o \
+	$(BUILD)/x86_64/drivers/nvme/nvme_reset.o \
 	$(BUILD)/x86_64/drivers/hyperv/hyperv_stage.o \
 	$(BUILD)/x86_64/drivers/usb/xhci.o \
 	$(BUILD)/x86_64/drivers/usb/xhci_context.o \
@@ -347,15 +366,19 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_offers.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_channel_runtime.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_keyboard_protocol.o \
+	$(BUILD)/x86_64/drivers/hyperv/vmbus_mouse_protocol.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_ring.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_transport.o \
 	$(BUILD)/x86_64/drivers/hyperv/vmbus_keyboard.o \
+	$(BUILD)/x86_64/drivers/hyperv/vmbus_mouse.o \
 	$(BUILD)/x86_64/drivers/input/keyboard/core.o \
 	$(BUILD)/x86_64/drivers/input/keyboard/layouts/us.o \
 	$(BUILD)/x86_64/drivers/input/keyboard/layouts/br_abnt2.o \
 	$(BUILD)/x86_64/drivers/storage/ahci.o \
 	$(BUILD)/x86_64/drivers/storage/ahci_commands.o \
+	$(BUILD)/x86_64/drivers/storage/ahci_dispatch.o \
 	$(BUILD)/x86_64/drivers/storage/ahci_slot_allocator.o \
+	$(BUILD)/x86_64/drivers/storage/ata_pio.o \
 	$(BUILD)/x86_64/drivers/storage/block_error.o \
 	$(BUILD)/x86_64/drivers/storage/storage_smoke.o \
 	$(BUILD)/x86_64/drivers/storage/storage_smoke_io.o \
@@ -363,6 +386,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/storage/ramdisk.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_backend.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_runtime.o \
+	$(BUILD)/x86_64/drivers/storage/storvsc_scsi.o \
+	$(BUILD)/x86_64/drivers/storage/storvsc_io.o \
 	$(BUILD)/x86_64/drivers/storage/storvsp.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_session.o \
 	$(BUILD)/x86_64/drivers/storage/storvsc_vmbus.o \
@@ -453,6 +478,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/task.o \
 	$(BUILD)/x86_64/kernel/task_iter.o \
 	$(BUILD)/x86_64/kernel/scheduler.o \
+	$(BUILD)/x86_64/kernel/scheduler_smoke.o \
+	$(BUILD)/x86_64/kernel/scheduler_smoke_io.o \
+	$(BUILD)/x86_64/kernel/thread_crash_smoke.o \
+	$(BUILD)/x86_64/kernel/thread_crash_smoke_io.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
 	$(BUILD)/x86_64/kernel/worker.o \
 	$(BUILD)/x86_64/kernel/syscall.o \
@@ -599,12 +628,15 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/gui/core/font.o \
 	$(BUILD)/x86_64/gui/core/compositor.o \
 	$(BUILD)/x86_64/gui/core/compositor_damage.o \
+	$(BUILD)/x86_64/gui/core/compositor_smoke.o \
+	$(BUILD)/x86_64/gui/core/compositor_smoke_io.o \
 	$(BUILD)/x86_64/gui/core/compositor_theme.o \
 	$(BUILD)/x86_64/gui/core/compositor_render.o \
 	$(BUILD)/x86_64/gui/widgets/widget.o \
 	$(BUILD)/x86_64/gui/widgets/capyui_display_adapter.o \
 	$(BUILD)/x86_64/gui/widgets/context_menu.o \
 	$(BUILD)/x86_64/gui/widgets/inline_prompt.o \
+	$(CAPYUI_DISPLAY_ADAPTER_OBJS) \
 	$(BUILD)/x86_64/gui/terminal/terminal.o \
 	$(BUILD)/x86_64/fs/capyfs/capyfs_journal_integration.o \
 	$(BUILD)/x86_64/boot/boot_metrics.o \
@@ -626,6 +658,15 @@ CAPYOS64_OBJS = \
 	$(DESKTOP_OBJS) \
 	$(WINDOW_OBJS) \
 	$(APPS_OBJS)
+CAPYPKG_LOCAL_BUNDLE_C := $(BUILD_GEN)/capypkg_local_bundle_data.c
+CAPYPKG_LOCAL_BUNDLE_H := $(BUILD_GEN)/capypkg_local_bundle_data.h
+CAPYPKG_LOCAL_INDEX := $(BUILD)/capypkg/local/modules-index.txt
+CAPYPKG_LOCAL_BUNDLE_STAMP := $(BUILD)/capypkg/local/.bundle.stamp
+LOCAL_MODULES_WORKSPACE ?= ..
+LOCAL_MODULES_REPOS ?= CapyAgent CapyBrowser CapyCodecs CapyUI CapyLang CapyBenchmark
+ifeq ($(CAPYOS_LOCAL_MODULES),1)
+CAPYOS64_OBJS += $(BUILD)/x86_64/generated/capypkg_local_bundle_data.o
+endif
 CAPYOS64_DEPS = $(CAPYOS64_OBJS:.o=.d)
 
 # ── Desktop / window / apps object lists (alpha.241 modular profile) ────────
@@ -702,6 +743,10 @@ $(BUILD)/boot:
 	mkdir -p $(BUILD)/boot
 
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
+$(BUILD)/x86_64/generated/%.o: $(BUILD_GEN)/%.c $(BUILD_GEN)/%.h | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
 
@@ -1022,6 +1067,49 @@ smoke-marker-policy-selftest:
 	python3 tools/scripts/smoke_marker_policy.py
 	python3 tools/scripts/smoke_x64_vmware.py --self-test
 	python3 tools/scripts/release_ci_smoke_evidence.py --self-test
+
+.PHONY: hyperv-baseline-evidence-selftest
+hyperv-baseline-evidence-selftest:
+	python3 tools/scripts/test_hyperv_baseline_evidence_summary.py
+	python3 tools/scripts/test_hyperv_baseline_evidence_schema.py
+	python3 tools/scripts/test_hyperv_baseline_evidence_ci_actions.py
+	python3 tools/scripts/test_hyperv_baseline_evidence_core.py
+	python3 tools/scripts/test_hyperv_quiet_input_policy.py
+	python3 tools/scripts/test_hyperv_persistent_boot_policy.py
+	python3 tools/scripts/test_hyperv_compat_storage_stack.py
+	python3 tools/scripts/test_hyperv_hybrid_firmware_runtime_policy.py
+	python3 tools/scripts/check_hyperv_baseline_evidence.py --self-test
+
+.PHONY: uefi-kernel-load-contract-selftest
+uefi-kernel-load-contract-selftest:
+	python3 tools/scripts/test_uefi_kernel_load_contract.py
+
+.PHONY: hyperv-baseline-evidence
+hyperv-baseline-evidence:
+	@if [ -z "$(HYPERV_BASELINE_LOG)" ] && [ -z "$(HYPERV_BASELINE_BUNDLE_DIR)" ]; then echo "[err] informe HYPERV_BASELINE_LOG=/caminho/hyperv-baseline.log ou HYPERV_BASELINE_BUNDLE_DIR=/caminho/evidencias"; exit 2; fi
+	@REQ_ARGS=""; \
+	if [ -n "$(HYPERV_BASELINE_LOG)" ]; then REQ_ARGS="$$REQ_ARGS --log $(HYPERV_BASELINE_LOG)"; fi; \
+	if [ -n "$(HYPERV_BASELINE_BUNDLE_DIR)" ]; then REQ_ARGS="$$REQ_ARGS --bundle-dir $(HYPERV_BASELINE_BUNDLE_DIR)"; fi; \
+	if [ "$(HYPERV_BASELINE_REQUIRE_INSPECT_DISK)" = "1" ]; then REQ_ARGS="$$REQ_ARGS --require-inspect-disk"; fi; \
+	for log in $(HYPERV_BASELINE_EXTRA_LOGS); do REQ_ARGS="$$REQ_ARGS --extra-log $$log"; done; \
+	if [ -n "$(HYPERV_BASELINE_MIN_VMBUS_STAGE)" ]; then REQ_ARGS="$$REQ_ARGS --min-vmbus-stage $(HYPERV_BASELINE_MIN_VMBUS_STAGE)"; fi; \
+	if [ -n "$(HYPERV_BASELINE_MIN_RUNTIME_STAGE)" ]; then REQ_ARGS="$$REQ_ARGS --min-runtime-stage $(HYPERV_BASELINE_MIN_RUNTIME_STAGE)"; fi; \
+	if [ -n "$(HYPERV_BASELINE_PROFILE)" ]; then REQ_ARGS="$$REQ_ARGS --profile $(HYPERV_BASELINE_PROFILE)"; fi; \
+	if [ "$(HYPERV_BASELINE_STRICT_COMMANDS)" = "1" ]; then REQ_ARGS="$$REQ_ARGS --strict-commands"; fi; \
+	if [ "$(HYPERV_BASELINE_REQUIRE_HOST_PREFLIGHT)" = "1" ]; then REQ_ARGS="$$REQ_ARGS --require-host-preflight"; fi; \
+	if [ "$(HYPERV_BASELINE_REQUIRE_HOST_SERIAL_CONSOLE)" = "1" ]; then REQ_ARGS="$$REQ_ARGS --require-host-serial-console"; fi; \
+	if [ "$(HYPERV_BASELINE_REQUIRE_HOST_NETWORK_ADAPTER)" = "1" ]; then REQ_ARGS="$$REQ_ARGS --require-host-network-adapter"; fi; \
+	if [ "$(HYPERV_BASELINE_REQUIRE_HOST_STORAGE_DISK)" = "1" ]; then REQ_ARGS="$$REQ_ARGS --require-host-storage-disk"; fi; \
+	if [ -n "$(HYPERV_BASELINE_HOST_PREFLIGHT_PROFILE)" ]; then REQ_ARGS="$$REQ_ARGS --host-preflight-profile $(HYPERV_BASELINE_HOST_PREFLIGHT_PROFILE)"; fi; \
+	if [ -n "$(HYPERV_BASELINE_VALIDATION_PROFILE)" ]; then REQ_ARGS="$$REQ_ARGS --validation-profile $(HYPERV_BASELINE_VALIDATION_PROFILE)"; fi; \
+	for group in $(HYPERV_BASELINE_REQUIRE_BUNDLE_FILES); do REQ_ARGS="$$REQ_ARGS --require-bundle-file $$group"; done; \
+	if [ -n "$(HYPERV_BASELINE_EXPECT_NEXT)" ]; then REQ_ARGS="$$REQ_ARGS --expect-next-slice $(HYPERV_BASELINE_EXPECT_NEXT)"; fi; \
+	if [ -n "$(HYPERV_BASELINE_EXPECT_FOCUS)" ]; then REQ_ARGS="$$REQ_ARGS --expect-focus $(HYPERV_BASELINE_EXPECT_FOCUS)"; fi; \
+	if [ -n "$(HYPERV_BASELINE_SUMMARY)" ]; then \
+		python3 tools/scripts/check_hyperv_baseline_evidence.py --summary "$(HYPERV_BASELINE_SUMMARY)" $$REQ_ARGS; \
+	else \
+		python3 tools/scripts/check_hyperv_baseline_evidence.py $$REQ_ARGS; \
+	fi
 
 .PHONY: release-public-key-fingerprint
 release-public-key-fingerprint:
@@ -1442,9 +1530,15 @@ TEST_SRCS   := \
                \
                tests/gui/test_gui_event.c tests/gui/test_gui_event_helpers.c src/gui/core/event.c \
                tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_damage.c src/gui/core/compositor_theme.c src/gui/core/compositor_render.c \
+               tests/gui/test_compositor_smoke_gate.c src/gui/core/compositor_smoke.c tests/stubs/stub_compositor_smoke_io.c \
                tests/gui/test_widget_damage.c src/gui/widgets/widget.c \
                tests/gui/test_overlay_damage.c src/gui/widgets/context_menu.c src/gui/widgets/inline_prompt.c src/lang/app_language.c \
+               tests/gui/test_font_cache.c \
                tests/gui/test_capyui_display_adapter.c src/gui/widgets/capyui_display_adapter.c src/gui/core/font.c \
+               src/gui/widgets/context_menu_display_list.c \
+               src/gui/widgets/inline_prompt_display_list.c \
+               tests/gui/test_terminal_display_list.c tests/gui/test_terminal_ansi_display_list.c tests/gui/test_terminal_ansi_sequence_display_list.c tests/gui/test_terminal_ansi_sequence_more_display_list.c tests/gui/test_terminal_ansi_sequence_extra_display_list.c src/gui/terminal/terminal.c src/gui/widgets/terminal_display_list.c \
+               src/gui/widgets/widget_display_list.c \
                tests/gui/test_gui_window_dispatcher.c tests/gui/test_gui_window_dispatcher_lifecycle.c $(WINDOW_SRC_ROOT)/window_dispatcher.c \
                tests/gui/test_desktop_smoke_readiness.c $(DESKTOP_SRC_ROOT)/desktop_smoke_readiness.c \
                \
@@ -1481,6 +1575,9 @@ TEST_SRCS   := \
                    userland/lib/capylibc-tls/capy_tls.c \
                \
                tests/drivers/test_keyboard_layouts.c src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c \
+               tests/drivers/test_hyperv_vmbus_stage.c src/drivers/hyperv/hyperv_stage.c \
+               tests/drivers/test_vmbus_ring.c src/drivers/hyperv/vmbus_ring.c \
+               tests/drivers/test_vmbus_mouse_protocol.c src/drivers/hyperv/vmbus_mouse_protocol.c \
                tests/drivers/test_hyperv_runtime.c src/net/hyperv/hyperv_runtime.c \
                tests/drivers/test_input_hyperv_gate.c src/arch/x86_64/hyperv_input_gate.c \
                tests/drivers/test_hyperv_runtime_gate.c src/net/hyperv/hyperv_runtime_gate.c \
@@ -1496,8 +1593,10 @@ TEST_SRCS   := \
                tests/drivers/test_storvsc_session.c src/drivers/storage/storvsc_session.c \
                tests/drivers/test_storvsc_backend.c src/drivers/storage/storvsc_backend.c \
                tests/drivers/test_storvsc_runtime.c src/drivers/storage/storvsc_runtime.c \
+               tests/drivers/test_storvsc_scsi.c src/drivers/storage/storvsc_scsi.c \
+               tests/drivers/test_storvsc_io.c src/drivers/storage/storvsc_io.c \
                tests/drivers/test_storage_runtime_hyperv_plan.c src/arch/x86_64/storage_runtime_hyperv_plan.c \
-               tests/drivers/test_usb_hid_init.c src/drivers/usb/usb_hid.c \
+               tests/drivers/test_usb_hid_init.c src/drivers/usb/usb_hid.c src/drivers/input/mouse.c \
                    src/drivers/usb/usb_hid_smoke.c tests/stubs/stub_usb_hid_smoke_io.c \
                tests/drivers/test_usb_hid_smoke_gate.c \
                tests/drivers/test_xhci_address_device.c src/drivers/usb/xhci.c \
@@ -1508,7 +1607,9 @@ TEST_SRCS   := \
                tests/drivers/test_xhci_release_slot.c \
                tests/drivers/test_usb_descriptor_parse.c src/drivers/usb/usb_descriptors.c \
                tests/drivers/test_ahci_commands.c src/drivers/storage/ahci_commands.c \
+               tests/drivers/test_ahci_dispatch.c src/drivers/storage/ahci_dispatch.c \
                tests/drivers/test_nvme_commands.c src/drivers/nvme/nvme_commands.c \
+               tests/drivers/test_nvme_controller_reset.c src/drivers/nvme/nvme_reset.c \
                tests/drivers/test_block_error.c src/drivers/storage/block_error.c \
                tests/fs/test_block_retry.c \
                tests/drivers/test_ahci_slot_allocator.c src/drivers/storage/ahci_slot_allocator.c \
@@ -1523,6 +1624,8 @@ TEST_SRCS   := \
                tests/kernel/test_process_destroy.c \
                tests/kernel/test_vmm_anon_regions.c \
                tests/kernel/test_context_switch.c src/kernel/scheduler.c \
+               tests/kernel/test_scheduler_smoke_gate.c src/kernel/scheduler_smoke.c tests/stubs/stub_scheduler_smoke_io.c \
+               tests/kernel/test_thread_crash_smoke_gate.c src/kernel/thread_crash_smoke.c tests/stubs/stub_thread_crash_smoke_io.c \
                tests/kernel/test_syscall_msr.c \
                tests/kernel/test_fault_classify.c src/arch/x86_64/fault_classify.c \
                tests/kernel/test_pmm_refcount.c src/memory/pmm_refcount.c \
@@ -1621,6 +1724,7 @@ TEST_SRCS   := \
                tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
                tests/services/test_update_transact.c src/services/update_agent_transact.c \
                tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c \
+               tests/services/test_capypkg_local_bundle.c src/services/capypkg_local_bundle.c \
                tests/services/test_install_profile.c src/services/install_profile.c \
                \
                tests/apps/test_hello_program.c \
@@ -1667,6 +1771,8 @@ TEST_CAPYPKG_SRCS := \
 	src/services/capypkg/capypkg_manifest.c \
 	src/services/capypkg/capypkg_repo.c \
 	src/services/capypkg/capypkg_install.c \
+	src/services/capypkg_bootstrap.c \
+	src/services/install_profile.c \
 	src/security/sha256.c \
 	src/kernel/log/klog.c
 TEST_CAPYPKG_MAIN := $(BUILD)/tests/capypkg_main.c
@@ -1680,7 +1786,7 @@ test-capypkg: $(TEST_CAPYPKG_BIN)
 $(TEST_CAPYPKG_BIN): $(TEST_CAPYPKG_SRCS) | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	@printf '#include <stdint.h>\nuint64_t pit_ticks(void){static uint64_t t=0;return ++t;}\nint run_capypkg_tests(void);\nint main(void){return run_capypkg_tests();}\n' > $(TEST_CAPYPKG_MAIN)
-	$(HOST_CC) $(HOST_CFLAGS) -o $@ $(TEST_CAPYPKG_SRCS) $(TEST_CAPYPKG_MAIN)
+	$(HOST_CC) $(HOST_CFLAGS) -DCAPYPKG_BOOTSTRAP_TESTS -o $@ $(TEST_CAPYPKG_SRCS) $(TEST_CAPYPKG_MAIN)
 
 .PHONY: modules-index
 # modules-index: aggregate per-repo capypkg manifests (produced by
@@ -1692,6 +1798,45 @@ modules-index:
 	@echo "Agregando manifests dos repositorios externos..."
 	python3 tools/scripts/build_modules_index.py \
 	  --output build/capypkg/modules-index.txt
+
+.PHONY: local-modules-index
+local-modules-index:
+	@echo "Gerando indice local de modulos para ISO de laboratorio..."
+	python3 tools/scripts/build_local_capypkg_bundle.py \
+	  --workspace "$(LOCAL_MODULES_WORKSPACE)" \
+	  --repos $(LOCAL_MODULES_REPOS) \
+	  --base-url "$(CAPYPKG_LOCAL_BUNDLE_BASE_URL)" \
+	  --output-index "$(CAPYPKG_LOCAL_INDEX)"
+
+.PHONY: local-modules-bundle force-local-modules-bundle
+local-modules-bundle: $(CAPYPKG_LOCAL_BUNDLE_STAMP)
+
+force-local-modules-bundle:
+
+$(CAPYPKG_LOCAL_BUNDLE_STAMP): force-local-modules-bundle tools/scripts/build_local_capypkg_bundle.py | $(BUILD) $(BUILD_GEN)
+	@echo "Gerando bundle C local de modulos para ISO de laboratorio..."
+	python3 tools/scripts/build_local_capypkg_bundle.py \
+	  --workspace "$(LOCAL_MODULES_WORKSPACE)" \
+	  --repos $(LOCAL_MODULES_REPOS) \
+	  --base-url "$(CAPYPKG_LOCAL_BUNDLE_BASE_URL)" \
+	  --output-index "$(CAPYPKG_LOCAL_INDEX)" \
+	  --output-c "$(CAPYPKG_LOCAL_BUNDLE_C)" \
+	  --output-h "$(CAPYPKG_LOCAL_BUNDLE_H)"
+	@touch "$@"
+
+$(CAPYPKG_LOCAL_BUNDLE_C) $(CAPYPKG_LOCAL_BUNDLE_H): $(CAPYPKG_LOCAL_BUNDLE_STAMP)
+	@test -f "$@"
+
+$(BUILD)/x86_64/generated/capypkg_local_bundle_data.o: $(CAPYPKG_LOCAL_BUNDLE_STAMP) $(CAPYPKG_LOCAL_BUNDLE_C) $(CAPYPKG_LOCAL_BUNDLE_H)
+
+.PHONY: iso-uefi-local-modules
+iso-uefi-local-modules:
+	$(MAKE) all64 iso-uefi \
+	  CAPYOS_LOCAL_MODULES=1 \
+	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
+	  LOCAL_MODULES_REPOS="$(LOCAL_MODULES_REPOS)" \
+	  CAPYPKG_LOCAL_BUNDLE_BASE_URL="$(CAPYPKG_LOCAL_BUNDLE_BASE_URL)" \
+	  TOOLCHAIN64="$(TOOLCHAIN64)"
 
 .PHONY: layout-audit
 layout-audit:
@@ -1730,6 +1875,7 @@ check-toolchain:
 .PHONY: release-check
 release-check:
 	@echo "Executando gates de release robusta..."
+	@if [ "$(CAPYOS_LOCAL_MODULES)" = "1" ]; then echo "[err] CAPYOS_LOCAL_MODULES=1 e lab-only; release-check deve usar artefatos oficiais remotos."; exit 2; fi
 	$(MAKE) check-toolchain TOOLCHAIN64=elf
 	$(MAKE) test
 	$(MAKE) layout-audit
@@ -1802,6 +1948,122 @@ smoke-x64-vmware-storage-resilience: all64 iso-uefi manifest64
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] storage-stack ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 4 — Fase C external validation gate.
+# Boots the official VMware+UEFI+E1000 VM and validates that the
+# scheduler has dispatched each of three observed task IDs at least
+# twice. Builds with CAPYOS_SCHEDULER_FAIRNESS_SMOKE so the first
+# adopted scheduler runtime creates two yield-only helper tasks; the
+# marker is emitted by src/kernel/scheduler_smoke_io.c through the
+# scheduler switch path.
+# Required reading before invoking this gate:
+# docs/operations/etapa-4-external-validation-playbook.md.
+smoke-x64-vmware-scheduler-fairness:
+	@echo "Executando smoke test VMware+E1000 scheduler-fairness..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] storage-stack ready" \
+		--marker "[smoke] gui-session ready" \
+		--marker "[smoke] scheduler-fairness ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 4 — Fase D external validation gate.
+# Boots the official VMware+UEFI+E1000 VM and validates that the
+# compositor observed partial dirty-rect rendering, not only full
+# redraws. The gate latches after two partial frames so the marker
+# lands after the GUI session has settled.
+# Required reading before invoking this gate:
+# docs/operations/etapa-4-external-validation-playbook.md.
+smoke-x64-vmware-compositor-damage-track: all64 iso-uefi manifest64
+	@echo "Executando smoke test VMware+E1000 compositor-damage-track..."
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] gui-session ready" \
+		--marker "[smoke] compositor-damage-track ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 4 — Fase E external validation gate.
+# Boots the official VMware+UEFI+E1000 VM and validates that the
+# kernel survives an observed fault-killed process exit. Builds with
+# CAPYOS_THREAD_CRASH_SURVIVES_SMOKE so the scheduler runtime spawns
+# a one-shot helper that feeds the exit latch with code = 128 + 14
+# (POSIX death-by-signal for x86_64 page fault). Subsequent scheduler
+# ticks drive the tick latch; the marker is emitted by
+# src/kernel/thread_crash_smoke_io.c after THREAD_CRASH_SMOKE_REQUIRED_
+# TICKS_AFTER_CRASH ticks elapse without the kernel rebooting.
+# Required reading before invoking this gate:
+# docs/operations/etapa-4-external-validation-playbook.md.
+smoke-x64-vmware-thread-crash-survives:
+	@echo "Executando smoke test VMware+E1000 thread-crash-survives..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] gui-session ready" \
+		--marker "[smoke] thread-crash-survives ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 4 — aggregate external validation gate (alpha.260).
+# Builds a single ISO with all Etapa 4 smoke flags enabled at once
+# and validates all four markers (DHCP -> gui-session ->
+# scheduler-fairness -> compositor-damage-track -> thread-crash-survives)
+# in a single VMware boot. This is the recommended Fase F gate
+# because it avoids the four sequential clean+build cycles that the
+# per-phase targets do; the per-phase targets remain for isolated
+# triage when one marker fails.
+#
+# Notes:
+#   - Both `CAPYOS_SCHEDULER_FAIRNESS_SMOKE` and
+#     `CAPYOS_THREAD_CRASH_SURVIVES_SMOKE` need to be set so the
+#     scheduler runtime spawns BOTH helper task families on boot.
+#     The compositor-damage-track latch is always live (no flag
+#     needed), so its marker fires whenever the GUI renders two
+#     partial frames during the boot sequence.
+#   - The harness `tools/scripts/smoke_x64_vmware.py` validates each
+#     marker via `smoke_marker_policy.markers_in_order` which is
+#     STRICT in the given order: marker N must appear in the serial
+#     log AFTER marker N-1. The order below mirrors the canonical
+#     per-Fase targets (DHCP -> gui-session -> Fase C -> Fase D ->
+#     Fase E). If a real boot consistently produces a different
+#     order among the three Fase C/D/E markers, reorder the
+#     --marker lines below to match what the operator observes;
+#     each marker is emitted exactly once per boot by design, so
+#     the order is deterministic for a given build.
+#
+# Required reading before invoking this gate:
+# docs/operations/etapa-4-external-validation-playbook.md.
+smoke-x64-vmware-etapa-4:
+	@echo "Executando smoke test VMware+E1000 etapa-4 aggregate..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full \
+		EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE -DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] gui-session ready" \
+		--marker "[smoke] scheduler-fairness ready" \
+		--marker "[smoke] compositor-damage-track ready" \
+		--marker "[smoke] thread-crash-survives ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+.PHONY: smoke-x64-hyperv-boot
+smoke-x64-hyperv-boot:
+	@if [ -z "$(IMG)" ]; then echo "Usage: make smoke-x64-hyperv-boot IMG=/path/to/CapyOSGen2.vhd"; echo "See docs/operations/hyperv-gen2-baseline-runbook.md"; exit 2; fi
+	$(MAKE) all64 iso-uefi manifest64
+	$(MAKE) provision-vhd IMG="$(IMG)"
+	$(MAKE) inspect-disk IMG="$(IMG)"
+	@echo "[manual] Boot the Hyper-V Gen2 VM attached to IMG=$(IMG)."
+	@echo "[manual] Capture serial log plus: runtime-native show, net-status, net-dump-runtime, recovery-storage, info."
+	@echo "[manual] Baseline pass/fail criteria: docs/operations/hyperv-gen2-baseline-runbook.md"
+	@echo "[pending] Hyper-V boot smoke is a manual laboratory gate in this phase; attach evidence before treating it as passed."
+	@exit 2
 
 smoke-x64-cli-nvme: all64 iso-uefi manifest64
 	@echo "Executando smoke test x64 (first-boot + login + persistencia) com NVMe..."
@@ -2102,6 +2364,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

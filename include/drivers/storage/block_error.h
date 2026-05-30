@@ -1,4 +1,4 @@
-/* Unified block-I/O error classification for AHCI / NVMe / ATA-PIO.
+/* Unified block-I/O error classification for AHCI / NVMe / ATA-PIO / SCSI.
  *
  * Etapa 3 — Slice 3E.2: every storage driver classifies its
  * completion / timeout outcome into a small enum that the upper
@@ -15,6 +15,7 @@
  *  - SATA AHCI 1.3.1 §5.4 (Port Task File) — TFD layout.
  *  - ATA/ATAPI-ACS3 §7.16 (ERROR register codes).
  *  - NVMe 1.4c §4.6.1 (Completion Queue Entry — Status Field).
+ *  - SCSI SPC/SAM status byte plus Windows StorVSP SRB status values.
  */
 #ifndef DRIVERS_STORAGE_BLOCK_ERROR_H
 #define DRIVERS_STORAGE_BLOCK_ERROR_H
@@ -95,6 +96,11 @@ enum block_io_error_class block_io_classify_ahci(uint32_t pxis, uint32_t pxtfd,
  *  6. Otherwise → TRANSIENT (default retryable). */
 enum block_io_error_class block_io_classify_nvme(uint16_t status,
                                                  int timed_out);
+
+enum block_io_error_class block_io_classify_scsi(uint8_t scsi_status,
+                                                 uint8_t srb_status,
+                                                 int timed_out,
+                                                 int device_present);
 
 /* Stable lowercase short name suitable for klog. Never NULL. */
 const char *block_io_error_class_name(enum block_io_error_class cls);

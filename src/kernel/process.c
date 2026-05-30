@@ -7,6 +7,10 @@
 #include "memory/kmem.h"
 #include <stddef.h>
 
+#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
+#include "kernel/thread_crash_smoke.h"
+#endif
+
 /* 2026-05-02: FD type and pipe direction constants now live in
  * include/kernel/process.h (FD_TYPE_*, FD_PIPE_FLAG_*). Removed
  * the local copies that duplicated them. */
@@ -251,6 +255,20 @@ void process_exit(int code) {
   for (int i = 0; i < PROCESS_FD_MAX; i++) {
     process_fd_free(me, i);
   }
+  /* Etapa 4 Fase E: feed the thread-crash-survives smoke latch.
+   * `code >= 128` is the POSIX-style "death by signal" encoding used
+   * by `process_exit(128 + vector)` in x64_exception_dispatch when a
+   * user-mode fault is contained. Voluntary exits with `code < 128`
+   * are ignored by the latch because they do not prove the kernel
+   * survived an asynchronous fault. The latch returns 1 on the edge
+   * that flips the gate from "not ready" to "ready"; on that edge we
+   * emit the COM1 marker exactly once. The body is wrapped in a
+   * compile-time flag so production builds pay zero cost. */
+#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
+  if (thread_crash_smoke_try_latch_exit_global((int32_t)code)) {
+    thread_crash_smoke_emit_marker();
+  }
+#endif
   task_exit(code);
 }
 
@@ -383,7 +401,13 @@ struct process *process_at_index(size_t index) {
 
 int process_kill(uint32_t pid, int signal) {
   struct process *p = process_by_pid(pid);
+  struct process *current;
   if (!p) return -1;
+  current = process_current();
+  if ((current && current == p) ||
+      (p->main_thread && p->main_thread == task_current())) {
+    return -2;
+  }
   /* Phase 6.6: record a POSIX-ish exit code (128 + signal & 0x7F)
    * so an eventual `wait()` consumer sees a sensible value. The
    * 0x7F mask matches WTERMSIG semantics; signal numbers above

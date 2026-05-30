@@ -1,11 +1,11 @@
-# Guia Hyper-V para CapyOS (historico / nao suportado)
+# Guia Hyper-V para CapyOS (laboratorio)
 
 Status atual:
 
-- `Hyper-V` nao faz parte da trilha suportada de validacao ou release
+- `Hyper-V` voltou a ter uma trilha de compatibilidade de laboratorio
 - o caminho oficial atual para VM e `VMware` em `UEFI` com `E1000`
-- este documento permanece apenas como referencia historica de investigacao
-- qualquer comportamento em `Hyper-V` deve ser tratado como experimental
+- o baseline operacional fica em `docs/operations/hyperv-gen2-baseline-runbook.md`
+- qualquer comportamento em `Hyper-V` ainda deve ser tratado como experimental
 
 O fluxo `BIOS/MBR` (Geracao 1) esta descontinuado para build, boot e release.
 
@@ -93,7 +93,17 @@ make inspect-disk IMG='/mnt/c/ProgramData/Microsoft/Windows/Virtual Hard Disks/C
   - first boot, login e shell aparecem sem depender de COM
   - arquivos e usuarios persistem apos reboot
 
-Para smoke automatizado da trilha oficial:
+Para preparar o baseline manual de Hyper-V Gen2:
+
+```bash
+cd /mnt/d/Projetos/CapyOS
+make smoke-x64-hyperv-boot IMG='/mnt/c/ProgramData/Microsoft/Windows/Virtual Hard Disks/CapyOSGen2.vhd'
+```
+
+Esse alvo compila, provisiona o VHD e imprime os passos manuais do runbook.
+Ele termina como pendente enquanto a coleta externa nao for anexada.
+
+Para smoke automatizado da trilha oficial VMware/QEMU:
 
 ```bash
 cd /mnt/d/Projetos/CapyOS

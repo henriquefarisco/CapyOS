@@ -22,8 +22,20 @@ static void protocol_memcpy(void *dst, const void *src, uint32_t len) {
   }
 }
 
+static int protocol_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 static void protocol_log(const char *s) {
 #ifndef UNIT_TEST
+  if (!protocol_verbose_io()) {
+    (void)s;
+    return;
+  }
   fbcon_print(s);
 #else
   (void)s;
@@ -32,6 +44,10 @@ static void protocol_log(const char *s) {
 
 static void protocol_log_hex(uint64_t value) {
 #ifndef UNIT_TEST
+  if (!protocol_verbose_io()) {
+    (void)value;
+    return;
+  }
   fbcon_print_hex(value);
 #else
   (void)value;
@@ -58,6 +74,9 @@ static uint64_t protocol_now_ticks_100hz(void) {
 static void protocol_log_packet_desc(const struct vmbus_keyboard_packet_desc *desc,
                                      uint32_t packet_len) {
   if (!desc) {
+    return;
+  }
+  if (!protocol_verbose_io()) {
     return;
   }
   protocol_log("[vmbus] keyboard: recv desc type=");
@@ -94,7 +113,9 @@ int vmbus_keyboard_protocol_process_packet(struct vmbus_keyboard *kbd,
     protocol_memcpy(&desc, packet, (uint32_t)sizeof(desc));
     protocol_log_packet_desc(&desc, packet_len);
     if (desc.type == VMBUS_PKT_COMP) {
-      protocol_log("[vmbus] keyboard: recv completion packet; aguardando payload inband.\n");
+      if (protocol_verbose_io()) {
+        protocol_log("[vmbus] keyboard: recv completion packet; aguardando payload inband.\n");
+      }
       return 0;
     }
   } else {
@@ -117,11 +138,13 @@ int vmbus_keyboard_protocol_process_packet(struct vmbus_keyboard *kbd,
   }
 
   protocol_memcpy(&msgtype, payload, sizeof(msgtype));
-  protocol_log("[vmbus] keyboard: msgtype=");
-  protocol_log_hex((uint64_t)msgtype);
-  protocol_log(" payload_len=");
-  protocol_log_hex((uint64_t)payload_len);
-  protocol_log("\n");
+  if (msgtype != SYNTH_KBD_EVENT || protocol_verbose_io()) {
+    protocol_log("[vmbus] keyboard: msgtype=");
+    protocol_log_hex((uint64_t)msgtype);
+    protocol_log(" payload_len=");
+    protocol_log_hex((uint64_t)payload_len);
+    protocol_log("\n");
+  }
   if (msgtype == SYNTH_KBD_PROTOCOL_RESPONSE) {
     struct synth_kbd_protocol_response_msg response;
     if (payload_len < (uint32_t)sizeof(response)) {
@@ -238,9 +261,11 @@ int vmbus_keyboard_protocol_wait(struct vmbus_keyboard *kbd,
       }
       continue;
     }
-    protocol_log("[vmbus] keyboard: raw packet len=");
-    protocol_log_hex((uint64_t)packet_len);
-    protocol_log("\n");
+    if (protocol_verbose_io()) {
+      protocol_log("[vmbus] keyboard: raw packet len=");
+      protocol_log_hex((uint64_t)packet_len);
+      protocol_log("\n");
+    }
     ret = vmbus_keyboard_protocol_process_packet(kbd, packet, packet_len, NULL,
                                                  NULL, NULL);
     if (ret == 2) {

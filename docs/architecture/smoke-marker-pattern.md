@@ -2,7 +2,7 @@
 
 **Audiência:** autores de drivers e gates externos no CapyOS.
 **Origem:** Slice 3D (USB HID, alpha.245), Slice 3E.4 (storage, alpha.250) e audit fix do alpha.252.
-**Última revisão:** 2026-05-21.
+**Última revisão:** 2026-05-22.
 
 Este documento descreve o pattern canônico para criar smoke
 markers forenses que sirvam como gates externos
@@ -28,6 +28,8 @@ Exemplos atuais:
 | `[smoke] gui-session ready` | desktop | Sessão gráfica inicializada | base |
 | `[smoke] mouse-events ready` | input mouse | 1 evento de mouse processado | base |
 | `[smoke] storage-stack ready` | storage | 1 read/write OK em AHCI **ou** NVMe | 250 (Slice 3E.4) + 252 (audit) |
+| `[smoke] scheduler-fairness ready` | scheduler | 3 task IDs despachados 2× cada | Etapa 4 Fase C |
+| `[smoke] compositor-damage-track ready` | compositor | 2 frames parciais com dirty rects | Etapa 4 Fase D |
 
 ## 2. Invariantes obrigatórios
 

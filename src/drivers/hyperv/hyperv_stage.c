@@ -46,3 +46,16 @@ uint8_t hyperv_runtime_stage_for(uint8_t vmbus_stage, uint8_t configured,
   }
   return vmbus_stage;
 }
+
+uint32_t hyperv_vmbus_sanitize_msg_conn_id(uint32_t version,
+                                           uint32_t response_conn_id,
+                                           uint32_t fallback_conn_id) {
+  if (response_conn_id == 0u) {
+    return fallback_conn_id;
+  }
+  if (version >= HYPERV_VMBUS_VERSION_WIN10 &&
+      (response_conn_id == version || response_conn_id > 0xFFu)) {
+    return fallback_conn_id;
+  }
+  return response_conn_id;
+}

@@ -341,6 +341,10 @@ int cmd_pkg_source_remove(struct shell_context *ctx, int argc, char **argv) {
 
 int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
+    int force = 0;
+    int installed = 0;
+    int failed = 0;
+    int rc = INSTALL_PROFILE_OK;
     (void)ctx;
     if (shell_help_requested(argc, argv)) {
         shell_print(trilang(
@@ -351,21 +355,18 @@ int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv) {
         return 0;
     }
 
-    int force = 0;
     if (argc >= 2 && shell_string_equal(argv[1], "--force")) {
         force = 1;
     }
 
-    int installed = 0;
-    int failed = 0;
-    int rc = capypkg_bootstrap_run(force, &installed, &failed);
+    rc = capypkg_bootstrap_run(force, &installed, &failed);
 
     if (rc == INSTALL_PROFILE_OK && installed == 0 && failed == 0) {
         shell_print(trilang(
             language,
-            "pkg-bootstrap: nada para instalar (profile=basic ou catalogo vazio).\n",
-            "pkg-bootstrap: nothing to install (profile=basic or empty catalog).\n",
-            "pkg-bootstrap: nada que instalar (profile=basic o catalogo vacio).\n"));
+            "pkg-bootstrap: nada para instalar (ja concluido, profile=basic ou catalogo vazio).\n",
+            "pkg-bootstrap: nothing to install (already complete, profile=basic or empty catalog).\n",
+            "pkg-bootstrap: nada que instalar (ya completado, profile=basic o catalogo vacio).\n"));
         return 0;
     }
 
@@ -390,6 +391,28 @@ int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv) {
         shell_newline();
         return -1;
     }
+    if (rc == INSTALL_PROFILE_ERR_STORAGE) {
+        shell_print_error(trilang(
+            language,
+            "pkg-bootstrap incompleto; sera tentado novamente. instalados=",
+            "pkg-bootstrap incomplete; retryable. installed=",
+            "pkg-bootstrap incompleto; se reintentara. instalados="));
+        shell_print_number((uint32_t)installed);
+        shell_print(trilang(language, " falhas=", " failures=", " fallos="));
+        shell_print_number((uint32_t)failed);
+        shell_newline();
+        return -1;
+    }
+    if (rc != INSTALL_PROFILE_OK) {
+        shell_print_error(trilang(
+            language,
+            "pkg-bootstrap falhou: ",
+            "pkg-bootstrap failed: ",
+            "pkg-bootstrap fallo: "));
+        shell_print(install_profile_result_label(rc));
+        shell_newline();
+        return -1;
+    }
 
     shell_print(trilang(language,
                         "pkg-bootstrap concluido. instalados=",
@@ -399,5 +422,5 @@ int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv) {
     shell_print(trilang(language, " falhas=", " failures=", " fallos="));
     shell_print_number((uint32_t)failed);
     shell_newline();
-    return rc == INSTALL_PROFILE_OK ? 0 : -1;
+    return 0;
 }

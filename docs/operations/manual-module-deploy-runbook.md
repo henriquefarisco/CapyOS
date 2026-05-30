@@ -249,8 +249,10 @@ ação no terminal:
 4. O bootstrap registra o repo declarado em `profile.ini`, faz
    `pkg-fetch` e instala cada pacote do catálogo (ou apenas os de
    `bootstrap_install` quando `profile=custom`).
-5. Marker `/system/install/bootstrap.done` é gravado para que o
-   próximo poll seja no-op.
+5. Marker `/system/install/bootstrap.done` é gravado apenas quando
+   o perfil é BASIC ou quando o sweep termina sem falhas de pacote e
+   a escrita do próprio marker também conclui; o próximo poll então
+   passa a ser no-op.
 
 Comandos para inspecionar:
 
@@ -265,19 +267,26 @@ Para re-executar manualmente (por exemplo após editar o profile):
 pkg-bootstrap --force
 ```
 
-Falhas transitórias (rede ainda em DHCP, HTTPS não respondendo)
-**não** gravam o marker — o próximo poll (60 s depois) tenta de novo.
-Falhas permanentes (profile.ini malformado, repo retornando 404)
-gravam o marker para evitar retry infinito; o operador re-roda
-`pkg-bootstrap --force` após corrigir.
+Falhas de leitura do `profile.ini`, rede/repo/pacote/marker **não**
+gravam o marker — o próximo poll (60 s depois) tenta de novo. Se
+`profile.ini` estiver malformado ou o repo estiver errado, corrija o
+arquivo e re-rode `pkg-bootstrap --force` ou aguarde o próximo poll.
+Quando o comando manual imprimir `pkg-bootstrap incomplete; retryable`,
+trate o bootstrap como ainda pendente mesmo que alguns pacotes já
+tenham sido instalados.
+O mesmo vale para `capy wizard --modules` quando ele imprimir
+`module bootstrap incomplete`; o profile continua válido e o poll de
+background segue tentando.
 
 Log auditável:
 
 ```
-[audit] [capypkg] bootstrap idle (basic profile or marker present)
+[audit] [capypkg] bootstrap idle (basic profile or marker file present)
 [audit] [capypkg] bootstrap reached install sweep
 [audit] [capypkg] bootstrap: index fetch failed (will retry)
+[audit] [capypkg] bootstrap: profile.ini read failed (will retry)
 [audit] [capypkg] bootstrap: profile.ini rejected
+[audit] [capypkg] bootstrap: marker update failed
 [audit] [capypkg] payload-sha256 verified; package installed
 ```
 
@@ -364,7 +373,10 @@ bootstrap_install=org.capyos.codecs.image-basic,org.capyos.ui.widget-core
 
 No primeiro boot, o auto-bootstrap (`kernel_service_poll_capypkg`)
 detecta o profile e roda o equivalente a `pkg-bootstrap`. O marker
-`/system/install/bootstrap.done` é gravado quando o sweep termina.
+`/system/install/bootstrap.done` é gravado para perfil BASIC ou quando
+o sweep termina sem falhas de pacote e o próprio marker é escrito com
+sucesso. Se a escrita do marker falhar, o bootstrap continua pendente e
+o próximo poll tenta novamente.
 
 Para iterar localmente: `pkg-bootstrap --force` re-aplica o profile
 sem precisar reinstalar a ISO.

@@ -289,4 +289,21 @@ size_t kernel_input_readline(char *buf, size_t maxlen, int mask);
 /* volume key loading */
 int load_handoff_volume_key(void);
 
+/* ── kernel_boot_stages.c ────────────────────────────────────────────── */
+
+/* Boot-stage bodies extracted verbatim from kernel_main64() to keep the
+ * entry point under the source-layout size budget. These run AFTER the
+ * fragile pre-COM1 / early-post-EBS window (Stage 1-3 stays inline in
+ * kernel_main.c), so introducing the call boundary is behavior-neutral.
+ * kernel_boot_stages.c carries the same `#pragma GCC optimize("O0")` as
+ * kernel_main.c. */
+struct boot_warnings;
+struct login_runtime_ops;
+
+void kernel_boot_register_linux_abi_shims(void);
+void kernel_boot_stage_keyboard_setup(void);
+void kernel_boot_stage_input(struct boot_warnings *warnings);
+void kernel_boot_stage_network_and_policy(struct boot_warnings *warnings);
+void kernel_boot_build_login_ops(struct login_runtime_ops *out);
+
 #endif /* ARCH_X86_64_KERNEL_MAIN_INTERNAL_H */

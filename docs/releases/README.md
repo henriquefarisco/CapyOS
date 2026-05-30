@@ -4,10 +4,22 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.258+20260523.md`
-  - Corrige a esteira do deploy modular ao alinhar o sibling remoto `CapyUI` `2.13.1` em `main` e refaz a release CapyOS sobre a pinagem correta.
+- `capyos-0.8.0-alpha.259+20260525.md`
+  - Slices 1+2 da stack de compatibilidade Hyper-V (track laboratorial, **não** promove plataforma oficial): ATA-PIO promovido a backend nativo via novo `X64_STORAGE_BACKEND_ATA_PIO` cobrindo Hyper-V Gen1 e IDE legado; boot policy troca fail-closed por fail-degraded com warning ruidoso quando storage persistente é indisponível. Plano arquitetural Slice 3 (StorVSC I/O wire-up Gen2) entregue.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.261+20260529.md`
+  - Corrige o provisionamento das pastas padrao do usuario no first-boot wizard (`user_home_prepare` passa a ser chamado em `src/config/first_boot/program.c`), entao `Desktop`/`Documents`/`Personal`/`Professional` passam a aparecer no desktop e no file manager do usuario primario. Compliance cross-repo: CapyUI `2.13.1` -> `2.19.0` (ABI `capy-ui-widget` v2.13 -> v2.19; display-list schema 7 inalterado). Bundla o trabalho in-tree de alpha.259/260. Tag a ser criada manualmente.
+
+- `capyos-0.8.0-alpha.260+20260525.md`
+  - Hardening + cleanup batch sobre alpha.259 (Sub-slice 3E.4.C klog migration, 3E.5.B `nvme_reset`, Etapa 4 Fases D+E smokes, P1 hardening). Trabalho in-tree, nao taggeado isoladamente.
+
+- `capyos-0.8.0-alpha.259+20260525.md`
+  - Slices 1+2 da stack de compatibilidade Hyper-V (ATA-PIO promovido a backend nativo + boot policy fail-degraded com wizard-em-RAM). Track laboratorial; plataforma oficial VMware + UEFI + E1000 inalterada.
+
+- `capyos-0.8.0-alpha.258+20260523.md`
+  - Corrige a esteira do deploy modular ao alinhar o sibling remoto `CapyUI` `2.13.1` em `main` e refaz a release CapyOS sobre a pinagem correta.
 
 - `capyos-0.8.0-alpha.257+20260523.md`
   - Consolida o deploy modular com novos adaptadores de display-list e damage tracking, mas a tag inicial quebrou na esteira porque o runner clonava `CapyUI` `main` ainda sem os fontes display-list publicados em `2.13.1`.

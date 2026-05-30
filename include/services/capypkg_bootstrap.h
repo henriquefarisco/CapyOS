@@ -13,24 +13,29 @@
  * `bootstrap_install` subset for profile=custom).
  *
  * Designed to be safe to call repeatedly:
- *   - first successful run writes
+ *   - first successful run writes the marker file
  *     `/system/install/bootstrap.done`; subsequent calls without
- *     `force=1` short-circuit;
- *   - network/HTTP errors do NOT write the marker, so retries on
- *     the next service poll can recover transient failures;
- *   - per-package failures are counted but do not abort the sweep.
+ *     `force=1` short-circuit only when that path is a file;
+ *   - profile read, network/HTTP/package errors do NOT write the
+ *     marker, so retries on the next service poll can recover
+ *     transient failures;
+ *   - per-package failures are counted after the sweep and reported as
+ *     INSTALL_PROFILE_ERR_STORAGE so the failed module is retried.
+ *   - marker update failures (remove/create/open/write) are also
+ *     reported as INSTALL_PROFILE_ERR_STORAGE; without the marker file
+ *     the bootstrap is not considered complete.
  *
  * Both the shell command `pkg-bootstrap` and the kernel
  * auto-bootstrap hook from `kernel_service_poll_capypkg` are
  * thin wrappers around this entry point.
  *
  * Returns one of the `install_profile_result` values:
- *   - INSTALL_PROFILE_OK                  bootstrap complete (marker written)
+ *   - INSTALL_PROFILE_OK                  bootstrap complete (marker file written)
  *   - INSTALL_PROFILE_ERR_NOT_READY       adapter not initialised
  *   - INSTALL_PROFILE_ERR_DENIED/PARSE    profile.ini rejected
  *   - INSTALL_PROFILE_ERR_MISSING_FIELD   profile=full/custom missing fields
- *   - INSTALL_PROFILE_ERR_STORAGE         repo add/fetch/install failed;
- *                                         retry on next poll
+ *   - INSTALL_PROFILE_ERR_STORAGE         profile read/repo add/fetch/install/
+ *                                         marker update failed; retry on next poll
  */
 
 #include "services/install_profile.h"
@@ -76,7 +81,7 @@ int capypkg_bootstrap_run(int force, int *out_installed, int *out_failed);
 
 /* Progress-aware entry point used by the first-boot wizard and the
  * `capy module` shell command. Behaviour is otherwise identical to
- * capypkg_bootstrap_run: idempotent, marker-driven, fail-soft on
+ * capypkg_bootstrap_run: idempotent, marker-driven, retryable on
  * per-package errors. Pass NULL progress to disable callbacks. */
 int capypkg_bootstrap_run_with_progress(
     int force,

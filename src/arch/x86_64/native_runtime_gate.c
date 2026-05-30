@@ -84,13 +84,13 @@ void x64_native_runtime_gate_eval(const struct boot_handoff *handoff,
     out->gate = SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_INPUT;
     return;
   }
-  /* On Hyper-V Gen2 all storage is synthetic (StorVSC) and depends on VMBus
-   * which in turn depends on ExitBootServices.  When the keyboard is deferred
-   * we know this is a Gen2 VM: skip storage checks because StorVSC will be
-   * promoted by the coordinator immediately after EBS completes.  The kernel
-   * is already in memory and the system can use ramdisk fallback until
-   * StorVSC is ready. */
-  if (runtime && !runtime->hyperv_deferred) {
+  /* Hyper-V Gen2 may have only synthetic storage after EBS, but if the
+   * installer handed us a usable EFI BlockIO DATA device we must not drop it
+   * before the persistent filesystem is mounted.  Only skip the storage gate
+   * for deferred Hyper-V input when no storage device exists yet; that is the
+   * recovery path that has to try StorVSC after EBS. */
+  if (!runtime || !runtime->hyperv_deferred ||
+      x64_storage_runtime_has_device()) {
     if (!x64_storage_runtime_has_device()) {
       out->gate = SYSTEM_EXIT_BOOT_SERVICES_GATE_WAIT_STORAGE_DEVICE;
       return;

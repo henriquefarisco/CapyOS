@@ -89,6 +89,38 @@ static int g_vmbus_connected = 0;
 static uint32_t g_msg_conn_id = VMBUS_MESSAGE_CONNECTION_ID;
 static uint8_t g_vmbus_stage = HYPERV_VMBUS_STAGE_OFF;
 
+static int vmbus_core_verbose_io(void) {
+#ifdef CAPYOS_HYPERV_VERBOSE_IO
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+static void vmbus_core_log(const char *s) {
+#ifndef UNIT_TEST
+  if (!vmbus_core_verbose_io()) {
+    (void)s;
+    return;
+  }
+  fbcon_print(s);
+#else
+  (void)s;
+#endif
+}
+
+static void vmbus_core_log_hex(uint64_t value) {
+#ifndef UNIT_TEST
+  if (!vmbus_core_verbose_io()) {
+    (void)value;
+    return;
+  }
+  fbcon_print_hex(value);
+#else
+  (void)value;
+#endif
+}
+
 static inline void cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
                          uint32_t *ecx, uint32_t *edx) {
   __asm__ volatile("cpuid"
@@ -103,21 +135,17 @@ static uint32_t hyperv_current_vp_index(void) {
 static uint32_t vmbus_sanitize_msg_conn_id(uint32_t version,
                                            uint32_t response_conn_id,
                                            uint32_t fallback_conn_id) {
-  if (response_conn_id == 0u) {
-    return fallback_conn_id;
+  uint32_t sanitized = hyperv_vmbus_sanitize_msg_conn_id(
+      version, response_conn_id, fallback_conn_id);
+  if (sanitized == fallback_conn_id && response_conn_id != 0u &&
+      response_conn_id != fallback_conn_id) {
+    vmbus_core_log("[vmbus] msg_conn_id suspeito, mantendo fallback=");
+    vmbus_core_log_hex((uint64_t)fallback_conn_id);
+    vmbus_core_log(" host=");
+    vmbus_core_log_hex((uint64_t)response_conn_id);
+    vmbus_core_log("\n");
   }
-
-  if (version >= VMBUS_VERSION_WIN10 &&
-      (response_conn_id == version || response_conn_id > 0xFFu)) {
-    fbcon_print("[vmbus] msg_conn_id suspeito, mantendo fallback=");
-    fbcon_print_hex((uint64_t)fallback_conn_id);
-    fbcon_print(" host=");
-    fbcon_print_hex((uint64_t)response_conn_id);
-    fbcon_print("\n");
-    return fallback_conn_id;
-  }
-
-  return response_conn_id;
+  return sanitized;
 }
 
 static const struct vmbus_offer_guid_key *
@@ -162,6 +190,14 @@ static const char *offer_kind_label(const struct hv_guid *guid) {
                 HV_STORAGE_GUID_DATA4_2, HV_STORAGE_GUID_DATA4_3,
                 HV_STORAGE_GUID_DATA4_4, HV_STORAGE_GUID_DATA4_5,
                 HV_STORAGE_GUID_DATA4_6, HV_STORAGE_GUID_DATA4_7}};
+  static const struct hv_guid k_hyperv_mouse_guid = {
+      .data1 = HV_MOUSE_GUID_DATA1,
+      .data2 = HV_MOUSE_GUID_DATA2,
+      .data3 = HV_MOUSE_GUID_DATA3,
+      .data4 = {HV_MOUSE_GUID_DATA4_0, HV_MOUSE_GUID_DATA4_1,
+                HV_MOUSE_GUID_DATA4_2, HV_MOUSE_GUID_DATA4_3,
+                HV_MOUSE_GUID_DATA4_4, HV_MOUSE_GUID_DATA4_5,
+                HV_MOUSE_GUID_DATA4_6, HV_MOUSE_GUID_DATA4_7}};
 
   if (!guid) {
     return "unknown";
@@ -174,6 +210,10 @@ static const char *offer_kind_label(const struct hv_guid *guid) {
   }
   if (guid_matches_public(guid, &k_hyperv_storage_guid)) {
     return "storvsc";
+  }
+  if (guid_matches_public(guid, &k_hyperv_mouse_guid) ||
+      guid->data1 == HV_MOUSE_GUID_DATA1) {
+    return "mouse";
   }
   return "other";
 }
@@ -190,6 +230,11 @@ static void offer_cache_store_public(const struct hv_guid *guid,
 static int offer_cache_lookup_public(const struct hv_guid *guid,
                                      struct vmbus_offer_info *out) {
   return vmbus_offer_cache_lookup(offer_guid_view(guid), offer_data_mut(out));
+}
+
+static int offer_cache_lookup_data1_public(uint32_t data1,
+                                           struct vmbus_offer_info *out) {
+  return vmbus_offer_cache_lookup_by_data1(data1, offer_data_mut(out));
 }
 
 static void vmbus_reset_connection_state(void) {
@@ -224,16 +269,16 @@ int vmbus_post_msg(void *msg, uint32_t len) {
       continue;
     }
 
-    fbcon_print("[vmbus] msg_conn_id invalido; tentando fallback=");
-    fbcon_print_hex((uint64_t)candidate);
-    fbcon_print("\n");
+    vmbus_core_log("[vmbus] msg_conn_id invalido; tentando fallback=");
+    vmbus_core_log_hex((uint64_t)candidate);
+    vmbus_core_log("\n");
 
     rc = vmbus_transport_post_msg(msg, len, candidate);
     if (rc == 0) {
       g_msg_conn_id = candidate;
-      fbcon_print("[vmbus] msg_conn_id ajustado para ");
-      fbcon_print_hex((uint64_t)g_msg_conn_id);
-      fbcon_print("\n");
+      vmbus_core_log("[vmbus] msg_conn_id ajustado para ");
+      vmbus_core_log_hex((uint64_t)g_msg_conn_id);
+      vmbus_core_log("\n");
       return 0;
     }
     if (rc != -(int)HV_STATUS_INVALID_CONNECTION_ID) {
@@ -346,11 +391,11 @@ static int vmbus_negotiate_version(void) {
     uint32_t target_vcpu;
     int ret;
 
-    fbcon_print("[vmbus] Inicio iter v=");
-    fbcon_print_hex((uint64_t)v);
-    fbcon_print(" ver=");
-    fbcon_print_hex((uint64_t)version);
-    fbcon_print("\n");
+    vmbus_core_log("[vmbus] Inicio iter v=");
+    vmbus_core_log_hex((uint64_t)v);
+    vmbus_core_log(" ver=");
+    vmbus_core_log_hex((uint64_t)version);
+    vmbus_core_log("\n");
 
     for (int i = 0; i < (int)sizeof(contact); ++i) {
       ((uint8_t *)&contact)[i] = 0;
@@ -371,71 +416,71 @@ static int vmbus_negotiate_version(void) {
     contact.monitor_page1 = vmbus_transport_monitor_page1();
     contact.monitor_page2 = vmbus_transport_monitor_page2();
 
-    fbcon_print("[vmbus] INITIATE_CONTACT v");
-    fbcon_print_hex(version);
-    fbcon_print(" conn_id=");
-    fbcon_print_hex(conn_id);
-    fbcon_print(" vp=");
-    fbcon_print_hex(target_vcpu);
-    fbcon_print("...\n");
+    vmbus_core_log("[vmbus] INITIATE_CONTACT v");
+    vmbus_core_log_hex(version);
+    vmbus_core_log(" conn_id=");
+    vmbus_core_log_hex(conn_id);
+    vmbus_core_log(" vp=");
+    vmbus_core_log_hex(target_vcpu);
+    vmbus_core_log("...\n");
 
     ret = vmbus_transport_post_msg(&contact, (uint32_t)sizeof(contact), conn_id);
     if (ret != 0) {
-      fbcon_print("[vmbus] Post falhou: ");
-      fbcon_print_hex((uint64_t)(-ret));
-      fbcon_print("\n");
+      vmbus_core_log("[vmbus] Post falhou: ");
+      vmbus_core_log_hex((uint64_t)(-ret));
+      vmbus_core_log("\n");
       continue;
     }
-    fbcon_print("[vmbus] Post OK, aguardando resposta...\n");
-    fbcon_print("[vmbus] >>> pre-wait canary <<<\n");
+    vmbus_core_log("[vmbus] Post OK, aguardando resposta...\n");
+    vmbus_core_log("[vmbus] >>> pre-wait canary <<<\n");
 
     for (int i = 0; i < (int)sizeof(response); ++i) {
       ((uint8_t *)&response)[i] = 0;
     }
     ret = vmbus_wait_message(&response, (uint32_t)sizeof(response), 300000);
-    fbcon_print("[vmbus] wait_message retornou: ");
-    fbcon_print_hex((uint64_t)ret);
-    fbcon_print("\n");
+    vmbus_core_log("[vmbus] wait_message retornou: ");
+    vmbus_core_log_hex((uint64_t)ret);
+    vmbus_core_log("\n");
     if (ret > 0) {
-      fbcon_print("[vmbus] Resp: tipo=");
-      fbcon_print_hex(response.header.msgtype);
-      fbcon_print(" sup=");
-      fbcon_print_hex((uint64_t)response.version_supported);
-      fbcon_print(" st=");
-      fbcon_print_hex((uint64_t)response.connection_state);
-      fbcon_print(" mcid=");
-      fbcon_print_hex((uint64_t)response.msg_conn_id);
-      fbcon_print("\n");
+      vmbus_core_log("[vmbus] Resp: tipo=");
+      vmbus_core_log_hex(response.header.msgtype);
+      vmbus_core_log(" sup=");
+      vmbus_core_log_hex((uint64_t)response.version_supported);
+      vmbus_core_log(" st=");
+      vmbus_core_log_hex((uint64_t)response.connection_state);
+      vmbus_core_log(" mcid=");
+      vmbus_core_log_hex((uint64_t)response.msg_conn_id);
+      vmbus_core_log("\n");
       if (response.header.msgtype == CHANNELMSG_VERSION_RESPONSE) {
         if (response.version_supported) {
           uint32_t negotiated_conn_id =
               vmbus_sanitize_msg_conn_id(version, response.msg_conn_id, conn_id);
 
-          fbcon_print("[vmbus] Versao aceita! conn_id=");
-          fbcon_print_hex(response.msg_conn_id);
-          fbcon_print(" state=");
-          fbcon_print_hex((uint64_t)response.connection_state);
-          fbcon_print("\n");
+          vmbus_core_log("[vmbus] Versao aceita! conn_id=");
+          vmbus_core_log_hex(response.msg_conn_id);
+          vmbus_core_log(" state=");
+          vmbus_core_log_hex((uint64_t)response.connection_state);
+          vmbus_core_log("\n");
           g_vmbus_connected = 1;
           g_msg_conn_id = negotiated_conn_id;
           g_vmbus_stage = HYPERV_VMBUS_STAGE_CONTACT;
           return 0;
         }
-        fbcon_print("[vmbus] Versao rejeitada.\n");
+        vmbus_core_log("[vmbus] Versao rejeitada.\n");
       } else {
-        fbcon_print("[vmbus] Msg ignorada (tipo!=VERSION_RESPONSE), proximo.\n");
+        vmbus_core_log("[vmbus] Msg ignorada (tipo!=VERSION_RESPONSE), proximo.\n");
       }
     } else {
-      fbcon_print("[vmbus] Timeout esperando resposta.\n");
+      vmbus_core_log("[vmbus] Timeout esperando resposta.\n");
     }
-    fbcon_print("[vmbus] Fim iteracao v=");
-    fbcon_print_hex((uint64_t)v);
-    fbcon_print("/");
-    fbcon_print_hex((uint64_t)num_versions);
-    fbcon_print("\n");
+    vmbus_core_log("[vmbus] Fim iteracao v=");
+    vmbus_core_log_hex((uint64_t)v);
+    vmbus_core_log("/");
+    vmbus_core_log_hex((uint64_t)num_versions);
+    vmbus_core_log("\n");
   }
 
-  fbcon_print("[vmbus] Negociacao falhou, retornando -1.\n");
+  vmbus_core_log("[vmbus] Negociacao falhou, retornando -1.\n");
   klog(KLOG_ERROR, "[vmbus] Version negotiation FAILED across all versions.");
   return -1;
 }
@@ -472,15 +517,15 @@ static int vmbus_request_matching_offer(const struct hv_guid *guid,
   offer_info_zero(&matched_offer);
   req.header.msgtype = CHANNELMSG_REQUESTOFFERS;
 
-  fbcon_print("[vmbus] REQUESTOFFERS...\n");
+  vmbus_core_log("[vmbus] REQUESTOFFERS...\n");
 
   {
     int post_rc = vmbus_post_msg(&req, (uint32_t)sizeof(req));
     if (post_rc != 0) {
-      fbcon_print("[vmbus] REQUESTOFFERS post rc=");
-      fbcon_print_hex((uint64_t)(uint32_t)(-post_rc));
-      fbcon_print("\n");
-      fbcon_print("[vmbus] REQUESTOFFERS post falhou.\n");
+      vmbus_core_log("[vmbus] REQUESTOFFERS post rc=");
+      vmbus_core_log_hex((uint64_t)(uint32_t)(-post_rc));
+      vmbus_core_log("\n");
+      vmbus_core_log("[vmbus] REQUESTOFFERS post falhou.\n");
       return -2;
     }
   }
@@ -500,19 +545,19 @@ static int vmbus_request_matching_offer(const struct hv_guid *guid,
       struct vmbus_offer_info cached_offer;
       const char *kind = offer_kind_label(&offer->if_type);
 
-      fbcon_print("[vmbus] OFFER relid=");
-      fbcon_print_hex((uint64_t)offer->child_relid);
-      fbcon_print(" conn=");
-      fbcon_print_hex((uint64_t)offer->connection_id);
-      fbcon_print(" mon=");
-      fbcon_print_hex((uint64_t)offer->monitor_id);
-      fbcon_print(" alloc=");
-      fbcon_print_hex((uint64_t)offer->monitor_allocated);
-      fbcon_print(" kind=");
-      fbcon_print(kind);
-      fbcon_print(" if=");
-      fbcon_print_hex((uint64_t)offer->if_type.data1);
-      fbcon_print("\n");
+      vmbus_core_log("[vmbus] OFFER relid=");
+      vmbus_core_log_hex((uint64_t)offer->child_relid);
+      vmbus_core_log(" conn=");
+      vmbus_core_log_hex((uint64_t)offer->connection_id);
+      vmbus_core_log(" mon=");
+      vmbus_core_log_hex((uint64_t)offer->monitor_id);
+      vmbus_core_log(" alloc=");
+      vmbus_core_log_hex((uint64_t)offer->monitor_allocated);
+      vmbus_core_log(" kind=");
+      vmbus_core_log(kind);
+      vmbus_core_log(" if=");
+      vmbus_core_log_hex((uint64_t)offer->if_type.data1);
+      vmbus_core_log("\n");
 
       cached_offer.child_relid = offer->child_relid;
       cached_offer.connection_id = offer->connection_id;
@@ -530,7 +575,7 @@ static int vmbus_request_matching_offer(const struct hv_guid *guid,
       }
     } else if (((const struct vmbus_channel_message_header *)msgbuf)->msgtype ==
                CHANNELMSG_ALLOFFERS_DELIVERED) {
-      fbcon_print("[vmbus] ALLOFFERS_DELIVERED.\n");
+      vmbus_core_log("[vmbus] ALLOFFERS_DELIVERED.\n");
       if (g_vmbus_stage < HYPERV_VMBUS_STAGE_OFFERS) {
         g_vmbus_stage = HYPERV_VMBUS_STAGE_OFFERS;
       }
@@ -539,7 +584,7 @@ static int vmbus_request_matching_offer(const struct hv_guid *guid,
   }
 
   if (!found_match) {
-    fbcon_print("[vmbus] Offer alvo nao encontrada.\n");
+    vmbus_core_log("[vmbus] Offer alvo nao encontrada.\n");
     return -3;
   }
 
@@ -564,6 +609,58 @@ int vmbus_query_offer(const struct hv_guid *guid, struct vmbus_offer_info *out) 
     return -4;
   }
   return vmbus_request_matching_offer(guid, out);
+}
+
+int vmbus_query_offer_by_data1(uint32_t data1, struct vmbus_offer_info *out) {
+  struct vmbus_request_offers req;
+  uint8_t msgbuf[256];
+
+  if (!data1 || !out) {
+    return -1;
+  }
+  offer_info_zero(out);
+  if (offer_cache_lookup_data1_public(data1, out) == 0) {
+    return 0;
+  }
+  if (!hyperv_detect()) {
+    return -2;
+  }
+  if (!g_vmbus_initialized && vmbus_init() != 0) {
+    return -3;
+  }
+  if (!g_vmbus_connected && vmbus_negotiate_version() != 0) {
+    return -4;
+  }
+  req.header.msgtype = CHANNELMSG_REQUESTOFFERS;
+  if (vmbus_post_msg(&req, (uint32_t)sizeof(req)) != 0) {
+    return -5;
+  }
+  for (int i = 0; i < 20; ++i) {
+    int ret = vmbus_wait_message(msgbuf, (uint32_t)sizeof(msgbuf), 100000);
+    if (ret <= 0) {
+      if (i > 0) break;
+      continue;
+    }
+    if (((const struct vmbus_channel_message_header *)msgbuf)->msgtype ==
+        CHANNELMSG_OFFERCHANNEL) {
+      struct vmbus_offer_channel *offer = (struct vmbus_offer_channel *)msgbuf;
+      struct vmbus_offer_info cached_offer;
+      cached_offer.child_relid = offer->child_relid;
+      cached_offer.connection_id = offer->connection_id;
+      cached_offer.monitor_id = offer->monitor_id;
+      cached_offer.monitor_allocated = offer->monitor_allocated;
+      cached_offer.is_dedicated_interrupt = offer->is_dedicated_interrupt;
+      offer_cache_store_public(&offer->if_type, &cached_offer);
+      if (offer->if_type.data1 == data1) {
+        *out = cached_offer;
+        return 0;
+      }
+    } else if (((const struct vmbus_channel_message_header *)msgbuf)->msgtype ==
+               CHANNELMSG_ALLOFFERS_DELIVERED) {
+      break;
+    }
+  }
+  return -6;
 }
 
 int vmbus_refresh_connected_offer(const struct hv_guid *guid,
@@ -605,11 +702,11 @@ static void vmbus_channel_runtime_fill_ops(
 int vmbus_channel_runtime_open(struct vmbus_channel_runtime *channel) {
   struct vmbus_channel_runtime_ops ops;
 
-  fbcon_print("[vmbus] core-open relid=");
-  fbcon_print_hex(channel ? (uint64_t)channel->child_relid : 0u);
-  fbcon_print(" conn=");
-  fbcon_print_hex(channel ? (uint64_t)channel->connection_id : 0u);
-  fbcon_print("\n");
+  vmbus_core_log("[vmbus] core-open relid=");
+  vmbus_core_log_hex(channel ? (uint64_t)channel->child_relid : 0u);
+  vmbus_core_log(" conn=");
+  vmbus_core_log_hex(channel ? (uint64_t)channel->connection_id : 0u);
+  vmbus_core_log("\n");
   vmbus_channel_runtime_fill_ops(&ops);
   return vmbus_channel_runtime_open_common(channel, &ops);
 }
@@ -623,6 +720,16 @@ int vmbus_channel_runtime_send_inband(struct vmbus_channel_runtime *channel,
   vmbus_channel_runtime_fill_ops(&ops);
   return vmbus_channel_runtime_send_inband_common(channel, payload, payload_len,
                                                   trans_id, &ops);
+}
+
+int vmbus_channel_runtime_send_prebuilt(struct vmbus_channel_runtime *channel,
+                                        const void *packet,
+                                        uint32_t packet_len) {
+  struct vmbus_channel_runtime_ops ops;
+
+  vmbus_channel_runtime_fill_ops(&ops);
+  return vmbus_channel_runtime_send_prebuilt_common(channel, packet, packet_len,
+                                                    &ops);
 }
 
 int vmbus_channel_runtime_read(struct vmbus_channel_runtime *channel,

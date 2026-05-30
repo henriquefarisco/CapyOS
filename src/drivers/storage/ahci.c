@@ -5,6 +5,7 @@
 
 #include "drivers/pcie.h"
 #include "drivers/storage/ahci_commands.h"
+#include "drivers/storage/ahci_dispatch.h"
 #include "drivers/storage/ahci_slot_allocator.h"
 #include "drivers/storage/block_error.h"
 #include "drivers/storage/storage_smoke.h"
@@ -234,7 +235,15 @@ static enum block_io_error_class ahci_exec_classified(
     uint32_t ci = mmio_read32(&port->ci);
     uint32_t is = mmio_read32(&port->is);
     uint32_t tfd = mmio_read32(&port->tfd);
-    if ((ci & (1u << slot)) == 0u) {
+    /* Slice 3F initial extraction: the three-way precedence
+     * (COMPLETED beats ABORTED beats INFLIGHT) lives in the pure
+     * `ahci_dispatch_classify_tick` helper so host tests can lock
+     * the bit semantics without an MMIO emulator. The downstream
+     * `block_io_classify_ahci` still reads the same IS/TFD bits
+     * to assign an error class. */
+    enum ahci_dispatch_observation obs =
+        ahci_dispatch_classify_tick(ci, is, tfd, 1u << slot);
+    if (obs == AHCI_DISPATCH_COMPLETED) {
       /* Etapa 3 — Slice 3E.2: classify the outcome so callers (and
        * smoke logs) see a stable taxonomy. The legacy 0/-1 return
        * contract is preserved; the classifier is currently used to
@@ -251,7 +260,7 @@ static enum block_io_error_class ahci_exec_classified(
       (void)ahci_slot_release(&ctx->slot_alloc, slot);
       return cls;
     }
-    if ((is & AHCI_PORT_IS_TFES) != 0u || (tfd & AHCI_PORT_TFD_ERR) != 0u) {
+    if (obs == AHCI_DISPATCH_ABORTED) {
       enum block_io_error_class cls = block_io_classify_ahci(
           is, tfd, /*timed_out=*/0, ahci_port_present(port));
       klog(KLOG_WARN, "[ahci] command aborted");

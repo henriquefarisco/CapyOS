@@ -10,6 +10,13 @@ typedef uint64_t EFI_STATUS_K;
 typedef void *EFI_HANDLE_K;
 
 typedef struct {
+  uint32_t Data1;
+  uint16_t Data2;
+  uint16_t Data3;
+  uint8_t Data4[8];
+} EFI_GUID_K;
+
+typedef struct {
   uint16_t ScanCode;
   uint16_t UnicodeChar;
 } EFI_INPUT_KEY;
@@ -27,6 +34,9 @@ typedef EFI_STATUS_K(EFIAPI *efi_get_memory_map_fn)(
     uint64_t *DescriptorSize, uint32_t *DescriptorVersion);
 typedef EFI_STATUS_K(EFIAPI *efi_exit_boot_services_fn)(EFI_HANDLE_K ImageHandle,
                                                         uint64_t MapKey);
+typedef EFI_STATUS_K(EFIAPI *efi_locate_protocol_fn)(EFI_GUID_K *Protocol,
+                                                     void *Registration,
+                                                     void **Interface);
 
 typedef struct {
   uint8_t Hdr[24];
@@ -59,6 +69,15 @@ typedef struct {
   efi_exit_boot_services_fn ExitBootServices;
   void *GetNextMonotonicCount;
   void *Stall;
+  void *SetWatchdogTimer;
+  void *ConnectController;
+  void *DisconnectController;
+  void *OpenProtocol;
+  void *CloseProtocol;
+  void *OpenProtocolInformation;
+  void *ProtocolsPerHandle;
+  void *LocateHandleBuffer;
+  efi_locate_protocol_fn LocateProtocol;
 } EFI_BOOT_SERVICES_K;
 
 /* EFI_SYSTEM_TABLE layout per UEFI 2.x spec:

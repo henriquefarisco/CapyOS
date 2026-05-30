@@ -6,7 +6,6 @@
  *   - kernel_services_recovery.c  (boot policy + maintenance + recovery)
  * to keep each TU ≤ 900 lines per layout-audit.
  */
-#pragma GCC optimize("O0")
 #include <stddef.h>
 #include <stdint.h>
 

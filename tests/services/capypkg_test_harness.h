@@ -36,13 +36,16 @@ struct fake_file {
     size_t bytes_len;
     int present;
     int is_text;
+    int is_dir;
 };
 
-#define FAKE_FS_CAP 16
+#define FAKE_FS_CAP 48
 static struct fake_file g_fs[FAKE_FS_CAP];
 
 static struct fake_file *fs_find(const char *path) {
-    for (size_t i = 0u; i < FAKE_FS_CAP; ++i) {
+    size_t i = 0u;
+    if (!path) return NULL;
+    for (i = 0u; i < FAKE_FS_CAP; ++i) {
         if (g_fs[i].present && strcmp(g_fs[i].path, path) == 0) {
             return &g_fs[i];
         }
@@ -50,8 +53,43 @@ static struct fake_file *fs_find(const char *path) {
     return NULL;
 }
 
+static int fs_has_child(const char *path) {
+    size_t len = 0u;
+    size_t i = 0u;
+    if (!path) return 0;
+    len = strlen(path);
+    if (len == 0u) return 0;
+    for (i = 0u; i < FAKE_FS_CAP; ++i) {
+        if (g_fs[i].present &&
+            strncmp(g_fs[i].path, path, len) == 0 &&
+            g_fs[i].path[len] == '/') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int fs_parent_dir_exists(const char *path) {
+    char parent[160];
+    size_t len = 0u;
+    size_t split = 0u;
+    struct fake_file *dir = NULL;
+    if (!path || path[0] != '/') return 0;
+    len = strlen(path);
+    if (len == 0u || len >= sizeof(parent)) return 0;
+    split = len;
+    while (split > 1u && path[split - 1u] != '/') --split;
+    if (split <= 1u) return 1;
+    memcpy(parent, path, split - 1u);
+    parent[split - 1u] = '\0';
+    dir = fs_find(parent);
+    return dir && dir->is_dir ? 1 : 0;
+}
+
 static struct fake_file *fs_alloc(const char *path) {
-    for (size_t i = 0u; i < FAKE_FS_CAP; ++i) {
+    size_t i = 0u;
+    if (!path) return NULL;
+    for (i = 0u; i < FAKE_FS_CAP; ++i) {
         if (!g_fs[i].present) {
             memset(&g_fs[i], 0, sizeof(g_fs[i]));
             strncpy(g_fs[i].path, path, sizeof(g_fs[i].path) - 1u);
@@ -69,8 +107,9 @@ static void fs_reset(void) {
 static int fs_read(const char *path, char *buffer, size_t buffer_size,
                    size_t *out_len) {
     struct fake_file *f = fs_find(path);
-    if (!f || !buffer || buffer_size < 2u) return -1;
-    size_t len = strlen(f->text);
+    size_t len = 0u;
+    if (!f || f->is_dir || !buffer || buffer_size < 2u) return -1;
+    len = strlen(f->text);
     if (len + 1u > buffer_size) len = buffer_size - 1u;
     memcpy(buffer, f->text, len);
     buffer[len] = '\0';
@@ -80,20 +119,30 @@ static int fs_read(const char *path, char *buffer, size_t buffer_size,
 
 static int fs_write_text(const char *path, const char *text) {
     struct fake_file *f = fs_find(path);
+    if (!path || !text) return -1;
+    if (!fs_parent_dir_exists(path)) return -1;
+    if (f && f->is_dir) return -1;
     if (!f) f = fs_alloc(path);
     if (!f) return -1;
+    f->is_dir = 0;
     f->is_text = 1;
-    strncpy(f->text, text ? text : "", sizeof(f->text) - 1u);
+    f->bytes_len = 0u;
+    strncpy(f->text, text, sizeof(f->text) - 1u);
     f->text[sizeof(f->text) - 1u] = '\0';
     return 0;
 }
 
 static int fs_write_bytes(const char *path, const uint8_t *data, size_t len) {
     struct fake_file *f = fs_find(path);
+    size_t stored = 0u;
+    if (!path || (!data && len > 0u)) return -1;
+    if (!fs_parent_dir_exists(path)) return -1;
+    if (f && f->is_dir) return -1;
     if (!f) f = fs_alloc(path);
     if (!f) return -1;
+    f->is_dir = 0;
     f->is_text = 0;
-    size_t stored = len > sizeof(f->bytes) ? sizeof(f->bytes) : len;
+    stored = len > sizeof(f->bytes) ? sizeof(f->bytes) : len;
     if (data && stored > 0u) memcpy(f->bytes, data, stored);
     f->bytes_len = len;
     return 0;
@@ -101,13 +150,56 @@ static int fs_write_bytes(const char *path, const uint8_t *data, size_t len) {
 
 static int fs_remove(const char *path) {
     struct fake_file *f = fs_find(path);
+    if (!path) return -1;
     if (!f) return 0;
+    if (f->is_dir) return -1;
     memset(f, 0, sizeof(*f));
     return 0;
 }
 
 static int fs_mkdir(const char *path) {
-    (void)path;
+    char build[160];
+    size_t build_len = 0u;
+    const char *p = path;
+    const char *start = NULL;
+    size_t len = 0u;
+    struct fake_file *f = NULL;
+    struct fake_file *segment = NULL;
+    if (!path || path[0] != '/') return -1;
+    build[0] = '/';
+    build[1] = '\0';
+    build_len = 1u;
+    while (*p == '/') ++p;
+    while (*p) {
+        start = p;
+        len = 0u;
+        segment = NULL;
+        while (start[len] && start[len] != '/') ++len;
+        if (len > 0u) {
+            if (build_len > 1u) {
+                if (build_len + 1u >= sizeof(build)) return -1;
+                build[build_len++] = '/';
+            }
+            if (build_len + len >= sizeof(build)) return -1;
+            memcpy(build + build_len, start, len);
+            build_len += len;
+            build[build_len] = '\0';
+            segment = fs_find(build);
+            if (segment && !segment->is_dir) return -1;
+            if (!segment) segment = fs_alloc(build);
+            if (!segment) return -1;
+            segment->is_dir = 1;
+            segment->is_text = 0;
+        }
+        p += len;
+        while (*p == '/') ++p;
+    }
+    f = fs_find(path);
+    if (f && !f->is_dir) return -1;
+    if (!f) f = fs_alloc(path);
+    if (!f) return -1;
+    f->is_dir = 1;
+    f->is_text = 0;
     return 0;
 }
 
@@ -122,9 +214,10 @@ static int g_signature_calls;
 
 static int net_fetch_text(const char *url, char *buffer, size_t buffer_size,
                           size_t *out_len) {
+    size_t len = 0u;
     (void)url;
     if (g_index_rc != 0 || !g_index_text) return -1;
-    size_t len = strlen(g_index_text);
+    len = strlen(g_index_text);
     if (len + 1u > buffer_size) len = buffer_size - 1u;
     memcpy(buffer, g_index_text, len);
     buffer[len] = '\0';
@@ -134,12 +227,13 @@ static int net_fetch_text(const char *url, char *buffer, size_t buffer_size,
 
 static int net_fetch_bytes(const char *url, uint8_t *buffer, size_t buffer_size,
                            size_t *out_len) {
+    size_t len = 0u;
     if (g_payload_fail_url_substr && url &&
         strstr(url, g_payload_fail_url_substr) != NULL) {
         return -1;
     }
     if (g_payload_rc != 0 || !g_payload_bytes) return -1;
-    size_t len = g_payload_len;
+    len = g_payload_len;
     if (len > buffer_size) len = buffer_size;
     memcpy(buffer, g_payload_bytes, len);
     if (out_len) *out_len = len;

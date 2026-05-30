@@ -603,6 +603,104 @@ static void test_scheduler_yield_from_adopted_kernel_task_switches_to_engine(voi
     scheduler_set_running(0);
 }
 
+static void test_cooperative_yield_round_robins_three_ready_tasks(void) {
+    reset_world();
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *c = task_create("c", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    scheduler_add(c);
+    a->state = TASK_STATE_RUNNING;
+    task_set_current(a);
+    scheduler_set_running(1);
+
+    scheduler_yield();
+    TEST("cooperative yield advances from task a to task b");
+    if (task_current() == b &&
+        a->state == TASK_STATE_READY &&
+        b->state == TASK_STATE_RUNNING &&
+        c->state == TASK_STATE_READY) PASS();
+    else FAIL("expected a -> b");
+
+    scheduler_yield();
+    TEST("cooperative yield advances from task b to task c");
+    if (task_current() == c &&
+        a->state == TASK_STATE_READY &&
+        b->state == TASK_STATE_READY &&
+        c->state == TASK_STATE_RUNNING) PASS();
+    else FAIL("expected b -> c");
+
+    scheduler_yield();
+    TEST("cooperative yield wraps from task c back to task a");
+    if (task_current() == a &&
+        a->state == TASK_STATE_RUNNING &&
+        b->state == TASK_STATE_READY &&
+        c->state == TASK_STATE_READY) PASS();
+    else FAIL("expected c -> a");
+
+    scheduler_set_running(0);
+}
+
+static void test_cooperative_yield_skips_blocked_tasks(void) {
+    reset_world();
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *c = task_create("c", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    scheduler_add(c);
+    a->state = TASK_STATE_RUNNING;
+    b->state = TASK_STATE_BLOCKED;
+    task_set_current(a);
+    scheduler_set_running(1);
+
+    scheduler_yield();
+    TEST("cooperative yield skips blocked tasks in round-robin scan");
+    if (task_current() == c &&
+        a->state == TASK_STATE_READY &&
+        b->state == TASK_STATE_BLOCKED &&
+        c->state == TASK_STATE_RUNNING) PASS();
+    else FAIL("blocked task was selected or states drifted");
+
+    scheduler_set_running(0);
+}
+
+static void test_priority_equal_tasks_round_robin_by_queue_position(void) {
+    reset_world();
+    scheduler_init(SCHED_POLICY_PRIORITY);
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *c = task_create("c", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    scheduler_add(c);
+    a->state = TASK_STATE_RUNNING;
+    task_set_current(a);
+    scheduler_set_running(1);
+
+    scheduler_yield();
+    scheduler_yield();
+    scheduler_yield();
+    TEST("PRIORITY policy is fair among equal-priority READY tasks");
+    if (task_current() == a &&
+        a->state == TASK_STATE_RUNNING &&
+        b->state == TASK_STATE_READY &&
+        c->state == TASK_STATE_READY) PASS();
+    else FAIL("equal-priority priority policy did not wrap fairly");
+
+    scheduler_set_running(0);
+}
+
 int test_context_switch_run(void) {
     printf("[test_context_switch]\n");
     tests_run = 0;
@@ -629,6 +727,9 @@ int test_context_switch_run(void) {
     test_arch_hook_fires_before_context_switch();
     test_scheduler_set_running_toggles_flag();
     test_scheduler_yield_from_adopted_kernel_task_switches_to_engine();
+    test_cooperative_yield_round_robins_three_ready_tasks();
+    test_cooperative_yield_skips_blocked_tasks();
+    test_priority_equal_tasks_round_robin_by_queue_position();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;
 }

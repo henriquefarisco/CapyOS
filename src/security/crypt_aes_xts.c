@@ -29,31 +29,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 #include "security/internal/crypt_internal.h"
 
-static inline void dbg_putc(char ch) {
-#ifdef UNIT_TEST
-  (void)ch;
-#else
-  __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-#endif
-}
-
-static void dbg_puts(const char *s) {
-  while (s && *s) {
-    dbg_putc(*s++);
-  }
-}
-
-static void dbg_hex32(uint32_t value) {
-  static const char hex[] = "0123456789ABCDEF";
-  for (int shift = 28; shift >= 0; shift -= 4) {
-    dbg_putc(hex[(value >> shift) & 0xFu]);
-  }
-}
-
-static uint32_t dbg_be32(const uint8_t *buf) {
+/* Slice 3E.4.C (2026-05-25) — `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * helpers removed. The QEMU-only port 0xE9 debug console was the
+ * historical sink for crypt-layer block 0 diagnostics; production
+ * output now goes through `klog(KLOG_*, ...)` and
+ * `klog_hex(KLOG_*, ...)`. `crypt_be32` survives as a pure utility
+ * because the block-0 audit lines load big-endian u32 words from
+ * the plaintext/ciphertext buffers. */
+static uint32_t crypt_be32(const uint8_t *buf) {
   if (!buf) {
     return 0;
   }
@@ -411,28 +398,28 @@ static int crypt_read_block(void *ctx, uint32_t block_no, void *buffer) {
   }
   uint8_t *temp = crypt->scratch;
   if (block_device_read(crypt->lower, block_no, temp) != 0) {
-    dbg_puts("[crypt] lower read fail blk=");
-    dbg_hex32(block_no);
-    dbg_putc('\n');
+    klog_hex(KLOG_ERROR, "[crypt] lower read fail blk=", (uint64_t)block_no);
     crypt_secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
     return -1;
   }
   if (block_no == 0) {
-    dbg_putc('r');
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32(temp));
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32(temp + 4));
-    dbg_putc('\n');
+    /* Slice 3E.4.C audit: ciphertext snapshot of block 0 just after
+     * lower read, before XTS decryption. The chained "r W0 W1\n"
+     * dbg_* sequence collapses into two structured klog entries. */
+    klog_hex(KLOG_INFO, "[crypt] blk0 read cipher word0=",
+             (uint64_t)crypt_be32(temp));
+    klog_hex(KLOG_INFO, "[crypt] blk0 read cipher word1=",
+             (uint64_t)crypt_be32(temp + 4));
   }
   xts_crypt(crypt, block_no, temp, (uint8_t *)buffer, 0);
   if (block_no == 0) {
-    dbg_putc('D');
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32((const uint8_t *)buffer));
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32((const uint8_t *)buffer + 4));
-    dbg_putc('\n');
+    /* Slice 3E.4.C audit: plaintext snapshot of block 0 after XTS
+     * decryption. The chained "D W0 W1\n" dbg_* sequence collapses
+     * into two structured klog entries. */
+    klog_hex(KLOG_INFO, "[crypt] blk0 read plain word0=",
+             (uint64_t)crypt_be32((const uint8_t *)buffer));
+    klog_hex(KLOG_INFO, "[crypt] blk0 read plain word1=",
+             (uint64_t)crypt_be32((const uint8_t *)buffer + 4));
   }
   crypt_secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
   return 0;
@@ -448,27 +435,27 @@ static int crypt_write_block(void *ctx, uint32_t block_no, const void *buffer) {
   }
   uint8_t *temp = crypt->scratch;
   if (block_no == 0) {
-    dbg_putc('C');
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32((const uint8_t *)buffer));
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32((const uint8_t *)buffer + 4));
-    dbg_putc('\n');
+    /* Slice 3E.4.C audit: plaintext snapshot of block 0 before XTS
+     * encryption. The chained "C W0 W1\n" dbg_* sequence collapses
+     * into two structured klog entries. */
+    klog_hex(KLOG_INFO, "[crypt] blk0 write plain word0=",
+             (uint64_t)crypt_be32((const uint8_t *)buffer));
+    klog_hex(KLOG_INFO, "[crypt] blk0 write plain word1=",
+             (uint64_t)crypt_be32((const uint8_t *)buffer + 4));
   }
   xts_crypt(crypt, block_no, (const uint8_t *)buffer, temp, 1);
   if (block_no == 0) {
-    dbg_putc('c');
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32(temp));
-    dbg_putc(' ');
-    dbg_hex32(dbg_be32(temp + 4));
-    dbg_putc('\n');
+    /* Slice 3E.4.C audit: ciphertext snapshot of block 0 after XTS
+     * encryption, before lower-device write. The chained "c W0 W1\n"
+     * dbg_* sequence collapses into two structured klog entries. */
+    klog_hex(KLOG_INFO, "[crypt] blk0 write cipher word0=",
+             (uint64_t)crypt_be32(temp));
+    klog_hex(KLOG_INFO, "[crypt] blk0 write cipher word1=",
+             (uint64_t)crypt_be32(temp + 4));
   }
   int result = block_device_write(crypt->lower, block_no, temp);
   if (result != 0) {
-    dbg_puts("[crypt] lower write fail blk=");
-    dbg_hex32(block_no);
-    dbg_putc('\n');
+    klog_hex(KLOG_ERROR, "[crypt] lower write fail blk=", (uint64_t)block_no);
   }
   crypt_secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
   return result;

@@ -168,6 +168,76 @@ static void test_class_name_and_retry_policy(void) {
     }
 }
 
+static void test_scsi_ok(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x01u, 0, 1);
+    if (c != BLOCK_IO_OK) fail("SCSI GOOD + SRB success must classify as OK");
+}
+
+static void test_scsi_timeout(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x01u, 1, 1);
+    if (c != BLOCK_IO_ERR_TIMEOUT) {
+        fail("SCSI timed_out must classify as TIMEOUT");
+    }
+}
+
+static void test_scsi_device_gone(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x01u, 0, 0);
+    if (c != BLOCK_IO_ERR_DEVICE_GONE) {
+        fail("SCSI !present must classify as DEVICE_GONE");
+    }
+}
+
+static void test_scsi_busy_transient(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x08u, 0x01u, 0, 1);
+    if (c != BLOCK_IO_ERR_TRANSIENT) {
+        fail("SCSI BUSY must classify as TRANSIENT");
+    }
+}
+
+static void test_scsi_check_condition_permanent(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x02u, 0x01u, 0, 1);
+    if (c != BLOCK_IO_ERR_PERMANENT) {
+        fail("SCSI CHECK CONDITION without sense must be PERMANENT");
+    }
+}
+
+static void test_scsi_srb_selection_timeout_gone(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x0Au, 0, 1);
+    if (c != BLOCK_IO_ERR_DEVICE_GONE) {
+        fail("SRB selection timeout must classify as DEVICE_GONE");
+    }
+}
+
+static void test_scsi_srb_no_device_gone(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x08u, 0, 1);
+    if (c != BLOCK_IO_ERR_DEVICE_GONE) {
+        fail("SRB no-device must classify as DEVICE_GONE");
+    }
+}
+
+static void test_scsi_srb_bus_reset_transient(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x0Eu, 0, 1);
+    if (c != BLOCK_IO_ERR_TRANSIENT) {
+        fail("SRB bus reset must classify as TRANSIENT");
+    }
+}
+
+static void test_scsi_srb_status_flags_masked(void) {
+    enum block_io_error_class c =
+        block_io_classify_scsi(0x00u, 0x8Eu, 0, 1);
+    if (c != BLOCK_IO_ERR_TRANSIENT) {
+        fail("SRB status flags must not hide the base status");
+    }
+}
+
 int run_block_error_tests(void) {
     g_failures = 0;
     test_ahci_ok_clean();
@@ -184,6 +254,15 @@ int run_block_error_tests(void) {
     test_nvme_media_permanent();
     test_nvme_dnr_permanent();
     test_nvme_default_transient();
+    test_scsi_ok();
+    test_scsi_timeout();
+    test_scsi_device_gone();
+    test_scsi_busy_transient();
+    test_scsi_check_condition_permanent();
+    test_scsi_srb_selection_timeout_gone();
+    test_scsi_srb_no_device_gone();
+    test_scsi_srb_bus_reset_transient();
+    test_scsi_srb_status_flags_masked();
     test_class_name_and_retry_policy();
     if (g_failures == 0) printf("[tests] block_error OK\n");
     return g_failures;

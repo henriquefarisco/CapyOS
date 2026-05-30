@@ -17,6 +17,16 @@ enum system_work_id {
    * event ring into the HID class buffer. Registered and scheduled by
    * kernel_work_usb_bringup after usb_hid_init succeeds. */
   SYSTEM_WORK_USB_POLL,
+  /* Background promotion retry for the Hyper-V StorVSC controller.
+   * The cooperative bootstrap budget in
+   * hyperv_runtime_coordinator::coordinator_bootstrap_storage_budget
+   * runs only once after maybe_exit_boot_services_after_native_runtime;
+   * if the host is slow to respond and the budget is exhausted, the
+   * controller stays degraded forever. This work item retries the
+   * promotion opportunistically at a low cadence (default 600 ticks =
+   * 6s at 100Hz) and self-disables when status.ready becomes 1 or when
+   * the platform is not Hyper-V. */
+  SYSTEM_WORK_STORAGE_HYPERV_RETRY,
   SYSTEM_WORK_COUNT
 };
 

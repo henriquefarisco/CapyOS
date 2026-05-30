@@ -1,6 +1,11 @@
 #include "gui/terminal.h"
 #include <stddef.h>
 
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+int terminal_render_display_list(struct terminal *term);
+void terminal_display_list_reset(void);
+#endif
+
 static void term_memset(void *dst, int val, size_t len) {
   uint8_t *d = (uint8_t *)dst; for (size_t i = 0; i < len; i++) d[i] = (uint8_t)val;
 }
@@ -17,6 +22,7 @@ void terminal_init(struct terminal *term, struct gui_window *win) {
     if (term->font->glyph_height != 0) glyph_height = term->font->glyph_height;
   }
   term->fg_color = 0xCCCCCC;
+  term->fg_base_color = term->fg_color;
   term->bg_color = 0x1A1A2E;
   term->default_fg = 0xCCCCCC;
   term->default_bg = 0x1A1A2E;
@@ -47,6 +53,9 @@ void terminal_init(struct terminal *term, struct gui_window *win) {
       term->cells[r][c].attrs = 0;
     }
   }
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  terminal_display_list_reset();
+#endif
 }
 
 static void terminal_scroll_line(struct terminal *term) {
@@ -70,6 +79,7 @@ static void terminal_scroll_line(struct terminal *term) {
     term->cells[term->rows - 1][c].ch = ' ';
     term->cells[term->rows - 1][c].fg = term->fg_color;
     term->cells[term->rows - 1][c].bg = term->bg_color;
+    term->cells[term->rows - 1][c].attrs = term->attrs;
   }
 }
 
@@ -78,12 +88,57 @@ static const uint32_t ansi_colors[8] = {
   0x003333CC, 0x00CC33CC, 0x0033CCCC, 0x00CCCCCC,
 };
 
+#define TERMINAL_ATTR_BOLD 0x01u
+#define TERMINAL_ATTR_DIM 0x02u
+
+static uint32_t ansi_brighten(uint32_t color) {
+  return color | 0x00404040;
+}
+
+static uint32_t ansi_dim(uint32_t color) {
+  return (color & 0x00FEFEFEu) >> 1;
+}
+
+static uint32_t ansi_apply_intensity(struct terminal *term, uint32_t color) {
+  if (term->attrs & TERMINAL_ATTR_DIM) color = ansi_dim(color);
+  if (term->attrs & TERMINAL_ATTR_BOLD) color = ansi_brighten(color);
+  return color;
+}
+
 static void ansi_apply_sgr(struct terminal *term, int code) {
-  if (code == 0) { term->fg_color = term->default_fg; term->bg_color = term->default_bg; }
-  else if (code == 1) { /* bold — brighten fg */ term->fg_color |= 0x00404040; }
-  else if (code >= 30 && code <= 37) { term->fg_color = ansi_colors[code - 30]; }
-  else if (code == 39) { term->fg_color = term->default_fg; }
+  if (code == 0) {
+    term->fg_base_color = term->default_fg;
+    term->fg_color = term->fg_base_color;
+    term->bg_color = term->default_bg;
+    term->attrs = 0u;
+  }
+  else if (code == 1) {
+    /* bold — brighten fg */
+    term->attrs |= TERMINAL_ATTR_BOLD;
+    term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
+  }
+  else if (code == 2) {
+    term->attrs |= TERMINAL_ATTR_DIM;
+    term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
+  }
+  else if (code == 22) {
+    term->attrs &= (uint8_t)~(TERMINAL_ATTR_BOLD | TERMINAL_ATTR_DIM);
+    term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
+  }
+  else if (code >= 30 && code <= 37) {
+    term->fg_base_color = ansi_colors[code - 30];
+    term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
+  }
+  else if (code == 39) {
+    term->fg_base_color = term->default_fg;
+    term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
+  }
+  else if (code >= 90 && code <= 97) {
+    term->fg_base_color = ansi_brighten(ansi_colors[code - 90]);
+    term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
+  }
   else if (code >= 40 && code <= 47) { term->bg_color = ansi_colors[code - 40]; }
+  else if (code >= 100 && code <= 107) { term->bg_color = ansi_brighten(ansi_colors[code - 100]); }
   else if (code == 49) { term->bg_color = term->default_bg; }
 }
 
@@ -156,6 +211,7 @@ void terminal_write_char(struct terminal *term, char c) {
   term->cells[term->cursor_y][term->cursor_x].ch = c;
   term->cells[term->cursor_y][term->cursor_x].fg = term->fg_color;
   term->cells[term->cursor_y][term->cursor_x].bg = term->bg_color;
+  term->cells[term->cursor_y][term->cursor_x].attrs = term->attrs;
   term->cursor_x++;
 }
 
@@ -175,6 +231,7 @@ void terminal_clear(struct terminal *term) {
       term->cells[r][c].ch = ' ';
       term->cells[r][c].fg = term->fg_color;
       term->cells[r][c].bg = term->bg_color;
+      term->cells[r][c].attrs = term->attrs;
     }
   }
   term->cursor_x = 0;
@@ -203,12 +260,16 @@ void terminal_set_cursor(struct terminal *term, uint32_t x, uint32_t y) {
 
 void terminal_set_color(struct terminal *term, uint32_t fg, uint32_t bg) {
   if (!term) return;
-  term->fg_color = fg;
+  term->fg_base_color = fg;
+  term->fg_color = ansi_apply_intensity(term, term->fg_base_color);
   term->bg_color = bg;
 }
 
 void terminal_paint(struct terminal *term) {
   if (!term || !term->window || !term->font) return;
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  if (terminal_render_display_list(term) == 0) return;
+#endif
   struct gui_surface *s = &term->window->surface;
 
   uint32_t gw = term->font->glyph_width;

@@ -15,6 +15,7 @@
 #include "drivers/usb/internal/xhci_internal.h"
 #include "drivers/pcie.h"
 #include "drivers/usb/usb_core.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -142,11 +143,23 @@ int xhci_reset(struct xhci_controller *xhci) {
   cmd &= ~XHCI_CMD_RS;
   mmio_write32(xhci->op_base + XHCI_USBCMD, cmd);
 
-  /* Wait for HCHalted */
+  /* Wait for HCHalted. HCH-first precedence (code review fix
+   * 2026-05-25): if both HCH and HSE are set, the controller is
+   * already halted and the subsequent HCRST will clear HSE per
+   * xHCI 1.2 §5.4.1. Bailing on HSE here would skip that recovery
+   * path. Only return HSE error if the controller failed to halt
+   * (HCH clear) while HSE is set, which is anomalous per
+   * §5.4.2 (HSE is supposed to force termination of TRBs/DMA). */
   for (int i = 0; i < 100000; i++) {
     uint32_t sts = mmio_read32(xhci->op_base + XHCI_USBSTS);
     if (sts & XHCI_STS_HCH)
       break;
+    if (sts & XHCI_STS_HSE) {
+      klog_hex(KLOG_ERROR,
+               "[xhci] USBSTS.HSE without HCH during stop, sts=",
+               (uint64_t)sts);
+      return -3;
+    }
     cpu_relax();
   }
 
@@ -155,10 +168,17 @@ int xhci_reset(struct xhci_controller *xhci) {
   cmd |= XHCI_CMD_HCRST;
   mmio_write32(xhci->op_base + XHCI_USBCMD, cmd);
 
-  /* Wait for reset to complete (HCRST clears and CNR clears) */
+  /* Wait for reset to complete (HCRST clears and CNR clears).
+   * HSE early-exit applies here too; a reset that pushes the
+   * controller into HSE is unrecoverable from software. */
   for (int i = 0; i < 1000000; i++) {
     uint32_t c = mmio_read32(xhci->op_base + XHCI_USBCMD);
     uint32_t s = mmio_read32(xhci->op_base + XHCI_USBSTS);
+    if (s & XHCI_STS_HSE) {
+      klog_hex(KLOG_ERROR, "[xhci] USBSTS.HSE during reset, sts=",
+               (uint64_t)s);
+      return -4;
+    }
     if (!(c & XHCI_CMD_HCRST) && !(s & XHCI_STS_CNR))
       return 0;
     cpu_relax();
@@ -309,9 +329,16 @@ int xhci_start(struct xhci_controller *xhci) {
   cmd |= XHCI_CMD_RS; /* Run */
   mmio_write32(xhci->op_base + XHCI_USBCMD, cmd);
 
-  /* Wait for running */
+  /* Wait for running. HSE early-exit: if the controller enters
+   * Host System Error before HCH clears, the start has failed
+   * and spinning longer cannot recover. */
   for (int i = 0; i < 100000; i++) {
     uint32_t sts = mmio_read32(xhci->op_base + XHCI_USBSTS);
+    if (sts & XHCI_STS_HSE) {
+      klog_hex(KLOG_ERROR, "[xhci] USBSTS.HSE during start, sts=",
+               (uint64_t)sts);
+      return -3;
+    }
     if (!(sts & XHCI_STS_HCH)) {
       xhci->running = 1;
       return 0;
@@ -331,12 +358,24 @@ int xhci_stop(struct xhci_controller *xhci) {
   cmd &= ~XHCI_CMD_RS;
   mmio_write32(xhci->op_base + XHCI_USBCMD, cmd);
 
-  /* Wait for halted */
+  /* Wait for halted. HCH-first precedence (code review fix
+   * 2026-05-25): the caller's intent is "stop the controller"; if
+   * HCH is set, the intent is satisfied regardless of whether HSE
+   * is also set (HSE just means the previous halt was caused by an
+   * internal error rather than the user's RS=0 write). Only treat
+   * HSE as a failure if HCH is clear, which is anomalous (HSE is
+   * supposed to force termination per xHCI 1.2 §5.4.2). */
   for (int i = 0; i < 100000; i++) {
     uint32_t sts = mmio_read32(xhci->op_base + XHCI_USBSTS);
     if (sts & XHCI_STS_HCH) {
       xhci->running = 0;
       return 0;
+    }
+    if (sts & XHCI_STS_HSE) {
+      klog_hex(KLOG_ERROR,
+               "[xhci] USBSTS.HSE without HCH during stop, sts=",
+               (uint64_t)sts);
+      return -3;
     }
     cpu_relax();
   }

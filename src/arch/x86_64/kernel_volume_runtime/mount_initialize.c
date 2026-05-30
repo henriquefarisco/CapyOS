@@ -1,5 +1,6 @@
 #include "internal/kernel_volume_runtime_internal.h"
 
+#include "kernel/log/klog.h"
 #include "security/volume_provider.h"
 
 int mount_root_capyfs(struct x64_kernel_volume_runtime_state *state,
@@ -63,7 +64,7 @@ int initialize_encrypted_data_volume(
   }
   local_copy(state->active_volume_key, state->active_volume_key_size, normalized_key);
   *state->active_volume_key_ready = 1;
-  dbg_puts("[kvr] init encrypted volume begin\n");
+  klog(KLOG_INFO, "[kvr] init encrypted volume begin");
   /*
    * alpha.222: fresh install lands on the modern header-managed path.
    * `volume_provider_install` generates a per-install random salt via
@@ -78,7 +79,7 @@ int initialize_encrypted_data_volume(
   if (volume_provider_install(data_dev, state->active_volume_key,
                               &crypt_dev) != 0 ||
       !crypt_dev) {
-    dbg_puts("[kvr] init crypt layer fail (volume_provider_install)\n");
+    klog(KLOG_ERROR, "[kvr] init crypt layer fail (volume_provider_install)");
     io_print(io, "[fs] ERRO: falha ao iniciar camada criptografica.\n");
     return -1;
   }
@@ -116,7 +117,7 @@ int initialize_encrypted_data_volume(
         }
       }
       if (!roundtrip_ok) {
-        dbg_puts("[kvr] crypt roundtrip fail\n");
+        klog(KLOG_ERROR, "[kvr] crypt roundtrip fail");
         io_print(io, "[fs] ERRO: autoteste de roundtrip da camada criptografica falhou.\n");
         io_print(io, "[fs] Roundtrip diag: write_rc=");
         io_print_hex(io, (uint64_t)(uint32_t)write_rc);
@@ -137,15 +138,14 @@ int initialize_encrypted_data_volume(
         reset_blank_probe_regions(state, data_dev);
         return -1;
       }
-      dbg_puts("[kvr] crypt roundtrip ok\n");
+      klog(KLOG_INFO, "[kvr] crypt roundtrip ok");
       if (verify_buf) kfree(verify_buf);
     }
   }
   int fmt_rc = capyfs_format(crypt_dev, 128, crypt_dev->block_count, NULL);
   if (fmt_rc != 0) {
-    dbg_puts("[kvr] capyfs_format fail rc=");
-    dbg_hex32((uint32_t)fmt_rc);
-    dbg_putc('\n');
+    klog_hex(KLOG_ERROR, "[kvr] capyfs_format fail rc=",
+             (uint64_t)(uint32_t)fmt_rc);
     io_print(io, "[fs] ERRO: falha ao formatar volume cifrado. rc=");
     io_print_hex(io, (uint64_t)(uint32_t)fmt_rc);
     uint32_t sync_block = 0;
@@ -162,7 +162,7 @@ int initialize_encrypted_data_volume(
     reset_blank_probe_regions(state, data_dev);
     return -1;
   }
-  dbg_puts("[kvr] capyfs_format ok\n");
+  klog(KLOG_INFO, "[kvr] capyfs_format ok");
   if (state->data_io_probe && state->data_io_probe_size >= data_dev->block_size &&
       block_device_read(data_dev, 0, state->data_io_probe) == 0) {
     uint32_t nonzero = 0;
@@ -177,32 +177,35 @@ int initialize_encrypted_data_volume(
   }
   if (state->data_io_probe && state->data_io_probe_size >= crypt_dev->block_size &&
       block_device_read(crypt_dev, 0, state->data_io_probe) == 0) {
-    dbg_puts("[kvr] crypt blk0=");
-    dbg_hex32(((uint32_t)state->data_io_probe[0] << 24) |
-              ((uint32_t)state->data_io_probe[1] << 16) |
-              ((uint32_t)state->data_io_probe[2] << 8) |
-              (uint32_t)state->data_io_probe[3]);
-    dbg_puts(" ");
-    dbg_hex32(((uint32_t)state->data_io_probe[4] << 24) |
-              ((uint32_t)state->data_io_probe[5] << 16) |
-              ((uint32_t)state->data_io_probe[6] << 8) |
-              (uint32_t)state->data_io_probe[7]);
-    dbg_putc('\n');
+    /* Slice 3E.4.C (2026-05-25) — first two big-endian u32 words of
+     * the freshly-formatted crypt block 0, emitted as separate klog
+     * entries so the audit trail keeps the original two-value
+     * pattern (was a single chained dbg_puts / dbg_hex32 sequence). */
+    uint32_t blk0_word0 = ((uint32_t)state->data_io_probe[0] << 24) |
+                          ((uint32_t)state->data_io_probe[1] << 16) |
+                          ((uint32_t)state->data_io_probe[2] << 8) |
+                          (uint32_t)state->data_io_probe[3];
+    uint32_t blk0_word1 = ((uint32_t)state->data_io_probe[4] << 24) |
+                          ((uint32_t)state->data_io_probe[5] << 16) |
+                          ((uint32_t)state->data_io_probe[6] << 8) |
+                          (uint32_t)state->data_io_probe[7];
+    klog_hex(KLOG_INFO, "[kvr] crypt blk0 word0=", (uint64_t)blk0_word0);
+    klog_hex(KLOG_INFO, "[kvr] crypt blk0 word1=", (uint64_t)blk0_word1);
   } else {
-    dbg_puts("[kvr] crypt blk0 read fail\n");
+    klog(KLOG_WARN, "[kvr] crypt blk0 read fail");
   }
   buffer_cache_invalidate(crypt_dev);
   /* Install the journal root secret BEFORE mount_root_capyfs so the format-
    * triggered journal hook produces an authenticated journal from day one. */
   install_journal_root_secret_from_key(state->active_volume_key);
   if (mount_root_capyfs(state, io, crypt_dev, "DATA cifrada") != 0) {
-    dbg_puts("[kvr] mount after format fail\n");
+    klog(KLOG_ERROR, "[kvr] mount after format fail");
     buffer_cache_invalidate(crypt_dev);
     crypt_free(crypt_dev);
     reset_blank_probe_regions(state, data_dev);
     return -1;
   }
-  dbg_puts("[kvr] mount after format ok\n");
+  klog(KLOG_INFO, "[kvr] mount after format ok");
   io_print(io, "[fs] Volume cifrado inicializado e montado.\n");
   return 0;
 }

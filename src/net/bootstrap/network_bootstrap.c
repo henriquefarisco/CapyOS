@@ -89,8 +89,14 @@ void network_bootstrap_run(const struct network_bootstrap_io *io,
     }
     klog(KLOG_WARN, "[net] Bootstrap: no driver available.");
   } else if (!net_stack_ready()) {
-    io->print("\n[net] AVISO: Driver encontrado mas handshake ainda incompleto.\n");
-    io->print("[net] O stack tentara completar a conexao em background.\n");
+    const char *reason = net_stack_unavailable_reason();
+    io->print("\n[net] AVISO: Driver encontrado mas runtime/data path ainda incompleto.\n");
+    io->print("[net] O stack tentara completar a promocao em background.\n");
+    if (reason) {
+      io->print("[net] Motivo: ");
+      io->print(reason);
+      io->print("\n");
+    }
     klog(KLOG_INFO, "[net] Bootstrap: driver available but not ready yet.");
   }
 }

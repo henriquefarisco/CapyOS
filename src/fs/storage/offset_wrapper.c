@@ -1,4 +1,5 @@
 #include "fs/block.h"
+#include "kernel/log/klog.h"
 #include "memory/kmem.h"
 
 struct offset_ctx {
@@ -7,36 +8,19 @@ struct offset_ctx {
     uint32_t count;
 };
 
-static inline void dbg_putc(char ch) {
-#if defined(UNIT_TEST) || !defined(__x86_64__)
-    (void)ch;
-#else
-    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)ch), "Nd"((uint16_t)0xE9));
-#endif
-}
-
-static void dbg_puts(const char *s) {
-    while (s && *s) {
-        dbg_putc(*s++);
-    }
-}
-
-static void dbg_hex32(uint32_t value) {
-    static const char hex[] = "0123456789ABCDEF";
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        dbg_putc(hex[(value >> shift) & 0xFu]);
-    }
-}
+/* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_puts`/`dbg_hex32`
+ * removed; the read/write failure traces now go through
+ * `klog_hex(KLOG_WARN, ...)`. Each emit becomes two structured
+ * entries (relative block + absolute block) so downstream parsers
+ * can correlate offsets without parsing a single chained line. */
 
 static int off_read(void *ctx, uint32_t block_no, void *buffer){
     struct offset_ctx *c = (struct offset_ctx *)ctx;
     if (block_no >= c->count) return -1;
     if (block_device_read(c->lower, c->start + block_no, buffer) != 0) {
-        dbg_puts("[off] read fail blk=");
-        dbg_hex32(block_no);
-        dbg_puts(" abs=");
-        dbg_hex32(c->start + block_no);
-        dbg_putc('\n');
+        klog_hex(KLOG_WARN, "[off] read fail blk=", (uint64_t)block_no);
+        klog_hex(KLOG_WARN, "[off] read fail abs=",
+                 (uint64_t)(c->start + block_no));
         return -1;
     }
     return 0;
@@ -46,11 +30,9 @@ static int off_write(void *ctx, uint32_t block_no, const void *buffer){
     struct offset_ctx *c = (struct offset_ctx *)ctx;
     if (block_no >= c->count) return -1;
     if (block_device_write(c->lower, c->start + block_no, buffer) != 0) {
-        dbg_puts("[off] write fail blk=");
-        dbg_hex32(block_no);
-        dbg_puts(" abs=");
-        dbg_hex32(c->start + block_no);
-        dbg_putc('\n');
+        klog_hex(KLOG_WARN, "[off] write fail blk=", (uint64_t)block_no);
+        klog_hex(KLOG_WARN, "[off] write fail abs=",
+                 (uint64_t)(c->start + block_no));
         return -1;
     }
     return 0;

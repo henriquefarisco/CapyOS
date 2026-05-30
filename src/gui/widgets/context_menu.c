@@ -10,6 +10,14 @@
 #include "gui/font.h"
 #include <stddef.h>
 
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+int context_menu_render_display_list(struct gui_window *win,
+                                     const struct context_menu_item *items,
+                                     uint32_t count,
+                                     int32_t hover_index);
+void context_menu_display_list_reset(void);
+#endif
+
 /* Estado singleton. */
 static struct {
   struct gui_window *win;
@@ -137,6 +145,10 @@ static void cm_invalidate_item(int32_t index) {
 
 static void cm_paint(struct gui_window *win) {
   if (!win || win != g_ctx.win) return;
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  if (context_menu_render_display_list(win, g_ctx.items, g_ctx.count,
+                                       g_ctx.hover_index) == 0) return;
+#endif
   const struct gui_theme_palette *theme = compositor_theme();
   const struct font *f = font_default();
   struct gui_surface *s = &win->surface;
@@ -175,6 +187,9 @@ int context_menu_show(const struct context_menu_item *items, uint32_t count,
                       context_menu_pick_fn on_pick, void *ctx) {
   if (!items || count == 0u) return -1;
   context_menu_close();
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  context_menu_display_list_reset();
+#endif
 
   if (count > CONTEXT_MENU_MAX_ITEMS) count = CONTEXT_MENU_MAX_ITEMS;
   for (uint32_t i = 0; i < count; i++) {
@@ -236,6 +251,9 @@ void context_menu_close(void) {
   g_ctx.hover_index = -1;
   g_ctx.on_pick = NULL;
   g_ctx.ctx = NULL;
+#if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
+  context_menu_display_list_reset();
+#endif
 }
 
 int context_menu_is_open(void) {

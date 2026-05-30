@@ -126,6 +126,17 @@ struct compositor_stats {
   uint32_t visible_count;
   uint64_t frames_rendered;
   uint64_t dirty_rects;
+  uint64_t full_frames_presented;
+  uint64_t partial_frames_presented;
+  uint64_t dirty_rects_presented;
+  /* Etapa 4 Fase D follow-up (2026-05-25): counts how many partial
+   * frames actually needed to erase the cursor area before the
+   * desktop loop redrew it. A low value means the cursor is rarely
+   * in the damaged region; a non-zero value still means each erase
+   * was justified by a real intersection between the cursor and a
+   * dirty rect. Always 0 in full-present mode because the
+   * full-frame copy already overwrote the cursor area. */
+  uint64_t cursor_erases_partial;
 };
 
 void compositor_init(uint32_t *framebuffer, uint32_t width, uint32_t height,
@@ -142,11 +153,13 @@ void compositor_resize_window(uint32_t window_id, uint32_t w, uint32_t h);
 void compositor_set_title(uint32_t window_id, const char *title);
 void compositor_invalidate(uint32_t window_id);
 void compositor_invalidate_rect(uint32_t window_id, struct gui_rect *rect);
+void compositor_invalidate_desktop_rect(const struct gui_rect *rect);
 /* Etapa UX W7-ish (2026-05-03): forca redraw global (incluindo o
  * wallpaper + desktop icons) sem precisar de window id. Usado pelo
  * desktop_icons quando muda selection / refresh de listagem. */
 void compositor_invalidate_all(void);
 void compositor_render(void);
+int compositor_current_render_clip(struct gui_rect *out);
 int compositor_needs_render(void);
 int compositor_cursor_needs_render(int32_t x, int32_t y);
 void compositor_render_cursor(int32_t x, int32_t y);

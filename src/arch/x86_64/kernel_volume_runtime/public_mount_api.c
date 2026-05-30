@@ -1,5 +1,7 @@
 #include "internal/kernel_volume_runtime_internal.h"
 
+#include "kernel/log/klog.h"
+
 int x64_kernel_volume_runtime_persist_active_key_hash(
     const struct x64_kernel_volume_runtime_state *state) {
   uint8_t existing[SHA256_DIGEST_SIZE];
@@ -59,9 +61,7 @@ int x64_kernel_volume_runtime_mount_encrypted_data_volume(
   io_print(io, "[fs] Probe de leitura DATA concluido.\n");
   (void)x64_kernel_volume_runtime_load_handoff_key(state);
   data_blank = device_is_blank(state, data_dev);
-  dbg_puts("[kvr] data blank=");
-  dbg_putc(data_blank ? '1' : '0');
-  dbg_putc('\n');
+  klog_dec(KLOG_INFO, "[kvr] data blank=", (uint32_t)data_blank);
   if (data_blank) {
     secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
     io_print(io,
@@ -84,21 +84,21 @@ int x64_kernel_volume_runtime_mount_encrypted_data_volume(
   secure_memzero((uint8_t *)normalized_key, sizeof(normalized_key));
   secure_memzero((uint8_t *)grouped_key, sizeof(grouped_key));
   if (*state->handoff_volume_key_ready) {
-    dbg_puts("[kvr] try existing volume with handoff key\n");
+    klog(KLOG_INFO, "[kvr] try existing volume with handoff key");
     struct block_device *crypt_dev = open_crypt_volume_with_password(
         state, data_dev, state->handoff_volume_key);
     /* Install the journal root secret BEFORE mount so the journal hook can
      * derive a per-volume HMAC key on this very first mount. */
     install_journal_root_secret_from_key(state->handoff_volume_key);
     if (crypt_dev && mount_root_capyfs(state, io, crypt_dev, "DATA cifrada") == 0) {
-      dbg_puts("[kvr] existing volume mount with handoff key ok\n");
+      klog(KLOG_INFO, "[kvr] existing volume mount with handoff key ok");
       local_copy(state->active_volume_key, state->active_volume_key_size,
                  state->handoff_volume_key);
       *state->active_volume_key_ready = 1;
       io_print(io, "[fs] Volume cifrado montado automaticamente.\n");
       return 0;
     }
-    dbg_puts("[kvr] existing volume mount with handoff key fail\n");
+    klog(KLOG_WARN, "[kvr] existing volume mount with handoff key fail");
     if (crypt_dev) {
       buffer_cache_invalidate(crypt_dev);
       crypt_free(crypt_dev);

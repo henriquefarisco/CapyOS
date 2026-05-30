@@ -185,7 +185,7 @@ Sem incompatibilidade detectada. Coerente com o roadmap.
 | `CapyAgent` ainda sem signer Ed25519 | Default `stable` é `signed=1` (rejeita install) | Publicar signer e plugar verifier antes de promover repo público para usuário final |
 | Mismatch entre descriptor JSON exemplo de `CapyAgent` e formato real consumido pelo adapter | Mapeamento documentado em `capypkg-publisher-manifest-format.md §10` e nota cruzada em `CapyAgent/docs/capypkg-publisher-guide.md` | Implementar serializer canônico em CapyAgent que converte modelo high-level → manifest line-oriented |
 | Payload > 1 MiB rejeitado mesmo abaixo do `CAPYPKG_PAYLOAD_MAX` | Buffer estático alpha + log warn | Implementar streaming writer para chegar ao limite real de 8 MiB |
-| First-boot wizard depende de rede para baixar índice | Auto-bootstrap em poll com retry; marker `bootstrap.done` impede re-tentativa indefinida | Manter UX de fallback claro para usuário em VM/instalação offline |
+| First-boot wizard depende de rede para baixar índice | Auto-bootstrap em poll com retry; arquivo marker `bootstrap.done` só é gravado em BASIC ou sweep completo sem falhas e com escrita de marker concluída | Manter UX de fallback claro para usuário em VM/instalação offline |
 
 ## 7. Conformidade com contratos de integração
 

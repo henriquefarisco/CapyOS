@@ -15,12 +15,12 @@ completed in-tree hygiene pass.
 
 | Repository | Current version | Intended ownership | Migration status |
 |---|---|---|---|
-| `CapyBrowser` | `0.0.4` | browser core, HTML-to-text, static layout/display list | browser source not present in active CapyOS; rebuild as decoupled core |
-| `CapyLang` | `0.1.3` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work (lexer S1 delivered) |
-| `CapyAgent` | `0.0.4` | package format, resolver, component index, release manifest model, declarative install/rollback plan | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary; CapyAgent Ed25519 signer **not yet published** (verifier slot NULL by design) |
-| `CapyCodecs` | `0.0.4` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders until an image adapter lands |
-| `CapyUI` | `2.13.1` | retained widget model + **desktop session, window manager and apps** (`org.capyos.ui.desktop-session` published in `alpha.241`) | widget/display-list model active for Etapa 4 via `capy-ui-widget` v2.13 schema v7 adapter; desktop/window/apps extracted (`capy-ui-desktop-session` v1); compositor/font/input plumbing **stays in CapyOS** |
-| `CapyBenchmark` | `0.0.4` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator initialized externally |
+| `CapyBrowser` | `0.0.6` | browser core, HTML-to-text, static layout/display list | browser source not present in active CapyOS; rebuild as decoupled core |
+| `CapyLang` | `0.1.7` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work (lexer S1 + parser S2 + diagnostics S3 + bytecode v0 S4 + opcodes/verifier S5 + emitter + VM S6 + host bridge S7 delivered, host-only) |
+| `CapyAgent` | `0.0.6` | package format, resolver, component index, release manifest model, declarative install/rollback plan | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary; CapyAgent Ed25519 signer **not yet published** (verifier slot NULL by design) |
+| `CapyCodecs` | `0.0.6` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders until an image adapter lands |
+| `CapyUI` | `2.19.0` | retained widget model + **desktop session, window manager and apps** (`org.capyos.ui.desktop-session` published in `alpha.241`) | widget/display-list model active for Etapa 4 via `capy-ui-widget` v2.19 schema v7 adapter; desktop/window/apps extracted (`capy-ui-desktop-session` v1); compositor/font/input plumbing **stays in CapyOS** |
+| `CapyBenchmark` | `0.0.6` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator initialized externally |
 
 ## Migrated snapshots
 
@@ -98,7 +98,7 @@ External repo entry points (unchanged):
 
 - `org.capyos.ui.widget-core` — portable retained widget model, layout,
   display-list schema v7, focus traversal, text editing, animation,
-  theme tokens and widget extensions (`capy-ui-widget` v2.13).
+  theme tokens and widget extensions (`capy-ui-widget` v2.19).
 - `org.capyos.ui.desktop-session` — desktop runtime, taskbar, window
   manager, dispatcher, notifications and built-in apps (calculator,
   file manager, settings, task manager, text editor)
