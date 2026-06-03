@@ -5,22 +5,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Memory functions for freestanding environment */
+#include "util/string_ops.h"
+
+/* Memory functions for freestanding environment.
+ * memcpy/memset delegate to the word-at-a-time cores in
+ * util/string_ops.h (inlined here -> no call overhead); the helpers are
+ * behavior-identical to the previous byte loops but ~8x fewer
+ * iterations on aligned bulk, and are host-tested for equivalence in
+ * tests/util/test_string_ops.c. memmove/memcmp stay byte-wise
+ * (overlap/sign correctness, not on hot paths). */
 void *memcpy(void *dest, const void *src, size_t n) {
-  uint8_t *d = (uint8_t *)dest;
-  const uint8_t *s = (const uint8_t *)src;
-  while (n--) {
-    *d++ = *s++;
-  }
-  return dest;
+  return capy_word_memcpy(dest, src, n);
 }
 
 void *memset(void *dest, int c, size_t n) {
-  uint8_t *d = (uint8_t *)dest;
-  while (n--) {
-    *d++ = (uint8_t)c;
-  }
-  return dest;
+  return capy_word_memset(dest, c, n);
 }
 
 int memcmp(const void *s1, const void *s2, size_t n) {

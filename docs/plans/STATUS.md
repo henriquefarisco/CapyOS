@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-05-29 · **Versão:** `0.8.0-alpha.261+20260529` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
+**Data:** 2026-06-02 · **Versão:** `0.8.0-alpha.262+20260602` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -32,26 +32,26 @@
 - **Audit fix entregue em 2026-05-21 (alpha.252):** revisão crítica de Slices 3E.1–3E.5 identificou e corrigiu dois bugs críticos antes da execução externa: (1) double-emission do smoke marker em VMs dual-storage; (2) NVMe Controller Level Reset não reemitia Create I/O CQ/SQ após CC.EN=1. 4 novos host tests de regressão.
 - **Sub-slice 3E.4.B entregue em 2026-05-21 (alpha.253):** migração mecânica de `dbg_puts`/`dbg_hex*`/`dbg_label_hex32` para `klog(KLOG_*, ...)` / `klog_hex(...)` em `ahci.c` e `nvme.c` (108 call sites em 2 arquivos). Helpers locais file-static removidos; output migra de port 0xE9 (QEMU-only) para o klog ring (recuperável em runtime). Como efeito colateral, **corrige bug latente**: 2 chamadas a `dbg_label_hex32` em `nvme_controller_reset` referenciavam o helper static de ahci.c (undefined-reference no escopo de TU). Outros 13 arquivos do projeto com ~126 sites `dbg_*` ficam como sub-slice 3E.4.C (follow-up).
 - **Etapa 3 fechada formalmente em 2026-05-21 (alpha.253):** gate externo `make smoke-x64-vmware-storage-resilience` aprovado em VMware + UEFI + E1000 com marker `[smoke] storage-stack ready` no COM1. Encerrou os 8 sub-slices 3D + 3E.1-3E.5 + audit fix + 3E.4.B. Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes.
-- **Próximo bloco da Etapa 4:** validar externamente a integração do scheduler cooperativo no runtime (marker determinístico `[smoke] scheduler-fairness ready`) e avançar Fase D do compositor com o marker `[smoke] compositor-damage-track ready`, stats full/parcial de dirty rects e cache host-testável de glyphs 8x16. Conforme `docs/operations/etapa-4-external-validation-playbook.md`.
+- **Próximo bloco da Etapa 4:** Fases A-E fechadas em código + host tests (alpha.260, empacotadas em alpha.261); resta apenas a **Fase F** — validação externa em VMware oficial via gate agregado `make smoke-x64-vmware-etapa-4` (5 markers em ordem: DHCP → gui-session → scheduler-fairness → compositor-damage-track → thread-crash-survives), **não executável nesta máquina**. Estado por fase em [`active/etapa-4-closure-tracker.md`](active/etapa-4-closure-tracker.md); runbook em `docs/operations/etapa-4-external-validation-playbook.md`.
 - **Etapas bloqueadas:** Etapas 5-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.260, Etapa 4 ativa)
+## Repositórios apartados (estado em alpha.262, Etapa 4 ativa)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A
 matriz pinada está em
 [`compatibility-matrix.md`](../reference/integration/compatibility-matrix.md)
 e o snapshot técnico atual está em
-[`compatibility-audit-2026-05-23.md`](../reference/integration/compatibility-audit-2026-05-23.md).
+[`compatibility-audit-2026-06-02.md`](../reference/integration/compatibility-audit-2026-06-02.md).
 
 | Repo apartado | Versão atual | Owner autoritativo | Gate de integração CapyOS |
 |---|---|---|---|
-| [`CapyUI`](../../../CapyUI) | `2.19.0` | widget model (`capy-ui-widget` v2.19, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
-| [`CapyAgent`](../../../CapyAgent) | `0.0.6` | formato `.capypkg`, component-index, resolver, futuro signer Ed25519 (`capy-agent-component-index` v1) | Etapas 8-9 |
-| [`CapyBrowser`](../../../CapyBrowser) | `0.0.6` | browser-core text/HTML estático (`capy-browser-core` v1 planejado) | Etapas 6-7 |
-| [`CapyCodecs`](../../../CapyCodecs) | `0.0.6` | image codecs portáveis (`capy-codec-image` v1) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
-| [`CapyLang`](../../../CapyLang) | `0.1.7` | lexer S1 + parser S2 + diagnostics S3 + bytecode v0 S4 + opcodes/verifier S5 + emitter + VM S6 + host bridge S7 entregues (host-only; `capy-lang-host` v0 parcial) | Etapa 15 |
-| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.6` | harness + baseline (`capy-benchmark-report` v1 planejado) | Etapas 15-16 |
+| [`CapyUI`](../../../CapyUI) | `2.22.0` | widget model (`capy-ui-widget` v2.22, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
+| [`CapyAgent`](../../../CapyAgent) | `0.0.7` | formato `.capypkg`, component-index, resolver, **signer Ed25519 publicado host-side** (`capy-agent-component-index` v1; verifier pendente de KAT externo + registro) | Etapas 8-9 |
+| [`CapyBrowser`](../../../CapyBrowser) | `0.3.0` | browser-core text/HTML estático (`capy-browser-core` v1 planejado; URL + HTML-to-text + image adapter + DOM host-testáveis) | Etapas 6-7 |
+| [`CapyCodecs`](../../../CapyCodecs) | `0.0.7` | image codecs portáveis (`capy-codec-image` v2: per-call limits, detect/generic, metadata, QOI) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
+| [`CapyLang`](../../../CapyLang) | `0.1.8` | S1-S7 + S6.3 structs/enums entregues (host-only; `capy-lang-host` v0 parcial; +opcodes 0x64-0x66 + trap V0018) | Etapa 15 |
+| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.7` | harness + baseline (`capy-benchmark-report` v1 planejado; +serialização report/eval/replay) | Etapas 15-16 |
 
 Regras gerais (válidas mesmo antes da etapa abrir):
 
@@ -151,6 +151,21 @@ Extensões posteriores:
   `2.13.1` → `2.19.0` (ABI `capy-ui-widget` v2.13 → v2.19; display-list schema
   7 inalterado) propagado na matriz/STATUS/pins/.windsurf; pins do core nos 6
   sisters movidos para `alpha.261`. Bundla o trabalho in-tree de alpha.259/260.
+- `alpha.262` — **release atual (a taggear; lote coordenado de 7 repos)**:
+  fecha a Etapa 4 via Fase F (validação externa em VMware + UEFI + E1000) +
+  batch de 5 fixes de hardening regressivo (ATA-PIO DF/ERR fatal-status,
+  fsck geometry overflow guard, compositor surface-dim cap, TLS free-wipe,
+  memcpy/memset word-at-a-time). Compliance cross-repo (pivot da matriz):
+  CapyUI `2.19.0 -> 2.22.0` (ABI `capy-ui-widget` v2.19 -> v2.22),
+  CapyCodecs `0.0.6 -> 0.0.7` (`capy-codec-image` v1 -> v2), CapyLang
+  `0.1.7 -> 0.1.8` (+opcodes 0x64-0x66 + V0018), CapyBrowser
+  `0.0.6 -> 0.3.0`, CapyAgent `0.0.6 -> 0.0.7` (**Ed25519 signer publicado
+  host-side**; verifier pendente de KAT externo + registro via
+  `capypkg_set_signature_verifier`), CapyBenchmark `0.0.6 -> 0.0.7`; pins
+  do core nos 6 sisters -> `alpha.262`; novo
+  `compatibility-audit-2026-06-02.md`. Release note:
+  `docs/releases/capyos-0.8.0-alpha.262+20260602.md`. Fase F continua sendo
+  o gate de fechamento da Etapa 4 (a executar externamente).
 
 ## Hardening cross-module ativo
 
@@ -185,7 +200,7 @@ via módulo capypkg `org.capyos.ui.desktop-session` (compositor session,
 window manager, apps). O CapyOS mantém in-tree um fallback de build em
 `src/gui/desktop/`, `src/gui/window/` e `src/apps/` para sustentar o
 caminho `make all64` quando o sibling `../CapyUI` não está presente,
-mas o owner de feature é o repo `CapyUI` (versão `2.19.0`+ no pin
+mas o owner de feature é o repo `CapyUI` (versão `2.22.0`+ no pin
 vigente da Etapa 4).
 
 ### Etapa 2 — Sessão gráfica operacional (concluída em `alpha.237`)
@@ -232,7 +247,7 @@ Resumo executivo vigente:
 | 1 | CapyUI Shell Polish v1 | Concluída | owner pós-alpha.241: `CapyUI` |
 | 2 | Sessão gráfica operacional | Concluída | desktop session: `CapyUI`; auth/crypto/runtime: core |
 | 3 | Driver framework + entrada USB HID + storage estável | Concluída | fechada em alpha.253 (2026-05-21); follow-ups 3F-3J não-bloqueantes |
-| 4 | CapyDisplay 2D + scheduler/multithread runtime | **Em andamento** | etapa atual; consome `capy-ui-widget` v2.19/schema v7 do sister repo `CapyUI` |
+| 4 | CapyDisplay 2D + scheduler/multithread runtime | **Em andamento** | etapa atual; consome `capy-ui-widget` v2.22/schema v7 do sister repo `CapyUI` |
 | 5 | TLS userland real | Bloqueada | depende da Etapa 4; sem repo apartado |
 | 6 | Apps básicos do desktop maduros | Bloqueada | inclui integração de `CapyBrowser` (HTML-to-text core) e `CapyCodecs` (image) por contrato |
 | 7 | Browser usável com web estática moderna | Bloqueada | integra `CapyBrowser` core + `CapyCodecs` imagem |
@@ -414,6 +429,210 @@ Outros drivers auditados sem encontrar bug:
 - `serial_com1` — short FIFO-empty wait, no fatal state aplica.
 - `mouse_ps2_*` — short PS/2 protocol waits, no fatal state aplica.
 
+### Driver safety audit 2026-05-29 — ATA-PIO DF/ERR fatal-status
+
+Hardening regressivo (não-bloqueante) que **fecha um gap do audit de
+2026-05-25**: `ata_pio.c` foi promovido a backend nativo só em alpha.259
+(`X64_STORAGE_BACKEND_ATA_PIO`, Hyper-V Gen1) e não estava na lista de
+drivers auditados acima.
+
+**Bug encontrado (mesma classe do NVMe CSTS.CFS / xHCI USBSTS.HSE):**
+`ata_wait_ready()` retornava sucesso assim que **BSY** limpava, **sem
+inspecionar Device Fault (DF=0x20) nem ERR (0x01)**. Como
+`ata_pio_write_sector_ctx()` chama `ata_wait_ready()` para "esperar o
+device terminar a escrita", uma falha de hardware durante a escrita era
+reportada como **sucesso silencioso** — risco de integridade de dados
+(escrita/leitura aceita sobre device em falha). `ata_wait_drq()` checava
+só ERR (não DF).
+
+**Fix:** lógica de status extraída como predicados puros host-testáveis
+em `include/drivers/storage/ata_status.h` + `src/drivers/storage/ata_status.c`
+(`ata_status_is_fatal` = DF|ERR, `ata_status_busy`, `ata_status_drq_ready`),
+seguindo o padrão de `nvme_reset.c` e `ahci_dispatch.c`. `ata_wait_ready`
+agora bail fail-closed com log forense (`falha de dispositivo (DF/ERR)
+apos BSY`) quando DF/ERR está setado após BSY limpar; `ata_wait_drq` usa
+`ata_status_is_fatal` (agora cobre DF além de ERR). Bail antecipado
+também evita queimar todo o budget `ATA_POLL_MAX` (2M) sobre hardware
+travado (ganho de performance, mesma motivação do fix NVMe CFS). As
+macros `ATA_STATUS_*` migraram para o header (single source of truth);
+`ata_pio.c` normalizado de CRLF→LF (convenção majoritária do tree).
+
+**Testes:** `tests/drivers/test_ata_status.c` (11 casos) trava o contrato
+fatal/busy/drq (DF, ERR, DF|ERR, DRDY|ERR, bits benignos CORR/IDX/DSC,
+0xFF). `run_ata_status_tests` registrado no `tests/test_runner.c`.
+
+**Validação local:** `make test` verde (`[tests] ata_status OK`,
+"Todos os testes passaram"); `make layout-audit` sem warnings;
+`ata_status.c` compila standalone. `ata_pio.c` exige o cross-toolchain
+x86_64 (ausente nesta máquina) — **gate externo recomendado: `make all64`**
+(regra 30 para mudança de driver/storage), e regressão
+`make smoke-x64-vmware-storage-resilience` em VMware oficial.
+
+### Filesystem safety audit 2026-05-29 — fsck superblock geometry
+
+Hardening regressivo (não-bloqueante) de memory-safety em
+`src/fs/fsck/fsck.c`, que lê o superblock CAPYFS de uma imagem
+**não-confiável** (validar essa imagem é, literalmente, o trabalho de um
+checker) e então deriva tamanhos de bitmap com aritmética **uint32**:
+`inode_bytes=(inode_count+7)/8`, `block_bytes=(block_count+7)/8`,
+`imap_blocks=(inode_bytes+bs-1)/bs` (aloca `imap_blocks*bs`) e
+`inode_block_count=(inode_count+ipb-1)/ipb`.
+
+**Bug:** um superblock com `inode_count`/`block_count` próximo de
+UINT32_MAX faz a soma `(+7)`/`(+ipb-1)`/`(*bs)` dar **wrap**, produzindo
+alocação **subdimensionada** que o walk de inodes/blocos depois escreve
+além do fim — **heap overflow controlado por metadados on-disk
+hostis**. Domínio de alto risco (rule 20: metadados CAPYFS), sem
+validação de geometria antes da alocação. `fsck_repair` sequer checava
+o magic antes de reconstruir bitmaps.
+
+**Fix (fail-closed, padrão de predicado puro host-testável):** novo
+`include/fs/fsck_geometry.h` + `src/fs/fsck/fsck_geometry.c` com
+`fsck_super_geometry_valid(sb, dev_block_count, dev_block_size)`, que
+**replica em uint64** toda a aritmética uint32 do fsck e rejeita (retorna
+0) quando: `block_size` do superblock difere do device; counts são zero
+ou excedem a capacidade física (`block_count<=dev_block_count`,
+`inode_count<=block_count*inodes_per_block`); offsets de layout caem fora
+do device; ou qualquer tamanho derivado faria wrap de uint32 / não
+caberia no device. `fsck_check` e `fsck_repair` chamam o validador logo
+após ler o superblock e abortam com `FSCK_ERR_BAD_SUPERBLOCK` / retorno
+-1 antes de qualquer `kmalloc`. O validador é uint64-puro (não pode ele
+mesmo dar overflow).
+
+**Testes:** `tests/fs/test_fsck_geometry.c` (11 casos) cobre baseline
+válido, NULL, device zero, block_size pequeno/divergente, counts zero,
+count > capacidade, offsets fora do device, região de bitmap
+extrapolando o device e os casos de overflow `inode_count`/`block_count`
+≈ UINT32_MAX. `run_fsck_geometry_tests` registrado no `tests/test_runner.c`.
+
+**Validação local:** `make test` verde (`[tests] fsck_geometry OK`,
+"Todos os testes passaram"); `make layout-audit` sem warnings; `fsck.c`
+e `fsck_geometry.c` passam `gcc -fsyntax-only` (sem inline asm x86).
+Gate externo recomendado: `make all64` + `make test` em CI.
+
+### Compositor safety audit 2026-05-29 — surface dimension overflow
+
+Hardening regressivo (não-bloqueante) em `src/gui/core/compositor.c`.
+`alloc_surface(w, h)` computava `pixels = (size_t)w*(size_t)h` e alocava
+`pixels * sizeof(uint32_t)` **sem limite superior** de dimensão.
+`compositor_create_window`/resize passam `w`/`h` direto; um caller com
+dimensões absurdas (~2^31 por lado, ex.: app bugado/hostil) faria
+`pixels*4` dar **wrap de size_t** → buffer subdimensionado tratado depois
+como `w*h` pixels (escrita out-of-bounds). Severidade baixa (exige
+dimensões absurdas em 64-bit) mas é um integer-overflow→OOB latente no
+único choke point de alocação de surface.
+
+**Fix:** nova constante `COMPOSITOR_MAX_SURFACE_DIM` (32768, folga acima
+de qualquer painel real e bem abaixo do ponto de wrap) em
+`include/gui/compositor.h`; `alloc_surface` rejeita fail-closed
+(`return NULL`, já tratado por ambos os callers) quando `w`/`h`
+excedem o limite. Guard inline (2 linhas) — proporcional à lógica
+trivial, diferente dos predicados puros extraídos para fsck/ata; os
+host tests existentes do compositor (`test_compositor_events`,
+`test_compositor_smoke_gate`, `test_widget_damage`, `test_overlay_damage`)
+cobrem create/resize. `make test` verde, `make layout-audit` sem warnings.
+
+### Audit de parsers de input não-confiável 2026-05-29 — sem alteração
+
+Varredura com **atenção extra a drivers e Hyper-V** (host→guest e input
+remoto) confirmou que os caminhos de parse de maior risco **já estão
+robustamente hardened e cobertos por host tests** — nenhuma alteração
+justificada (mexer em código testado e correto só adicionaria risco):
+
+- **DNS** (`src/net/services/dns.c`): `skip_name` limita label a 63,
+  cap de 8 saltos de ponteiro de compressão e `(pos+1+count) > len`;
+  `net_dns_parse_first_a` e o parser de SOA negativo checam
+  `offset+4/+10/+rdlen` e confinam o skip de nomes do RDATA a
+  `rdata_start+rdlen` antes de ler MINIMUM.
+- **RNDIS** (`src/drivers/net/rndis.c`): todo parser valida
+  `len >= sizeof(msg)` e `msg->len <= len`; `rndis_parse_query_complete`
+  calcula `payload_offset` em `size_t` e checa `payload_offset > len` e
+  `info_len > (len - payload_offset)` antes de expor payload.
+- **VMBus ring** (`src/drivers/hyperv/vmbus_ring.c`):
+  `vmbus_read_raw_packet_runtime` clampa `packet_len` a
+  `available - trailer` e recusa `packet_len > buffer_size` (sem cópia);
+  `vmbus_packet_extract_payload` clampa `declared_len`/`offset` e deriva
+  `data_len = declared_len - offset` dentro do pacote.
+- **netvsc** (`src/drivers/net/netvsc.c`): consome só os payloads já
+  validados do RNDIS e checa `payload_len` antes de ler (ex.: `< 6` p/ MAC).
+- **HTTP** (`src/net/services/http/`): corpo limitado a
+  `HTTP_MAX_RESPONSE_SIZE` (`RESPONSE_TOO_LARGE`); cópias usam
+  `body_received`/`buffer_size` reais, não o `Content-Length` do servidor
+  (que só dirige detecção de fim); chunked decode é bounded.
+- **storvsc** (`src/drivers/storage/storvsc_scsi.c`): build de CDB com
+  `cdb_len > STORVSC_SCSI_CDB_MAX` e `alloc_len > 0xFF`, sobre a extração
+  de pacote VMBus já validada.
+
+### Secret-zeroization audit 2026-05-29 — TLS free-wipe
+
+Hardening regressivo (não-bloqueante) de higiene de segredos (rule 20:
+"wipe sensitive buffers using the project volatile-safe wipe pattern").
+Auditoria dos sites que liberam material secreto:
+
+- **Bug em `src/security/tls.c`:** (1) `tls_memzero` usava ponteiro
+  **não-volátil** (`uint8_t *`), que o compilador pode eliminar; (2)
+  `tls_free` fazia `kfree` do `iobuf` (plaintext TLS + registros de
+  handshake) e do `ctx` (que embute `br_ssl_client_context`/`x509` com
+  chaves de sessão + master secret) **sem zerar antes** — segredos de
+  TLS ficavam residentes na heap liberada a cada fecho de conexão HTTPS
+  (usado por capypkg, update-agent, `net-fetch`).
+- **Fix:** `tls_memzero` agora é volatile-safe (`volatile uint8_t *`,
+  mesmo padrão de `crypt_secure_clear`/`vp_wipe`); `tls_free` zera
+  `iobuf` (`BR_SSL_BUFSIZE_BIDI`) e o `ctx` inteiro (`sizeof(*ctx)`)
+  antes dos respectivos `kfree`. Mínimo e contido; preserva o
+  comportamento (só acrescenta o wipe no teardown).
+
+**Sites auditados e já corretos (sem alteração):**
+
+- `src/security/volume_provider.c` — política "Wipe hygiene" documentada
+  + `vp_wipe` volatile-safe em **todo** caminho de saída (salt, key1,
+  key2, tag, header_buf, hdr).
+- `src/security/crypt*.c` — `crypt_secure_clear` volatile-safe usado
+  pervasivamente (round keys, tweak, k_pad, hashes; wipe-before-free do
+  `crypt_device`).
+- `src/auth/login_runtime/credential_buffer.c` — wipe canônico
+  volatile-safe (`login_window_credential_buffer_wipe`) com
+  `password_wipe_required`/`wiped` enforced pela política.
+
+**Validação local:** `tls.c` passa `gcc -fsyntax-only` (com
+`-Ithird_party/bearssl/inc`); `make test` verde (tls.c é kernel-side,
+não está na suíte host — gate externo `make all64`); `make layout-audit`
+sem warnings.
+
+### Performance audit 2026-05-29 — word-at-a-time memcpy/memset
+
+Primeira fatia de performance da varredura (segurança + performance). O
+`memcpy`/`memset` freestanding do kernel em `src/arch/x86_64/stubs.c`
+(o próprio comentário os chamava de "Temporary stubs ... until proper
+implementations are added") eram **loops byte-a-byte** — e o compilador
+rebaixa cópias de struct, init de array e zeramento grande **kernel-wide**
+para esses símbolos (page tables, buffer cache, framebuffer, pacotes de
+rede, buffers de cripto). Byte-a-byte é ~8x mais iterações de load/store
+que word-a-word no bulk alinhado.
+
+**Otimização (comportamento idêntico):** novos cores `static inline`
+`capy_word_memset`/`capy_word_memcpy` em `include/util/string_ops.h`,
+word-at-a-time (8 bytes) com **prólogo byte para alinhar a 8 bytes**
+(sem acesso desalinhado, sem UB de aliasing/alinhamento); `memcpy` usa o
+caminho word só quando origem e destino compartilham alinhamento mod 8
+(caso comum: buffers page/struct/block-alinhados) e cai para bytes caso
+contrário. `memcpy`/`memset` em `stubs.c` passam a chamar os cores
+(inlinados → zero overhead de chamada). `memmove`/`memcmp` permanecem
+byte-a-byte (correção de overlap/sinal, fora de hot path).
+
+**Equivalência provada por host test:** `tests/util/test_string_ops.c`
+compara os cores contra uma referência byte-a-byte para **todo** tamanho
+(0..256), todos os offsets de alinhamento de destino (0-7) e, no memcpy,
+todas as combinações de alinhamento origem×destino (8×8), verificando
+também bytes-guarda fora do range (sem escrita OOB). `run_string_ops_tests`
+registrado no `tests/test_runner.c`.
+
+**Validação local:** `make test` verde (`[tests] string_ops OK`,
+"Todos os testes passaram"); `make layout-audit` sem warnings; `stubs.c`
+e o teste passam `gcc -fsyntax-only`; `stubs.c` normalizado CRLF→LF.
+Ganho de throughput real (não medível nesta workspace) deve ser
+confirmado em `make all64` + smoke/benchmark externo.
+
 ### Hardening da revisão regressiva (não-bloqueante)
 
 A auditoria informal de 2026-05-24 identificou alguns pontos
@@ -560,7 +779,7 @@ isolada quando algum marker falha. Documentação completa em
 
 A etapa ativa entrega CapyDisplay 2D + scheduler/multithread runtime e
 **abre o primeiro gate cross-repo com sister** depois do fechamento da
-Etapa 3: o contrato real `capy-ui-widget` v2.19 / display-list schema v7
+Etapa 3: o contrato real `capy-ui-widget` v2.22 / display-list schema v7
 com o repo `CapyUI`.
 
 **Runbook autoritativo:**
@@ -570,7 +789,7 @@ com o repo `CapyUI`.
 
 | Fase | Sub-gate | Owner |
 |---|---|---|
-| A | Adapter CapyOS-side consumindo `capy-ui-widget` v2.19/schema v7 | CapyOS core |
+| A | Adapter CapyOS-side consumindo `capy-ui-widget` v2.22/schema v7 | CapyOS core |
 | B | Integração visual do produtor real CapyUI com o adapter | CapyOS core + CapyUI |
 | C | Scheduler cooperativo + multithread runtime + smoke `scheduler-fairness` | CapyOS core |
 | D | Damage tracking + double buffering + smoke `compositor-damage-track` | CapyOS core |
@@ -590,11 +809,27 @@ Makefile sibling detection. O adapter renderiza o subconjunto 2D
 básico e ignora/falha de forma segura para ops que exigem providers
 dedicados.
 
-**Próximo passo bloqueador:** ligar o adapter a produtores reais de
-display-list no fluxo desktop/window e avançar o damage tracking +
-double buffering sem reintroduzir ABI paralela.
+**Estado por fase (alpha.260+, fonte única de detalhe:
+[`active/etapa-4-closure-tracker.md`](active/etapa-4-closure-tracker.md)):**
+Fase A (adapter) ✅ código + host tests; Fase B (produtor real CapyUI)
+🟡 capability entregue e exercitada — fluxos core (Terminal, Context
+menu, Inline prompt) + fluxos do sibling via `capy_widget_emit`
+(Calculator, Text Editor, Settings, File Manager, Task Manager, Taskbar,
+Notification, Desktop icons); a migração dos demais fluxos de produção é
+polish **não-bloqueante** porque o critério de capability já está
+atendido; Fases C (scheduler cooperativo), D (damage tracking + double
+buffering) e E (thread-crash survives) ✅ código + host tests, cada uma
+com seu latch de smoke.
 
-**Critérios de aceite (a fechar):**
+**Único bloqueador para fechar a Etapa 4:** a **Fase F** — validação
+externa em VMware oficial (`make smoke-x64-vmware-etapa-4` + regressões
+da Etapa 3 + `release-check`). Essa validação **não roda nesta
+workspace** (review/edit only).
+
+**Critérios de aceite (implementados em código + host tests; permanecem
+`[ ]` até a confirmação externa da Fase F; rastreabilidade critério →
+fase → evidência → gate em
+[`active/etapa-4-closure-tracker.md`](active/etapa-4-closure-tracker.md) §3):**
 
 - [ ] Compositor redesenha somente regiões danificadas quando possível.
 - [ ] Cursor e texto não piscam sob resize/move de janela.
@@ -606,14 +841,14 @@ double buffering sem reintroduzir ABI paralela.
 
 **Cross-repo handshake esperado:** qualquer nova alteração no layout
 do display-list ou no pin do sister deve passar pelo workflow
-`cross-repo-contract-sync`; o consumo atual é do header real v2.19
-já publicado no sibling `../CapyUI`.
+`cross-repo-contract-sync`; o consumo atual é do header real v2.22
+(schema v7 inalterado) já publicado no sibling `../CapyUI`.
 
 ## Bloqueio das etapas 5-16
 
 Todas dependem do fechamento integral da etapa anterior conforme
 [`active/capyos-master-plan.md`](active/capyos-master-plan.md). Repositórios
-apartados podem evoluir em paralelo (CapyUI já entregou v2.19.0 com
+apartados podem evoluir em paralelo (CapyUI já entregou v2.22.0 com
 desktop session e widget/display-list schema v7; CapyLang já entregou S1-S7 host-only (lexer/parser/diagnostics/bytecode v0/VM/host bridge); demais permanecem em
 ABI host-only ou planejada) — mas só contam como progresso oficial
 quando a etapa correspondente abrir e o adapter + gate externo aceitarem

@@ -379,6 +379,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/storage/ahci_dispatch.o \
 	$(BUILD)/x86_64/drivers/storage/ahci_slot_allocator.o \
 	$(BUILD)/x86_64/drivers/storage/ata_pio.o \
+	$(BUILD)/x86_64/drivers/storage/ata_status.o \
 	$(BUILD)/x86_64/drivers/storage/block_error.o \
 	$(BUILD)/x86_64/drivers/storage/storage_smoke.o \
 	$(BUILD)/x86_64/drivers/storage/storage_smoke_io.o \
@@ -597,6 +598,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/memory/vmm_regions.o \
 	$(BUILD)/x86_64/fs/journal/journal.o \
 	$(BUILD)/x86_64/fs/fsck/fsck.o \
+	$(BUILD)/x86_64/fs/fsck/fsck_geometry.o \
 	$(BUILD)/x86_64/net/services/socket.o \
 	$(BUILD)/x86_64/net/protocols/tcp.o \
 	$(BUILD)/x86_64/net/services/dns_cache.o \
@@ -1526,6 +1528,7 @@ TEST_SRCS   := \
                tests/fs/test_capyfs_check.c src/fs/capyfs/capyfs_check.c \
                tests/fs/test_capyfs_journal_cause.c src/fs/capyfs/capyfs_journal_integration.c \
                tests/fs/test_journal.c src/fs/journal/journal.c \
+               tests/fs/test_fsck_geometry.c src/fs/fsck/fsck_geometry.c \
                tests/fs/test_buffer_cache_pacing.c src/fs/cache/buffer_cache.c \
                \
                tests/gui/test_gui_event.c tests/gui/test_gui_event_helpers.c src/gui/core/event.c \
@@ -1610,12 +1613,14 @@ TEST_SRCS   := \
                tests/drivers/test_ahci_dispatch.c src/drivers/storage/ahci_dispatch.c \
                tests/drivers/test_nvme_commands.c src/drivers/nvme/nvme_commands.c \
                tests/drivers/test_nvme_controller_reset.c src/drivers/nvme/nvme_reset.c \
+               tests/drivers/test_ata_status.c src/drivers/storage/ata_status.c \
                tests/drivers/test_block_error.c src/drivers/storage/block_error.c \
                tests/fs/test_block_retry.c \
                tests/drivers/test_ahci_slot_allocator.c src/drivers/storage/ahci_slot_allocator.c \
                tests/drivers/test_storage_smoke_gate.c src/drivers/storage/storage_smoke.c tests/stubs/stub_storage_smoke_io.c \
                \
                tests/kernel/test_klog.c src/kernel/log/klog.c \
+               tests/util/test_string_ops.c \
                tests/kernel/test_pmm.c src/memory/pmm.c \
                tests/kernel/test_task.c src/kernel/task.c \
                tests/kernel/test_task_iter.c src/kernel/task_iter.c \

@@ -3,6 +3,7 @@
 
 #include "drivers/io.h"
 #include "drivers/video/vga.h"
+#include "drivers/storage/ata_status.h"
 #include "fs/block.h"
 #include <stdint.h>
 
@@ -11,14 +12,8 @@
 #define ATA_CMD_IDENTIFY 0xEC
 #define ATA_CMD_IDENTIFY_PACKET 0xA1
 
-#define ATA_STATUS_BSY 0x80
-#define ATA_STATUS_DRDY 0x40
-#define ATA_STATUS_DF 0x20
-#define ATA_STATUS_DSC 0x10
-#define ATA_STATUS_DRQ 0x08
-#define ATA_STATUS_CORR 0x04
-#define ATA_STATUS_IDX 0x02
-#define ATA_STATUS_ERR 0x01
+/* ATA_STATUS_* bits + pure predicates live in
+ * drivers/storage/ata_status.h (shared with tests/drivers/test_ata_status.c). */
 
 #define ATA_POLL_MAX 2000000u
 #define ATA_RETRY_COUNT 3
@@ -144,13 +139,20 @@ static void ata_wait_400ns(uint16_t io) {
 
 static int ata_wait_ready(uint16_t io) {
   // Wait for BSY=0. Some controllers don't assert DRDY reliably; do not fail on
-  // DRDY=0.
+  // DRDY=0. Once BSY clears, DF/ERR become meaningful: a device that faulted
+  // must NOT be reported as ready, otherwise a hardware fault becomes a silent
+  // I/O success (e.g. the post-write "finish" wait). Mirrors the NVMe
+  // CSTS.CFS / xHCI USBSTS.HSE fatal early-exit pattern.
   for (uint32_t i = 0; i < ATA_POLL_MAX; ++i) {
     uint8_t st = inb(REG_STATUS(io));
     if (st == 0xFF) {
       return -1; // floating bus: nenhum dispositivo
     }
-    if (!(st & ATA_STATUS_BSY)) {
+    if (!ata_status_busy(st)) {
+      if (ata_status_is_fatal(st)) {
+        ata_log_status("falha de dispositivo (DF/ERR) apos BSY", io, st);
+        return -1;
+      }
       return 0;
     }
   }
@@ -164,11 +166,11 @@ static int ata_wait_drq(uint16_t io) {
     if (st == 0xFF) {
       return -1;
     }
-    if (st & ATA_STATUS_ERR) {
-      ata_log_status("erro aguardando DRQ", io, st);
+    if (ata_status_is_fatal(st)) {
+      ata_log_status("erro aguardando DRQ (DF/ERR)", io, st);
       return -1;
     }
-    if (st & ATA_STATUS_DRQ) {
+    if (ata_status_drq_ready(st)) {
       return 0;
     }
   }

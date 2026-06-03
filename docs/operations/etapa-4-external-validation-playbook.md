@@ -35,7 +35,9 @@ only; nenhum gate aqui é executado localmente.
 
 Reproduzido de `docs/plans/active/capyos-master-plan.md` §7 para
 evitar drift. Em caso de divergência, o master plan é
-autoritativo.
+autoritativo. A rastreabilidade critério → fase → evidência → gate
+(código + host tests por fase) vive em
+`docs/plans/active/etapa-4-closure-tracker.md` §3.
 
 - [ ] Compositor redesenha somente regiões danificadas quando possível.
 - [ ] Cursor e texto não piscam sob resize/move de janela.
@@ -192,7 +194,7 @@ cd ../CapyUI && make validate && make package
 - Política de panic/oops para thread de app falha.
 - Smoke marker novo: `[smoke] scheduler-fairness ready` (emitido após N rounds de scheduling justos).
 
-**Status parcial implementado:** a primeira fatia da Fase C formaliza a
+**Status (fechada em código + host tests, alpha.260+):** a primeira fatia da Fase C formaliza a
 fairness cooperativa existente no scheduler CapyOS: `scheduler_yield()` agora
 procura o próximo `READY` após a task corrente e faz wrap para o início da fila,
 evitando starvation quando três ou mais tasks cooperativas estão prontas. A
@@ -226,7 +228,7 @@ Marcadores esperados no COM1, em ordem:
 - Glyph cache para fontes.
 - Smoke marker: `[smoke] compositor-damage-track ready` (emitido após N frames com damage region não-total).
 
-**Status parcial implementado:** a primeira fatia da Fase D conecta o gate
+**Status (fechada em código + host tests, alpha.260+):** a primeira fatia da Fase D conecta o gate
 host-testável `compositor-damage-track`: o latch global emite
 `[smoke] compositor-damage-track ready` após observar 2 frames parciais com
 dirty rects no caminho real de `compositor_render()`. O alvo externo
@@ -273,7 +275,7 @@ Marcadores esperados, em ordem:
 - Política de panic/oops para falha de thread de app.
 - Smoke marker: `[smoke] thread-crash-survives ready` (emitido após uma thread de app falhar deliberadamente e o desktop permanecer responsivo).
 
-**Status parcial implementado:** a primeira fatia da Fase E formaliza
+**Status (fechada em código + host tests, alpha.260+):** a primeira fatia da Fase E formaliza
 o latch host-testável `thread-crash-survives` no mesmo padrão das
 Fases C e D. O kernel-side ganhou `include/kernel/thread_crash_smoke.h`,
 `src/kernel/thread_crash_smoke.c` (latch puro) e
@@ -419,10 +421,12 @@ oficial ou em CI provisionada.
 
 - `docs/plans/active/capyos-master-plan.md` §7 — definição
   autoritativa da Etapa 4.
+- `docs/plans/active/etapa-4-closure-tracker.md` — estado por fase
+  (código ↔ testes ↔ docs ↔ gate externo); fonte única de detalhe.
 - `docs/reference/integration/compatibility-matrix.md` — versões
   pinadas cross-repo.
-- `docs/reference/integration/compatibility-audit-2026-05-22.md` —
-  snapshot técnico vigente.
+- `docs/reference/integration/compatibility-audit-2026-05-23.md` —
+  snapshot técnico vigente (inclui addenda alpha.260).
 - `docs/architecture/smoke-marker-pattern.md` — pattern canônico
   para os markers novos que esta Etapa introduz.
 - `docs/operations/etapa-3-external-validation-playbook.md` —

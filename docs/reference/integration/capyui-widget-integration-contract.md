@@ -3,7 +3,7 @@
 **Status:** referência para desenvolvimento apartado.
 **Integração planejada:** Etapas 4 e 6, com o compositor/input permanecendo no sistema base.
 **Repositório externo atual:** `CapyUI`.
-**Contrato ativo:** `capy-ui-widget` v2.19, display-list schema v7 (`CapyUI/src/widget/capy_display_list.h`).
+**Contrato ativo:** `capy-ui-widget` v2.22, display-list schema v7 (`CapyUI/src/widget/capy_display_list.h`; o bump 2.19->2.22 é aditivo no estado dos widgets — rich-text ranges, canvas draw callback, multi-touch pinch/rotate — e não altera o display-list schema v7).
 
 ## Escopo atual
 

@@ -146,6 +146,11 @@ static int window_is_overlay(const struct gui_window *win) {
 static uint32_t *alloc_surface(uint32_t w, uint32_t h) {
   size_t pixels = (size_t)w * (size_t)h;
   if (w == 0 || h == 0 || pixels == 0) return NULL;
+  /* Fail closed on absurd dimensions: keeps w*h*4 well inside size_t so
+   * the allocation can never wrap to an undersized buffer that callers
+   * would then treat as w*h pixels (out-of-bounds surface). */
+  if (w > COMPOSITOR_MAX_SURFACE_DIM || h > COMPOSITOR_MAX_SURFACE_DIM)
+    return NULL;
   return (uint32_t *)kmalloc(pixels * sizeof(uint32_t));
 }
 

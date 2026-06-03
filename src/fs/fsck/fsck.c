@@ -1,4 +1,5 @@
 #include "fs/fsck.h"
+#include "fs/fsck_geometry.h"
 #include "memory/kmem.h"
 #include <stddef.h>
 
@@ -55,6 +56,17 @@ int fsck_check(struct block_device *dev, struct fsck_result *result) {
   if (sb->version != CAPYFS_VERSION) {
     fsck_add_error(result, FSCK_ERR_BAD_VERSION, 0, 0, sb->version);
     result->clean = 0;
+  }
+
+  /* Fail closed on implausible / overflow-prone geometry before deriving
+   * any bitmap sizes or walking inodes: a hostile superblock could
+   * otherwise wrap the uint32 size math below and under-allocate the
+   * tracking bitmaps this function then writes into. */
+  if (!fsck_super_geometry_valid(sb, dev->block_count, dev->block_size)) {
+    fsck_add_error(result, FSCK_ERR_BAD_SUPERBLOCK, 0, 0, 0);
+    result->clean = 0;
+    kfree(buf);
+    return -1;
   }
 
   uint32_t inode_count = sb->inode_count;
@@ -203,6 +215,15 @@ int fsck_repair(struct block_device *dev, struct fsck_result *result) {
 
   if (fsck_read_block(dev, 0, buf) != 0) { kfree(buf); return -1; }
   struct capy_super *sb = (struct capy_super *)buf;
+
+  /* Fail closed before rebuilding bitmaps: refuse to act on a bad
+   * magic or implausible/overflow-prone geometry (same protection as
+   * fsck_check; the repair path must not trust the superblock either). */
+  if (sb->magic != CAPYFS_MAGIC ||
+      !fsck_super_geometry_valid(sb, dev->block_count, dev->block_size)) {
+    kfree(buf);
+    return -1;
+  }
 
   uint32_t inode_count = sb->inode_count;
   uint32_t block_count = sb->block_count;

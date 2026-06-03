@@ -39,7 +39,9 @@ static struct tls_security_info g_tls_last_info;
 static const char *g_tls_alpn_protocols[] = { "http/1.1" };
 
 static void tls_memzero(void *ptr, size_t len) {
-  uint8_t *p = (uint8_t *)ptr;
+  /* volatile so the compiler cannot elide the wipe of secret material
+   * (TLS plaintext, session keys) when it happens right before free. */
+  volatile uint8_t *p = (volatile uint8_t *)ptr;
   while (len-- > 0) {
     *p++ = 0;
   }
@@ -664,9 +666,15 @@ void tls_free(struct tls_context *ctx) {
   }
   tls_free_custom_anchor(ctx);
   if (ctx->iobuf) {
+    /* iobuf carries TLS plaintext and handshake records; wipe before
+     * returning it to the heap so secrets do not linger in freed memory. */
+    tls_memzero(ctx->iobuf, BR_SSL_BUFSIZE_BIDI);
     kfree(ctx->iobuf);
     ctx->iobuf = NULL;
   }
+  /* ctx embeds the BearSSL client/x509 engine state (session keys,
+   * master secret); wipe the whole struct before freeing it. */
+  tls_memzero(ctx, sizeof(*ctx));
   kfree(ctx);
 }
 

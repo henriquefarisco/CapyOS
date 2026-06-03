@@ -7,6 +7,14 @@
 #define COMPOSITOR_MAX_WINDOWS 32
 #define COMPOSITOR_MAX_LAYERS  8
 
+/* Upper bound for a single surface dimension. Generous headroom above
+ * any real display (16K-wide panels are ~15360 px) yet far below the
+ * point where width*height*4 could wrap size_t. alloc_surface() rejects
+ * dimensions beyond this fail-closed, so a caller passing absurd
+ * (e.g. attacker-influenced) window dimensions cannot drive an
+ * integer-overflow -> undersized allocation -> out-of-bounds surface. */
+#define COMPOSITOR_MAX_SURFACE_DIM 32768u
+
 struct gui_rect {
   int32_t x, y;
   uint32_t width, height;

@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
 **Data de referência:** 2026-05-15
-**Versão atual:** `0.8.0-alpha.261+20260529`
+**Versão atual:** `0.8.0-alpha.262+20260602`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -272,7 +272,15 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 
 **Objetivo:** criar uma camada gráfica 2D sólida e introduzir scheduler/multithread cooperativo no runtime — pré-requisito para apps que precisam de paralelismo previsível e UI fluida.
 
-**Status:** **Em andamento** desde 2026-05-21 (alpha.253). Etapa 3 fechou externamente nessa mesma data. **Fase A revertida em alpha.255** (alpha.254 foi rolled back): o scaffolding entregue tinha um erro de design (criou ABI paralela em vez de consumir a ABI real do sister `CapyUI`). A correção da Fase A consome `CapyUI/src/widget/capy_display_list.h` do `CapyUI` `2.19.0` (`capy-ui-widget` v2.19, display-list schema v7) via Makefile sibling detection e adapter CapyOS-side. Próximo passo bloqueador: ligar esse adapter ao fluxo desktop/window real e avançar damage tracking/double buffering sem reintroduzir ABI paralela.
+**Status:** **Em andamento** desde 2026-05-21 (alpha.253); **Fases A-E fechadas em código + host tests** em alpha.260 (empacotadas no release alpha.261). Etapa 3 fechou externamente em 2026-05-21. Histórico: a **Fase A foi revertida em alpha.255** (alpha.254 rolled back) porque o scaffolding criou ABI paralela em vez de consumir a ABI real do sister `CapyUI`; a correção consome `CapyUI/src/widget/capy_display_list.h` do `CapyUI` `2.22.0` (`capy-ui-widget` v2.22, display-list schema v7 inalterado) via Makefile sibling detection (`CAPYOS_HAVE_CAPYUI_WIDGET`) e adapter CapyOS-side.
+
+**Estado por fase** (fonte única de detalhe: [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md)):
+
+- Fase A (adapter) — ✅ código + host tests.
+- Fase B (produtor real CapyUI) — 🟡 capability entregue e exercitada por fluxos reais (Terminal, Context menu, Inline prompt no core; Calculator/Text Editor/Settings/File Manager/Task Manager/Taskbar/Notification/Desktop icons via `capy_widget_emit` do sibling). A migração dos demais fluxos de produção é polish **não-bloqueante** — o critério de aceite de capability (render via adapter sem acesso direto ao compositor) já está atendido.
+- Fases C (scheduler cooperativo), D (damage tracking + double buffering) e E (thread-crash survives) — ✅ código + host tests, cada uma com seu latch de smoke.
+
+**Único bloqueador para fechar a Etapa 4:** a **Fase F** — validação externa em VMware oficial via `make smoke-x64-vmware-etapa-4` (5 markers em ordem) + regressões da Etapa 3 + `release-check`. Essa validação **não roda nesta workspace** (review/edit only); é executada pelo operador externo / CI provisionada.
 
 **ROI:** médio-alto — UI fluida sem travar é base de qualquer experiência polida; scheduler fecha uma lacuna conhecida em `project-overview.md`.
 
@@ -288,6 +296,12 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - Política de panic/oops controlada quando thread de app falha.
 
 ### Critérios de aceite
+
+> Os seis critérios abaixo já estão **implementados em código + host tests**
+> (Fases A-E, alpha.260+) e permanecem `[ ]` até a **confirmação externa da
+> Fase F** em VMware oficial (`make smoke-x64-vmware-etapa-4`). A
+> rastreabilidade critério → fase → evidência → gate está em
+> [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md) §3.
 
 - [ ] Compositor redesenha somente regiões danificadas quando possível.
 - [ ] Cursor e texto não piscam sob resize/move de janela.
@@ -307,6 +321,8 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 **Objetivo:** avançar `libcapy-tls` de metadata-only para handshake real. Pré-requisito direto para browser HTTPS (Etapa 7) e release/update HTTPS (Etapa 8).
 
 **ROI:** alto — sem HTTPS real, nada moderno funciona (web, update, sync, qualquer serviço).
+
+> **Preparação read-only (não inicia a etapa; permanece BLOQUEADA até a Etapa 4 fechar):** auditoria do estado atual + plano do 1º slice em [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md). Achados-chave: o TLS BearSSL **kernel-side já é real e em produção** (`src/security/tls.c`); a Etapa 5 torna real a `libcapy-tls` **userland** (hoje stub fail-closed, `capy_tls_is_supported()=0`). O gap mais fundamental é a **ausência de syscall de entropia userland** (`getrandom`) para semear o DRBG do BearSSL — candidato a 1º slice (5.1).
 
 ### Entregáveis
 
@@ -697,4 +713,4 @@ abrir.
 
 ## 20. Próximo comando esperado
 
-A Etapa 3 fechou formalmente em 2026-05-21 (alpha.253) após validação externa do gate `make smoke-x64-vmware-storage-resilience` em VMware oficial. A Etapa 4 abriu em sequência mas o scaffolding entregue em alpha.254 foi rolled back em **alpha.255** após descoberta de que a ABI real do sister `CapyUI` já estava além do contrato paralelo criado. A matriz agora pina `CapyUI` `2.19.0` / `capy-ui-widget` v2.19 (display-list schema v7), e a Fase A correta consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side em vez de inventar schema paralelo. Próxima ação: ligar esse adapter ao fluxo desktop/window real e avançar damage tracking + scheduler runtime. Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes da Etapa 3. Runbook completo da Etapa 4: `docs/operations/etapa-4-external-validation-playbook.md`.
+A Etapa 3 fechou formalmente em 2026-05-21 (alpha.253) após validação externa do gate `make smoke-x64-vmware-storage-resilience` em VMware oficial. A Etapa 4 abriu em sequência mas o scaffolding entregue em alpha.254 foi rolled back em **alpha.255** após descoberta de que a ABI real do sister `CapyUI` já estava além do contrato paralelo criado. A matriz agora pina `CapyUI` `2.22.0` / `capy-ui-widget` v2.22 (display-list schema v7), e a Fase A correta consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side em vez de inventar schema paralelo. Próxima ação: executar a **Fase F** — gate externo agregado `make smoke-x64-vmware-etapa-4` em VMware oficial (5 markers em ordem: DHCP → gui-session → scheduler-fairness → compositor-damage-track → thread-crash-survives) + regressões `usb-hid-keyboard`/`storage-resilience` + `release-check` — já que as **Fases A-E estão fechadas em código + host tests** (alpha.260+). Estado por fase em [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md). Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes da Etapa 3. Runbook completo da Etapa 4: `docs/operations/etapa-4-external-validation-playbook.md`.
