@@ -123,9 +123,12 @@ v1 com signer aditivo, CapyBenchmark v1 com serializacao aditiva).
 
 ## Evidencias / validacao
 
-Validacao **nao executada** nesta maquina (politica review/edit-only do
-workspace). Gates recomendados para o operador/CI antes de promover a tag
-(detalhe e ordem completa do lote em `DEPLOY-WORKSPACE.txt` na raiz):
+Preparada no workspace (politica review/edit-only) e **validada
+externamente pelo operador/CI antes da tag**: os gates abaixo foram
+executados fora desta maquina e **passaram** — em especial a **Fase F**
+(`make smoke-x64-vmware-etapa-4`, 5 markers em ordem) em VMware + UEFI +
+E1000, fechando a Etapa 4. Lista dos gates (ordem completa do lote em
+`DEPLOY-WORKSPACE.txt` na raiz):
 
 - `make test` — host tests (inclui `ata_status`, `fsck_geometry`, `string_ops`).
 - `make layout-audit` e `make version-audit`.
@@ -141,9 +144,11 @@ workspace). Gates recomendados para o operador/CI antes de promover a tag
 
 ## Proximos passos
 
-1. Rodar os gates externos acima fora desta maquina (lote de 7 repos).
-2. Criar manualmente a tag `v0.8.0-alpha.262+20260602` (develop + main).
-3. Etapa 4 fica formalmente fechada quando a Fase F passar; Etapa 5 (TLS
-   userland real) e a proxima da sequencia.
-4. P0 do signer Ed25519: validar KAT externamente; registrar o verifier
+1. Concluido: gates externos executados fora desta maquina (lote de 7
+   repos) e tag `v0.8.0-alpha.262+20260602` criada (develop + main).
+2. Concluido: **Etapa 4 formalmente fechada** (Fase F validada em VMware).
+   **Etapa 5 (TLS userland real) aberta**; Slice 5.1 (`SYS_GETRANDOM`)
+   entregue in-tree, Slice 5.2 (BearSSL include-path no userland + host
+   test dos trust anchors) em andamento. TLS userland segue fail-closed.
+3. P0 do signer Ed25519: validar KAT externamente; registrar o verifier
    quando a Etapa 9 abrir.

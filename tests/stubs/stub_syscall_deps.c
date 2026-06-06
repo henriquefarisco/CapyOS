@@ -41,6 +41,11 @@ uint64_t apic_timer_ticks(void) {
     return 0u;
 }
 
+/* sys_clock_realtime. The host build has no RTC; return 0. */
+uint64_t rtc_unix_timestamp(void) {
+    return 0u;
+}
+
 /* syscall_init_msr lives in arch-specific assembly (`syscall_msr.S`).
  * The host build never enables MSRs; provide an empty shim so the
  * linker is satisfied. The real syscall_init() in syscall.c calls

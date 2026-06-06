@@ -29,9 +29,10 @@
   migração dos fluxos de produção restantes é **polish não-bloqueante**
   (o critério de aceite de capability — render via adapter sem acesso
   direto ao compositor — já está atendido).
-- **Fase F:** ⛔ **pendente** — validação externa em VMware oficial.
-  **Não executável nesta workspace** (review/edit only).
-- **Bloqueador único para declarar a Etapa 4 fechada:** Fase F.
+- **Fase F:** ✅ **validada externamente** em VMware + UEFI + E1000 e
+  **fechada na release `alpha.262+20260602`** (gate agregado
+  `make smoke-x64-vmware-etapa-4`, 5 markers em ordem).
+- **Etapa 4: CONCLUÍDA** em `alpha.262`. Etapa seguinte: **Etapa 5 — TLS userland real** (ativa).
 
 ---
 
@@ -44,7 +45,7 @@
 | **C** | Scheduler cooperativo + multithread runtime | `include/kernel/scheduler.h` (`SCHED_POLICY_COOPERATIVE`); `src/kernel/scheduler.c` (`scheduler_yield` anti-starvation); latch em `src/kernel/scheduler_smoke*` (flag `CAPYOS_SCHEDULER_FAIRNESS_SMOKE`) | `tests/kernel/test_scheduler_smoke_gate.c` → `run_scheduler_smoke_gate_tests()` | `make smoke-x64-vmware-scheduler-fairness` → marker `[smoke] scheduler-fairness ready` | ✅ código + host tests |
 | **D** | Damage tracking + double buffering + glyph cache | `src/gui/core/compositor_damage.c`, `compositor_render.c`, `compositor_smoke.c`, `compositor_smoke_io.c`; cache de glyphs 8x16; fix "cursor erase scoped to overlap" | `tests/gui/test_compositor_events.c` → `test_compositor_events_run()` (inclui `test_compositor_cursor_erase_only_on_overlap`); `test_compositor_smoke_gate_run()` | `make smoke-x64-vmware-compositor-damage-track` → marker `[smoke] compositor-damage-track ready` (latch sempre live, sem flag) | ✅ código + host tests |
 | **E** | Política panic/oops: thread de app crashar não derruba kernel/desktop | `include/kernel/thread_crash_smoke.h`; `src/kernel/thread_crash_smoke.c` + `thread_crash_smoke_io.c`; alimentado por `process.c::process_exit` + `scheduler.c::scheduler_tick` sob `#ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE` | `tests/kernel/test_thread_crash_smoke_gate.c` → `run_thread_crash_smoke_gate_tests()` | `make smoke-x64-vmware-thread-crash-survives` → marker `[smoke] thread-crash-survives ready` | ✅ código + host tests |
-| **F** | Aprovação externa final + fechamento | — | — | `make smoke-x64-vmware-etapa-4` (agregado, 5 markers em ordem) + `release-check` + regressões Etapa 3 | ⛔ pendente (off-machine) |
+| **F** | Aprovação externa final + fechamento | — | — | `make smoke-x64-vmware-etapa-4` (agregado, 5 markers em ordem) + `release-check` + regressões Etapa 3 | ✅ validada em `alpha.262` (2026-06-02) |
 
 Gate agregado da Fase F (`smoke-x64-vmware-etapa-4`) valida, no mesmo
 boot e em ordem estrita:
@@ -62,9 +63,9 @@ Regressões da Etapa 3 que devem continuar verdes:
 
 ## 3. Critérios de aceite (master-plan §7) — rastreabilidade
 
-Todos os critérios estão **implementados em código + host tests**;
-permanecem `[ ]` (não marcados) até a **confirmação externa da Fase F**,
-porque o "done" oficial da etapa é o comportamento observado em VMware.
+Todos os critérios foram **confirmados externamente na Fase F**
+(VMware + UEFI + E1000) e **fechados na release `alpha.262+20260602`**.
+A coluna "Confirmação externa" indica o gate que validou cada um.
 
 | # | Critério de aceite | Fase | Evidência code/test | Confirmação externa |
 |---|---|---|---|---|

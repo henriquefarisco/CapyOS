@@ -99,6 +99,8 @@ static void test_syscall_numbers(void) {
         { "SYS_TIME == 39",    SYS_TIME,     39 },
         { "SYS_IOCTL == 40",   SYS_IOCTL,    40 },
         { "SYS_DNS_RESOLVE == 41", SYS_DNS_RESOLVE, 41 },
+        { "SYS_GETRANDOM == 42", SYS_GETRANDOM, 42 },
+        { "SYS_CLOCK_REALTIME == 43", SYS_CLOCK_REALTIME, 43 },
     };
 
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
@@ -107,8 +109,8 @@ static void test_syscall_numbers(void) {
         else FAIL("syscall number drift");
     }
 
-    TEST("SYSCALL_COUNT == 42");
-    if (SYSCALL_COUNT == 42) PASS();
+    TEST("SYSCALL_COUNT == 44");
+    if (SYSCALL_COUNT == 44) PASS();
     else FAIL("syscall table size drift");
 }
 

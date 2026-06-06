@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-06-02 · **Versão:** `0.8.0-alpha.262+20260602` · **Plataforma oficial:** VMware + UEFI + E1000 · **Público alvo:** usuário desktop comum
+**Data:** 2026-06-06 ? **Vers?o:** `0.8.0-alpha.263+20260606` ? **Plataforma oficial:** VMware + UEFI + E1000 ? **P?blico alvo:** usu?rio desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -20,8 +20,8 @@
 ## Progresso global
 
 - **Base histórica:** 100% consolidada até `alpha.93`; Etapa 1 fechada em `alpha.100`.
-- **Plano sequencial novo (pós-reordenação ROI):** Etapas 1-3 oficialmente fechadas; 3/16 etapas concluídas.
-- **Etapa atual:** Etapa 4 — CapyDisplay 2D + scheduler/multithread runtime.
+- **Plano sequencial novo (pós-reordenação ROI):** Etapas 1-4 oficialmente fechadas; 4/16 etapas concluídas.
+- **Etapa atual:** Etapa 5 — TLS userland real (desbloqueada pelo fecho da Etapa 4 em alpha.262).
 - **Slice 3D fechado em 2026-05-21 (alpha.245):** gate externo `make smoke-x64-vmware-usb-hid-keyboard` validado em VMware + UEFI + E1000 com teclado USB HID real, marker `[smoke] usb-hid-keyboard ready` observado no COM1, follow-ups §14.1-§14.3 entregues, audit fixes §15.1-§15.5 corrigidos e bug W (slot reuse collision) resolvido. 25 novos host tests cobrem smoke gate, event pump, release slot, port ack CSC, Ctrl combinations, LED dispatch e caps lock.
 - **Slice 3E.1 entregue em 2026-05-21 (alpha.246):** extração host-testável dos AHCI/NVMe command builders.
 - **Slice 3E.2.A entregue em 2026-05-21 (alpha.247):** unified block-I/O error classifier `block_io_classify_ahci`/`block_io_classify_nvme` com 5 classes. AHCI integrado em 3 sites de `ahci_exec`; NVMe em 4 sites. 15 novos host tests.
@@ -32,23 +32,24 @@
 - **Audit fix entregue em 2026-05-21 (alpha.252):** revisão crítica de Slices 3E.1–3E.5 identificou e corrigiu dois bugs críticos antes da execução externa: (1) double-emission do smoke marker em VMs dual-storage; (2) NVMe Controller Level Reset não reemitia Create I/O CQ/SQ após CC.EN=1. 4 novos host tests de regressão.
 - **Sub-slice 3E.4.B entregue em 2026-05-21 (alpha.253):** migração mecânica de `dbg_puts`/`dbg_hex*`/`dbg_label_hex32` para `klog(KLOG_*, ...)` / `klog_hex(...)` em `ahci.c` e `nvme.c` (108 call sites em 2 arquivos). Helpers locais file-static removidos; output migra de port 0xE9 (QEMU-only) para o klog ring (recuperável em runtime). Como efeito colateral, **corrige bug latente**: 2 chamadas a `dbg_label_hex32` em `nvme_controller_reset` referenciavam o helper static de ahci.c (undefined-reference no escopo de TU). Outros 13 arquivos do projeto com ~126 sites `dbg_*` ficam como sub-slice 3E.4.C (follow-up).
 - **Etapa 3 fechada formalmente em 2026-05-21 (alpha.253):** gate externo `make smoke-x64-vmware-storage-resilience` aprovado em VMware + UEFI + E1000 com marker `[smoke] storage-stack ready` no COM1. Encerrou os 8 sub-slices 3D + 3E.1-3E.5 + audit fix + 3E.4.B. Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes.
-- **Próximo bloco da Etapa 4:** Fases A-E fechadas em código + host tests (alpha.260, empacotadas em alpha.261); resta apenas a **Fase F** — validação externa em VMware oficial via gate agregado `make smoke-x64-vmware-etapa-4` (5 markers em ordem: DHCP → gui-session → scheduler-fairness → compositor-damage-track → thread-crash-survives), **não executável nesta máquina**. Estado por fase em [`active/etapa-4-closure-tracker.md`](active/etapa-4-closure-tracker.md); runbook em `docs/operations/etapa-4-external-validation-playbook.md`.
-- **Etapas bloqueadas:** Etapas 5-16 dependem do fechamento integral da etapa anterior.
+- **Etapa 4 fechada em `alpha.262+20260602`:** Fase F validada externamente em VMware + UEFI + E1000 (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem: DHCP → gui-session → scheduler-fairness → compositor-damage-track → thread-crash-survives) + batch de 5 fixes de hardening regressivo (ATA-PIO DF/ERR, fsck geometry overflow, compositor surface-dim cap, TLS free-wipe, memcpy/memset word-at-a-time). Detalhe por fase em [`active/etapa-4-closure-tracker.md`](active/etapa-4-closure-tracker.md).
+- **Etapa atual (Etapa 5 — TLS userland real):** **Slice 5.1 entregue in-tree** = syscall de entropia userland `SYS_GETRANDOM` (=42; `SYSCALL_COUNT`=43) backed pela CSPRNG do kernel (handler `sys_getrandom`, cap 256 B/chamada, fail-closed), stub `capy_getrandom` + decl capylibc + assert de ABI. `make test` verde (`SYS_GETRANDOM == 42 OK`, `SYSCALL_COUNT == 43 OK`), `layout-audit` sem warnings, `syscall.c` syntax OK; **TLS intocado** (`capy_tls_is_supported()` continua 0). **Slice 5.2 parcial in-tree** = include-path do BearSSL ligado (`USERLAND_CFLAGS` + `HOST_CFLAGS`) + host test validando os 146 trust anchors BearSSL reais com tipos reais host-side (`tls_trust_anchors OK (146 anchors)`); link ring-3 do subset pendente de `make all64`. **Engine smoke host-side entregue** = `tests/security/test_tls_client_engine.c` constrói um `br_ssl_client` real com os 146 trust anchors de produção e emite um ClientHello TLS válido com SNI (`tls_client_engine OK`), provando engine + anchors + config host-side **sem ligar o handshake** (userland segue fail-closed). **Slice 5.4 parcial** = handshake-drive loop real (`capy_tls_handshake.c`: engine BearSSL ↔ transport seam) implementado e host-testado (`tls_handshake_drive OK`: ClientHello + fail-closed em EOF/garbage/write-fail), **sem tocar o seam de produção** (`capy_tls_backend_connect` segue `EUNSUPPORTED`). **Validação de cert host-testada (5.5 parcial)** = `tls_cert_validation OK`: `br_x509_minimal` (o engine que o handshake arma) aceita cadeia válida p/ o host certo e **falha fechado** em hostname errado / expirado / issuer não-confiável (PKI de teste só-público; sem chaves privadas no tree). **Wall-clock para X.509 (Slice 5.x)** = `SYS_CLOCK_REALTIME=43` (`SYSCALL_COUNT`=44) via RTC do kernel + `capy_clock_realtime` + helper puro `capy_tls_unix_to_x509_time` (host-testado), fechando um gap real: `SYS_TIME` retornava ticks do APIC (não data), inútil p/ validade de cert. **Prerequisites da Etapa 5 todos prontos host-side** (entropia, anchors, engine, handshake-loop, validação de cert, wall-clock). **Handshake PLUGADO no backend de produção (gated)** = `capy_tls_backend_connect` executa o handshake real BearSSL (init_full + time + buffer + TLS1.2 + ALPN + seed + reset + `br_sslio_flush`), `capy_tls_connect_tcp` devolve o contexto vivo, send/recv/close via `br_sslio`, `capy_tls_is_supported()→1`, contexto zeroizado no release — tudo sob `CAPYOS_TLS_USERLAND_HANDSHAKE` (**default OFF**, default build/tests intactos; espelha o kernel `tls.c`). **Não validado aqui** (review/edit-only + sem cross-toolchain). Validação externa: `make all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1` + `make smoke-x64-vmware-tls-handshake`; depois promover o flag a default (5.6). Plano por slice em [`../architecture/etapa-5-tls-userland-readiness.md`](../architecture/etapa-5-tls-userland-readiness.md).
+- **Etapas bloqueadas:** Etapas 6-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.262, Etapa 4 ativa)
+## Repositórios apartados (estado em alpha.262, Etapa 5 ativa)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A
 matriz pinada está em
 [`compatibility-matrix.md`](../reference/integration/compatibility-matrix.md)
 e o snapshot técnico atual está em
-[`compatibility-audit-2026-06-02.md`](../reference/integration/compatibility-audit-2026-06-02.md).
+[`compatibility-audit-2026-06-06.md`](../reference/integration/compatibility-audit-2026-06-06.md).
 
 | Repo apartado | Versão atual | Owner autoritativo | Gate de integração CapyOS |
 |---|---|---|---|
 | [`CapyUI`](../../../CapyUI) | `2.22.0` | widget model (`capy-ui-widget` v2.22, display-list schema v7) **e** desktop session (`capy-ui-desktop-session` v1, publicado em `alpha.241`) | Etapas 4 e 6 |
 | [`CapyAgent`](../../../CapyAgent) | `0.0.7` | formato `.capypkg`, component-index, resolver, **signer Ed25519 publicado host-side** (`capy-agent-component-index` v1; verifier pendente de KAT externo + registro) | Etapas 8-9 |
-| [`CapyBrowser`](../../../CapyBrowser) | `0.3.0` | browser-core text/HTML estático (`capy-browser-core` v1 planejado; URL + HTML-to-text + image adapter + DOM host-testáveis) | Etapas 6-7 |
+| [`CapyBrowser`](../../../CapyBrowser) | `0.5.0` | browser-core text/HTML/CSS est?tico (`capy-browser-core` v1 planejado; CSS cascade, layout/display-list, download, sess?o privada e forms host-test?veis) | Etapas 6-7 |
 | [`CapyCodecs`](../../../CapyCodecs) | `0.0.7` | image codecs portáveis (`capy-codec-image` v2: per-call limits, detect/generic, metadata, QOI) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
 | [`CapyLang`](../../../CapyLang) | `0.1.8` | S1-S7 + S6.3 structs/enums entregues (host-only; `capy-lang-host` v0 parcial; +opcodes 0x64-0x66 + trap V0018) | Etapa 15 |
 | [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.7` | harness + baseline (`capy-benchmark-report` v1 planejado; +serialização report/eval/replay) | Etapas 15-16 |
@@ -163,7 +164,7 @@ Extensões posteriores:
   host-side**; verifier pendente de KAT externo + registro via
   `capypkg_set_signature_verifier`), CapyBenchmark `0.0.6 -> 0.0.7`; pins
   do core nos 6 sisters -> `alpha.262`; novo
-  `compatibility-audit-2026-06-02.md`. Release note:
+  `compatibility-audit-2026-06-06.md`. Release note:
   `docs/releases/capyos-0.8.0-alpha.262+20260602.md`. Fase F continua sendo
   o gate de fechamento da Etapa 4 (a executar externamente).
 
@@ -775,10 +776,10 @@ per-Fase (`smoke-x64-vmware-scheduler-fairness`,
 isolada quando algum marker falha. Documentação completa em
 §5.6 do `docs/operations/etapa-4-external-validation-playbook.md`.
 
-## Etapa 4 (em andamento) — detalhes operacionais
+## Etapa 4 (concluída em alpha.262) — detalhes operacionais
 
-A etapa ativa entrega CapyDisplay 2D + scheduler/multithread runtime e
-**abre o primeiro gate cross-repo com sister** depois do fechamento da
+A etapa entregou CapyDisplay 2D + scheduler/multithread runtime e
+**abriu o primeiro gate cross-repo com sister** depois do fechamento da
 Etapa 3: o contrato real `capy-ui-widget` v2.22 / display-list schema v7
 com o repo `CapyUI`.
 

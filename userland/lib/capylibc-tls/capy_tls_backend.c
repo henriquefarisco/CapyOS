@@ -1,6 +1,71 @@
 #include "capy_tls_internal.h"
 #include "security/tls_hostname_policy.h"
 
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+#include "capylibc/capylibc.h"               /* capy_send/recv/getrandom/clock */
+#include "capylibc-tls/capy_tls_handshake.h" /* capy_tls_unix_to_x509_time */
+
+/* The userland TLS client validates against the SAME in-tree anchor bundle
+ * the kernel uses (capyos_tls_trust_anchors), compiled into the userland
+ * build under this flag (see Makefile). */
+extern const br_x509_trust_anchor *capyos_tls_trust_anchors(void);
+extern size_t capyos_tls_trust_anchor_count(void);
+
+static const char *const g_capy_tls_alpn_protocols[] = { "http/1.1" };
+
+/* BearSSL's ssl_engine references br_prng_seeder_system (sysrng.c is not
+ * linked); CapyOS seeds the DRBG explicitly via SYS_GETRANDOM, so this
+ * reports "no system seeder", exactly like the kernel stub. */
+br_prng_seeder br_prng_seeder_system(const char **name) {
+  if (name) *name = "none";
+  return 0;
+}
+
+static int capy_tls_engine_socket_read(void *read_context,
+                                       unsigned char *data, size_t len) {
+  struct capy_tls_context *ctx = (struct capy_tls_context *)read_context;
+  long r;
+  if (!ctx || !data || len == 0) return -1;
+  r = capy_recv(ctx->socket_fd, data, len, 0);
+  return r > 0 ? (int)r : -1;
+}
+
+static int capy_tls_engine_socket_write(void *write_context,
+                                        const unsigned char *data, size_t len) {
+  struct capy_tls_context *ctx = (struct capy_tls_context *)write_context;
+  long r;
+  if (!ctx || !data || len == 0) return -1;
+  r = capy_send(ctx->socket_fd, data, len, 0);
+  return r > 0 ? (int)r : -1;
+}
+
+/* Seed BearSSL's DRBG from the kernel CSPRNG (SYS_GETRANDOM). Fail-closed
+ * if the full seed cannot be obtained. Mirrors kernel tls_seed_engine. */
+static int capy_tls_engine_seed(struct capy_tls_context *ctx) {
+  unsigned char seed[48];
+  volatile unsigned char *wipe;
+  size_t i;
+  long n = capy_getrandom(seed, sizeof seed, 0);
+  int ok = (n == (long)sizeof seed);
+  if (ok) {
+    br_ssl_engine_inject_entropy(&ctx->bearssl_client.eng, seed, sizeof seed);
+  }
+  wipe = seed;
+  for (i = 0; i < sizeof seed; i++) wipe[i] = 0;
+  return ok;
+}
+
+/* Set X.509 validation time from the kernel RTC (SYS_CLOCK_REALTIME).
+ * Mirrors kernel tls_set_validation_time. */
+static void capy_tls_engine_set_time(struct capy_tls_context *ctx) {
+  long unix_time = capy_clock_realtime();
+  uint32_t days = 0u, seconds = 0u;
+  if (unix_time < 0) unix_time = 0;
+  capy_tls_unix_to_x509_time((uint64_t)unix_time, &days, &seconds);
+  br_x509_minimal_set_time(&ctx->bearssl_x509, days, seconds);
+}
+#endif /* CAPYOS_TLS_USERLAND_HANDSHAKE */
+
 static void capy_tls_backend_state_zero(
     struct capy_tls_backend_state *state) {
   uint8_t *p = (uint8_t *)state;
@@ -173,6 +238,50 @@ static int capy_tls_backend_prepare_state(struct capy_tls_context *ctx) {
 }
 
 capy_tls_err_t capy_tls_backend_connect(struct capy_tls_context *ctx) {
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  /* Slice 5.4: real BearSSL TLS-1.2 client handshake, mirroring the kernel
+   * tls_connect path (src/security/tls.c). Every error path is fail-closed
+   * — an untrusted/unreachable/expired peer never yields CAPY_TLS_OK. */
+  const br_x509_trust_anchor *anchors;
+  size_t anchor_count;
+  unsigned state;
+
+  if (!ctx) return CAPY_TLS_EINVAL;
+  ctx->bearssl_connected = 0;
+  if (ctx->socket_fd < 0) return CAPY_TLS_EINVAL;
+  if (!tls_hostname_policy_valid(ctx->hostname)) return CAPY_TLS_EINVAL;
+  if (!capy_tls_backend_config_ready(&ctx->config)) return CAPY_TLS_EINVAL;
+  /* Custom CA pinning is not wired into the userland engine yet. */
+  if (ctx->config.ca_cert || ctx->config.ca_cert_len) return CAPY_TLS_EUNSUPPORTED;
+
+  anchors = capyos_tls_trust_anchors();
+  anchor_count = capyos_tls_trust_anchor_count();
+  if (!anchors || anchor_count == 0u) return CAPY_TLS_ESTATE;
+
+  br_ssl_client_init_full(&ctx->bearssl_client, &ctx->bearssl_x509,
+                          anchors, anchor_count);
+  capy_tls_engine_set_time(ctx);
+  br_ssl_engine_set_buffer(&ctx->bearssl_client.eng, ctx->bearssl_iobuf,
+                           sizeof ctx->bearssl_iobuf, 1);
+  br_ssl_engine_set_versions(&ctx->bearssl_client.eng, BR_TLS12, BR_TLS12);
+  br_ssl_engine_set_protocol_names(&ctx->bearssl_client.eng,
+                                   g_capy_tls_alpn_protocols, 1u);
+  if (!capy_tls_engine_seed(ctx)) return CAPY_TLS_ESTATE;
+  if (!br_ssl_client_reset(&ctx->bearssl_client, ctx->hostname, 0))
+    return CAPY_TLS_ESTATE;
+
+  br_sslio_init(&ctx->bearssl_io, &ctx->bearssl_client.eng,
+                capy_tls_engine_socket_read, ctx,
+                capy_tls_engine_socket_write, ctx);
+  /* Drive the handshake to completion (sends ClientHello, processes the
+   * server flight + validates the cert chain). br_sslio_flush returns < 0
+   * on any handshake/certificate error. */
+  if (br_sslio_flush(&ctx->bearssl_io) < 0) return CAPY_TLS_ESTATE;
+  state = br_ssl_engine_current_state(&ctx->bearssl_client.eng);
+  if ((state & (BR_SSL_SENDAPP | BR_SSL_RECVAPP)) == 0) return CAPY_TLS_ESTATE;
+  ctx->bearssl_connected = 1;
+  return CAPY_TLS_OK;
+#else
   if (!ctx) return CAPY_TLS_EINVAL;
   capy_tls_backend_state_zero(&ctx->backend);
   if (ctx->socket_fd < 0) return CAPY_TLS_EINVAL;
@@ -183,4 +292,5 @@ capy_tls_err_t capy_tls_backend_connect(struct capy_tls_context *ctx) {
     return CAPY_TLS_EINVAL;
   }
   return CAPY_TLS_EUNSUPPORTED;
+#endif
 }

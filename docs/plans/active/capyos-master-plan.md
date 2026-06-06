@@ -1,11 +1,11 @@
 # CapyOS — Master Plan sequencial
 
 **Data de referência:** 2026-05-15
-**Versão atual:** `0.8.0-alpha.262+20260602`
+**Vers?o atual:** `0.8.0-alpha.263+20260606`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-3 oficialmente fechadas; 3/16 etapas concluídas; Etapa 4 em andamento.
+**Status:** Etapas 1-4 oficialmente fechadas; 4/16 etapas concluídas; Etapa 5 em andamento.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -82,8 +82,8 @@ Referências obrigatórias:
 | 1 | CapyUI Shell Polish v1 | Concluída | base alpha.93 | desktop familiar Ubuntu/Windows 7-like |
 | 2 | Sessão gráfica operacional | Concluída | Etapa 1 | login GUI real e smokes `gui-session`/`mouse-events` |
 | 3 | Driver framework + entrada USB HID + storage estável | Concluída (alpha.253) | Etapa 2 | XHCI/USB HID maduro, AHCI/NVMe estáveis, VirtIO opcional, política fail-safe de driver |
-| 4 | CapyDisplay 2D + scheduler/multithread runtime | Em andamento | Etapa 3 | camada 2D com damage/double buffer, scheduler cooperativo, multithread runtime e contrato widget/display-list |
-| 5 | TLS userland real | Bloqueada | Etapa 4 | BearSSL userland com handshake real validado |
+| 4 | CapyDisplay 2D + scheduler/multithread runtime | Concluída (alpha.262) | Etapa 3 | camada 2D com damage/double buffer, scheduler cooperativo, multithread runtime e contrato widget/display-list |
+| 5 | TLS userland real | Em andamento | Etapa 4 | BearSSL userland com handshake real validado |
 | 6 | Apps básicos do desktop maduros | Bloqueada | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
 | 7 | Browser usável com web estática moderna | Bloqueada | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
 | 8 | Release/update gate oficial + instalador polido | Bloqueada | Etapa 7 | smoke VMware+E1000 oficial, update HTTPS, instalador wizard amigável |
@@ -268,11 +268,11 @@ Detalhe histórico por alpha (101 → 237) está em
 
 Evidência externa registrada em `docs/operations/etapa-3-external-validation-playbook.md` (Slice 3D) e `docs/operations/etapa-3-slice-3e-validation-playbook.md` (Slice 3E).
 
-## 7. Etapa 4 — CapyDisplay 2D + scheduler/multithread runtime (em andamento)
+## 7. Etapa 4 — CapyDisplay 2D + scheduler/multithread runtime (concluída em alpha.262)
 
 **Objetivo:** criar uma camada gráfica 2D sólida e introduzir scheduler/multithread cooperativo no runtime — pré-requisito para apps que precisam de paralelismo previsível e UI fluida.
 
-**Status:** **Em andamento** desde 2026-05-21 (alpha.253); **Fases A-E fechadas em código + host tests** em alpha.260 (empacotadas no release alpha.261). Etapa 3 fechou externamente em 2026-05-21. Histórico: a **Fase A foi revertida em alpha.255** (alpha.254 rolled back) porque o scaffolding criou ABI paralela em vez de consumir a ABI real do sister `CapyUI`; a correção consome `CapyUI/src/widget/capy_display_list.h` do `CapyUI` `2.22.0` (`capy-ui-widget` v2.22, display-list schema v7 inalterado) via Makefile sibling detection (`CAPYOS_HAVE_CAPYUI_WIDGET`) e adapter CapyOS-side.
+**Status:** **CONCLUÍDA** em `alpha.262+20260602` via **Fase F validada externamente** em VMware + UEFI + E1000 (gate agregado `make smoke-x64-vmware-etapa-4`, 5 markers em ordem). Fases A-E fechadas em código + host tests em alpha.260 (empacotadas em alpha.261); a Fase F externa foi aprovada e a etapa fechada na release alpha.262. Histórico: a **Fase A foi revertida em alpha.255** (alpha.254 rolled back) porque o scaffolding criou ABI paralela em vez de consumir a ABI real do sister `CapyUI`; a correção consome `CapyUI/src/widget/capy_display_list.h` do `CapyUI` `2.22.0` (`capy-ui-widget` v2.22, display-list schema v7 inalterado) via Makefile sibling detection (`CAPYOS_HAVE_CAPYUI_WIDGET`) e adapter CapyOS-side.
 
 **Estado por fase** (fonte única de detalhe: [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md)):
 
@@ -280,7 +280,7 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - Fase B (produtor real CapyUI) — 🟡 capability entregue e exercitada por fluxos reais (Terminal, Context menu, Inline prompt no core; Calculator/Text Editor/Settings/File Manager/Task Manager/Taskbar/Notification/Desktop icons via `capy_widget_emit` do sibling). A migração dos demais fluxos de produção é polish **não-bloqueante** — o critério de aceite de capability (render via adapter sem acesso direto ao compositor) já está atendido.
 - Fases C (scheduler cooperativo), D (damage tracking + double buffering) e E (thread-crash survives) — ✅ código + host tests, cada uma com seu latch de smoke.
 
-**Único bloqueador para fechar a Etapa 4:** a **Fase F** — validação externa em VMware oficial via `make smoke-x64-vmware-etapa-4` (5 markers em ordem) + regressões da Etapa 3 + `release-check`. Essa validação **não roda nesta workspace** (review/edit only); é executada pelo operador externo / CI provisionada.
+**Fechamento:** a **Fase F** foi **validada externamente** em VMware oficial (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem + regressões da Etapa 3 + `release-check`) e a Etapa 4 foi **fechada na release `alpha.262+20260602`**. A etapa seguinte (**Etapa 5 — TLS userland real**) está desbloqueada e ativa.
 
 **ROI:** médio-alto — UI fluida sem travar é base de qualquer experiência polida; scheduler fecha uma lacuna conhecida em `project-overview.md`.
 
@@ -297,18 +297,18 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 
 ### Critérios de aceite
 
-> Os seis critérios abaixo já estão **implementados em código + host tests**
-> (Fases A-E, alpha.260+) e permanecem `[ ]` até a **confirmação externa da
-> Fase F** em VMware oficial (`make smoke-x64-vmware-etapa-4`). A
-> rastreabilidade critério → fase → evidência → gate está em
+> Os seis critérios abaixo foram **confirmados externamente na Fase F**
+> (VMware + UEFI + E1000, `make smoke-x64-vmware-etapa-4`, 5 markers em
+> ordem) e **fechados na release `alpha.262+20260602`**. Rastreabilidade
+> critério → fase → evidência → gate em
 > [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md) §3.
 
-- [ ] Compositor redesenha somente regiões danificadas quando possível.
-- [ ] Cursor e texto não piscam sob resize/move de janela.
-- [ ] Fallback framebuffer continua funcionando.
-- [ ] Apps single-threaded existentes continuam funcionais como regressão.
-- [ ] Thread de app crashando não derruba kernel nem desktop.
-- [ ] Widget model desacoplado consegue renderizar display list por adaptador
+- [x] Compositor redesenha somente regiões danificadas quando possível.
+- [x] Cursor e texto não piscam sob resize/move de janela.
+- [x] Fallback framebuffer continua funcionando.
+- [x] Apps single-threaded existentes continuam funcionais como regressão.
+- [x] Thread de app crashando não derruba kernel nem desktop.
+- [x] Widget model desacoplado consegue renderizar display list por adaptador
       CapyOS sem acessar compositor diretamente.
 
 ### Gates externos recomendados
@@ -316,13 +316,15 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - `make smoke-x64-vmware-compositor-damage-track` (novo).
 - `make smoke-x64-vmware-scheduler-fairness` (novo).
 
-## 8. Etapa 5 — TLS userland real
+## 8. Etapa 5 — TLS userland real (em andamento)
 
 **Objetivo:** avançar `libcapy-tls` de metadata-only para handshake real. Pré-requisito direto para browser HTTPS (Etapa 7) e release/update HTTPS (Etapa 8).
 
 **ROI:** alto — sem HTTPS real, nada moderno funciona (web, update, sync, qualquer serviço).
 
-> **Preparação read-only (não inicia a etapa; permanece BLOQUEADA até a Etapa 4 fechar):** auditoria do estado atual + plano do 1º slice em [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md). Achados-chave: o TLS BearSSL **kernel-side já é real e em produção** (`src/security/tls.c`); a Etapa 5 torna real a `libcapy-tls` **userland** (hoje stub fail-closed, `capy_tls_is_supported()=0`). O gap mais fundamental é a **ausência de syscall de entropia userland** (`getrandom`) para semear o DRBG do BearSSL — candidato a 1º slice (5.1).
+> **ATIVA desde `alpha.262`** (Etapa 4 fechada). Auditoria + plano por slice em [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md). Achados-chave: o TLS BearSSL **kernel-side já é real e em produção** (`src/security/tls.c`); a Etapa 5 torna real a `libcapy-tls` **userland** (hoje stub fail-closed, `capy_tls_is_supported()=0`). O gap mais fundamental é a **ausência de syscall de entropia userland** (`getrandom`) para semear o DRBG do BearSSL.
+>
+> **Slice 5.1 (em andamento):** syscall de entropia userland (`SYS_GETRANDOM`) backed pela CSPRNG do kernel, com stub capylibc e assert de ABI; TLS permanece intocado (fail-closed) nesta fatia. Próximas: BearSSL no build userland → trust anchors reais → handshake real → HTTPS userland deixa de retornar unsupported.
 
 ### Entregáveis
 
@@ -713,4 +715,4 @@ abrir.
 
 ## 20. Próximo comando esperado
 
-A Etapa 3 fechou formalmente em 2026-05-21 (alpha.253) após validação externa do gate `make smoke-x64-vmware-storage-resilience` em VMware oficial. A Etapa 4 abriu em sequência mas o scaffolding entregue em alpha.254 foi rolled back em **alpha.255** após descoberta de que a ABI real do sister `CapyUI` já estava além do contrato paralelo criado. A matriz agora pina `CapyUI` `2.22.0` / `capy-ui-widget` v2.22 (display-list schema v7), e a Fase A correta consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side em vez de inventar schema paralelo. Próxima ação: executar a **Fase F** — gate externo agregado `make smoke-x64-vmware-etapa-4` em VMware oficial (5 markers em ordem: DHCP → gui-session → scheduler-fairness → compositor-damage-track → thread-crash-survives) + regressões `usb-hid-keyboard`/`storage-resilience` + `release-check` — já que as **Fases A-E estão fechadas em código + host tests** (alpha.260+). Estado por fase em [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md). Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes da Etapa 3. Runbook completo da Etapa 4: `docs/operations/etapa-4-external-validation-playbook.md`.
+A Etapa 3 fechou formalmente em 2026-05-21 (alpha.253) após validação externa do gate `make smoke-x64-vmware-storage-resilience` em VMware oficial. A Etapa 4 abriu em sequência mas o scaffolding entregue em alpha.254 foi rolled back em **alpha.255** após descoberta de que a ABI real do sister `CapyUI` já estava além do contrato paralelo criado. A matriz agora pina `CapyUI` `2.22.0` / `capy-ui-widget` v2.22 (display-list schema v7), e a Fase A correta consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side em vez de inventar schema paralelo. A **Etapa 4 foi fechada na release `alpha.262+20260602`** após a Fase F validada externamente (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem + regressões `usb-hid-keyboard`/`storage-resilience` + `release-check`). **Próxima ação: Etapa 5 (TLS userland real) — Slice 5.1**, a syscall de entropia userland (`SYS_GETRANDOM`) backed pela CSPRNG do kernel. Estado por fase da Etapa 4 em [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md); plano da Etapa 5 em [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md). Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes da Etapa 3. Runbook completo da Etapa 4: `docs/operations/etapa-4-external-validation-playbook.md`.

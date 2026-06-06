@@ -28,7 +28,11 @@ int capy_tls_init(void) {
 }
 
 int capy_tls_is_supported(void) {
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  return 1;
+#else
   return 0;
+#endif
 }
 
 struct capy_tls_context *capy_tls_connect_tcp(
@@ -56,6 +60,17 @@ struct capy_tls_context *capy_tls_connect_tcp(
     return 0;
   }
   backend_err = capy_tls_backend_connect(prepared);
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  if (backend_err == CAPY_TLS_OK) {
+    /* Handshake established: hand the live context (with its BearSSL
+     * engine) back to the caller, who owns it until capy_tls_free. */
+    capy_tls_record(CAPY_TLS_STATE_INIT, CAPY_TLS_OK);
+    return prepared;
+  }
+  capy_tls_context_release(prepared);
+  capy_tls_record(CAPY_TLS_STATE_ERROR, backend_err);
+  return 0;
+#else
   capy_tls_context_release(prepared);
   if (backend_err != CAPY_TLS_EUNSUPPORTED) {
     capy_tls_record(CAPY_TLS_STATE_ERROR, backend_err);
@@ -63,6 +78,7 @@ struct capy_tls_context *capy_tls_connect_tcp(
   }
   capy_tls_record(CAPY_TLS_STATE_UNSUPPORTED, CAPY_TLS_EUNSUPPORTED);
   return 0;
+#endif
 }
 
 int capy_tls_send(struct capy_tls_context *ctx, const void *data, size_t len) {
@@ -70,8 +86,23 @@ int capy_tls_send(struct capy_tls_context *ctx, const void *data, size_t len) {
     capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_EINVAL);
     return -1;
   }
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  if (!ctx->bearssl_connected) {
+    capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_ESTATE);
+    return -1;
+  }
+  if (len == 0) return 0;
+  if (br_sslio_write_all(&ctx->bearssl_io, data, len) < 0 ||
+      br_sslio_flush(&ctx->bearssl_io) < 0) {
+    capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_ESTATE);
+    return -1;
+  }
+  capy_tls_record(CAPY_TLS_STATE_INIT, CAPY_TLS_OK);
+  return (int)len;
+#else
   capy_tls_record(CAPY_TLS_STATE_UNSUPPORTED, CAPY_TLS_EUNSUPPORTED);
   return -1;
+#endif
 }
 
 int capy_tls_recv(struct capy_tls_context *ctx, void *buf, size_t len) {
@@ -79,8 +110,33 @@ int capy_tls_recv(struct capy_tls_context *ctx, void *buf, size_t len) {
     capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_EINVAL);
     return -1;
   }
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  {
+    int r;
+    unsigned engine_state;
+    if (!ctx->bearssl_connected) {
+      capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_ESTATE);
+      return -1;
+    }
+    r = br_sslio_read(&ctx->bearssl_io, buf, len);
+    if (r >= 0) {
+      capy_tls_record(CAPY_TLS_STATE_INIT, CAPY_TLS_OK);
+      return r;
+    }
+    /* A clean peer close (CLOSED with no error) is EOF, not a failure. */
+    engine_state = br_ssl_engine_current_state(&ctx->bearssl_client.eng);
+    if ((engine_state & BR_SSL_CLOSED) != 0 &&
+        br_ssl_engine_last_error(&ctx->bearssl_client.eng) == BR_ERR_OK) {
+      capy_tls_record(CAPY_TLS_STATE_CLOSED, CAPY_TLS_OK);
+      return 0;
+    }
+    capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_ESTATE);
+    return -1;
+  }
+#else
   capy_tls_record(CAPY_TLS_STATE_UNSUPPORTED, CAPY_TLS_EUNSUPPORTED);
   return -1;
+#endif
 }
 
 int capy_tls_close(struct capy_tls_context *ctx) {
@@ -88,8 +144,17 @@ int capy_tls_close(struct capy_tls_context *ctx) {
     capy_tls_record(CAPY_TLS_STATE_ERROR, CAPY_TLS_EINVAL);
     return -1;
   }
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  if (ctx->bearssl_connected) {
+    (void)br_sslio_close(&ctx->bearssl_io);
+    ctx->bearssl_connected = 0;
+  }
+  capy_tls_record(CAPY_TLS_STATE_CLOSED, CAPY_TLS_OK);
+  return 0;
+#else
   capy_tls_record(CAPY_TLS_STATE_UNSUPPORTED, CAPY_TLS_EUNSUPPORTED);
   return -1;
+#endif
 }
 
 void capy_tls_free(struct capy_tls_context *ctx) {

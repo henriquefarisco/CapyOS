@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry for decoupled core projects (updated 2026-06-02; coordinated 7-repo batch on CapyOS core `alpha.262`).
+**Status:** migration registry for decoupled core projects (updated 2026-06-06; CapyOS core `alpha.263` + CapyBrowser `0.5.0`).
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
 a versioned in-tree adapter and an external gate.
@@ -15,7 +15,7 @@ completed in-tree hygiene pass.
 
 | Repository | Current version | Intended ownership | Migration status |
 |---|---|---|---|
-| `CapyBrowser` | `0.3.0` | browser core, HTML-to-text, static layout/display list | URL parse/normalize/origin + HTML-to-text + image adapter (via `capy-codec-image`) + DOM host-testable delivered; runtime still gated by Etapas 6-7 |
+| `CapyBrowser` | `0.5.0` | browser core, HTML-to-text, CSS, static layout/display list, download/forms/session | URL parse/normalize/origin + HTML-to-text + image adapter + DOM + CSS cascade + layout/display-list + download/session/forms host-testable delivered; runtime still gated by Etapas 6-7 |
 | `CapyLang` | `0.1.8` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work (S1-S7 + S6.3 structs/enums delivered, host-only; +opcodes 0x64-0x66 MakeAggregate/GetField/GetTag + trap V0018) |
 | `CapyAgent` | `0.0.7` | package format, resolver, component index, release manifest model, declarative install/rollback plan, **Ed25519 signer** | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary; CapyAgent Ed25519 signer **published host-side in `src/signer/`** (pending external KAT + registration via `capypkg_set_signature_verifier`; verifier slot NULL until Etapa 9) |
 | `CapyCodecs` | `0.0.7` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders (`capy-codec-image` v2: per-call limits, detect/generic decode, metadata query, QOI) until an image adapter lands |

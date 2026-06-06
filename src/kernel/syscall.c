@@ -8,6 +8,8 @@
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "fs/vfs.h"
+#include "security/csprng.h"
+#include "drivers/rtc/rtc.h"
 #include <stddef.h>
 
 /* 2026-05-02: FD type discriminators (FD_TYPE_FREE/VFS/PIPE) and
@@ -320,6 +322,43 @@ static int64_t sys_time(struct syscall_frame *f) {
   return (int64_t)apic_timer_ticks();
 }
 
+/* Etapa 5 / Slice 5.1: SYS_GETRANDOM — userland CSPRNG entropy.
+ *
+ * Fills the caller's buffer with up to SYS_GETRANDOM_MAX_PER_CALL bytes
+ * from the audited in-tree CSPRNG (src/security/csprng.c). This is the
+ * userland entropy source libcapy-tls needs to seed BearSSL's DRBG in
+ * ring 3 — the prerequisite gap for Etapa 5. TLS itself is untouched in
+ * this slice.
+ *
+ * ABI: rdi = buf, rsi = len, rdx = flags (reserved, must be 0).
+ * Returns the number of bytes written (0..min(len, MAX)); -1 on a
+ * non-zero `flags` or a NULL buffer with len > 0. The per-call cap
+ * bounds the in-kernel fill so a hostile `len` cannot turn one syscall
+ * into an unbounded kernel-side write; callers needing more loop. */
+#define SYS_GETRANDOM_MAX_PER_CALL 256u
+static int64_t sys_getrandom(struct syscall_frame *f) {
+  void *buf = (void *)f->rdi;
+  size_t len = (size_t)f->rsi;
+  unsigned int flags = (unsigned int)f->rdx;
+  if (flags != 0u) return -1;
+  if (len == 0u) return 0;
+  if (!buf) return -1;
+  if (len > SYS_GETRANDOM_MAX_PER_CALL) len = SYS_GETRANDOM_MAX_PER_CALL;
+  csprng_get_bytes(buf, len);
+  return (int64_t)len;
+}
+
+/* Etapa 5 / Slice 5.x: SYS_CLOCK_REALTIME — userland wall-clock.
+ *
+ * Returns seconds since the Unix epoch from the kernel RTC. Unlike
+ * SYS_TIME (which returns APIC ticks since boot), this is real calendar
+ * time — required by libcapy-tls to evaluate X.509 certificate validity
+ * (notBefore/notAfter) in ring 3. No arguments. */
+static int64_t sys_clock_realtime(struct syscall_frame *f) {
+  (void)f;
+  return (int64_t)rtc_unix_timestamp();
+}
+
 /* M5 phase A.3: SYS_FORK.
  *
  * Splits the current process into two: parent gets the child PID
@@ -525,6 +564,8 @@ void syscall_init(void) {
   syscall_table[SYS_GETUID]  = sys_getuid;
   syscall_table[SYS_GETGID]  = sys_getgid;
   syscall_table[SYS_TIME]    = sys_time;
+  syscall_table[SYS_GETRANDOM] = sys_getrandom;
+  syscall_table[SYS_CLOCK_REALTIME] = sys_clock_realtime;
   syscall_table[SYS_FORK]    = sys_fork;
   syscall_table[SYS_EXEC]    = sys_exec;
   syscall_table[SYS_WAIT]    = sys_wait;

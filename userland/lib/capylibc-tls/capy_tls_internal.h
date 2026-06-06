@@ -3,6 +3,10 @@
 
 #include "capylibc-tls/capy_tls.h"
 
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+#include "bearssl.h"
+#endif
+
 #define CAPY_TLS_HOSTNAME_MAX_LEN 253u
 #define CAPY_TLS_HOSTNAME_BUFFER_LEN (CAPY_TLS_HOSTNAME_MAX_LEN + 1u)
 #define CAPY_TLS_CONTEXT_SLOT_COUNT 1u
@@ -263,6 +267,18 @@ struct capy_tls_context {
   char hostname[CAPY_TLS_HOSTNAME_BUFFER_LEN];
   struct capy_tls_effective_config config;
   struct capy_tls_backend_state backend;
+#ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+  /* Slice 5.4 wiring: real BearSSL client engine. The context is a static
+   * slot (capy_tls_context.c), so this large state lives in BSS — no
+   * userland heap needed. Mirrors the kernel `struct tls_context`. The
+   * full-context memzero in capy_tls_context_reset wipes the session keys
+   * (engine) and plaintext (iobuf) on release. */
+  br_ssl_client_context bearssl_client;
+  br_x509_minimal_context bearssl_x509;
+  br_sslio_context bearssl_io;
+  int bearssl_connected;
+  unsigned char bearssl_iobuf[BR_SSL_BUFSIZE_BIDI];
+#endif
 };
 
 int capy_tls_config_resolve(

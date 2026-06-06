@@ -300,5 +300,33 @@ capy_dns_resolve:
     ret
 .size capy_dns_resolve, .-capy_dns_resolve
 
+# === Etapa 5 / Slice 5.1 — userland CSPRNG entropy =================
+#
+# long capy_getrandom(void *buf, size_t len, unsigned int flags);
+#
+# 3-argument SYSCALL: buf in %rdi, len in %rsi, flags in %rdx (no
+# shuffle). Fills up to 256 bytes of kernel CSPRNG entropy into buf;
+# returns the byte count (0..min(len,256)) or -1 on NULL buf with
+# len>0 / non-zero flags. This is the entropy source libcapy-tls uses
+# to seed BearSSL's DRBG in ring 3.
+.global capy_getrandom
+capy_getrandom:
+    movq $SYS_GETRANDOM, %rax
+    syscall
+    ret
+.size capy_getrandom, .-capy_getrandom
+
+# long capy_clock_realtime(void);
+#
+# Wall-clock seconds since the Unix epoch, from the kernel RTC. Distinct
+# from capy_time (APIC ticks since boot); libcapy-tls uses this to check
+# X.509 certificate validity in ring 3. No arguments.
+.global capy_clock_realtime
+capy_clock_realtime:
+    movq $SYS_CLOCK_REALTIME, %rax
+    syscall
+    ret
+.size capy_clock_realtime, .-capy_clock_realtime
+
 # Mark stack as non-executable to satisfy modern binutils hardening.
 .section .note.GNU-stack,"",@progbits

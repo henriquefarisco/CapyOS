@@ -77,14 +77,14 @@ engine real**:
 
 | # | Gap | Estado hoje | Evidência |
 |---|---|---|---|
-| G1 | **Entropia userland** p/ semear o DRBG do BearSSL | **AUSENTE** — não há syscall `getrandom`; tabela termina em `SYS_DNS_RESOLVE=41` | `include/kernel/syscall_numbers.h:24-79` |
-| G2 | BearSSL linkado no userland | Ausente (só kernel) | `Makefile:802` sem `-Ithird_party/bearssl/inc` |
+| G1 | **Entropia userland** p/ semear o DRBG do BearSSL | ✅ **RESOLVIDO (Slice 5.1)** — `SYS_GETRANDOM=42` + `capy_getrandom` backed pela CSPRNG | `syscall_numbers.h`, `syscall.c::sys_getrandom`, `syscall_stubs.S`, `capylibc.h` |
+| G2 | BearSSL linkado no userland | 🟡 **include-path ligado** (Slice 5.2: `USERLAND_CFLAGS` + `HOST_CFLAGS` com `-Ithird_party/bearssl/inc`); link ring-3 do subset pendente | `make all64` valida o link userland; host build já compila contra `bearssl.h` |
 | G3 | Trust anchors reais no userland | Só metadata (contagem/fingerprint) | `capy_tls_trust.c`, `capy_tls_backend.c:35-89` |
-| G4 | Engine real (`br_ssl_client`+`br_sslio`) no seam | `EUNSUPPORTED` fixo | `capy_tls_backend.c:175-186` |
-| G5 | Fonte de tempo p/ validade X.509 | **OK** — `SYS_TIME=39` existe | `syscall_numbers.h:63` |
+| G4 | Engine real (`br_ssl_client`+`br_sslio`) no seam | ✅ **PLUGADO (gated)** — `capy_tls_backend_connect` faz o handshake real BearSSL (init_full + time + buffer + TLS1.2 + ALPN + seed + reset + `br_sslio_flush`); send/recv/close via `br_sslio`. Sob `CAPYOS_TLS_USERLAND_HANDSHAKE` (default OFF → fail-closed) até `make all64` + smoke. Espelha o kernel `tls.c` | `capy_tls_backend.c`, `capy_tls.c` |
+| G5 | Fonte de tempo p/ validade X.509 | ✅ **RESOLVIDO** — `SYS_CLOCK_REALTIME=43` (wall-clock via RTC do kernel) + `capy_clock_realtime` + helper puro `capy_tls_unix_to_x509_time` (host-testado). **Correção:** `SYS_TIME=39` era enganoso — retorna ticks do APIC desde o boot, NÃO data, logo inútil p/ expiry de cert | `syscall_numbers.h`, `syscall.c::sys_clock_realtime`, `capy_tls_handshake.c` |
 | G6 | I/O de socket p/ callbacks `br_sslio` | **OK** — `SYS_SEND/RECV=33/34` | `syscall_numbers.h:57-58` |
-| G7 | Zeroização/ownership do contexto userland | A implementar (espelhar kernel) | `tls.c:530,661-671` (referência) |
-| G8 | Integração HTTPS (`is_supported→1`) | Gated em `capy_tls_is_supported()` | `capy_net_tls.c:24` |
+| G7 | Zeroização/ownership do contexto userland | ✅ **coberto (gated)** — engine + iobuf vivem no `capy_tls_context` (slot estático); `capy_tls_context_reset` faz memzero do contexto inteiro no release/free, apagando session keys + plaintext | `capy_tls_context.c:13-19` |
+| G8 | Integração HTTPS (`is_supported→1`) | ✅ **gated** — `capy_tls_is_supported()` retorna 1 sob `CAPYOS_TLS_USERLAND_HANDSHAKE`; `capy_net_tls` passa a usar o caminho real automaticamente | `capy_tls.c`, `capy_net_tls.c:24` |
 
 **Já decoplado e reusável:** a política de hostname
 `tls_hostname_policy_valid()` (`include/security/tls_hostname_policy.h`)
@@ -110,16 +110,39 @@ O kernel `src/security/tls.c` é o gabarito 1:1 para o userland:
 
 | Slice | Entrega | Fail-closed mantido? | Gate |
 |---|---|---|---|
-| **5.1 (1º, recomendado)** | **Syscall de entropia userland** (`SYS_GETRANDOM`) backed pela CSPRNG do kernel + stub capylibc + ABI assert | Sim (sem TLS ainda) | `make test` |
-| 5.2 | Wiring de build do BearSSL no userland (subset curado + `-Ithird_party/bearssl/inc`); compila/linka em ring-3 | Sim | `make all64` + build capylibc |
+| **5.1 ✅ ENTREGUE (alpha.262+)** | **Syscall de entropia userland** (`SYS_GETRANDOM`=42) backed pela CSPRNG do kernel + stub capylibc + ABI assert | Sim (TLS intocado) | `make test` ✅ |
+| **5.2 🟡 PARCIAL (in-tree)** | `-Ithird_party/bearssl/inc` ligado no `USERLAND_CFLAGS` + `HOST_CFLAGS`; host test valida os 146 trust anchors BearSSL reais (fundação da 5.3) com tipos reais do BearSSL host-side. Falta: link ring-3 do subset | `make test` ✅ (anchors) / `make all64` (link ring-3) |
 | 5.3 | Trust anchors **reais** no userland; host-test conta/fingerprint contra o catálogo metadata existente | Sim | `make test` |
-| 5.4 | Plugar `capy_tls_backend_connect` no `br_ssl_client`+`br_sslio` real (I/O via SYS_SEND/RECV, tempo via SYS_TIME, seed via getrandom); flip dos gates + `is_supported()→1`; zeroização | Não (handshake liga) | `make test` + smoke local |
-| 5.5 | `capy_net` HTTPS real; smoke local `tls-handshake` contra servidor controlado; cert inválido falha fechado | — | smoke local |
+| **5.4 ✅ PLUGADO (gated)** | Handshake real ligado em `capy_tls_backend_connect` (I/O via `capy_send/recv`, seed via `SYS_GETRANDOM`, time via `SYS_CLOCK_REALTIME`, anchors reais) + `connect_tcp` devolve contexto vivo + send/recv/close via `br_sslio` + `is_supported()→1` + contexto zeroizado no release — tudo sob `CAPYOS_TLS_USERLAND_HANDSHAKE` (default OFF). Espelha o kernel `tls.c`. Falta: validar com build+smoke | `make test` (default OFF, intacto) / `make all64 ...=1` + smoke (flag ON) |
+| **5.5 🟡 PARCIAL** | Validação de cert (`br_x509_minimal`, o mesmo engine que `br_ssl_client_init_full` arma) **host-testada** (`test_tls_cert_validation.c`, PKI de teste só-público): aceita cadeia válida p/ o host certo e **falha fechado** em hostname errado / expirado / issuer não-confiável. Falta: `capy_net` HTTPS real + smoke contra servidor | `make test` ✅ (validação) / smoke local (HTTPS real) |
 | 5.6 | Gate externo `make smoke-x64-vmware-tls-handshake` + `release-check` | — | VMware (Fase externa) |
+
+> **Engine smoke host-side entregue (de-risca a 5.4):**
+> `tests/security/test_tls_client_engine.c` constrói um `br_ssl_client`
+> real com os **146 trust anchors de produção**, injeta entropia de teste
+> e emite um **ClientHello TLS válido** (record `0x16`, handshake `0x01`,
+> SNI `example.com`) — provando engine + anchors + config host-side, sem
+> rede. Linka `$(BEARSSL_SRCS)` + `tests/stubs/stub_bearssl_seeder.c` no
+> binário de teste. **Não liga** o handshake em produção: o seam userland
+> segue fail-closed (`capy_tls_is_supported()=0`) até a 5.4 plugar o I/O
+> (`SYS_SEND/RECV`) e a 5.6 validar em VMware.
 
 ---
 
 ## 5. Primeiro slice recomendado — **5.1: syscall de entropia userland**
+
+> **STATUS: ✅ ENTREGUE in-tree** (Etapa 5 ativa desde alpha.262).
+> `SYS_GETRANDOM=42` (`SYSCALL_COUNT=43`) + handler `sys_getrandom` em
+> `src/kernel/syscall.c` (usa `csprng_get_bytes`; cap 256 B/chamada;
+> fail-closed em `flags!=0` ou buf NULL) + stub `capy_getrandom` em
+> `userland/lib/capylibc/syscall_stubs.S` + declaração em
+> `userland/include/capylibc/capylibc.h` + assert de ABI em
+> `tests/userland/test_capylibc_abi.c`. Verificação: `make test` verde
+> (`SYS_GETRANDOM == 42 OK`, `SYSCALL_COUNT == 43 OK`), `make layout-audit`
+> sem warnings, `syscall.c` passa `gcc -fsyntax-only`. **TLS intocado**
+> (`capy_tls_is_supported()` continua 0; garantia fail-closed preservada).
+> Link userland completo + boot dependem de `make all64` (externo).
+> **Próximo: Slice 5.2** (BearSSL no build userland).
 
 **Por que primeiro:** é o gap **mais fundamental, de segurança e
 host-testável**, e está **ausente hoje**. Sem entropia em ring-3, o DRBG

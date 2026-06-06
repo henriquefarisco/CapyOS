@@ -76,6 +76,17 @@
  * resolver service or via the initial DHCP exchange). The active
  * resolver lands together with the libcapy-net DNS client. */
 #define SYS_DNS_RESOLVE 41
-#define SYSCALL_COUNT   42
+/* Etapa 5 / Slice 5.1: userland CSPRNG entropy, backed by the audited
+ * in-tree csprng (src/security/csprng.c). Required so libcapy-tls can
+ * seed BearSSL's DRBG in ring 3 — the gap that blocked Etapa 5.
+ * Handler: src/kernel/syscall.c::sys_getrandom. */
+#define SYS_GETRANDOM   42
+/* Etapa 5 / Slice 5.x: userland wall-clock (seconds since the Unix epoch),
+ * backed by the kernel RTC (rtc_unix_timestamp). Needed so libcapy-tls can
+ * check X.509 certificate validity in ring 3 — SYS_TIME returns APIC ticks
+ * since boot, NOT wall-clock, so it cannot drive cert expiry.
+ * Handler: src/kernel/syscall.c::sys_clock_realtime. */
+#define SYS_CLOCK_REALTIME 43
+#define SYSCALL_COUNT   44
 
 #endif /* KERNEL_SYSCALL_NUMBERS_H */

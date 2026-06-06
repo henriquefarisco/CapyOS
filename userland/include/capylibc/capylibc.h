@@ -159,6 +159,21 @@ long capy_recv(int fd, void *buf, size_t len, int flags);
  * seeded by DHCP discovery + (future) libcapy-net DNS client. */
 int capy_dns_resolve(const char *name, uint32_t *out_ip, int flags);
 
+/* Etapa 5 / Slice 5.1: fill `buf` with up to 256 bytes of CSPRNG
+ * entropy from the kernel (backed by the audited in-tree csprng).
+ * Returns the number of bytes written (0..min(len, 256)), or -1 on a
+ * NULL buffer with len > 0 / non-zero `flags`. `flags` is reserved and
+ * must be 0. Callers needing more than the per-call cap loop. This is
+ * the userland entropy source libcapy-tls uses to seed BearSSL's
+ * DRBG (Etapa 5 prerequisite). */
+long capy_getrandom(void *buf, size_t len, unsigned int flags);
+
+/* Etapa 5: wall-clock seconds since the Unix epoch, from the kernel RTC.
+ * Distinct from capy_time(), which returns APIC ticks since boot. This is
+ * real calendar time, required by libcapy-tls to evaluate X.509
+ * certificate validity (notBefore/notAfter) in ring 3. */
+long capy_clock_realtime(void);
+
 #ifdef __cplusplus
 }
 #endif

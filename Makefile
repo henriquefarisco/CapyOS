@@ -801,7 +801,7 @@ USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
                   -fno-omit-frame-pointer -fno-strict-aliasing \
                   -fno-stack-protector -mno-sse -mno-sse2 -mno-mmx \
                   -mno-80387 -msoft-float \
-                  -Iinclude -Iuserland/include
+                  -Iinclude -Iuserland/include -Ithird_party/bearssl/inc
 
 $(CAPYLIBC_BUILD_DIR)/%.o: $(USERLAND_DIR)/%.S
 	@mkdir -p $(dir $@)
@@ -848,6 +848,26 @@ CAPYLIBC_TLS_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_bearssl_adapter.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_backend.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls.o
+
+# Etapa 5 / Slice 5.4: opt-in REAL userland TLS handshake. Default OFF so the
+# standard build is unchanged (userland TLS stays fail-closed,
+# capy_tls_is_supported()==0). Enable + validate externally with:
+#   make all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1
+#   make smoke-x64-vmware-tls-handshake
+# Once the smoke passes, this can be promoted to the default build.
+# Reuses the kernel-built $(BEARSSL_OBJS) (same CC64 / -mcmodel=small) and
+# compiles the in-tree trust anchors (src/security/tls_trust_anchors.c) as a
+# userland object. br_prng_seeder_system is provided by capy_tls_backend.c.
+ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+USERLAND_CFLAGS += -DCAPYOS_TLS_USERLAND_HANDSHAKE
+CAPYLIBC_TLS_OBJS += \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_handshake.o \
+	$(CAPYLIBC_BUILD_DIR)/security/tls_trust_anchors.o \
+	$(BEARSSL_OBJS)
+$(CAPYLIBC_BUILD_DIR)/security/%.o: src/security/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+endif
 
 .PHONY: capylibc capylibc-net capylibc-tls
 capylibc: $(CAPYLIBC_OBJS)
@@ -1429,7 +1449,7 @@ EFI_STUB := $(BUILD)/boot/uefi_loader.efi
 run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-grub-device \
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
-HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Isrc -Iuserland/include -Itools/host/include -Ithird_party/tinf -DUNIT_TEST
+HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Isrc -Iuserland/include -Itools/host/include -Ithird_party/tinf -Ithird_party/bearssl/inc -Ithird_party/bearssl/src -DUNIT_TEST
 ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
 HOST_CFLAGS += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
 endif
@@ -1514,6 +1534,10 @@ TEST_SRCS   := \
                tests/security/test_volume_header.c src/security/volume_header.c \
                tests/security/test_volume_provider.c tests/security/test_volume_provider_rekey.c tests/security/test_volume_provider_execute.c tests/security/test_volume_provider_rekey_execute.c tests/security/test_volume_provider_rekey_copy.c tests/security/test_volume_provider_rekey_commit.c tests/security/test_volume_provider_rekey_recovery.c tests/security/test_volume_provider_rekey_orchestrator.c src/security/volume_provider.c src/security/volume_provider_rekey.c src/security/volume_provider_rekey_execute.c src/security/volume_provider_rekey_copy.c src/security/volume_provider_rekey_commit.c src/security/volume_provider_rekey_recovery.c src/security/volume_provider_rekey_orchestrator.c \
                tests/security/test_tls_hostname.c src/security/tls_hostname.c \
+               tests/security/test_tls_trust_anchors.c src/security/tls_trust_anchors.c \
+               tests/security/test_tls_client_engine.c $(BEARSSL_SRCS) tests/stubs/stub_bearssl_seeder.c \
+               tests/security/test_tls_handshake_drive.c userland/lib/capylibc-tls/capy_tls_handshake.c \
+               tests/security/test_tls_cert_validation.c \
                src/security/csprng.c src/security/crypt.c src/security/crypt_kdf.c src/security/crypt_aes_xts.c src/security/crypt_hkdf.c src/security/ed25519.c src/security/ed25519_group.c src/security/ed25519_encode.c src/security/ed25519_scalar.c src/security/fe25519.c src/security/sha256.c src/security/sha512.c src/security/blake2b.c src/security/argon2.c src/security/chacha20_poly1305.c src/security/x25519.c \
                \
                tests/boot/test_boot_manifest.c tests/boot/test_boot_writer.c \

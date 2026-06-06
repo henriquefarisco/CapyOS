@@ -1,8 +1,8 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo desde 2026-05-19; atualização técnica em 2026-06-02 (CapyOS core `alpha.262`; lote coordenado de 7 repos — CapyUI `2.22.0` / `capy-ui-widget` v2.22, CapyCodecs `0.0.7` / `capy-codec-image` v2, CapyLang `0.1.8`, CapyBrowser `0.3.0`, CapyAgent `0.0.7` com Ed25519 signer publicado host-side, CapyBenchmark `0.0.7`).
+**Status:** autoritativo desde 2026-05-19; atualiza??o t?cnica em 2026-06-06 (CapyOS core `alpha.263`; CapyBrowser `0.5.0`; demais pins do lote alpha.262 preservados: CapyUI `2.22.0` / `capy-ui-widget` v2.22, CapyCodecs `0.0.7` / `capy-codec-image` v2, CapyLang `0.1.8`, CapyAgent `0.0.7`, CapyBenchmark `0.0.7`).
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
-**Auditoria atual:** [`compatibility-audit-2026-06-02.md`](compatibility-audit-2026-06-02.md).
+**Auditoria atual:** [`compatibility-audit-2026-06-06.md`](compatibility-audit-2026-06-06.md).
 **Auditoria anterior (snapshot histórico):** [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md).
 
 Esta matriz pina as versões mínimas que o CapyOS core suporta para cada
@@ -14,9 +14,9 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.262+20260602` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.8.0-alpha.263+20260606` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
 | `CapyAgent` | `0.0.7` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier pendente de KAT externo + registro) | `0.0.7` | `0.0.7` |
-| `CapyBrowser` | `0.3.0` | `capy-browser-core` v1 (planejada; URL + HTML-to-text + image adapter + DOM host-testáveis) | n/a (sem runtime ativo até Etapa 6) | n/a |
+| `CapyBrowser` | `0.5.0` | `capy-browser-core` v1 (planejada; URL + HTML-to-text + CSS cascade + layout/display-list + download/forms/session host-test?veis) | n/a (sem runtime ativo at? Etapa 6) | n/a |
 | `CapyCodecs` | `0.0.7` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1) | `0.0.7` (host-only) | `0.0.7` |
 | `CapyUI` | `2.22.0` | `capy-ui-widget` v2.22 (display-list schema v7) + `capy-ui-desktop-session` v1 | `2.22.0` (cross-repo build / capypkg modulo / display-list adapter Etapa 4) | `2.22.0` (CI release gates com sibling remoto em main) |
 | `CapyLang` | `0.1.8` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes 0x64-0x66 + trap V0018, 36->39 opcodes; host-only no sister) | n/a (roadmap-blocked) | n/a |
@@ -55,9 +55,9 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | semver alpha (`0.MAJOR.MINOR-alpha.NUM+YYYYMMDD`) | `v<x>.<y>.<z>` | manifest assinado por Ed25519 (autoridade base) |
+| `CapyOS` | `0.8.0-alpha.263+20260606` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
 | `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); pendente KAT externo + registro via `capypkg_set_signature_verifier`** |
-| `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
+| `CapyBrowser` | `0.5.0` | `capy-browser-core` v1 (planejada; URL + HTML-to-text + CSS cascade + layout/display-list + download/forms/session host-test?veis) | n/a (sem runtime ativo at? Etapa 6) | n/a |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
 | `CapyUI` | semver `MAJOR.MINOR.PATCH` (versão 2.x ativa; absorveu desktop+window+apps em alpha.241; modules `widget-core` + `desktop-session`) | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote signed |
 | `CapyLang` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
@@ -81,7 +81,7 @@ incidente; documente no `STATUS.md`.
 | Etapa | Componentes que podem ser instalados como módulo remoto | Componentes bloqueados |
 |---|---|---|
 | Etapa 3 (concluída em alpha.253) | apenas `org.capyos.ui.widget-core` e `org.capyos.ui.desktop-session` em `--unsigned` para validar o pipeline; nenhum em `signed` (verifier do CapyAgent ainda NULL) | demais |
-| Etapa 4 (atual) | mesmo escopo da Etapa 3 + adapter CapyOS-side para consumir `capy-ui-widget` v2.22 / display-list schema v7 do sister `CapyUI`; módulos remotos continuam em `--unsigned` durante o scaffolding | CapyCodecs (audio + image como módulo), CapyBrowser, CapyAgent assinado, CapyLang, CapyBenchmark |
+| Etapa 4 (concluída em alpha.262) | mesmo escopo da Etapa 3 + adapter CapyOS-side para consumir `capy-ui-widget` v2.22 / display-list schema v7 do sister `CapyUI`; módulos remotos continuam em `--unsigned` durante o scaffolding | CapyCodecs (audio + image como módulo), CapyBrowser, CapyAgent assinado, CapyLang, CapyBenchmark |
 | Etapas 5-7 | CapyUI widget v2.22 oficial + CapyCodecs image v2 (quando adapter GUI image abrir) + CapyBrowser text | CapyLang, CapyBenchmark |
 | Etapas 8-9 | installer/update UX + package manager + SDK + ABI estável; CapyAgent vira producer oficial e pluga verifier Ed25519 | CapyLang, CapyBenchmark |
 | Etapa 10 | CapyCodecs audio | CapyLang, CapyBenchmark |
@@ -142,7 +142,8 @@ versão correspondente do `VERSION.yaml`.
 
 ## 9. Referência cruzada
 
-- [`compatibility-audit-2026-06-02.md`](compatibility-audit-2026-06-02.md) (atual; lote coordenado de 7 repos — alpha.262 + CapyUI 2.22.0 + CapyCodecs 0.0.7/image v2 + CapyLang 0.1.8 + CapyBrowser 0.3.0 + CapyAgent 0.0.7/signer + CapyBenchmark 0.0.7)
+- [`compatibility-audit-2026-06-06.md`](compatibility-audit-2026-06-06.md) (atual; alpha.263 + CapyBrowser 0.5.0)
+- [`compatibility-audit-2026-06-02.md`](compatibility-audit-2026-06-02.md) (hist?rico; lote coordenado de 7 repos ? alpha.262 + CapyUI 2.22.0 + CapyCodecs 0.0.7/image v2 + CapyLang 0.1.8 + CapyBrowser 0.3.0 + CapyAgent 0.0.7/signer + CapyBenchmark 0.0.7)
 - [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md) (snapshot histórico; inclui addenda alpha.260 de 2026-05-25 e a sincronização cross-repo de 2026-05-29)
 - [`compatibility-audit-2026-05-22.md`](compatibility-audit-2026-05-22.md) (snapshot histórico)
 - [`compatibility-audit-2026-05-21.md`](compatibility-audit-2026-05-21.md) (snapshot histórico)
