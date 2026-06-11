@@ -308,6 +308,98 @@ static void test_labels(void) {
                   "missing field") == 0, "label missing");
 }
 
+static void test_crlf_line_endings_parse_clean(void) {
+    struct install_profile profile;
+    const char text[] =
+        "profile=full\r\n"
+        "bootstrap_repo_name=modules\r\n"
+        "bootstrap_repo_url=https://example.org/modules-index.txt\r\n";
+    int rc = install_profile_parse(text, sizeof(text) - 1u, &profile);
+    EXPECT(rc == INSTALL_PROFILE_OK, "CRLF profile must parse");
+    EXPECT(profile.kind == INSTALL_PROFILE_FULL, "CRLF kind full");
+    EXPECT(strcmp(profile.repo_name, "modules") == 0,
+           "CRLF must not leave a trailing CR in repo_name");
+    EXPECT(strcmp(profile.repo_url,
+                  "https://example.org/modules-index.txt") == 0,
+           "CRLF must not leave a trailing CR in repo_url");
+    EXPECT(install_profile_should_bootstrap(&profile) == 1,
+           "CRLF full profile must bootstrap");
+}
+
+static void test_install_list_skips_empty_and_trims(void) {
+    /* Direct iterator contract: empty tokens (from doubled or trailing
+     * commas) are skipped and surrounding whitespace is trimmed, so the
+     * bootstrap never receives an empty or padded package name. */
+    const char *list = "a,,b , c,";
+    size_t cursor = 0u;
+    char token[INSTALL_PROFILE_NAME_MAX];
+    EXPECT(install_profile_install_list_next(list, &cursor, token,
+                                             sizeof(token)) == 0 &&
+               strcmp(token, "a") == 0, "first token a");
+    EXPECT(install_profile_install_list_next(list, &cursor, token,
+                                             sizeof(token)) == 0 &&
+               strcmp(token, "b") == 0, "doubled comma skipped, b returned");
+    EXPECT(install_profile_install_list_next(list, &cursor, token,
+                                             sizeof(token)) == 0 &&
+               strcmp(token, "c") == 0, "whitespace-padded c trimmed");
+    EXPECT(install_profile_install_list_next(list, &cursor, token,
+                                             sizeof(token)) == -1,
+           "trailing comma yields no extra token");
+}
+
+static void test_signed_invalid_value_rejected(void) {
+    struct install_profile profile;
+    int rc = PARSE(
+        "profile=full\n"
+        "bootstrap_repo_name=modules\n"
+        "bootstrap_repo_url=https://example.org/m.txt\n"
+        "bootstrap_repo_signed=2\n",
+        &profile);
+    EXPECT(rc == INSTALL_PROFILE_ERR_PARSE,
+           "bootstrap_repo_signed must be exactly 0 or 1");
+    EXPECT(profile.kind == INSTALL_PROFILE_BASIC,
+           "reset to BASIC on rejected bool");
+}
+
+static void test_url_empty_value_rejected(void) {
+    struct install_profile profile;
+    int rc = PARSE(
+        "profile=full\n"
+        "bootstrap_repo_url=\n",
+        &profile);
+    EXPECT(rc == INSTALL_PROFILE_ERR_PARSE,
+           "empty bootstrap_repo_url must be rejected");
+}
+
+static void test_full_with_name_but_no_url_fails(void) {
+    struct install_profile profile;
+    int rc = PARSE(
+        "profile=full\n"
+        "bootstrap_repo_name=modules\n",
+        &profile);
+    EXPECT(rc == INSTALL_PROFILE_ERR_MISSING_FIELD,
+           "full with repo_name but no repo_url must fail");
+}
+
+static void test_should_bootstrap_rejects_non_https_defensively(void) {
+    /* should_bootstrap re-checks the https prefix independently of the
+     * parser, so a hand-built or future-loaded profile cannot smuggle a
+     * non-https repo into the bootstrap path. */
+    struct install_profile profile;
+    install_profile_reset(&profile);
+    profile.kind = INSTALL_PROFILE_FULL;
+    profile.valid = 1u;
+    snprintf(profile.repo_name, sizeof(profile.repo_name), "modules");
+    snprintf(profile.repo_url, sizeof(profile.repo_url),
+             "http://example.org/modules-index.txt");
+    EXPECT(install_profile_should_bootstrap(&profile) == 0,
+           "should_bootstrap must reject a non-HTTPS repo url defensively");
+    snprintf(profile.repo_url, sizeof(profile.repo_url),
+             "https://example.org/modules-index.txt");
+    EXPECT(install_profile_should_bootstrap(&profile) == 1,
+           "should_bootstrap accepts a well-formed https full profile");
+}
+
 int run_install_profile_tests(void) {
     test_empty_defaults_to_basic();
     test_explicit_basic();
@@ -329,6 +421,13 @@ int run_install_profile_tests(void) {
     test_format_custom_with_install_list();
     test_format_rejects_too_small_buffer();
     test_labels();
+    /* alpha.263 follow-up: parser robustness + defensive gates. */
+    test_crlf_line_endings_parse_clean();
+    test_install_list_skips_empty_and_trims();
+    test_signed_invalid_value_rejected();
+    test_url_empty_value_rejected();
+    test_full_with_name_but_no_url_fails();
+    test_should_bootstrap_rejects_non_https_defensively();
     fprintf(stderr,
             "install_profile: %d/%d tests passed (%d failures)\n",
             g_total - g_failures, g_total, g_failures);

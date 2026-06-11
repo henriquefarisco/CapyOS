@@ -48,6 +48,20 @@ struct http_pool_entry {
 
 extern int g_http_last_error;
 
+/* Download progress observer (see net/http.h). Single global slot: the
+ * network stack handles one request at a time. Installed/cleared by
+ * http_download_progress() around the transfer; consumed by the receive
+ * loop in request_response.c. */
+extern http_progress_fn g_http_progress_fn;
+extern void *g_http_progress_ctx;
+void http_set_progress_observer(http_progress_fn fn, void *ctx);
+
+static inline void http_emit_progress(size_t received, size_t total) {
+  if (g_http_progress_fn) {
+    g_http_progress_fn(received, total, g_http_progress_ctx);
+  }
+}
+
 static inline void http_memset(void *d, int v, size_t n) {
   uint8_t *p = (uint8_t *)d;
   for (size_t i = 0; i < n; i++) p[i] = (uint8_t)v;
@@ -156,6 +170,7 @@ char *http_grow_recv_buffer(char *buf, size_t current_capacity,
 
 int http_build_request(const struct http_request *req, char *buf, size_t buf_size);
 int http_parse_status_line(const char *line, int *status_code);
+size_t http_parse_content_length(const char *value);
 
 struct http_pool_entry *http_pool_find(const char *host, uint16_t port, int use_tls);
 void http_pool_remove(struct http_pool_entry *e);

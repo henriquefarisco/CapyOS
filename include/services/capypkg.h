@@ -172,6 +172,44 @@ typedef int (*capypkg_verify_signature_fn)(const char *signed_text,
                                            size_t signed_len,
                                            const char *signature_hex);
 
+/* Optional progress-aware payload fetcher. When bound via
+ * capypkg_set_bytes_fetcher_progress() the install path prefers it over
+ * the plain capypkg_fetch_bytes_fn so byte-level download progress can
+ * be surfaced to the install observer. `cb` (when non-NULL) is invoked
+ * repeatedly as the payload streams in; `received`/`total` are byte
+ * counts and `total` is 0 when the length is not known in advance.
+ * Production binds this to net/http's http_download_progress; host
+ * tests may leave it NULL and rely on the plain fetcher fallback. */
+typedef void (*capypkg_download_progress_fn)(uint64_t received,
+                                             uint64_t total, void *ctx);
+typedef int (*capypkg_fetch_bytes_progress_fn)(const char *url,
+                                               uint8_t *buffer,
+                                               size_t buffer_size,
+                                               size_t *out_len,
+                                               capypkg_download_progress_fn cb,
+                                               void *cb_ctx);
+
+/* Per-package install lifecycle phases reported to the install
+ * observer. Stable enum: append only, never renumber (UI consumers and
+ * the first-boot wizard switch on these). */
+enum capypkg_install_phase {
+    CAPYPKG_INSTALL_PHASE_RESOLVE  = 0, /* resolving dependencies        */
+    CAPYPKG_INSTALL_PHASE_DOWNLOAD = 1, /* streaming payload (cur/total) */
+    CAPYPKG_INSTALL_PHASE_VERIFY   = 2, /* sha-256 + signature           */
+    CAPYPKG_INSTALL_PHASE_STAGE    = 3, /* committing to install_root    */
+    CAPYPKG_INSTALL_PHASE_DONE     = 4  /* installed + db persisted      */
+};
+
+/* Fine-grained, per-package install progress observer. `name` is the
+ * package being installed. `cur`/`total` carry byte counts during
+ * DOWNLOAD (total may be 0 when unknown) and are 0 for the other
+ * phases. Single global slot: installs are serialized in the current
+ * runtime. Set NULL to disable (the default). */
+typedef void (*capypkg_install_progress_fn)(const char *name,
+                                             enum capypkg_install_phase phase,
+                                             uint64_t cur, uint64_t total,
+                                             void *ctx);
+
 void capypkg_reset(void);
 int  capypkg_init(void);
 int  capypkg_initialized(void);
@@ -184,7 +222,12 @@ void capypkg_set_mkdir(capypkg_mkdir_fn fn);
 
 void capypkg_set_text_fetcher(capypkg_fetch_text_fn fn);
 void capypkg_set_bytes_fetcher(capypkg_fetch_bytes_fn fn);
+void capypkg_set_bytes_fetcher_progress(capypkg_fetch_bytes_progress_fn fn);
 void capypkg_set_signature_verifier(capypkg_verify_signature_fn fn);
+
+/* Install a fine-grained per-package install progress observer. NULL
+ * disables it. The wizard installs this to drive its live status bar. */
+void capypkg_set_install_observer(capypkg_install_progress_fn fn, void *ctx);
 
 /* Repository management. */
 int  capypkg_repo_add(const char *name, const char *index_url,

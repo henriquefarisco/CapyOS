@@ -52,15 +52,21 @@ int http_parse_url(const char *url, char *host, size_t host_len,
 
   if (*url == ':') {
     int saw_digit = 0;
+    uint32_t p = 0;
     url++;
-    uint16_t p = 0;
     while (*url >= '0' && *url <= '9') {
       saw_digit = 1;
-      p = p * 10 + (uint16_t)(*url - '0');
+      p = p * 10u + (uint32_t)(*url - '0');
+      /* Reject an out-of-range port instead of letting it wrap a uint16_t:
+       * ":65590" would otherwise truncate to 54 and silently connect to a
+       * different port than the URL named. Accumulate in a uint32_t and
+       * fail closed as soon as it leaves the 16-bit port space (this also
+       * bounds the accumulator, so a long digit run cannot overflow it). */
+      if (p > 65535u) return http_fail(HTTP_ERR_INVALID_URL);
       url++;
     }
     if (!saw_digit) return http_fail(HTTP_ERR_INVALID_URL);
-    if (p > 0) *port = p;
+    if (p > 0u) *port = (uint16_t)p;
   }
 
   if (*url == '/') http_strcpy(path, url, path_len);
@@ -147,11 +153,39 @@ int http_build_request(const struct http_request *req, char *buf, size_t buf_siz
 }
 
 int http_parse_status_line(const char *line, int *status_code) {
+  int digits = 0;
   if (http_strncmp(line, "HTTP/1.", 7) != 0) return -1;
   const char *p = line + 7;
   while (*p && *p != ' ') p++;
   if (*p == ' ') p++;
   *status_code = 0;
-  while (*p >= '0' && *p <= '9') { *status_code = *status_code * 10 + (*p - '0'); p++; }
+  while (*p >= '0' && *p <= '9') {
+    *status_code = *status_code * 10 + (*p - '0');
+    /* An HTTP status code is exactly three digits (100-999). Reject an
+     * overlong digit run instead of letting the signed int overflow
+     * (undefined behavior) on a hostile status line. Capping at 3 digits
+     * keeps *status_code <= 9999, well within int range. */
+    if (++digits > 3) return -1;
+    p++;
+  }
   return 0;
+}
+
+size_t http_parse_content_length(const char *value) {
+  size_t v = 0;
+  if (!value) return 0;
+  /* Parse the leading run of decimal digits (the value is OWS-trimmed and
+   * control-filtered by http_store_headers). Saturate to SIZE_MAX on
+   * overflow instead of wrapping: a Content-Length that wrapped to a small
+   * value would let the receive loop in http_request treat a partial body
+   * as complete and desync a reused keep-alive connection (response
+   * smuggling). Saturating instead trips the HTTP_MAX_RESPONSE_SIZE cap,
+   * which fails closed. */
+  while (*value >= '0' && *value <= '9') {
+    size_t digit = (size_t)(*value - '0');
+    if (v > (SIZE_MAX - digit) / 10u) return SIZE_MAX;
+    v = v * 10u + digit;
+    value++;
+  }
+  return v;
 }

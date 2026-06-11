@@ -311,6 +311,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/config/first_boot/storage_users.o \
 	$(BUILD)/x86_64/config/first_boot/program.o \
 	$(BUILD)/x86_64/config/first_boot/modules.o \
+	$(BUILD)/x86_64/config/first_boot/modules_progress.o \
 	$(BUILD)/x86_64/services/update_agent.o \
 	$(BUILD)/x86_64/services/update_agent_parse.o \
 	$(BUILD)/x86_64/services/update_agent_apply.o \
@@ -320,6 +321,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/capypkg/capypkg_manifest.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_repo.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_install.o \
+	$(BUILD)/x86_64/services/capypkg/capypkg_persist.o \
 	$(BUILD)/x86_64/services/capypkg_local_bundle.o \
 	$(BUILD)/x86_64/services/capypkg_bootstrap.o \
 	$(BUILD)/x86_64/services/install_profile.o \
@@ -402,6 +404,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/net/protocols/stack_icmp.o \
 	$(BUILD)/x86_64/net/protocols/stack_ipv4.o \
 	$(BUILD)/x86_64/net/core/stack_services.o \
+	$(BUILD)/x86_64/net/core/dhcp_options.o \
 	$(BUILD)/x86_64/net/core/stack_selftest.o \
 	$(BUILD)/x86_64/net/core/stack_utils.o \
 	$(BUILD)/x86_64/net/core/stack.o \
@@ -483,6 +486,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/scheduler_smoke_io.o \
 	$(BUILD)/x86_64/kernel/thread_crash_smoke.o \
 	$(BUILD)/x86_64/kernel/thread_crash_smoke_io.o \
+	$(BUILD)/x86_64/kernel/tls_handshake_smoke.o \
+	$(BUILD)/x86_64/kernel/tls_handshake_smoke_io.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
 	$(BUILD)/x86_64/kernel/worker.o \
 	$(BUILD)/x86_64/kernel/syscall.o \
@@ -604,6 +609,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/net/services/dns_cache.o \
 	$(BUILD)/x86_64/net/services/http_encoding.o \
 	$(BUILD)/x86_64/net/services/http/prelude_headers_encoding.o \
+	$(BUILD)/x86_64/net/services/http/http_chunked.o \
 	$(BUILD)/x86_64/net/services/http/url_request_builder.o \
 	$(BUILD)/x86_64/net/services/http/transport.o \
 	$(BUILD)/x86_64/net/services/http/request_response.o \
@@ -849,16 +855,18 @@ CAPYLIBC_TLS_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_backend.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls.o
 
-# Etapa 5 / Slice 5.4: opt-in REAL userland TLS handshake. Default OFF so the
-# standard build is unchanged (userland TLS stays fail-closed,
-# capy_tls_is_supported()==0). Enable + validate externally with:
-#   make all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1
-#   make smoke-x64-vmware-tls-handshake
-# Once the smoke passes, this can be promoted to the default build.
+# Etapa 5 / Slices 5.4+5.6: REAL userland TLS handshake. PROMOTED TO DEFAULT in
+# alpha.264 after the Etapa 5 external gate passed (flag-on build +
+# `make smoke-x64-vmware-tls-handshake` + `release-check`). The standard build
+# now does real userland TLS (capy_tls_is_supported()==1). Opt out with
+# `make ... CAPYOS_TLS_USERLAND_HANDSHAKE=0` to restore the legacy fail-closed
+# userland TLS (e.g. for size-constrained or diagnostic builds). Only affects
+# the ring-3 USERLAND_CFLAGS build; HOST_CFLAGS unit tests are unchanged.
 # Reuses the kernel-built $(BEARSSL_OBJS) (same CC64 / -mcmodel=small) and
 # compiles the in-tree trust anchors (src/security/tls_trust_anchors.c) as a
 # userland object. br_prng_seeder_system is provided by capy_tls_backend.c.
-ifdef CAPYOS_TLS_USERLAND_HANDSHAKE
+CAPYOS_TLS_USERLAND_HANDSHAKE ?= 1
+ifneq ($(CAPYOS_TLS_USERLAND_HANDSHAKE),0)
 USERLAND_CFLAGS += -DCAPYOS_TLS_USERLAND_HANDSHAKE
 CAPYLIBC_TLS_OBJS += \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_handshake.o \
@@ -980,6 +988,50 @@ $(CAPYSH_BLOB_OBJ): $(CAPYSH_ELF)
 .PHONY: capysh-blob
 capysh-blob: $(CAPYSH_BLOB_OBJ)
 	@echo "[ok] capysh blob ready for kernel link: $(CAPYSH_BLOB_OBJ)"
+
+# Etapa 5 / Slice 5.6: userland TLS handshake smoke binary. Mirrors the
+# capysh template, but TLS_SMOKE_OBJS additionally links $(CAPYLIBC_NET_OBJS)
+# (which pulls in $(CAPYLIBC_TLS_OBJS); under CAPYOS_TLS_USERLAND_HANDSHAKE
+# that includes the real BearSSL handshake + trust anchors) so the program
+# can drive capy_http_get over HTTPS. The blob is embedded into the kernel
+# image only under CAPYOS_TLS_HANDSHAKE_SMOKE (gated block below + the
+# smoke-x64-vmware-tls-handshake target), so the default image is unchanged.
+TLS_SMOKE_ELF = $(CAPYLIBC_BUILD_DIR)/bin/tls_smoke/tls_smoke.elf
+TLS_SMOKE_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/tls_smoke/main.o \
+	$(CAPYLIBC_OBJS) \
+	$(CAPYLIBC_NET_OBJS)
+
+$(TLS_SMOKE_ELF): $(TLS_SMOKE_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(TLS_SMOKE_OBJS)
+
+.PHONY: tls-smoke-elf
+tls-smoke-elf: $(TLS_SMOKE_ELF)
+	@echo "[ok] user binary linked: $(TLS_SMOKE_ELF)"
+
+# objcopy input MUST be `tls_smoke.elf` so the magic symbols come out as
+# `_binary_tls_smoke_elf_start/_end` (consumed by embedded_progs.c).
+TLS_SMOKE_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/tls_smoke/tls_smoke_elf_blob.o
+
+$(TLS_SMOKE_BLOB_OBJ): $(TLS_SMOKE_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: tls-smoke-blob
+tls-smoke-blob: $(TLS_SMOKE_BLOB_OBJ)
+	@echo "[ok] tls_smoke blob ready for kernel link: $(TLS_SMOKE_BLOB_OBJ)"
+
+# Gate: embed the tls_smoke blob into the kernel image only when the smoke
+# is being built. The matching -DCAPYOS_TLS_HANDSHAKE_SMOKE (kernel TUs:
+# embedded_progs.c registration + user_init boot hook + kernel_main branch)
+# is passed via EXTRA_CFLAGS64 by the smoke target. Default OFF = unchanged.
+ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
+CAPYOS64_OBJS += $(TLS_SMOKE_BLOB_OBJ)
+endif
 
 # Sessao 6 (2026-05-05): regras do navegador legado erradicadas.
 # Serao reabertas somente por adaptador versionado na etapa correta.
@@ -1535,6 +1587,7 @@ TEST_SRCS   := \
                tests/security/test_volume_provider.c tests/security/test_volume_provider_rekey.c tests/security/test_volume_provider_execute.c tests/security/test_volume_provider_rekey_execute.c tests/security/test_volume_provider_rekey_copy.c tests/security/test_volume_provider_rekey_commit.c tests/security/test_volume_provider_rekey_recovery.c tests/security/test_volume_provider_rekey_orchestrator.c src/security/volume_provider.c src/security/volume_provider_rekey.c src/security/volume_provider_rekey_execute.c src/security/volume_provider_rekey_copy.c src/security/volume_provider_rekey_commit.c src/security/volume_provider_rekey_recovery.c src/security/volume_provider_rekey_orchestrator.c \
                tests/security/test_tls_hostname.c src/security/tls_hostname.c \
                tests/security/test_tls_trust_anchors.c src/security/tls_trust_anchors.c \
+               tests/security/test_tls_trust_userland_sync.c \
                tests/security/test_tls_client_engine.c $(BEARSSL_SRCS) tests/stubs/stub_bearssl_seeder.c \
                tests/security/test_tls_handshake_drive.c userland/lib/capylibc-tls/capy_tls_handshake.c \
                tests/security/test_tls_cert_validation.c \
@@ -1570,7 +1623,13 @@ TEST_SRCS   := \
                tests/gui/test_desktop_smoke_readiness.c $(DESKTOP_SRC_ROOT)/desktop_smoke_readiness.c \
                \
                tests/net/test_http_encoding.c src/net/services/http_encoding.c \
+               tests/net/test_http_url.c src/net/services/http/url_request_builder.c \
+               tests/net/test_http_chunked.c src/net/services/http/http_chunked.c \
                tests/net/test_net_dns.c src/net/services/dns.c \
+               tests/net/test_net_dhcp_options.c src/net/core/dhcp_options.c \
+               tests/net/test_net_icmp.c src/net/protocols/stack_icmp.c \
+               tests/net/test_net_arp.c src/net/protocols/stack_arp.c \
+               tests/kernel/test_elf_bounds.c \
                tests/net/test_net_probe.c src/drivers/net/net_probe.c src/drivers/net/netvsc.c \
                tests/net/test_dns_cache.c src/net/services/dns_cache.c \
                tests/net/test_syscall_net.c src/kernel/syscall_net.c \
@@ -1655,6 +1714,7 @@ TEST_SRCS   := \
                tests/kernel/test_context_switch.c src/kernel/scheduler.c \
                tests/kernel/test_scheduler_smoke_gate.c src/kernel/scheduler_smoke.c tests/stubs/stub_scheduler_smoke_io.c \
                tests/kernel/test_thread_crash_smoke_gate.c src/kernel/thread_crash_smoke.c tests/stubs/stub_thread_crash_smoke_io.c \
+               tests/kernel/test_tls_handshake_smoke_gate.c src/kernel/tls_handshake_smoke.c tests/stubs/stub_tls_handshake_smoke_io.c \
                tests/kernel/test_syscall_msr.c \
                tests/kernel/test_fault_classify.c src/arch/x86_64/fault_classify.c \
                tests/kernel/test_pmm_refcount.c src/memory/pmm_refcount.c \
@@ -1752,7 +1812,7 @@ TEST_SRCS   := \
                tests/services/test_work_queue.c src/core/work_queue.c \
                tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
                tests/services/test_update_transact.c src/services/update_agent_transact.c \
-               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c \
+               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c src/services/capypkg/capypkg_persist.c \
                tests/services/test_capypkg_local_bundle.c src/services/capypkg_local_bundle.c \
                tests/services/test_install_profile.c src/services/install_profile.c \
                \
@@ -1800,6 +1860,7 @@ TEST_CAPYPKG_SRCS := \
 	src/services/capypkg/capypkg_manifest.c \
 	src/services/capypkg/capypkg_repo.c \
 	src/services/capypkg/capypkg_install.c \
+	src/services/capypkg/capypkg_persist.c \
 	src/services/capypkg_bootstrap.c \
 	src/services/install_profile.c \
 	src/security/sha256.c \
@@ -2080,6 +2141,35 @@ smoke-x64-vmware-etapa-4:
 		--marker "[smoke] scheduler-fairness ready" \
 		--marker "[smoke] compositor-damage-track ready" \
 		--marker "[smoke] thread-crash-survives ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 5 / Slice 5.6 external validation gate — userland TLS handshake.
+# Builds the real userland TLS path (CAPYOS_TLS_USERLAND_HANDSHAKE=1) and
+# embeds + boots the tls_smoke ring-3 program (CAPYOS_TLS_HANDSHAKE_SMOKE:
+# blob in the image + kernel-side registration/boot hook + process_exit
+# latch). The program does a valid HTTPS GET (must succeed) and a bad-cert
+# GET (must fail closed), then exits 0 iff BOTH hold. The kernel latch
+# (process_exit, gated) emits the single COM1 marker "[smoke] tls-handshake
+# ready" on that exit-0 — ring-3 stdout would land on 0xE9 (not COM1), so the
+# exit code is the authoritative VMware signal.
+# Requires a controlled HTTPS server reachable from the VM; point the
+# endpoints at it via EXTRA_USERLAND_CFLAGS, e.g.:
+#   EXTRA_USERLAND_CFLAGS='-DCAPYOS_TLS_SMOKE_URL=\"https://lab/\" \
+#                          -DCAPYOS_TLS_SMOKE_BADCERT_URL=\"https://bad.lab/\"'
+# Required reading before invoking this gate:
+# docs/operations/etapa-5-external-validation-playbook.md.
+smoke-x64-vmware-tls-handshake:
+	@echo "Executando smoke test VMware+E1000 tls-handshake..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full \
+		CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
+		CAPYOS_TLS_HANDSHAKE_SMOKE=1 \
+		EXTRA_CFLAGS64='-DCAPYOS_TLS_HANDSHAKE_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] tls-handshake ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
 .PHONY: smoke-x64-hyperv-boot

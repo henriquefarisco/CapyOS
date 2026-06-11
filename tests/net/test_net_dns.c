@@ -212,6 +212,107 @@ int run_net_dns_tests(void) {
     }
   }
 
+  /* === Adversarial / malformed-packet robustness ==================
+   * DNS responses are untrusted network input (and a prerequisite of the
+   * Etapa 5 userland HTTPS path). The parser must reject malformed packets
+   * safely — return -1, never an out-of-bounds read or an unbounded loop.
+   * These cases lock that robustness against regression. */
+
+  /* (a) Truncated header (shorter than the 12-byte DNS header). */
+  {
+    uint8_t pkt[8];
+    uint32_t ip = 0u;
+    memset(pkt, 0, sizeof(pkt));
+    if (net_dns_parse_first_a(pkt, sizeof(pkt), 0x1234u, &ip, NULL) == 0) {
+      printf("[dns] parser accepted truncated header\n");
+      fails++;
+    }
+  }
+
+  /* (b) Reserved label type in the name (0x40: not a 0xC0 pointer, > 63).
+   * skip_name must reject it rather than mis-walk the name. */
+  {
+    uint8_t pkt[32];
+    uint32_t ip = 0u;
+    memset(pkt, 0, sizeof(pkt));
+    write_be16(&pkt[0], 0x1234u);
+    write_be16(&pkt[2], 0x8180u);  /* QR=1, RCODE=0 */
+    write_be16(&pkt[4], 1u);       /* QDCOUNT=1 */
+    pkt[12] = 0x40u;               /* reserved label type */
+    if (net_dns_parse_first_a(pkt, sizeof(pkt), 0x1234u, &ip, NULL) == 0) {
+      printf("[dns] parser accepted reserved label type\n");
+      fails++;
+    }
+  }
+
+  /* (c) Label length runs past the end of the packet. */
+  {
+    uint8_t pkt[20];
+    uint32_t ip = 0u;
+    memset(pkt, 0, sizeof(pkt));
+    write_be16(&pkt[0], 0x1234u);
+    write_be16(&pkt[2], 0x8180u);
+    write_be16(&pkt[4], 1u);       /* QDCOUNT=1 */
+    pkt[12] = 7u;                  /* label claims 7 bytes... */
+    if (net_dns_parse_first_a(pkt, 16u, 0x1234u, &ip, NULL) == 0) {
+      /* ...but len=16 leaves only 3 -> 12+1+7=20 > 16. */
+      printf("[dns] parser accepted label past end\n");
+      fails++;
+    }
+  }
+
+  /* (d) Compression pointer as the final byte (no second pointer byte). */
+  {
+    uint8_t pkt[13];
+    uint32_t ip = 0u;
+    memset(pkt, 0, sizeof(pkt));
+    write_be16(&pkt[0], 0x1234u);
+    write_be16(&pkt[2], 0x8180u);
+    write_be16(&pkt[4], 1u);       /* QDCOUNT=1 */
+    pkt[12] = 0xC0u;               /* pointer high byte at the last index */
+    if (net_dns_parse_first_a(pkt, sizeof(pkt), 0x1234u, &ip, NULL) == 0) {
+      printf("[dns] parser accepted truncated compression pointer\n");
+      fails++;
+    }
+  }
+
+  /* (e) Answer RDLENGTH runs past the end of the packet. */
+  {
+    uint8_t pkt[64];
+    uint32_t ip = 0u;
+    size_t o = 12u;
+    memset(pkt, 0, sizeof(pkt));
+    write_be16(&pkt[0], 0x1234u);
+    write_be16(&pkt[2], 0x8180u);
+    write_be16(&pkt[4], 0u);       /* QDCOUNT=0 */
+    write_be16(&pkt[6], 1u);       /* ANCOUNT=1 */
+    pkt[o++] = 0u;                 /* answer name = root */
+    write_be16(&pkt[o], 1u); o += 2u;   /* TYPE=A */
+    write_be16(&pkt[o], 1u); o += 2u;   /* CLASS=IN */
+    write_be32(&pkt[o], 60u); o += 4u;  /* TTL */
+    write_be16(&pkt[o], 100u); o += 2u; /* RDLENGTH=100 (well past the packet) */
+    if (net_dns_parse_first_a(pkt, o, 0x1234u, &ip, NULL) == 0) {
+      printf("[dns] parser accepted RDLENGTH past end\n");
+      fails++;
+    }
+  }
+
+  /* (f) ANCOUNT claims 65535 records in a tiny packet: the answer loop must
+   * bail on the first bounds check, never spin or read out of bounds. */
+  {
+    uint8_t pkt[16];
+    uint32_t ip = 0u;
+    memset(pkt, 0, sizeof(pkt));
+    write_be16(&pkt[0], 0x1234u);
+    write_be16(&pkt[2], 0x8180u);
+    write_be16(&pkt[4], 0u);       /* QDCOUNT=0 */
+    write_be16(&pkt[6], 0xFFFFu);  /* ANCOUNT=65535 */
+    if (net_dns_parse_first_a(pkt, sizeof(pkt), 0x1234u, &ip, NULL) == 0) {
+      printf("[dns] parser accepted oversized ANCOUNT\n");
+      fails++;
+    }
+  }
+
   if (fails == 0) {
     printf("[tests] net_dns OK\n");
   }

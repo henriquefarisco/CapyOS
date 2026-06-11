@@ -10,7 +10,8 @@
  * `--target=x86_64-unknown-linux-musl`.
  *
  * Coverage policy: this header lists the syscalls we plan to wire
- * through the platform shim (S1.x of `firefox-port-platform-shim.md`).
+ * through the platform shim (S1.x of
+ * `docs/archive/firefox-port-exploration/firefox-port-platform-shim.md`).
  * Numbers we do not implement still live here (so the dispatcher can
  * return -ENOSYS instead of -EINVAL when Firefox tries them) but only
  * for the slices we expect to hit. The full Linux syscall table has

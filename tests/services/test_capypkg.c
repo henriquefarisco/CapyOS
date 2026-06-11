@@ -20,6 +20,9 @@
  *   - test_capypkg_core.inc            init/repo/fetch/install/signature core
  *   - test_capypkg_bootstrap.inc       vfs-write + first-boot bootstrap tests
  *                                      (bootstrap-gated)
+ *   - test_capypkg_bootstrap_sweep.inc install-sweep: per-package retry +
+ *                                      dependency-ordered wave planner
+ *                                      (bootstrap-gated)
  *   - test_capypkg_install_manifest.inc install variants + manifest security
  * The bootstrap-gated fragments compile only under CAPYPKG_BOOTSTRAP_TESTS,
  * matching the original #ifdef structure. Makefile wiring is unchanged
@@ -37,6 +40,7 @@
 
 #ifdef CAPYPKG_BOOTSTRAP_TESTS
 #include "test_capypkg_bootstrap.inc"
+#include "test_capypkg_bootstrap_sweep.inc"
 #endif
 
 #include "test_capypkg_install_manifest.inc"
@@ -75,6 +79,11 @@ int run_capypkg_tests(void) {
     test_bootstrap_marker_file_short_circuits_bad_profile();
     test_bootstrap_force_bypasses_marker_file();
     test_bootstrap_profile_directory_is_retryable_storage();
+    test_bootstrap_per_package_retry_recovers();
+    test_bootstrap_per_package_retry_caps_attempts();
+    test_bootstrap_installs_dependency_before_dependent();
+    test_bootstrap_custom_pulls_transitive_dependency();
+    test_bootstrap_dependency_cycle_does_not_hang();
 #endif
     test_install_accepts_payload_larger_than_one_mib();
     test_install_fail_closed_without_verifier();
@@ -85,6 +94,8 @@ int run_capypkg_tests(void) {
     test_manifest_rejects_malformed_sha256();
     test_install_resolves_dependency_chain();
     test_install_dependency_missing_in_catalog_fails();
+    test_install_observer_reports_phases();
+    test_install_progress_fetcher_forwards_bytes();
     test_stats_reports_state_correctly();
     test_install_emits_audit_trail_on_success();
     test_install_emits_audit_trail_on_sha256_mismatch();

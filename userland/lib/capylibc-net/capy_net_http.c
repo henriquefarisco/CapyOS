@@ -31,6 +31,7 @@
  */
 
 #include "capylibc-net/capy_net.h"
+#include "capylibc-tls/capy_tls.h"
 #include "capylibc/capylibc.h"
 
 #include <stddef.h>
@@ -40,6 +41,7 @@ extern void capy_net_internal_set_error(capy_net_err_t err);
 extern void capy_net_internal_reset_error(void);
 extern int capy_net_internal_https_fail_closed(
     const struct capy_url_parts *url);
+extern capy_net_err_t capy_net_internal_tls_error_to_net(capy_tls_err_t err);
 
 #define HTTP_HEAD_BUF_CAP    4096
 #define HTTP_DRAIN_CHUNK     256
@@ -167,13 +169,16 @@ int capy_http_build_get_request(const char *host, uint16_t port,
     capy_net_internal_set_error(CAPY_NET_EBUF);
     return -1;
   }
-  /* Only emit ":port" when it differs from the scheme default. The
-   * caller knows scheme via the URL parser; we pass the resolved
-   * port through. The caller is expected to NOT pass 80/443
-   * unless that's the actual remote port, but we still emit it if
-   * passed -- the wire is more deterministic. We choose to always
-   * emit the port when non-default-80. */
-  if (port != 80) {
+  /* Only emit ":port" when it differs from a scheme default. Both 80
+   * (http) and 443 (https) are scheme-default ports, so a canonical
+   * Host header omits them: RFC 7230 §5.4 recommends it, and in
+   * practice many virtual-host / SNI setups key on the bare authority
+   * ("example.com") and mis-route or 404 "example.com:443". The builder
+   * is scheme-agnostic (it only sees the resolved port), so it treats
+   * both defaults the same; explicit non-default ports (8080, 8443, ...)
+   * are still emitted. Slice 5.5 (real userland HTTPS via the transport
+   * seam) made the 443 case reachable, so omitting it now matters. */
+  if (port != 80 && port != 443) {
     if (http_buf_putc(buf, buf_cap, &pos, ':') != 0 ||
         http_buf_putu16(buf, buf_cap, &pos, port) != 0) {
       capy_net_internal_set_error(CAPY_NET_EBUF);
@@ -555,6 +560,54 @@ static int http_headers_have_transfer_encoding(const char *buf, size_t len) {
   return 0;
 }
 
+/* === transport seam (TCP plaintext vs userland TLS) ========== */
+
+/* HTTP runs over a raw TCP fd; HTTPS runs over a libcapy-tls context
+ * wrapping that same fd, but only when capy_tls_is_supported() (i.e. built
+ * with CAPYOS_TLS_USERLAND_HANDSHAKE) — otherwise the https gate above
+ * fails closed and we never get here with is_https set. The send/recv/close
+ * helpers dispatch on `tls` so capy_http_get's request/response logic stays
+ * transport-agnostic. The fd is always owned here and torn down by
+ * capy_http_conn_close. */
+struct capy_http_conn {
+  int fd;
+  struct capy_tls_context *tls;
+};
+
+static long capy_http_conn_send_all(struct capy_http_conn *c,
+                                    const void *buf, size_t len) {
+  if (c->tls) {
+    /* capy_tls_send writes the whole buffer (br_sslio_write_all + flush)
+     * or returns -1, matching capy_send_all's all-or-error contract. */
+    int n = capy_tls_send(c->tls, buf, len);
+    return n < 0 ? -1 : (long)n;
+  }
+  return capy_send_all(c->fd, buf, len);
+}
+
+static long capy_http_conn_recv(struct capy_http_conn *c,
+                                void *buf, size_t cap) {
+  if (c->tls) {
+    /* capy_tls_recv mirrors capy_recv_all: available bytes, 0 on clean
+     * peer close, -1 on error. It rejects cap == 0, so guard it. */
+    if (cap == 0) return 0;
+    return (long)capy_tls_recv(c->tls, buf, cap);
+  }
+  return capy_recv_all(c->fd, buf, cap);
+}
+
+static void capy_http_conn_close(struct capy_http_conn *c) {
+  if (c->tls) {
+    (void)capy_tls_close(c->tls);
+    capy_tls_free(c->tls);
+    c->tls = NULL;
+  }
+  if (c->fd >= 0) {
+    (void)capy_close(c->fd);
+    c->fd = -1;
+  }
+}
+
 /* === capy_http_get =========================================== */
 
 int capy_http_get(const char *url,
@@ -586,10 +639,31 @@ int capy_http_get(const char *url,
     return -1;
   }
 
-  int fd = capy_tcp_connect_host(u.host, u.port);
-  if (fd < 0) {
+  struct capy_http_conn conn;
+  conn.fd = capy_tcp_connect_host(u.host, u.port);
+  conn.tls = NULL;
+  if (conn.fd < 0) {
     /* connect_host already set the error (EDNS / ESOCK / ECONNECT). */
     return -1;
+  }
+  if (u.is_https) {
+    /* Reached only when capy_tls_is_supported() returned 1 (the https gate
+     * above failed closed otherwise). Wrap the connected socket in the real
+     * userland TLS handshake; from here send/recv flow through the engine. */
+    struct capy_tls_config cfg;
+    cfg.verify_peer = 1;
+    cfg.ca_cert = NULL;
+    cfg.ca_cert_len = 0;
+    cfg.timeout_ms = CAPY_TLS_TIMEOUT_DEFAULT_MS;
+    conn.tls = capy_tls_connect_tcp(conn.fd, u.host, &cfg);
+    if (!conn.tls) {
+      /* Handshake / cert validation failed: map the libcapy-tls error and
+       * fail closed. capy_tls_connect_tcp does not own the fd, so close it. */
+      capy_net_internal_set_error(
+          capy_net_internal_tls_error_to_net(capy_tls_last_error()));
+      (void)capy_close(conn.fd);
+      return -1;
+    }
   }
 
   /* Build the request. 1 KB is enough for a GET line + Host header
@@ -599,12 +673,13 @@ int capy_http_get(const char *url,
   int req_len = capy_http_build_get_request(u.host, u.port, u.path,
                                               request_buf, sizeof(request_buf));
   if (req_len <= 0) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     return -1;
   }
 
-  if (capy_send_all(fd, request_buf, (size_t)req_len) != (long)req_len) {
-    (void)capy_close(fd);
+  if (capy_http_conn_send_all(&conn, request_buf, (size_t)req_len) !=
+      (long)req_len) {
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_ESEND);
     return -1;
   }
@@ -615,15 +690,16 @@ int capy_http_get(const char *url,
   size_t head_len = 0;
   size_t header_end = 0;  /* index of byte AFTER the head terminator */
   while (head_len < sizeof(head)) {
-    long n = capy_recv_all(fd, head + head_len, sizeof(head) - head_len);
+    long n = capy_http_conn_recv(&conn, head + head_len,
+                                 sizeof(head) - head_len);
     if (n < 0) {
-      (void)capy_close(fd);
+      capy_http_conn_close(&conn);
       capy_net_internal_set_error(CAPY_NET_ERECV);
       return -1;
     }
     if (n == 0) {
       /* Server closed before we got the full head. */
-      (void)capy_close(fd);
+      capy_http_conn_close(&conn);
       capy_net_internal_set_error(CAPY_NET_EHTTP);
       return -1;
     }
@@ -644,7 +720,7 @@ int capy_http_get(const char *url,
     }
   }
   /* Filled the whole 4 KB without finding the head terminator. */
-  (void)capy_close(fd);
+  capy_http_conn_close(&conn);
   capy_net_internal_set_error(CAPY_NET_EHTTP);
   return -1;
 
@@ -653,12 +729,12 @@ have_head:;
   int after_status = capy_http_parse_status_line(head, header_end,
                                                    &out->status_code);
   if (after_status < 0) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EHTTP);
     return -1;
   }
   if (http_status_is_informational(out->status_code)) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EHTTP);
     return -1;
   }
@@ -666,20 +742,20 @@ have_head:;
   /* `header_end` includes the trailing empty-line terminator. */
   size_t headers_len = (size_t)(header_end - (size_t)after_status);
   if (capy_http_parse_headers(head + after_status, headers_len, out) < 0) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EHTTP);
     return -1;
   }
 
   /* Reject unsupported Transfer-Encoding before Content-Length framing. */
   if (http_headers_have_transfer_encoding(head + after_status, headers_len)) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EUNSUPPORTED);
     return -1;
   }
   if (http_headers_have_unsupported_content_encoding(head + after_status,
                                                      headers_len)) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EUNSUPPORTED);
     return -1;
   }
@@ -687,13 +763,13 @@ have_head:;
   if (http_resolve_content_length(head + after_status, headers_len,
                                   &out->content_length,
                                   &content_length_known) != 0) {
-    (void)capy_close(fd);
+    capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EHTTP);
     return -1;
   }
   if (http_status_has_no_body(out->status_code)) {
     if (content_length_known && out->content_length != 0) {
-      (void)capy_close(fd);
+      capy_http_conn_close(&conn);
       capy_net_internal_set_error(CAPY_NET_EHTTP);
       return -1;
     }
@@ -751,15 +827,15 @@ have_head:;
       if (cap > remaining) cap = remaining;
     }
     if (cap == 0) break;
-    long n = capy_recv_all(fd, dst, cap);
+    long n = capy_http_conn_recv(&conn, dst, cap);
     if (n < 0) {
-      (void)capy_close(fd);
+      capy_http_conn_close(&conn);
       capy_net_internal_set_error(CAPY_NET_ERECV);
       return -1;
     }
     if (n == 0) {
       if (content_length_known && body_received < out->content_length) {
-        (void)capy_close(fd);
+        capy_http_conn_close(&conn);
         capy_net_internal_set_error(CAPY_NET_EHTTP);
         return -1;
       }
@@ -777,6 +853,6 @@ have_head:;
     }
   }
 
-  (void)capy_close(fd);
+  capy_http_conn_close(&conn);
   return 0;
 }

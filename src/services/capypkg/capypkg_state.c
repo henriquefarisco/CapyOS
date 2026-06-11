@@ -19,9 +19,22 @@ capypkg_write_bytes_fn g_capypkg_bytes_writer = NULL;
 capypkg_remove_file_fn g_capypkg_remover = NULL;
 capypkg_mkdir_fn       g_capypkg_mkdir = NULL;
 
-capypkg_fetch_text_fn       g_capypkg_text_fetcher = NULL;
-capypkg_fetch_bytes_fn      g_capypkg_bytes_fetcher = NULL;
-capypkg_verify_signature_fn g_capypkg_signature_verifier = NULL;
+capypkg_fetch_text_fn          g_capypkg_text_fetcher = NULL;
+capypkg_fetch_bytes_fn         g_capypkg_bytes_fetcher = NULL;
+capypkg_fetch_bytes_progress_fn g_capypkg_bytes_fetcher_progress = NULL;
+capypkg_verify_signature_fn    g_capypkg_signature_verifier = NULL;
+
+capypkg_install_progress_fn g_capypkg_install_observer = NULL;
+void                       *g_capypkg_install_observer_ctx = NULL;
+
+void capypkg_emit_install_phase(const char *name,
+                                enum capypkg_install_phase phase,
+                                uint64_t cur, uint64_t total) {
+    if (g_capypkg_install_observer) {
+        g_capypkg_install_observer(name ? name : "", phase, cur, total,
+                                   g_capypkg_install_observer_ctx);
+    }
+}
 
 const char *const CAPYPKG_DEFAULT_REPO_NAME = "stable";
 const char *const CAPYPKG_DEFAULT_REPO_URL =
@@ -131,7 +144,10 @@ void capypkg_reset(void) {
     g_capypkg_mkdir = NULL;
     g_capypkg_text_fetcher = NULL;
     g_capypkg_bytes_fetcher = NULL;
+    g_capypkg_bytes_fetcher_progress = NULL;
     g_capypkg_signature_verifier = NULL;
+    g_capypkg_install_observer = NULL;
+    g_capypkg_install_observer_ctx = NULL;
 }
 
 static void seed_default_repository(void) {
@@ -181,8 +197,15 @@ void capypkg_set_text_fetcher(capypkg_fetch_text_fn fn) {
 void capypkg_set_bytes_fetcher(capypkg_fetch_bytes_fn fn) {
     g_capypkg_bytes_fetcher = fn;
 }
+void capypkg_set_bytes_fetcher_progress(capypkg_fetch_bytes_progress_fn fn) {
+    g_capypkg_bytes_fetcher_progress = fn;
+}
 void capypkg_set_signature_verifier(capypkg_verify_signature_fn fn) {
     g_capypkg_signature_verifier = fn;
+}
+void capypkg_set_install_observer(capypkg_install_progress_fn fn, void *ctx) {
+    g_capypkg_install_observer = fn;
+    g_capypkg_install_observer_ctx = ctx;
 }
 
 struct capypkg_entry *capypkg_find_installed(const char *name) {

@@ -153,6 +153,19 @@ int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
   return 0;
 }
 
+int http_download_progress(const char *url, uint8_t *buffer,
+                           size_t buffer_size, size_t *out_len,
+                           http_progress_fn cb, void *ctx) {
+  int rc;
+  /* Install the observer for just this transfer and always clear it
+   * afterwards so a callback can never leak into an unrelated, later
+   * http_download/http_get on the shared (single) network path. */
+  http_set_progress_observer(cb, ctx);
+  rc = http_download(url, buffer, buffer_size, out_len);
+  http_set_progress_observer(NULL, NULL);
+  return rc;
+}
+
 void http_response_free(struct http_response *resp) {
   if (resp) {
     if (resp->body) {

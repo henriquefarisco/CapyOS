@@ -32,7 +32,7 @@
 - **Fase F:** ✅ **validada externamente** em VMware + UEFI + E1000 e
   **fechada na release `alpha.262+20260602`** (gate agregado
   `make smoke-x64-vmware-etapa-4`, 5 markers em ordem).
-- **Etapa 4: CONCLUÍDA** em `alpha.262`. Etapa seguinte: **Etapa 5 — TLS userland real** (ativa).
+- **Etapa 4: CONCLUÍDA** em `alpha.262`. Etapa seguinte: **Etapa 5 — TLS userland real** (concluída em `alpha.264`).
 
 ---
 

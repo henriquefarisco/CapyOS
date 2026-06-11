@@ -1,8 +1,8 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo desde 2026-05-19; atualiza??o t?cnica em 2026-06-06 (CapyOS core `alpha.263`; CapyBrowser `0.5.0`; demais pins do lote alpha.262 preservados: CapyUI `2.22.0` / `capy-ui-widget` v2.22, CapyCodecs `0.0.7` / `capy-codec-image` v2, CapyLang `0.1.8`, CapyAgent `0.0.7`, CapyBenchmark `0.0.7`).
+**Status:** autoritativo desde 2026-05-19; atualizacao tecnica em 2026-06-11 (CapyOS core `alpha.265` — Etapa 6 ativa, Slice 6.4 desbloqueado por handoff; CapyBrowser `0.6.0`; demais pins do lote alpha.262 preservados: CapyUI `2.22.0` / `capy-ui-widget` v2.22, CapyCodecs `0.0.7` / `capy-codec-image` v2, CapyLang `0.1.8`, CapyAgent `0.0.7`, CapyBenchmark `0.0.7`).
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
-**Auditoria atual:** [`compatibility-audit-2026-06-06.md`](compatibility-audit-2026-06-06.md).
+**Auditoria atual:** [`compatibility-audit-2026-06-11.md`](compatibility-audit-2026-06-11.md).
 **Auditoria anterior (snapshot histórico):** [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md).
 
 Esta matriz pina as versões mínimas que o CapyOS core suporta para cada
@@ -14,9 +14,9 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.263+20260606` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
+| `CapyOS` | `0.8.0-alpha.265+20260611` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
 | `CapyAgent` | `0.0.7` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier pendente de KAT externo + registro) | `0.0.7` | `0.0.7` |
-| `CapyBrowser` | `0.5.0` | `capy-browser-core` v1 (planejada; URL + HTML-to-text + CSS cascade + layout/display-list + download/forms/session host-test?veis) | n/a (sem runtime ativo at? Etapa 6) | n/a |
+| `CapyBrowser` | `0.6.0` | `capy-browser-core` v1 text subset publicado (`org.capyos.browser.text`; URL + HTML-to-text + links + erro/warning deterministico); core grafico segue Etapa 7 | `0.6.0` (handoff Etapa 6 / Slice 6.4; adapter CapyOS pendente) | `0.6.0` |
 | `CapyCodecs` | `0.0.7` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1) | `0.0.7` (host-only) | `0.0.7` |
 | `CapyUI` | `2.22.0` | `capy-ui-widget` v2.22 (display-list schema v7) + `capy-ui-desktop-session` v1 | `2.22.0` (cross-repo build / capypkg modulo / display-list adapter Etapa 4) | `2.22.0` (CI release gates com sibling remoto em main) |
 | `CapyLang` | `0.1.8` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes 0x64-0x66 + trap V0018, 36->39 opcodes; host-only no sister) | n/a (roadmap-blocked) | n/a |
@@ -42,7 +42,7 @@ instaláveis devem declarar `required_abis` por nome.
 | `capyos-package-apply` | CapyOS | v1 | implícito; aplicação de pacote |
 | `capy-agent-component-index` | CapyAgent | v1 | descritor de pacote; Ed25519 signer publicado host-side (verifier pendente de registro via `capypkg_set_signature_verifier`) |
 | `capy-codec-image` | CapyCodecs | v2 | decodificação de imagem (aditiva sobre v1: per-call limits, detect/generic decode, metadata query, QOI) |
-| `capy-browser-core` | CapyBrowser | v1 (planejada) | aceita só após Etapa 6 |
+| `capy-browser-core` | CapyBrowser | v1 text subset publicado em CapyBrowser `0.6.0`; core grafico planejado | pacote textual aceito para adapter da Etapa 6; runtime depende do gate `smoke-x64-vmware-capybrowse-text` |
 | `capy-ui-widget` | CapyUI | v2.22 (display-list schema v7; v1.x LTS preservado no sister) | Etapa 4 consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side; ops básicos 2D renderizam no core, ops sem provider (`IMAGE_REF`, transforms, plugins) ficam fail-safe/skip até providers dedicados |
 | `capy-ui-desktop-session` | CapyUI | v1 (publicado em `alpha.241`) | aceita via capypkg `org.capyos.ui.desktop-session`; consultado pelo `kernel/module_gate.c` no boot |
 | `capy-lang-host` | CapyLang + CapyOS | v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes 0x64-0x66 MakeAggregate/GetField/GetTag + trap V0018, 36->39 opcodes; host-only no sister; host ABI de integração ainda planejada) | aceita só após Etapa 15 |
@@ -55,9 +55,9 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.263+20260606` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
+| `CapyOS` | `0.8.0-alpha.265+20260611` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
 | `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); pendente KAT externo + registro via `capypkg_set_signature_verifier`** |
-| `CapyBrowser` | `0.5.0` | `capy-browser-core` v1 (planejada; URL + HTML-to-text + CSS cascade + layout/display-list + download/forms/session host-test?veis) | n/a (sem runtime ativo at? Etapa 6) | n/a |
+| `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
 | `CapyUI` | semver `MAJOR.MINOR.PATCH` (versão 2.x ativa; absorveu desktop+window+apps em alpha.241; modules `widget-core` + `desktop-session`) | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote signed |
 | `CapyLang` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
@@ -82,7 +82,7 @@ incidente; documente no `STATUS.md`.
 |---|---|---|
 | Etapa 3 (concluída em alpha.253) | apenas `org.capyos.ui.widget-core` e `org.capyos.ui.desktop-session` em `--unsigned` para validar o pipeline; nenhum em `signed` (verifier do CapyAgent ainda NULL) | demais |
 | Etapa 4 (concluída em alpha.262) | mesmo escopo da Etapa 3 + adapter CapyOS-side para consumir `capy-ui-widget` v2.22 / display-list schema v7 do sister `CapyUI`; módulos remotos continuam em `--unsigned` durante o scaffolding | CapyCodecs (audio + image como módulo), CapyBrowser, CapyAgent assinado, CapyLang, CapyBenchmark |
-| Etapas 5-7 | CapyUI widget v2.22 oficial + CapyCodecs image v2 (quando adapter GUI image abrir) + CapyBrowser text | CapyLang, CapyBenchmark |
+| Etapas 5-7 | CapyUI widget v2.22 oficial + CapyCodecs image v2 (quando adapter GUI image abrir) + CapyBrowser text (`org.capyos.browser.text`, CapyBrowser `0.6.0`, adapter CapyOS pendente) | CapyLang, CapyBenchmark |
 | Etapas 8-9 | installer/update UX + package manager + SDK + ABI estável; CapyAgent vira producer oficial e pluga verifier Ed25519 | CapyLang, CapyBenchmark |
 | Etapa 10 | CapyCodecs audio | CapyLang, CapyBenchmark |
 | Etapa 15 | CapyLang VM e benchmarks | — |
@@ -142,7 +142,8 @@ versão correspondente do `VERSION.yaml`.
 
 ## 9. Referência cruzada
 
-- [`compatibility-audit-2026-06-06.md`](compatibility-audit-2026-06-06.md) (atual; alpha.263 + CapyBrowser 0.5.0)
+- [`compatibility-audit-2026-06-11.md`](compatibility-audit-2026-06-11.md) (atual; alpha.265 + CapyBrowser 0.6.0 handoff da Etapa 6 / Slice 6.4)
+- [`compatibility-audit-2026-06-06.md`](compatibility-audit-2026-06-06.md) (historico; alpha.263 + CapyBrowser 0.5.0; addendum alpha.264 = fecho Etapa 5 / abertura Etapa 6, pins sister inalterados)
 - [`compatibility-audit-2026-06-02.md`](compatibility-audit-2026-06-02.md) (hist?rico; lote coordenado de 7 repos ? alpha.262 + CapyUI 2.22.0 + CapyCodecs 0.0.7/image v2 + CapyLang 0.1.8 + CapyBrowser 0.3.0 + CapyAgent 0.0.7/signer + CapyBenchmark 0.0.7)
 - [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md) (snapshot histórico; inclui addenda alpha.260 de 2026-05-25 e a sincronização cross-repo de 2026-05-29)
 - [`compatibility-audit-2026-05-22.md`](compatibility-audit-2026-05-22.md) (snapshot histórico)

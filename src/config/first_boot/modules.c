@@ -45,6 +45,11 @@
 #include "services/install_profile.h"
 #include "fs/vfs.h"
 
+/* struct modules_ui_state, the L() string picker and the status-bar
+ * renderer entry points live here; the renderer itself is in the
+ * sibling modules_progress.c translation unit. */
+#include "../internal/modules_progress.h"
+
 /*
  * Default modules-index URL.
  *
@@ -69,13 +74,8 @@
 #define MODULES_OFFICIAL_COUNT 7u
 
 /* ---- localized strings (PT default, EN, ES) -------------------------- */
-
-static const char *L(const char *language, const char *pt, const char *en,
-                     const char *es) {
-    if (strings_equal(language, "en")) return en;
-    if (strings_equal(language, "es")) return es;
-    return pt;
-}
+/* The L(language, pt, en, es) picker is shared with the status-bar
+ * renderer and is defined in ../internal/modules_progress.h. */
 
 struct modules_official_package {
     const char *name;
@@ -238,134 +238,6 @@ static int modules_write_profile_ini(const struct install_profile *profile) {
     return config_write_text_file(INSTALL_PROFILE_PATH, buf);
 }
 
-/* ---- progress callback ---------------------------------------------- */
-
-/* Stage tags persisted across retries so the wizard can show a
- * stage-specific diagnostic ("[modules] index fetch failed: ...") and
- * decide whether the failure is retryable. */
-enum modules_fail_stage {
-    MODULES_FAIL_STAGE_NONE = 0,
-    MODULES_FAIL_STAGE_REPO_REGISTER = 1,
-    MODULES_FAIL_STAGE_INDEX_FETCH = 2,
-    MODULES_FAIL_STAGE_PACKAGES = 3
-};
-
-struct modules_progress_state {
-    int started_sweep;
-    enum modules_fail_stage fail_stage;
-    int fail_rc;
-};
-
-static void modules_render_progress(enum capypkg_bootstrap_event event,
-                                    const char *name,
-                                    int index, int total,
-                                    int rc, void *ctx) {
-    struct modules_progress_state *st = (struct modules_progress_state *)ctx;
-    char line[160];
-    line[0] = '\0';
-
-    switch (event) {
-    case CAPYPKG_BOOTSTRAP_EVENT_REPO_REGISTER:
-        config_buffer_append(line, sizeof(line), "[modules] registrando repositorio ");
-        config_buffer_append(line, sizeof(line), name);
-        config_print_line(line);
-        break;
-    case CAPYPKG_BOOTSTRAP_EVENT_REPO_REGISTER_FAIL: {
-        char rc_buf[12];
-        config_u32_to_string((uint32_t)(rc < 0 ? -rc : rc), rc_buf, sizeof(rc_buf));
-        config_buffer_append(line, sizeof(line), "[modules] falha ao registrar repositorio (rc=");
-        config_buffer_append(line, sizeof(line), rc < 0 ? "-" : "");
-        config_buffer_append(line, sizeof(line), rc_buf);
-        config_buffer_append(line, sizeof(line), "): ");
-        config_buffer_append(line, sizeof(line), name ? name : "?");
-        config_print_line(line);
-        if (st) {
-            st->fail_stage = MODULES_FAIL_STAGE_REPO_REGISTER;
-            st->fail_rc = rc;
-        }
-        break;
-    }
-    case CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH:
-        config_print_line("[modules] baixando indice de modulos...");
-        break;
-    case CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH_FAIL: {
-        char rc_buf[12];
-        config_u32_to_string((uint32_t)(rc < 0 ? -rc : rc), rc_buf, sizeof(rc_buf));
-        config_buffer_append(line, sizeof(line), "[modules] falha ao baixar indice (rc=");
-        config_buffer_append(line, sizeof(line), rc < 0 ? "-" : "");
-        config_buffer_append(line, sizeof(line), rc_buf);
-        config_buffer_append(line, sizeof(line), "): ");
-        config_buffer_append(line, sizeof(line), http_error_string(http_last_error()));
-        config_buffer_append(line, sizeof(line), " tls=");
-        config_buffer_append(line, sizeof(line), tls_state_name(tls_last_state()));
-        config_buffer_append(line, sizeof(line), "/");
-        config_buffer_append(line, sizeof(line), tls_alert_name(tls_last_error()));
-        config_print_line(line);
-        if (st) {
-            st->fail_stage = MODULES_FAIL_STAGE_INDEX_FETCH;
-            st->fail_rc = rc;
-        }
-        break;
-    }
-    case CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_BEGIN: {
-        char idx_buf[12];
-        char tot_buf[12];
-        config_u32_to_string((uint32_t)index, idx_buf, sizeof(idx_buf));
-        config_u32_to_string((uint32_t)total, tot_buf, sizeof(tot_buf));
-        config_buffer_append(line, sizeof(line), "[modules] [");
-        config_buffer_append(line, sizeof(line), idx_buf);
-        config_buffer_append(line, sizeof(line), "/");
-        config_buffer_append(line, sizeof(line), tot_buf);
-        config_buffer_append(line, sizeof(line), "] instalando ");
-        config_buffer_append(line, sizeof(line), name);
-        config_buffer_append(line, sizeof(line), "...");
-        config_print_line(line);
-        if (st) st->started_sweep = 1;
-        break;
-    }
-    case CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_OK:
-        config_buffer_append(line, sizeof(line), "         ok: ");
-        config_buffer_append(line, sizeof(line), name);
-        config_print_line(line);
-        break;
-    case CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_FAIL: {
-        char rc_buf[12];
-        config_u32_to_string((uint32_t)(rc < 0 ? -rc : rc), rc_buf, sizeof(rc_buf));
-        config_buffer_append(line, sizeof(line), "         falha (rc=");
-        config_buffer_append(line, sizeof(line), rc < 0 ? "-" : "");
-        config_buffer_append(line, sizeof(line), rc_buf);
-        config_buffer_append(line, sizeof(line), "): ");
-        config_buffer_append(line, sizeof(line), name);
-        config_buffer_append(line, sizeof(line), " ");
-        config_buffer_append(line, sizeof(line), capypkg_result_label(rc));
-        config_print_line(line);
-        if (rc == CAPYPKG_ERR_DIGEST && capypkg_last_verify_error()[0]) {
-            config_print_line(capypkg_last_verify_error());
-        }
-        break;
-    }
-    case CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_SKIP:
-        /* Quiet: SKIP fires for every off-list package in CUSTOM
-         * mode and would otherwise dominate the screen. */
-        (void)name;
-        break;
-    case CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE: {
-        char ok_buf[12];
-        char fail_buf[12];
-        config_u32_to_string((uint32_t)index, ok_buf, sizeof(ok_buf));
-        config_u32_to_string((uint32_t)rc, fail_buf, sizeof(fail_buf));
-        config_buffer_append(line, sizeof(line), "[modules] sweep completo: ");
-        config_buffer_append(line, sizeof(line), ok_buf);
-        config_buffer_append(line, sizeof(line), " instalados, ");
-        config_buffer_append(line, sizeof(line), fail_buf);
-        config_buffer_append(line, sizeof(line), " falhas.");
-        config_print_line(line);
-        break;
-    }
-    default:
-        break;
-    }
-}
 
 /* ---- timing + network + retry helpers ------------------------------- */
 
@@ -415,10 +287,13 @@ static int modules_wait_for_network(uint32_t timeout_ticks,
     return 0;
 }
 
-/* Run capypkg_bootstrap_run_with_progress up to MODULES_RETRY_MAX
- * times with exponential backoff (2/4/8 s). Returns the underlying
- * install_profile_result for the last attempt. */
-static int modules_run_bootstrap_with_retry(const char *setup_language,
+/* Run capypkg_bootstrap_run_with_progress up to MODULES_RETRY_MAX times
+ * with exponential backoff (2/4/8 s) at the *sweep* level. Per-package
+ * retries already happen inside the bootstrap; this outer loop only
+ * covers longer outages (DHCP/DNS/TLS warm-up). The shared `ui` state
+ * drives the live status bar across attempts. Returns the
+ * install_profile_result of the last attempt. */
+static int modules_run_bootstrap_with_retry(struct modules_ui_state *ui,
                                             int *out_installed,
                                             int *out_failed) {
     static const uint32_t backoff_seconds[MODULES_RETRY_MAX] = {2u, 4u, 8u};
@@ -426,25 +301,10 @@ static int modules_run_bootstrap_with_retry(const char *setup_language,
     if (out_installed) *out_installed = 0;
     if (out_failed) *out_failed = 0;
     for (uint32_t attempt = 0u; attempt < MODULES_RETRY_MAX; ++attempt) {
-        struct modules_progress_state st = {0};
         int installed = 0;
         int failed = 0;
-        if (attempt > 0u) {
-            char line[96];
-            char num[12];
-            line[0] = '\0';
-            config_u32_to_string((uint32_t)(attempt + 1u), num, sizeof(num));
-            config_buffer_append(line, sizeof(line),
-                                 L(setup_language,
-                                   "[modules] tentativa ",
-                                   "[modules] attempt ",
-                                   "[modules] intento "));
-            config_buffer_append(line, sizeof(line), num);
-            config_buffer_append(line, sizeof(line), "/3...");
-            config_print_line(line);
-        }
         rc = capypkg_bootstrap_run_with_progress(
-            1, &installed, &failed, modules_render_progress, &st);
+            1, &installed, &failed, modules_render_progress, ui);
         if (out_installed) *out_installed = installed;
         if (out_failed) *out_failed = failed;
         if (rc == INSTALL_PROFILE_OK && failed == 0) {
@@ -458,22 +318,15 @@ static int modules_run_bootstrap_with_retry(const char *setup_language,
         }
         if (attempt + 1u < MODULES_RETRY_MAX) {
             uint32_t wait_s = backoff_seconds[attempt];
-            char line[96];
             char num[12];
-            line[0] = '\0';
+            ui->status[0] = '\0';
+            config_buffer_append(ui->status, sizeof(ui->status),
+                                 L(ui->language, "Nova tentativa em ",
+                                   "Retrying in ", "Reintento en "));
             config_u32_to_string(wait_s, num, sizeof(num));
-            config_buffer_append(line, sizeof(line),
-                                 L(setup_language,
-                                   "[modules] aguardando ",
-                                   "[modules] waiting ",
-                                   "[modules] esperando "));
-            config_buffer_append(line, sizeof(line), num);
-            config_buffer_append(line, sizeof(line),
-                                 L(setup_language,
-                                   "s antes de tentar novamente...",
-                                   "s before retrying...",
-                                   "s antes de reintentar..."));
-            config_print_line(line);
+            config_buffer_append(ui->status, sizeof(ui->status), num);
+            config_buffer_append(ui->status, sizeof(ui->status), "s...");
+            modules_force_render(ui);
             modules_sleep_ticks(wait_s * MODULES_TICKS_PER_SECOND);
         }
     }
@@ -679,44 +532,64 @@ int first_boot_module_selection_step(const char *setup_language) {
      * the difference between "I want the desktop" and "I am happy
      * with just the core". */
     kernel_capypkg_bind_runtime_adapters();
-    if (modules_wait_for_network(MODULES_NETWORK_WAIT_TICKS, setup_language) == 0) {
-        config_print_line(L(setup_language,
-                            "[modules] aviso: rede ainda nao pronta; tentando bootstrap mesmo assim.",
-                            "[modules] warning: network not ready yet; attempting bootstrap anyway.",
-                            "[modules] aviso: red aun no lista; intentando bootstrap igualmente."));
+
+    /* Shared status-bar state for the whole install loop. Registered as
+     * the capypkg install observer so byte-level download/verify/install
+     * progress feeds the live bar; ALWAYS cleared before returning so the
+     * stack-allocated `ui` can never dangle for the kernel's background
+     * bootstrap poll (which would otherwise call the observer with a
+     * freed stack pointer). */
+    struct modules_ui_state ui;
+    int step_result = 0;
+    memory_zero(&ui, sizeof(ui));
+    ui.language = setup_language;
+    ui.phase = -1;
+    capypkg_set_install_observer(modules_install_observer, &ui);
+
+    if (modules_wait_for_network(MODULES_NETWORK_WAIT_TICKS,
+                                 setup_language) == 0) {
+        cstring_copy(ui.status, sizeof(ui.status),
+                     L(setup_language,
+                       "Rede ainda nao pronta; tentando mesmo assim...",
+                       "Network not ready yet; trying anyway...",
+                       "Red aun no lista; intentando igualmente..."));
+        modules_force_render(&ui);
     }
 
     for (;;) {
         int installed = 0;
         int failed = 0;
-        int rc = modules_run_bootstrap_with_retry(setup_language,
-                                                  &installed, &failed);
+        int rc = modules_run_bootstrap_with_retry(&ui, &installed, &failed);
         if (rc == INSTALL_PROFILE_OK && failed > 0) {
-            config_print_line(L(setup_language,
-                                "[modules] instalacao parcial detectada; tentando novamente.",
-                                "[modules] partial install detected; retrying.",
-                                "[modules] instalacion parcial detectada; reintentando."));
+            /* Treat a completed sweep with leftover failures as
+             * retryable so the outer dialogue offers another attempt. */
             rc = INSTALL_PROFILE_ERR_STORAGE;
         }
         if (rc == INSTALL_PROFILE_OK) {
-            config_print_line(L(setup_language,
-                                "[modules] instalacao concluida; reinicio recomendado para ativar.",
-                                "[modules] install complete; reboot recommended to activate.",
-                                "[modules] instalacion completa; se recomienda reiniciar para activar."));
-            return installed > 0 ? 1 : 0;
+            cstring_copy(ui.status, sizeof(ui.status),
+                         L(setup_language,
+                           "Instalacao concluida. Reinicie para ativar.",
+                           "Install complete. Reboot to activate.",
+                           "Instalacion completa. Reinicie para activar."));
+            modules_force_render(&ui);
+            step_result = (installed > 0) ? 1 : 0;
+            break;
         }
         if (rc == INSTALL_PROFILE_ERR_NOT_READY) {
-            config_print_line(L(setup_language,
-                                "[modules] adaptador capypkg nao iniciou; bootstrap rodara em segundo plano.",
-                                "[modules] capypkg adapter did not start; bootstrap will run in the background.",
-                                "[modules] adaptador capypkg no inicio; bootstrap se ejecutara en segundo plano."));
-            return 0;
+            cstring_copy(ui.status, sizeof(ui.status),
+                         L(setup_language,
+                           "capypkg nao iniciou; seguira em segundo plano.",
+                           "capypkg not started; will continue in background.",
+                           "capypkg no inicio; seguira en segundo plano."));
+            modules_force_render(&ui);
+            step_result = 0;
+            break;
         }
-        /* Bootstrap returned a soft failure (network / repo / index /
-         * per-package / marker). profile.ini stays on disk and the kernel poll
-         * will keep retrying in the background regardless of the
-         * choice made here. The dialogue is purely about whether to
-         * keep the wizard occupying the screen. */
+        /* Soft failure (network / repo / index / per-package / marker).
+         * profile.ini stays on disk and the kernel poll keeps retrying in
+         * the background regardless of the choice here; the dialogue is
+         * only about whether to keep the wizard on screen. It uses the
+         * scrolling prompt, which intentionally replaces the frame. */
         char choice = modules_ask_retry_choice(setup_language);
         if (choice == 'r') {
             continue;
@@ -726,7 +599,8 @@ int first_boot_module_selection_step(const char *setup_language) {
                                 "[modules] ok: o sistema tentara terminar a instalacao em segundo plano.",
                                 "[modules] ok: the system will keep retrying the install in the background.",
                                 "[modules] ok: el sistema seguira reintentando la instalacion en segundo plano."));
-            return 0;
+            step_result = 0;
+            break;
         }
         /* 'c' (cancel) or unknown: fall back to BASIC. Rewrite the
          * profile so the kernel poll does not keep hammering the
@@ -742,6 +616,10 @@ int first_boot_module_selection_step(const char *setup_language) {
                             "[modules] instalacao remota cancelada; sistema seguira em modo basico.",
                             "[modules] remote install cancelled; system will stay in basic mode.",
                             "[modules] instalacion remota cancelada; el sistema seguira en modo basico."));
-        return 0;
+        step_result = 0;
+        break;
     }
+
+    capypkg_set_install_observer(NULL, NULL);
+    return step_result;
 }

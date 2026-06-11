@@ -48,20 +48,21 @@ Escopo atual:
   - gate publico de aceitacao das evidencias pos-smoke VMware oficial
 - `operations/release-ci-smoke-promotion.md`
   - gate publico de promocao pos-smoke VMware oficial
-- `plans/mvp-implementation-plan.md`
-  - plano operacional do ciclo atual
+- `plans/historical/mvp-implementation-plan.md`
+  - plano operacional histórico (era do MVP, até `alpha.93`)
 - `plans/README.md`
   - indice de governanca dos planos ativos, historicos e experimentais
-- `plans/platform-hardening-plan.md`
-  - detalha o fechamento da etapa de hardening da plataforma x64
-- `plans/browser-status-roadmap.md`
-  - fonte de verdade do programa do navegador, com status atual, roadmap e
-    criterios de validacao por fase
+- `plans/historical/platform-hardening-plan.md`
+  - histórico: fechamento da etapa de hardening da plataforma x64
+- `plans/historical/browser-status-roadmap.md`
+  - histórico do programa de navegador legado; a estratégia ativa passou a
+    ser o CapyBrowser desacoplado (`CapyBrowse Text` na Etapa 6, browser
+    gráfico na Etapa 7) — ver o master-plan §9-§10
 - `screenshots/README.md`
   - politica de snapshots visuais do sistema por versao alpha/beta/stable
-- `plans/source-organization-roadmap.md`
-  - roadmap incremental para reduzir monolitos, separar modulos/linguagens e
-    estabilizar a arquitetura de pastas
+- `plans/historical/source-organization-roadmap.md`
+  - histórico: roadmap de redução de monolitos e organização de pastas; as
+    regras vigentes estão em `architecture/source-layout.md`
 - `architecture/source-layout.md`
   - regras oficiais de organizacao de codigo e uso de `make layout-audit`
 - `architecture/decoupled-development-contracts.md`
@@ -80,8 +81,10 @@ Escopo atual:
   - matriz autoritativa de versões pinadas e ABIs cross-repo
 - `reference/integration/capypkg-publisher-manifest-format.md`
   - formato canônico do manifest line-oriented consumido pelo adapter in-tree
-- `reference/integration/compatibility-audit-2026-05-19.md`
-  - auditoria estática cross-repo de 2026-05-19
+- `reference/integration/compatibility-audit-2026-06-11.md`
+  - auditoria estática cross-repo vigente (2026-06-11); os snapshots
+    anteriores (2026-05-19 … 2026-06-06) ficam no mesmo diretório como
+    histórico, encadeados por addendum
 - `operations/manual-module-deploy-runbook.md`
   - runbook de deploy manual de módulos remotos durante a instalação do core
 - `architecture/libcapy-net-http-hardening.md`

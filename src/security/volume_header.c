@@ -208,14 +208,19 @@ static int vh_validate_params(uint32_t algo_id, uint32_t t_cost,
      * cannot collapse PBKDF2 to a trivial cost. m_cost MUST be 0 for
      * PBKDF2 (any non-zero value is taken as a probe to confuse the
      * dispatcher). */
-    if (t_cost < 1000u || m_cost != 0u) {
+    if (t_cost < 1000u || t_cost > CAPYOS_VOLUME_KDF_PBKDF2_ITERS_MAX ||
+        m_cost != 0u) {
       return CAPYOS_VOLUME_HEADER_ERR_PARAMS;
     }
   } else {
-    /* Argon2id minimums per RFC 9106 §3.1: t_cost >= 1, m_cost >= 8
-     * (KiB). CapyOS uses t=3, m=8192 as the production tuning; the
-     * lower bound here just rejects degenerate-tampered values. */
-    if (t_cost < 1u || m_cost < 8u) {
+    /* Argon2id bounds per RFC 9106 §3.1: t_cost >= 1, m_cost >= 8 (KiB).
+     * CapyOS uses t=3, m=8192 as the production tuning. The lower bounds
+     * reject degenerate-weak values; the upper bounds reject absurd ones
+     * that would force an unbounded mount-time derivation/allocation before
+     * the header is authenticated (see the ceiling rationale in the
+     * header). */
+    if (t_cost < 1u || t_cost > CAPYOS_VOLUME_KDF_ARGON2_T_COST_MAX ||
+        m_cost < 8u || m_cost > CAPYOS_VOLUME_KDF_ARGON2_M_COST_MAX) {
       return CAPYOS_VOLUME_HEADER_ERR_PARAMS;
     }
   }

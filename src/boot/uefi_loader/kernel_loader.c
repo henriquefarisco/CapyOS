@@ -129,7 +129,12 @@ static EFI_STATUS kernel_plan_from_headers(const Elf64_Ehdr *eh,
     }
     if (ph->p_offset > kernel_size ||
         ph->p_filesz > (kernel_size - ph->p_offset) ||
-        ph->p_filesz > ph->p_memsz) {
+        ph->p_filesz > ph->p_memsz ||
+        ph->p_memsz > (0xFFFFFFFFFFFFFFFFULL - 0xFFFULL) ||
+        ph->p_paddr > (0xFFFFFFFFFFFFFFFFULL - 0xFFFULL) - ph->p_memsz) {
+      /* Last two clauses: p_paddr + p_memsz + 0xFFF must not wrap uint64,
+       * else seg_end below wraps small and a huge p_paddr escapes the span,
+       * leaving the segment copy to write to a wild address. */
       Print(L"[UEFI] Segmento ELF invalido (seg %u)\r\n", (UINT32)i);
       return EFI_LOAD_ERROR;
     }
@@ -335,10 +340,36 @@ EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
   EFI_PHYSICAL_ADDRESS link_base = 0xFFFFFFFFFFFFFFFFULL;
   EFI_PHYSICAL_ADDRESS link_end = 0;
 
+  /* Bound the program-header table before reading it in place: e_phoff,
+   * e_phnum and e_phentsize are untrusted; without these checks the loops
+   * below read phdrs from kernel_buf + e_phoff past the buffer. Mirrors the
+   * validated reader path (kernel_plan_from_headers) so a valid kernel is
+   * unaffected, only a malformed/corrupt image is rejected. */
+  if (eh->e_phnum == 0 || eh->e_phnum > KERNEL_MAX_PHDRS ||
+      eh->e_phentsize != sizeof(Elf64_Phdr)) {
+    Print(L"[UEFI] kernel ELF com program headers invalidos\r\n");
+    return EFI_LOAD_ERROR;
+  }
+  if (eh->e_phoff > kernel_size ||
+      (UINT64)eh->e_phnum >
+          ((kernel_size - eh->e_phoff) / sizeof(Elf64_Phdr))) {
+    Print(L"[UEFI] kernel ELF com program headers fora do arquivo\r\n");
+    return EFI_LOAD_ERROR;
+  }
+
   Elf64_Phdr *ph = (Elf64_Phdr *)((UINT8 *)kernel_buf + eh->e_phoff);
   for (UINT16 i = 0; i < eh->e_phnum; i++, ph++) {
     if (ph->p_type != PT_LOAD || ph->p_memsz == 0)
       continue;
+    /* Reject a segment whose page-rounded virtual span wraps uint64;
+     * otherwise seg_end below wraps small, a huge p_paddr escapes the
+     * computed span, and the copy loop writes to a wild address. (No pages
+     * are allocated yet at this point, so just return.) */
+    if (ph->p_memsz > (0xFFFFFFFFFFFFFFFFULL - 0xFFFULL) ||
+        ph->p_paddr > (0xFFFFFFFFFFFFFFFFULL - 0xFFFULL) - ph->p_memsz) {
+      Print(L"[UEFI] Segmento ELF com span invalido (seg %u)\r\n", (UINT32)i);
+      return EFI_LOAD_ERROR;
+    }
     EFI_PHYSICAL_ADDRESS seg_start = ph->p_paddr & ~0xFFFULL;
     EFI_PHYSICAL_ADDRESS seg_end =
         (ph->p_paddr + ph->p_memsz + 0xFFFULL) & ~0xFFFULL;
@@ -381,7 +412,8 @@ EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
   for (UINT16 i = 0; i < eh->e_phnum; i++, ph++) {
     if (ph->p_type != PT_LOAD || ph->p_memsz == 0)
       continue;
-    if (ph->p_offset + ph->p_filesz > kernel_size) {
+    if (ph->p_offset > kernel_size ||
+        ph->p_filesz > kernel_size - ph->p_offset) {
       Print(L"[UEFI] Segmento fora do buffer (seg %d)\r\n", i);
       kernel_release_load_pages(st, load_base, pages);
       return EFI_LOAD_ERROR;

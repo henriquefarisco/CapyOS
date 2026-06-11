@@ -209,8 +209,20 @@ static const uint8_t *g_payload_bytes;
 static size_t g_payload_len;
 static int g_payload_rc;
 static const char *g_payload_fail_url_substr;
+/* Number of leading payload fetches to fail before succeeding, used to
+ * exercise the bootstrap's per-package retry. Decremented on each
+ * failing fetch; 0 means "do not inject transient failures". */
+static int g_payload_fail_remaining;
+static int g_payload_fetch_calls;
 static int g_signature_rc;
 static int g_signature_calls;
+
+/* Install-observer capture (capypkg_set_install_observer). */
+static int g_obs_phase_count[CAPYPKG_INSTALL_PHASE_DONE + 1];
+static int g_obs_total_calls;
+static char g_obs_last_name[CAPYPKG_NAME_MAX];
+static uint64_t g_obs_dl_cur_last;
+static uint64_t g_obs_dl_total_last;
 
 static int net_fetch_text(const char *url, char *buffer, size_t buffer_size,
                           size_t *out_len) {
@@ -228,8 +240,13 @@ static int net_fetch_text(const char *url, char *buffer, size_t buffer_size,
 static int net_fetch_bytes(const char *url, uint8_t *buffer, size_t buffer_size,
                            size_t *out_len) {
     size_t len = 0u;
+    ++g_payload_fetch_calls;
     if (g_payload_fail_url_substr && url &&
         strstr(url, g_payload_fail_url_substr) != NULL) {
+        return -1;
+    }
+    if (g_payload_fail_remaining > 0) {
+        --g_payload_fail_remaining;
         return -1;
     }
     if (g_payload_rc != 0 || !g_payload_bytes) return -1;
@@ -238,6 +255,42 @@ static int net_fetch_bytes(const char *url, uint8_t *buffer, size_t buffer_size,
     memcpy(buffer, g_payload_bytes, len);
     if (out_len) *out_len = len;
     return 0;
+}
+
+/* Progress-aware payload fetcher: streams two intermediate progress
+ * samples then a final 100% before delegating to net_fetch_bytes for
+ * the actual bytes. Exercises the capypkg progress fetcher + observer
+ * forwarding path. */
+static int net_fetch_bytes_progress(const char *url, uint8_t *buffer,
+                                    size_t buffer_size, size_t *out_len,
+                                    capypkg_download_progress_fn cb,
+                                    void *cb_ctx) {
+    int rc = net_fetch_bytes(url, buffer, buffer_size, out_len);
+    if (rc == 0 && cb) {
+        uint64_t total = (uint64_t)(out_len ? *out_len : 0u);
+        cb(total / 2u, total, cb_ctx);
+        cb(total, total, cb_ctx);
+    }
+    return rc;
+}
+
+static void install_observer_capture(const char *name,
+                                     enum capypkg_install_phase phase,
+                                     uint64_t cur, uint64_t total,
+                                     void *ctx) {
+    (void)ctx;
+    ++g_obs_total_calls;
+    if ((int)phase >= 0 && (int)phase <= CAPYPKG_INSTALL_PHASE_DONE) {
+        ++g_obs_phase_count[(int)phase];
+    }
+    if (name) {
+        strncpy(g_obs_last_name, name, sizeof(g_obs_last_name) - 1u);
+        g_obs_last_name[sizeof(g_obs_last_name) - 1u] = '\0';
+    }
+    if (phase == CAPYPKG_INSTALL_PHASE_DOWNLOAD) {
+        g_obs_dl_cur_last = cur;
+        g_obs_dl_total_last = total;
+    }
 }
 
 static int signature_verifier_ok(const char *text, size_t len,
@@ -272,9 +325,18 @@ static void reset_state(int with_verifier) {
     g_payload_len = 0u;
     g_payload_rc = -1;
     g_payload_fail_url_substr = NULL;
+    g_payload_fail_remaining = 0;
+    g_payload_fetch_calls = 0;
     g_signature_rc = 0;
     g_signature_calls = 0;
+    memset(g_obs_phase_count, 0, sizeof(g_obs_phase_count));
+    g_obs_total_calls = 0;
+    g_obs_last_name[0] = '\0';
+    g_obs_dl_cur_last = 0u;
+    g_obs_dl_total_last = 0u;
     klog_reset();
+    /* capypkg_reset() clears the progress fetcher + install observer; a
+     * test that wants them re-binds explicitly after reset_state(). */
     capypkg_reset();
     bind_runtime_adapters(with_verifier);
     capypkg_init();

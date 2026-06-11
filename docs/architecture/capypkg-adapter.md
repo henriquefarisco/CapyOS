@@ -26,12 +26,13 @@ those live in `CapyAgent`.
 ```
 include/services/capypkg.h                 public contract
 src/services/capypkg/
-  internal/capypkg_internal.h              shared between the 4 TUs
+  internal/capypkg_internal.h              shared between the 5 TUs
   capypkg_state.c                          singleton, init/reset, accessors
   capypkg_manifest.c                       descriptor parsing + SHA-256
   capypkg_repo.c                           repository config + persistence
   capypkg_install.c                        index fetch, install, remove, update
-src/arch/x86_64/kernel_services.c          VFS+HTTPS adapter binding +
+  capypkg_persist.c                        installed-DB + cached-catalog I/O
+src/arch/x86_64/kernel_services_capypkg.c  VFS+HTTPS adapter binding +
                                            service poll/start/stop hooks
 src/shell/commands/system_control/
   capypkg_commands.c                       9 pkg-* CLI commands
@@ -52,6 +53,8 @@ shell runtime ready
             (VFS through vfs_open/read/write + kernel helpers)
          -> capypkg_set_text_fetcher/bytes_fetcher
             (HTTPS through net/http http_get/http_download)
+         -> capypkg_set_bytes_fetcher_progress
+            (HTTPS with byte-level progress through http_download_progress)
          -> capypkg_init
             -> seed default repo "stable"
                (capypkg_repo_load best-effort)
@@ -149,9 +152,32 @@ the in-memory state remains coherent).
 
 The adapter is fully driven by injected function pointers, so the
 host test build never touches real VFS or HTTPS. Production wiring is
-in `kernel_services.c::kernel_capypkg_bind_runtime_adapters`; the
-unit tests in `tests/services/test_capypkg.c` plug deterministic
+in `kernel_services_capypkg.c::kernel_capypkg_bind_runtime_adapters`;
+the unit tests in `tests/services/test_capypkg.c` plug deterministic
 fakes for both transport and storage.
+
+Two optional, additive progress seams surface install progress without
+changing the fail-closed contract. Both default to NULL, in which case
+the install path behaves exactly as before:
+
+- `capypkg_set_bytes_fetcher_progress` — a progress-aware payload
+  fetcher `(url, buf, cap, out_len, cb, cb_ctx)`. When bound,
+  `capypkg_install` prefers it over the plain `bytes_fetcher` and hands
+  it a callback that receives `(received, total)` byte counts as the
+  payload streams in. Production binds it to net/http's
+  `http_download_progress`; host tests can leave it NULL and the plain
+  fetcher is used unchanged (so the existing fail-closed coverage is
+  untouched).
+- `capypkg_set_install_observer` — a per-package phase observer
+  `(name, phase, cur, total, ctx)`. `capypkg_install` reports
+  RESOLVE → DOWNLOAD (cur/total bytes) → VERIFY → STAGE → DONE so a UI
+  (the first-boot module wizard) can drive a live status bar. The
+  observer is informational only and never gates the install.
+
+Both seams are cleared by `capypkg_reset`, so each host test starts
+from a clean slate. The first-boot module sweep that consumes them
+(dependency-ordered install waves + per-package retry) is documented
+in [`first-boot-wizard.md`](first-boot-wizard.md) §2.1.
 
 ## Service supervision
 
@@ -185,7 +211,8 @@ contract used by the rest of `capysh`.
 
 ## Test discipline
 
-`tests/services/test_capypkg.c` is the host-side baseline (28 cases).
+`tests/services/test_capypkg.c` is the host-side baseline (the
+bootstrap-sweep cases compile under `CAPYPKG_BOOTSTRAP_TESTS`).
 Coverage includes:
 
 - init idempotency and default repo seeding;
@@ -228,7 +255,27 @@ Coverage includes:
   the serial port via `vga_write`;
 - `capypkg_repo_add` refuses control bytes in `name` or `index_url`
   so a piped/scripted caller cannot inject escapes into repos.cfg
-  via `pkg-source-add`.
+  via `pkg-source-add`;
+- the install observer reports RESOLVE → DOWNLOAD → VERIFY → STAGE →
+  DONE with the final DOWNLOAD sample equal to the payload size, and a
+  bound progress-aware fetcher forwards intermediate byte samples
+  (`test_install_observer_reports_phases`,
+  `test_install_progress_fetcher_forwards_bytes`);
+- the first-boot bootstrap sweep performs per-package retry on
+  transient errors — it recovers a package that fails twice then
+  succeeds, and caps the attempts at three for a permanent failure
+  (`test_bootstrap_per_package_retry_recovers`,
+  `…_caps_attempts`);
+- the dependency-ordered wave planner installs a dependency before its
+  dependent even when the catalog lists them in the opposite order,
+  pulls a transitive dependency into a CUSTOM selection, and handles an
+  unsatisfiable dependency cycle fail-closed without hanging
+  (`test_bootstrap_installs_dependency_before_dependent`,
+  `…_custom_pulls_transitive_dependency`,
+  `…_dependency_cycle_does_not_hang`);
+- the kernel trust-anchor bundle's key-type distribution is locked
+  (106 RSA + 40 EC), matching the userland trust metadata claim
+  (`tests/security/test_tls_trust_anchors.c`).
 
 Adding regression tests for new behaviour is required before changing
 manifest parsing, install path or signature semantics.

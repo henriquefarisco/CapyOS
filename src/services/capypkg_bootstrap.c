@@ -211,6 +211,218 @@ static void emit_progress(capypkg_bootstrap_progress_fn fn,
     fn(event, name ? name : "", index, total, rc, ctx);
 }
 
+/* ---- dependency-ordered install planner ----------------------------- *
+ *
+ * The first-boot sweep no longer installs packages in raw catalog
+ * order. It builds a plan that:
+ *
+ *   - selects the target set (FULL = every available package; CUSTOM =
+ *     the bootstrap_install list expanded to include the transitive
+ *     dependencies that exist in the catalog);
+ *   - groups the targets into dependency "waves": a package lands in the
+ *     earliest wave in which all of its in-target dependencies are
+ *     already placed (or were already installed). Packages in the same
+ *     wave have no dependency relationship, so the order inside a wave is
+ *     irrelevant — they are independent (the parallel-ready seam below);
+ *   - installs each package with an individual in-place retry for
+ *     transient errors, so one flaky download does not restart the sweep.
+ *
+ * capypkg_install() still performs its own recursive dependency
+ * resolution as a backstop; ordering the sweep here means each
+ * dependency is attempted (and retried) on its own before any dependent,
+ * and an already-installed dependency is a cheap no-op for the
+ * dependent. */
+
+#define CAPYPKG_BOOTSTRAP_PLAN_MAX CAPYPKG_MAX_AVAILABLE
+/* Total install attempts per package (1 initial + up to 2 retries). The
+ * wizard/kernel poll still retry the whole sweep with backoff on top of
+ * this for longer outages; this bound only absorbs transient blips. */
+#define CAPYPKG_BOOTSTRAP_PKG_ATTEMPTS 3u
+
+struct bootstrap_planner {
+    uint8_t  is_target[CAPYPKG_BOOTSTRAP_PLAN_MAX];
+    uint8_t  placed[CAPYPKG_BOOTSTRAP_PLAN_MAX];
+    uint8_t  dep_n[CAPYPKG_BOOTSTRAP_PLAN_MAX];
+    uint16_t dep_idx[CAPYPKG_BOOTSTRAP_PLAN_MAX][CAPYPKG_MAX_DEPS];
+    uint16_t order[CAPYPKG_BOOTSTRAP_PLAN_MAX];
+    uint16_t wave[CAPYPKG_BOOTSTRAP_PLAN_MAX];
+    uint16_t order_count;
+    uint16_t target_count;
+};
+
+/* Single-shot scratch for the planner. The capypkg adapter (and this
+ * bootstrap) are single-threaded, so a file-scope instance keeps the
+ * ~3 KiB plan off the kernel stack without a reentrancy hazard. */
+static struct bootstrap_planner g_bootstrap_plan;
+
+static void bootstrap_zero(void *ptr, size_t len) {
+    uint8_t *dst = (uint8_t *)ptr;
+    while (len--) {
+        *dst++ = 0u;
+    }
+}
+
+/* Catalog index of `name`, or -1 when it is not in the available set. */
+static int bootstrap_catalog_index(const char *name) {
+    size_t count = capypkg_available_count();
+    struct capypkg_entry e;
+    if (!name || !name[0]) {
+        return -1;
+    }
+    if (count > CAPYPKG_BOOTSTRAP_PLAN_MAX) {
+        count = CAPYPKG_BOOTSTRAP_PLAN_MAX;
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        if (capypkg_available_get_at(i, &e) == CAPYPKG_OK &&
+            profile_strings_equal(e.name, name)) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* Only retry errors that an immediate second attempt can plausibly
+ * clear: a transient network fetch, a transient storage write, or a
+ * corrupted/truncated download (digest mismatch). Deterministic errors
+ * (missing signature/verifier, unresolved dependency, quota, policy) are
+ * returned as-is so retries are not wasted on them. */
+static int bootstrap_pkg_error_is_retryable(int rc) {
+    return rc == CAPYPKG_ERR_FETCH ||
+           rc == CAPYPKG_ERR_STORAGE ||
+           rc == CAPYPKG_ERR_DIGEST;
+}
+
+static int bootstrap_install_one_with_retry(
+        const char *name, int index, int total,
+        capypkg_bootstrap_progress_fn progress, void *ctx) {
+    int irc = capypkg_install(name);
+    for (uint32_t attempt = 1u;
+         attempt < CAPYPKG_BOOTSTRAP_PKG_ATTEMPTS &&
+         irc != CAPYPKG_OK && irc != CAPYPKG_ERR_ALREADY;
+         ++attempt) {
+        if (!bootstrap_pkg_error_is_retryable(irc)) {
+            break;
+        }
+        emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_RETRY,
+                      name, index, total, irc);
+        irc = capypkg_install(name);
+    }
+    return irc;
+}
+
+/* Build g_bootstrap_plan for `profile`: select the target set, resolve
+ * the in-target dependency edges and order the targets into waves. */
+static void bootstrap_plan_build(const struct install_profile *profile) {
+    size_t count = capypkg_available_count();
+    struct capypkg_entry e;
+    uint16_t wave_num = 0u;
+
+    bootstrap_zero(&g_bootstrap_plan, sizeof(g_bootstrap_plan));
+    if (count > CAPYPKG_BOOTSTRAP_PLAN_MAX) {
+        count = CAPYPKG_BOOTSTRAP_PLAN_MAX;
+    }
+
+    /* Select initial targets. */
+    for (size_t i = 0u; i < count; ++i) {
+        if (capypkg_available_get_at(i, &e) != CAPYPKG_OK) continue;
+        if (profile->kind == INSTALL_PROFILE_CUSTOM) {
+            if (profile_install_list_contains(profile->install_list, e.name)) {
+                g_bootstrap_plan.is_target[i] = 1u;
+            }
+        } else {
+            g_bootstrap_plan.is_target[i] = 1u; /* FULL: everything */
+        }
+    }
+
+    /* CUSTOM: pull in transitive in-catalog dependencies so a selected
+     * package is never installed without what it needs. */
+    if (profile->kind == INSTALL_PROFILE_CUSTOM) {
+        int changed = 1;
+        while (changed) {
+            changed = 0;
+            for (size_t i = 0u; i < count; ++i) {
+                if (!g_bootstrap_plan.is_target[i]) continue;
+                if (capypkg_available_get_at(i, &e) != CAPYPKG_OK) continue;
+                for (uint32_t d = 0u; d < e.dep_count; ++d) {
+                    int di = bootstrap_catalog_index(e.deps[d]);
+                    if (di >= 0 && !g_bootstrap_plan.is_target[di]) {
+                        g_bootstrap_plan.is_target[di] = 1u;
+                        changed = 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Resolve the dependency edges that constrain ordering. A dep that is
+     * already installed (or not in the target set) does not constrain the
+     * wave assignment. */
+    for (size_t i = 0u; i < count; ++i) {
+        struct capypkg_entry dep_probe;
+        uint8_t n = 0u;
+        if (!g_bootstrap_plan.is_target[i]) continue;
+        if (capypkg_available_get_at(i, &e) != CAPYPKG_OK) continue;
+        for (uint32_t d = 0u; d < e.dep_count && n < CAPYPKG_MAX_DEPS; ++d) {
+            if (capypkg_installed_get(e.deps[d], &dep_probe) == CAPYPKG_OK) {
+                continue; /* already satisfied */
+            }
+            int di = bootstrap_catalog_index(e.deps[d]);
+            if (di >= 0 && g_bootstrap_plan.is_target[di]) {
+                g_bootstrap_plan.dep_idx[i][n++] = (uint16_t)di;
+            }
+            /* A dep neither installed nor in the catalog is non-blocking
+             * here; capypkg_install will surface CAPYPKG_ERR_DEPENDENCY. */
+        }
+        g_bootstrap_plan.dep_n[i] = n;
+        g_bootstrap_plan.target_count++;
+    }
+
+    /* Wave assignment. A snapshot per pass (placed[] updated only after
+     * the pass) keeps each wave's members mutually independent. */
+    while (g_bootstrap_plan.order_count < g_bootstrap_plan.target_count) {
+        uint16_t start = g_bootstrap_plan.order_count;
+        for (size_t i = 0u; i < count; ++i) {
+            int ready = 1;
+            if (!g_bootstrap_plan.is_target[i] || g_bootstrap_plan.placed[i]) {
+                continue;
+            }
+            for (uint8_t k = 0u; k < g_bootstrap_plan.dep_n[i]; ++k) {
+                if (!g_bootstrap_plan.placed[g_bootstrap_plan.dep_idx[i][k]]) {
+                    ready = 0;
+                    break;
+                }
+            }
+            if (ready) {
+                g_bootstrap_plan.order[g_bootstrap_plan.order_count] =
+                    (uint16_t)i;
+                g_bootstrap_plan.wave[g_bootstrap_plan.order_count] = wave_num;
+                g_bootstrap_plan.order_count++;
+            }
+        }
+        if (g_bootstrap_plan.order_count == start) {
+            /* Dependency cycle or unsatisfiable edge: emit the remaining
+             * targets in a final wave so they are still attempted (and
+             * fail cleanly inside capypkg_install) rather than dropped. */
+            for (size_t i = 0u; i < count; ++i) {
+                if (!g_bootstrap_plan.is_target[i] ||
+                    g_bootstrap_plan.placed[i]) {
+                    continue;
+                }
+                g_bootstrap_plan.order[g_bootstrap_plan.order_count] =
+                    (uint16_t)i;
+                g_bootstrap_plan.wave[g_bootstrap_plan.order_count] = wave_num;
+                g_bootstrap_plan.placed[i] = 1u;
+                g_bootstrap_plan.order_count++;
+            }
+            break;
+        }
+        for (uint16_t j = start; j < g_bootstrap_plan.order_count; ++j) {
+            g_bootstrap_plan.placed[g_bootstrap_plan.order[j]] = 1u;
+        }
+        wave_num++;
+    }
+}
+
 int capypkg_bootstrap_run_with_progress(
         int force,
         int *out_installed,
@@ -224,12 +436,9 @@ int capypkg_bootstrap_run_with_progress(
     int frc = CAPYPKG_OK;
     int planned = 0;
     int progressed = 0;
-    int irc = CAPYPKG_OK;
-    size_t count = 0u;
-    size_t i = 0u;
+    uint16_t slot = 0u;
     struct install_profile profile;
     struct capypkg_stats stats;
-    struct capypkg_entry entry;
 
     if (out_installed) *out_installed = 0;
     if (out_failed) *out_failed = 0;
@@ -299,53 +508,45 @@ int capypkg_bootstrap_run_with_progress(
         return INSTALL_PROFILE_ERR_STORAGE;
     }
 
-    /* First pass: count packages that will actually be installed so
-     * the progress UI can show "[i/N] name" deterministically. */
-    count = capypkg_available_count();
-    for (i = 0u; i < count; ++i) {
-        if (capypkg_available_get_at(i, &entry) != CAPYPKG_OK) continue;
-        if (profile.kind == INSTALL_PROFILE_CUSTOM) {
-            if (!profile_install_list_contains(profile.install_list,
-                                               entry.name)) {
-                continue;
-            }
-        }
-        ++planned;
-    }
+    /* Build the dependency-ordered install plan from the freshly fetched
+     * catalog. `planned` becomes the number of packages we will actually
+     * attempt (deps included for CUSTOM), so the UI's "[i/N]" is exact. */
+    bootstrap_plan_build(&profile);
+    planned = (int)g_bootstrap_plan.order_count;
 
-    /* Install every package in the catalog (or the custom subset).
-     * Each per-package failure is counted but does not abort the
-     * sweep: a single bad package should not block the rest. */
-    for (i = 0u; i < count; ++i) {
-        if (capypkg_available_get_at(i, &entry) != CAPYPKG_OK) {
+    /* Install in wave order. Each per-package failure is counted but does
+     * not abort the sweep: a single bad package must not block the rest.
+     *
+     * PARALLEL-READY SEAM: packages that share g_bootstrap_plan.wave[slot]
+     * are mutually independent. They are installed sequentially today
+     * because the network/TLS/VFS/capypkg layers are single-threaded and
+     * the first-boot wizard runs before the preemptive scheduler is
+     * enabled (CAPYOS_PREEMPTIVE_SCHEDULER is off by default). Once those
+     * are reentrant, a whole wave can be submitted to a kernel worker
+     * pool and drained before advancing to the next wave, with no change
+     * to the plan above. */
+    for (slot = 0u; slot < g_bootstrap_plan.order_count; ++slot) {
+        struct capypkg_entry plan_entry;
+        uint16_t cidx = g_bootstrap_plan.order[slot];
+        int irc;
+        if (capypkg_available_get_at(cidx, &plan_entry) != CAPYPKG_OK) {
             continue;
         }
-        if (profile.kind == INSTALL_PROFILE_CUSTOM) {
-            if (!profile_install_list_contains(profile.install_list,
-                                               entry.name)) {
-                emit_progress(progress, ctx,
-                              CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_SKIP,
-                              entry.name, 0, planned, 0);
-                continue;
-            }
-        }
         ++progressed;
-        emit_progress(progress, ctx,
-                      CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_BEGIN,
-                      entry.name, progressed, planned, 0);
-        irc = capypkg_install(entry.name);
+        emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_BEGIN,
+                      plan_entry.name, progressed, planned, 0);
+        irc = bootstrap_install_one_with_retry(plan_entry.name, progressed,
+                                               planned, progress, ctx);
         if (irc == CAPYPKG_OK || irc == CAPYPKG_ERR_ALREADY) {
             ++installed;
-            emit_progress(progress, ctx,
-                          CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_OK,
-                          entry.name, progressed, planned, irc);
+            emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_OK,
+                          plan_entry.name, progressed, planned, irc);
         } else {
             ++failed;
             klog(KLOG_WARN,
                  "[audit] [capypkg] bootstrap: package install failed");
-            emit_progress(progress, ctx,
-                          CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_FAIL,
-                          entry.name, progressed, planned, irc);
+            emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_FAIL,
+                          plan_entry.name, progressed, planned, irc);
         }
     }
 

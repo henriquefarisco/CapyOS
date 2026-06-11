@@ -48,8 +48,7 @@ truth and ALSO asks about modules to install.
 3. Wizard TUI on the framebuffer console (locale-aware):
    - Keyboard layout selection
    - Hostname
-   - Theme
-   - Splash on/off
+   - Splash on/off          (Theme is no longer asked here; see §2.1)
    - Admin user + password (with confirmation)
    - Module selection (NEW):
        BASIC  - core + capysh only
@@ -58,9 +57,10 @@ truth and ALSO asks about modules to install.
 
 4. If profile != BASIC:
    - Writes /system/install/profile.ini via install_profile_format.
-   - Calls capypkg_bootstrap_run_with_progress(force=1) so the
-     progress callback prints "[i/N] org.capyos.ui.desktop-session..."
-     on the fbcon while bytes flow in.
+   - Registers a capypkg install observer and calls
+     capypkg_bootstrap_run_with_progress(force=1); the wizard renders a
+     live status bar (overall + per-package download/verify/install)
+     instead of a scrolling log. See §2.1.
    - On install_count > 0, returns 1 to program.c which logs
      "Rebooting to activate modules..." and calls acpi_reboot().
 
@@ -79,6 +79,55 @@ If the profile selection picks BASIC, step 4 only writes
 `profile.ini` with `kind=basic` and skips the bootstrap call; no
 reboot happens and the system continues into capysh.
 
+## 2.1 Theme, install progress, ordering and retry (alpha.256)
+
+**Theme removed from the wizard.** The visual theme only has an effect
+once the optional CapyUI desktop-session module is installed, and that
+install is decided in the module-selection step. Asking for a theme
+earlier would either be a no-op (BASIC, no desktop) or force the choice
+before the desktop is even selected. The wizard therefore writes the
+canonical `capyos` theme to `/system/config.ini`; the desktop module
+(and the `config-theme` CLI command) own the user-facing theme switch
+after install.
+
+The module-install sweep was reworked so the wizard is honest about
+what it is doing and resilient to flaky networks:
+
+- **Live status bar.** `modules.c` owns a `struct modules_ui_state`
+  rendered by `modules_progress.c`. Two callbacks feed it: the coarse
+  `capypkg_bootstrap` event callback (repo/index/package
+  begin/ok/fail/retry/sweep) and a fine `capypkg` install observer that
+  reports the current package's phase (RESOLVE → DOWNLOAD → VERIFY →
+  STAGE → DONE) and byte-level download progress. The download bytes
+  come from a new `http_download_progress()` plumbed through an optional
+  `capypkg` progress-aware bytes fetcher; when that fetcher is not bound
+  (e.g. host tests) the install still works and falls back to the plain
+  fetcher. Redraws are throttled (~30 ms) so a fast download does not
+  flood the framebuffer.
+- **Dependency-ordered waves.** `capypkg_bootstrap` no longer installs
+  in raw catalog order. It builds a plan: select the target set (FULL =
+  all available; CUSTOM = the picked list expanded with transitive
+  in-catalog dependencies), then group targets into dependency *waves*.
+  A package lands in the earliest wave where all of its in-target
+  dependencies are already placed (or already installed). Packages in a
+  wave have no dependency relationship, so within a wave order is
+  irrelevant — they are independent. `capypkg_install` still resolves
+  dependencies recursively as a backstop.
+- **Per-package retry.** Each package is installed with an individual
+  in-place retry (up to 3 attempts) for transient errors (fetch /
+  storage / digest); one flaky download no longer restarts the whole
+  sweep. The `CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_RETRY` event surfaces this
+  to the UI. The wizard's outer sweep-level retry (2/4/8 s backoff)
+  still covers longer outages (DHCP/DNS/TLS warm-up).
+- **Parallel-ready seam.** Within a wave the packages are independent
+  and could be installed concurrently. They run sequentially today
+  because the network/TLS/VFS/`capypkg` layers are single-threaded and
+  the wizard runs before the preemptive scheduler is enabled
+  (`CAPYOS_PREEMPTIVE_SCHEDULER` is off by default, so worker-pool
+  threads would not be dispatched and `worker_pool_drain` would spin).
+  The wave structure is the single dispatch seam a future change can
+  switch to a kernel worker pool once those layers are reentrant.
+
 ## 3. Surfaces involved
 
 | Layer                      | TU                                                         |
@@ -87,6 +136,8 @@ reboot happens and the system continues into capysh.
 | Boot config                | `src/boot/uefi_loader/efi_main.c`                          |
 | Kernel storage bring-up    | `src/arch/x86_64/kernel_shell_runtime.c`                   |
 | Wizard top-level           | `src/config/first_boot/program.c`                          |
+| Wizard install status bar  | `src/config/first_boot/modules_progress.c`                |
+| capypkg download progress  | `src/net/services/http/redirect_download.c` (`http_download_progress`) |
 | Wizard module selection    | `src/config/first_boot/modules.c`                          |
 | Wizard TUI helpers         | `src/config/system_setup_wizard.c`                         |
 | Module profile parser      | `src/services/install_profile.c`                           |

@@ -1,5 +1,6 @@
 #include "../internal/stack_services.h"
 
+#include "net/dhcp_options.h"
 #include "net/dns.h"
 
 #include <stddef.h>
@@ -98,66 +99,9 @@ void net_dns_reset(struct net_dns_state *state) {
   services_mem_zero(state, sizeof(*state));
 }
 
-static void dhcp_parse_options(const uint8_t *options, size_t len,
-                               uint8_t *msg_type, uint32_t *server_id,
-                               uint32_t *subnet_mask, uint32_t *router,
-                               uint32_t *dns) {
-  size_t idx = 0;
-  while (idx < len) {
-    uint8_t code = options[idx++];
-    if (code == 0u) {
-      continue;
-    }
-    if (code == NET_DHCP_OPTION_END) {
-      break;
-    }
-    if (idx >= len) {
-      break;
-    }
-    uint8_t opt_len = options[idx++];
-    if ((size_t)opt_len > (len - idx)) {
-      break;
-    }
-    switch (code) {
-    case NET_DHCP_OPTION_MESSAGE_TYPE:
-      if (msg_type && opt_len >= 1u) {
-        *msg_type = options[idx];
-      }
-      break;
-    case NET_DHCP_OPTION_SERVER_ID:
-      if (server_id && opt_len >= 4u) {
-        uint32_t raw = 0;
-        services_mem_copy(&raw, &options[idx], 4u);
-        *server_id = services_ntohl32(raw);
-      }
-      break;
-    case NET_DHCP_OPTION_SUBNET_MASK:
-      if (subnet_mask && opt_len >= 4u) {
-        uint32_t raw = 0;
-        services_mem_copy(&raw, &options[idx], 4u);
-        *subnet_mask = services_ntohl32(raw);
-      }
-      break;
-    case NET_DHCP_OPTION_ROUTER:
-      if (router && opt_len >= 4u) {
-        uint32_t raw = 0;
-        services_mem_copy(&raw, &options[idx], 4u);
-        *router = services_ntohl32(raw);
-      }
-      break;
-    case NET_DHCP_OPTION_DNS:
-      if (dns && opt_len >= 4u) {
-        uint32_t raw = 0;
-        services_mem_copy(&raw, &options[idx], 4u);
-        *dns = services_ntohl32(raw);
-      }
-      break;
-    default:
-      break;
-    }
-    idx += opt_len;
-  }
-}
+/* dhcp_parse_options() was extracted to src/net/core/dhcp_options.c (declared
+ * in include/net/dhcp_options.h) so the untrusted-input parser is host-testable
+ * in isolation (tests/net/test_net_dhcp_options.c). Behaviour is unchanged. */
 
 int net_dhcp_handle(struct net_dhcp_state *state, struct net_stack_stats *stats,
                     const struct net_ipv4_config *ipv4,

@@ -242,6 +242,20 @@ static void test_http_build_get_default_port(void) {
   else FAIL("request format wrong");
 }
 
+static void test_http_build_get_https_default_port(void) {
+  fake_reset();
+  TEST("http_build_get default https port 443 -> no :port in Host");
+  char buf[512];
+  /* Slice 5.5: real userland HTTPS resolves to port 443. The Host header
+   * must omit the scheme-default port (bare authority), not "host:443". */
+  int n = capy_http_build_get_request("example.com", 443, "/", buf, sizeof(buf));
+  if (n > 0 && strstr(buf, "GET / HTTP/1.1\r\n") != NULL &&
+      strstr(buf, "Host: example.com\r\n") != NULL &&
+      strstr(buf, "Host: example.com:443\r\n") == NULL &&
+      strstr(buf, "Connection: close\r\n\r\n") != NULL) PASS();
+  else FAIL("https default port should be omitted from Host");
+}
+
 static void test_http_build_get_custom_port(void) {
   fake_reset();
   TEST("http_build_get custom port 8080 -> Host: host:8080");
@@ -602,6 +616,7 @@ void test_capylibc_net_url_cases(void) {
   test_url_parse_rejects_percent_nul_in_path();
   test_url_parse_rejects_percent_nul_in_query();
   test_http_build_get_default_port();
+  test_http_build_get_https_default_port();
   test_http_build_get_custom_port();
   test_http_build_get_rejects_zero_port();
   test_http_build_get_buffer_too_small();

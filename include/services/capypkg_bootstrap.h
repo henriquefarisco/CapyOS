@@ -59,7 +59,13 @@ enum capypkg_bootstrap_event {
     CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_SKIP        = 6,  /* skipped (custom)     */
     CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE          = 7,  /* all packages handled */
     CAPYPKG_BOOTSTRAP_EVENT_REPO_REGISTER_FAIL  = 8,  /* repo add returned err */
-    CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH_FAIL    = 9   /* index fetch failed   */
+    CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH_FAIL    = 9,  /* index fetch failed   */
+    /* A package install failed with a retryable error and the bootstrap
+     * is about to retry it in place (before moving on / counting it as
+     * failed). `rc` carries the failure that triggered the retry;
+     * `index`/`total` keep the package counters. Independent of the
+     * wizard's coarser sweep-level retry. */
+    CAPYPKG_BOOTSTRAP_EVENT_PACKAGE_RETRY       = 10
 };
 
 /* Progress callback. `name` is NUL-terminated and points into

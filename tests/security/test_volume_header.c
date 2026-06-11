@@ -239,6 +239,25 @@ static int test_init_fail_closed(void) {
       capyos_volume_header_init(&hdr, CAPYOS_VOLUME_KDF_ALGO_ARGON2ID, 1u, 8u,
                                 kTestSalt16, 16u, 1u, 2u, 0ULL, NULL),
       CAPYOS_VOLUME_HEADER_ERR_RESERVED, "init reserved>data_offset");
+  /* Argon2id t_cost above the sanity ceiling (pre-auth mount-time DoS guard). */
+  fails += expect_int(
+      capyos_volume_header_init(&hdr, CAPYOS_VOLUME_KDF_ALGO_ARGON2ID,
+                                CAPYOS_VOLUME_KDF_ARGON2_T_COST_MAX + 1u, 8u,
+                                kTestSalt16, 16u, 1u, 1u, 0ULL, NULL),
+      CAPYOS_VOLUME_HEADER_ERR_PARAMS, "init argon2id t_cost>max");
+  /* Argon2id m_cost above the sanity ceiling (would force a huge mount-time
+   * allocation before the header is authenticated). */
+  fails += expect_int(
+      capyos_volume_header_init(&hdr, CAPYOS_VOLUME_KDF_ALGO_ARGON2ID, 3u,
+                                CAPYOS_VOLUME_KDF_ARGON2_M_COST_MAX + 1u,
+                                kTestSalt16, 16u, 1u, 1u, 0ULL, NULL),
+      CAPYOS_VOLUME_HEADER_ERR_PARAMS, "init argon2id m_cost>max");
+  /* PBKDF2 iteration count above the sanity ceiling. */
+  fails += expect_int(
+      capyos_volume_header_init(&hdr, CAPYOS_VOLUME_KDF_ALGO_PBKDF2_SHA256,
+                                CAPYOS_VOLUME_KDF_PBKDF2_ITERS_MAX + 1u, 0u,
+                                kTestSalt16, 16u, 1u, 1u, 0ULL, NULL),
+      CAPYOS_VOLUME_HEADER_ERR_PARAMS, "init pbkdf2 iters>max");
   return fails;
 }
 

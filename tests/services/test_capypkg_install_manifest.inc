@@ -610,3 +610,85 @@ static void test_state_and_result_labels_are_well_formed(void) {
                   "no-repository-configured") == 0,
            "result label for NO_SOURCE must be 'no-repository-configured'");
 }
+
+static void test_install_observer_reports_phases(void) {
+    static char idx[1024];
+    char hex[65];
+    int rc;
+    reset_state(1);
+    compute_sha256_hex((const uint8_t *)CAPYPKG_TEST_PAYLOAD,
+                       strlen(CAPYPKG_TEST_PAYLOAD), hex);
+    snprintf(idx, sizeof(idx),
+             "name=obs.one\nversion=1.0.0\npayload_url=https://example.com/obs.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\ninstall_root=/var/capypkg/obs.one\n"
+             "---\n",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "observer test index must populate catalog");
+    g_payload_bytes = (const uint8_t *)CAPYPKG_TEST_PAYLOAD;
+    g_payload_len = strlen(CAPYPKG_TEST_PAYLOAD);
+    g_payload_rc = 0;
+    g_signature_rc = 0;
+
+    capypkg_set_install_observer(install_observer_capture, NULL);
+    rc = capypkg_install("obs.one");
+    capypkg_set_install_observer(NULL, NULL);
+
+    EXPECT(rc == CAPYPKG_OK, "observed install must succeed");
+    EXPECT(g_obs_phase_count[CAPYPKG_INSTALL_PHASE_RESOLVE] >= 1,
+           "install observer must see the RESOLVE phase");
+    EXPECT(g_obs_phase_count[CAPYPKG_INSTALL_PHASE_DOWNLOAD] >= 1,
+           "install observer must see the DOWNLOAD phase");
+    EXPECT(g_obs_phase_count[CAPYPKG_INSTALL_PHASE_VERIFY] >= 1,
+           "install observer must see the VERIFY phase");
+    EXPECT(g_obs_phase_count[CAPYPKG_INSTALL_PHASE_STAGE] >= 1,
+           "install observer must see the STAGE phase");
+    EXPECT(g_obs_phase_count[CAPYPKG_INSTALL_PHASE_DONE] >= 1,
+           "install observer must see the DONE phase");
+    EXPECT(g_obs_dl_total_last == (uint64_t)strlen(CAPYPKG_TEST_PAYLOAD),
+           "final download sample must report the full payload size");
+    EXPECT(strcmp(g_obs_last_name, "obs.one") == 0,
+           "observer must report the installed package name");
+}
+
+static void test_install_progress_fetcher_forwards_bytes(void) {
+    static char idx[1024];
+    char hex[65];
+    int rc;
+    reset_state(1);
+    compute_sha256_hex((const uint8_t *)CAPYPKG_TEST_PAYLOAD,
+                       strlen(CAPYPKG_TEST_PAYLOAD), hex);
+    snprintf(idx, sizeof(idx),
+             "name=prog.one\nversion=1.0.0\npayload_url=https://example.com/prog.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\ninstall_root=/var/capypkg/prog.one\n"
+             "---\n",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "progress-fetcher test index must populate catalog");
+    g_payload_bytes = (const uint8_t *)CAPYPKG_TEST_PAYLOAD;
+    g_payload_len = strlen(CAPYPKG_TEST_PAYLOAD);
+    g_payload_rc = 0;
+    g_signature_rc = 0;
+
+    /* Prefer the progress-aware fetcher so intermediate byte samples are
+     * forwarded; the plain fetcher would emit only the start/end pair. */
+    capypkg_set_bytes_fetcher_progress(net_fetch_bytes_progress);
+    capypkg_set_install_observer(install_observer_capture, NULL);
+    rc = capypkg_install("prog.one");
+    capypkg_set_install_observer(NULL, NULL);
+    capypkg_set_bytes_fetcher_progress(NULL);
+
+    EXPECT(rc == CAPYPKG_OK, "progress-fetcher install must succeed");
+    EXPECT(g_obs_phase_count[CAPYPKG_INSTALL_PHASE_DOWNLOAD] >= 3,
+           "progress fetcher must forward intermediate download samples");
+    EXPECT(g_obs_dl_total_last == (uint64_t)strlen(CAPYPKG_TEST_PAYLOAD),
+           "final forwarded sample must equal the payload size");
+}

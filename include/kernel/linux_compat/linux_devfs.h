@@ -8,7 +8,8 @@
  *
  * Firefox/SpiderMonkey expect a small set of POSIX device files to
  * be readable/writable as ordinary files. The full S2.7 task in
- * `firefox-port-platform-shim.md` calls for a real devfs mounted at
+ * `docs/archive/firefox-port-exploration/firefox-port-platform-shim.md`
+ * calls for a real devfs mounted at
  * `/dev`; this module is the precursor: a path -> handler table
  * keyed on string match, ready to be wired into the future
  * Linux-ABI `open(2)` adapter.

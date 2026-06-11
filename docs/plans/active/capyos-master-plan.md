@@ -1,11 +1,11 @@
 # CapyOS — Master Plan sequencial
 
 **Data de referência:** 2026-05-15
-**Vers?o atual:** `0.8.0-alpha.263+20260606`
+**Vers?o atual:** `0.8.0-alpha.265+20260611`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-4 oficialmente fechadas; 4/16 etapas concluídas; Etapa 5 em andamento.
+**Status:** Etapas 1-5 oficialmente fechadas; 5/16 etapas concluídas; Etapa 6 em andamento.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -280,7 +280,7 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - Fase B (produtor real CapyUI) — 🟡 capability entregue e exercitada por fluxos reais (Terminal, Context menu, Inline prompt no core; Calculator/Text Editor/Settings/File Manager/Task Manager/Taskbar/Notification/Desktop icons via `capy_widget_emit` do sibling). A migração dos demais fluxos de produção é polish **não-bloqueante** — o critério de aceite de capability (render via adapter sem acesso direto ao compositor) já está atendido.
 - Fases C (scheduler cooperativo), D (damage tracking + double buffering) e E (thread-crash survives) — ✅ código + host tests, cada uma com seu latch de smoke.
 
-**Fechamento:** a **Fase F** foi **validada externamente** em VMware oficial (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem + regressões da Etapa 3 + `release-check`) e a Etapa 4 foi **fechada na release `alpha.262+20260602`**. A etapa seguinte (**Etapa 5 — TLS userland real**) está desbloqueada e ativa.
+**Fechamento:** a **Fase F** foi **validada externamente** em VMware oficial (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem + regressões da Etapa 3 + `release-check`) e a Etapa 4 foi **fechada na release `alpha.262+20260602`**. A etapa seguinte (**Etapa 5 — TLS userland real**) foi desbloqueada e, em seguida, concluída em `alpha.264`.
 
 **ROI:** médio-alto — UI fluida sem travar é base de qualquer experiência polida; scheduler fecha uma lacuna conhecida em `project-overview.md`.
 
@@ -316,15 +316,23 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - `make smoke-x64-vmware-compositor-damage-track` (novo).
 - `make smoke-x64-vmware-scheduler-fairness` (novo).
 
-## 8. Etapa 5 — TLS userland real (em andamento)
+## 8. Etapa 5 — TLS userland real (concluída em alpha.264)
 
 **Objetivo:** avançar `libcapy-tls` de metadata-only para handshake real. Pré-requisito direto para browser HTTPS (Etapa 7) e release/update HTTPS (Etapa 8).
 
 **ROI:** alto — sem HTTPS real, nada moderno funciona (web, update, sync, qualquer serviço).
 
-> **ATIVA desde `alpha.262`** (Etapa 4 fechada). Auditoria + plano por slice em [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md). Achados-chave: o TLS BearSSL **kernel-side já é real e em produção** (`src/security/tls.c`); a Etapa 5 torna real a `libcapy-tls` **userland** (hoje stub fail-closed, `capy_tls_is_supported()=0`). O gap mais fundamental é a **ausência de syscall de entropia userland** (`getrandom`) para semear o DRBG do BearSSL.
->
-> **Slice 5.1 (em andamento):** syscall de entropia userland (`SYS_GETRANDOM`) backed pela CSPRNG do kernel, com stub capylibc e assert de ABI; TLS permanece intocado (fail-closed) nesta fatia. Próximas: BearSSL no build userland → trust anchors reais → handshake real → HTTPS userland deixa de retornar unsupported.
+> **CONCLUÍDA em `alpha.264`** (validada externamente). A `libcapy-tls`
+> userland avançou de stub fail-closed para handshake **BearSSL real**
+> (`capy_tls_is_supported()==1`): entropia userland (`SYS_GETRANDOM`),
+> wall-clock X.509 (`SYS_CLOCK_REALTIME`), trust anchors BearSSL reais,
+> ClientHello+SNI, handshake-drive, validação X.509 fail-closed, e o seam
+> HTTPS de `capy_net` (`capy_http_get` sobre TLS). A flag
+> `CAPYOS_TLS_USERLAND_HANDSHAKE` foi **promovida a default** depois do gate
+> externo passar (build flag-on + `make smoke-x64-vmware-tls-handshake`,
+> marker `[smoke] tls-handshake ready` no COM1, + `release-check`).
+> Auditoria + plano por slice em
+> [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md).
 
 ### Entregáveis
 
@@ -336,20 +344,45 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 
 ### Critérios de aceite
 
-- [ ] Erro em qualquer gate mantém fail-closed.
-- [ ] HTTPS em `libcapy-net` deixa de retornar unsupported para caso válido.
-- [ ] Certificado inválido falha fechado.
+- [x] Erro em qualquer gate mantém fail-closed.
+- [x] HTTPS em `libcapy-net` deixa de retornar unsupported para caso válido.
+- [x] Certificado inválido falha fechado.
 
 ### Gates externos recomendados
 
 - `make smoke-x64-vmware-tls-handshake` (novo).
 - `make release-check` continua passando.
 
-## 9. Etapa 6 — Apps básicos do desktop maduros
+## 9. Etapa 6 — Apps básicos do desktop maduros (em andamento — ativa desde alpha.264)
 
 **Objetivo:** entregar o primeiro conjunto de apps verdadeiramente usáveis sem CLI, com toolkit estável, ícones oficiais, localização nativa e um navegador textual inicial para validar rede/HTTPS em páginas simples. Esta é a etapa onde o usuário comum começa a perceber valor real.
 
 **ROI:** muito alto — primeiro valor visível ao usuário final.
+
+> **ATIVA desde `alpha.264`** (Etapa 5 fechada). Etapa grande e
+> majoritariamente de repos desacoplados: os apps e o toolkit vivem em
+> **CapyUI** (`capy-ui-widget` / `capy-ui-desktop-session`) e o core
+> HTML-to-text em **CapyBrowser** (`capy-browser-core`, planejado). O lado
+> CapyOS é o conjunto de **adaptadores** (janela, input, FS permitido, tema,
+> i18n, lifecycle) + a integração `CapyBrowse Text` pelo contrato
+> [`../../reference/integration/browser-core-integration-contract.md`](../../reference/integration/browser-core-integration-contract.md),
+> sempre extraindo lógica pura antes de ampliar parser/render acoplado
+> (contenção do `html_viewer` histórico). Plano por slice + auditoria de
+> estado em
+> [`../../architecture/etapa-6-desktop-apps-readiness.md`](../../architecture/etapa-6-desktop-apps-readiness.md).
+>
+> **Slice 6.1 (concluído) · 6.2–6.3 + 6.5 entregues in-tree · 6.4 desbloqueado por handoff:** readiness audit + plano por
+> slice (o documento de readiness acima) — mapeia o estado CapyOS-side **já existente**
+> (i18n `localization_select`/`APP_T` em produção desde a F4; apps in-tree
+> fallback + CapyUI; tema da Etapa 1) versus os gaps reais: seam
+> `CapyBrowse Text` sobre o HTTPS da Etapa 5 **extraindo lógica pura** do
+> `html_viewer` legado (contrato `capy-browser-core`); em `alpha.265`,
+> `CapyBrowser v0.6.0` publicou o pacote textual `org.capyos.browser.text`,
+> removendo o bloqueio de publicação da 6.4; reconciliação do
+> **default EN obrigatório** vs. o fallback PT-BR atual de `localization.c`;
+> adaptadores de lifecycle/toolkit por contrato CapyUI. O primeiro slice de
+> **código** sai do audit; nada de ampliar parser/render acoplado antes de
+> extrair a lógica pura.
 
 ### Entregáveis
 
@@ -360,7 +393,7 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - Toolkit `libcapy-ui` inicial: button, list, textbox, dialog, menu.
 - Ícones oficiais e integração com launcher/taskbar.
 - Acessibilidade básica: atalhos de teclado consistentes, contraste mínimo.
-- Localização nativa: PT-BR e ES como targets de release; EN continua default obrigatório.
+- Localização nativa: PT-BR e ES como targets de release; **EN é o fallback base obrigatório** (idioma sempre completo, usado quando uma string PT-BR/ES falta). A **seleção default de idioma segue PT-BR** — invariante "seleção padrão" travado em `test_localization.c`. (Implementado em `localization_select`, Slice 6.5.)
 
 ### Critérios de aceite
 

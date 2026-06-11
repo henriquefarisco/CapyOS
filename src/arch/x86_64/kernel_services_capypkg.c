@@ -292,6 +292,56 @@ static int capypkg_runtime_fetch_bytes(const char *url, uint8_t *buffer,
   return 0;
 }
 
+/* Bridge net/http's size_t progress callback to the capypkg uint64_t
+ * download-progress callback. The context is a small stack struct owned
+ * by capypkg_runtime_fetch_bytes_progress for the (synchronous)
+ * lifetime of the download, so no global state is involved. */
+struct capypkg_dl_bridge {
+  capypkg_download_progress_fn cb;
+  void *ctx;
+};
+
+static void capypkg_runtime_http_progress(size_t received, size_t total,
+                                          void *ctx) {
+  struct capypkg_dl_bridge *b = (struct capypkg_dl_bridge *)ctx;
+  if (b && b->cb) {
+    b->cb((uint64_t)received, (uint64_t)total, b->ctx);
+  }
+}
+
+/* Progress-aware payload fetcher bound into the capypkg adapter so the
+ * first-boot wizard can render a live byte-level download bar. Mirrors
+ * capypkg_runtime_fetch_bytes (local bundle fast path + audit logging)
+ * but routes the network download through http_download_progress. */
+static int capypkg_runtime_fetch_bytes_progress(
+    const char *url, uint8_t *buffer, size_t buffer_size, size_t *out_len,
+    capypkg_download_progress_fn cb, void *cb_ctx) {
+  struct capypkg_dl_bridge bridge;
+  int rc;
+  if (capypkg_local_bundle_fetch_bytes(url, buffer, buffer_size, out_len) == 0) {
+    /* Local bundle resolves instantly with no streaming; surface a
+     * single 100% sample so the bar does not appear stuck at 0%. */
+    if (cb && out_len) {
+      cb((uint64_t)*out_len, (uint64_t)*out_len, cb_ctx);
+    }
+    return 0;
+  }
+  if (!url || !buffer || buffer_size == 0u) {
+    capypkg_runtime_log_fetch_failure(url, -1, 0);
+    return -1;
+  }
+  bridge.cb = cb;
+  bridge.ctx = cb_ctx;
+  rc = http_download_progress(url, buffer, buffer_size, out_len,
+                              cb ? capypkg_runtime_http_progress : NULL,
+                              cb ? &bridge : NULL);
+  if (rc != 0) {
+    capypkg_runtime_log_fetch_failure(url, http_last_error(), 0);
+    return -1;
+  }
+  return 0;
+}
+
 /* Bind once after storage is ready. Idempotent. */
 void kernel_capypkg_bind_runtime_adapters(void) {
   static int g_capypkg_bound = 0;
@@ -305,6 +355,7 @@ void kernel_capypkg_bind_runtime_adapters(void) {
   capypkg_set_mkdir(capypkg_runtime_mkdir);
   capypkg_set_text_fetcher(capypkg_runtime_fetch_text);
   capypkg_set_bytes_fetcher(capypkg_runtime_fetch_bytes);
+  capypkg_set_bytes_fetcher_progress(capypkg_runtime_fetch_bytes_progress);
   /* signature verifier intentionally left NULL: until CapyAgent's
    * ed25519 verifier is integrated the adapter must fail closed for
    * signed repos. capypkg_install will refuse with CAPYPKG_ERR_SIGNATURE. */

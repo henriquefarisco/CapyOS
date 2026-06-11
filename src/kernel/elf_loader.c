@@ -1,4 +1,5 @@
 #include "kernel/elf_loader.h"
+#include "kernel/elf_bounds.h"
 #include "memory/pmm.h"
 #include "memory/kmem.h"
 #include "fs/vfs.h"
@@ -43,12 +44,17 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
   uint16_t ph_size = hdr->e_phentsize;
   uint16_t ph_num = hdr->e_phnum;
 
+  /* e_phoff/e_phentsize/e_phnum come straight from the untrusted file; use
+   * the overflow-safe helper so a crafted value cannot wrap past the bound
+   * and turn `phdr` into a wild pointer. */
   for (uint16_t i = 0; i < ph_num; i++) {
-    if (ph_off + (uint64_t)i * ph_size + sizeof(struct elf64_phdr) > size)
+    uint64_t entry_off = (uint64_t)i * ph_size;
+    if (!elf_phdr_entry_fits(ph_off, entry_off, sizeof(struct elf64_phdr),
+                             size))
       return -1;
 
     const struct elf64_phdr *phdr =
-      (const struct elf64_phdr *)(data + ph_off + (uint64_t)i * ph_size);
+      (const struct elf64_phdr *)(data + ph_off + entry_off);
 
     if (phdr->p_type == PT_PHDR) {
       result->phdr_vaddr = phdr->p_vaddr;
@@ -56,6 +62,11 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
     }
 
     if (phdr->p_type != PT_LOAD) continue;
+
+    /* Reject a segment whose virtual span wraps uint64 (crafted p_vaddr +
+     * p_memsz); otherwise vaddr_end below wraps and num_pages underflows
+     * into an enormous mapping loop. */
+    if (!elf_sum_no_wrap(phdr->p_vaddr, phdr->p_memsz)) return -1;
 
     uint64_t vaddr_start = phdr->p_vaddr & ~(VMM_PAGE_SIZE - 1);
     uint64_t vaddr_end = (phdr->p_vaddr + phdr->p_memsz + VMM_PAGE_SIZE - 1) &
@@ -82,7 +93,8 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
      * O loop abaixo recolhe o phys de cada pagina e copia apenas
      * o slice que cabe nela. p_offset alinhamento dentro da pagina
      * e respeitado via `page_off`. */
-    if (phdr->p_filesz > 0 && phdr->p_offset + phdr->p_filesz <= size) {
+    if (phdr->p_filesz > 0 &&
+        elf_range_in_bounds(phdr->p_offset, phdr->p_filesz, size)) {
       uint64_t copied = 0;
       while (copied < phdr->p_filesz) {
         uint64_t cur_vaddr = phdr->p_vaddr + copied;

@@ -30,7 +30,7 @@ match Linux 6.x. **105 NRs are registered** at the time of
 this commit (see `linux_syscall_nrs.h` and `COMPAT.md`).
 
 For a deeper rationale see also
-`docs/plans/active/musl-port-strategy.md`.
+`docs/archive/firefox-port-exploration/musl-port-strategy.md`.
 
 musl hits the same ABI: it expects to call `syscall(NR, args)`
 and get the same errno conventions Linux uses. So the bulk of
@@ -103,4 +103,4 @@ Total: ~10-15 sessions to get a working musl build for x86_64.
   <https://wiki.musl-libc.org/architecture-porting-guide.html>
 - CapyOS Linux ABI surface: `include/kernel/linux_compat/`
   and `linux_syscall_nrs.h` (105 NRs as of 2026-05-06).
-- Strategy doc: `docs/plans/active/musl-port-strategy.md`.
+- Strategy doc: `docs/archive/firefox-port-exploration/musl-port-strategy.md`.

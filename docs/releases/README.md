@@ -4,10 +4,22 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.259+20260525.md`
-  - Slices 1+2 da stack de compatibilidade Hyper-V (track laboratorial, **não** promove plataforma oficial): ATA-PIO promovido a backend nativo via novo `X64_STORAGE_BACKEND_ATA_PIO` cobrindo Hyper-V Gen1 e IDE legado; boot policy troca fail-closed por fail-degraded com warning ruidoso quando storage persistente é indisponível. Plano arquitetural Slice 3 (StorVSC I/O wire-up Gen2) entregue.
+- `capyos-0.8.0-alpha.265+20260611.md`
+  - Handoff cross-repo da Etapa 6 / Slice 6.4: `CapyBrowser v0.6.0` publica
+    `org.capyos.browser.text` (`capy-browser-core` textual) via `make package
+    STAGE=text`, com `depends=` vazio para nao bloquear em codecs de imagem.
+    CapyOS atualiza matriz, auditoria e plano; proximo gate e o adapter
+    CapyOS-side + `make smoke-x64-vmware-capybrowse-text`.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.264+20260607.md`
+  - **Fecho da Etapa 5** (TLS userland real): flag `CAPYOS_TLS_USERLAND_HANDSHAKE` promovida a default apos o gate externo (smoke VMware `tls-handshake` + `release-check`). **Abertura da Etapa 6** (apps basicos + CapyBrowse Text) com a fundacao CapyOS-side: `capy_net_strerror` (6.2), `capy_net_diagnose_stage`/`stage_name` (6.3, diagnostico DNS/TCP/TLS/HTTP) e fallback EN universal em `localization_select` (6.5). Hardening de seguranca: overflows do ELF loader (userland + boot), tetos KDF do volume header, cobertura adversarial DNS/DHCP/ICMP/ARP, bound do `names_equal` do CAPYFS. Tag a ser criada manualmente.
+
+- `capyos-0.8.0-alpha.263+20260606.md`
+  - Etapa 5 TLS userland prerequisites host-side (entropia `SYS_GETRANDOM`, wall-clock `SYS_CLOCK_REALTIME`, trust anchors, ClientHello, handshake-drive, validacao X.509) + backend BearSSL plugado atras de `CAPYOS_TLS_USERLAND_HANDSHAKE` (default OFF na epoca). Compliance CapyBrowser `0.5.0`.
+- `capyos-0.8.0-alpha.262+20260602.md`
+  - **Fecho da Etapa 4** (CapyDisplay 2D + scheduler/multithread runtime): Fase F validada externamente em VMware + UEFI + E1000 (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem) + batch de 5 fixes de hardening regressivo.
 
 - `capyos-0.8.0-alpha.261+20260529.md`
   - Corrige o provisionamento das pastas padrao do usuario no first-boot wizard (`user_home_prepare` passa a ser chamado em `src/config/first_boot/program.c`), entao `Desktop`/`Documents`/`Personal`/`Professional` passam a aparecer no desktop e no file manager do usuario primario. Compliance cross-repo: CapyUI `2.13.1` -> `2.19.0` (ABI `capy-ui-widget` v2.13 -> v2.19; display-list schema 7 inalterado). Bundla o trabalho in-tree de alpha.259/260. Tag a ser criada manualmente.

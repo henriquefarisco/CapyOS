@@ -117,11 +117,8 @@ int http_request(const struct http_request *req, struct http_response *resp) {
           resp->content_length = 0;
           for (uint32_t hi = 0; hi < resp->header_count; hi++) {
             if (http_streq_ci(resp->headers[hi].name, "Content-Length")) {
-              const char *p = resp->headers[hi].value;
-              while (*p >= '0' && *p <= '9') {
-                resp->content_length = resp->content_length * 10 + (size_t)(*p - '0');
-                p++;
-              }
+              resp->content_length =
+                  http_parse_content_length(resp->headers[hi].value);
               break;
             }
           }
@@ -132,6 +129,14 @@ int http_request(const struct http_request *req, struct http_response *resp) {
 
     if (header_done) {
       size_t body_received_now = total - header_end_offset;
+      /* Report streaming progress for real (2xx) bodies only; redirect
+       * hops carry no payload and would just emit a misleading 0%. The
+       * observer is a no-op when no download progress callback is
+       * installed (the common path). content_length is 0 for chunked
+       * transfers, which the UI renders as an indeterminate bar. */
+      if (!http_status_is_redirect(resp->status_code)) {
+        http_emit_progress(body_received_now, resp->content_length);
+      }
       if (http_status_is_redirect(resp->status_code) &&
           resp->content_length == 0 &&
           !resp->chunked) {

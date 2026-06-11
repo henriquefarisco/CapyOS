@@ -171,3 +171,32 @@ int kernel_boot_run_capysh(void) {
   process_enter_user_mode(p);
   return -1;
 }
+
+#ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
+/* Etapa 5 / Slice 5.6: boot directly into the embedded tls_smoke program,
+ * the userland TLS handshake gate. Same control-flow shape as
+ * kernel_boot_run_capysh, resolving /bin/tls_smoke through the
+ * embedded_progs registry. Compiled only under the smoke gate (the blob
+ * exists only then). The program retries its HTTPS GET until the async
+ * DHCP lease lands, so it tolerates running before the network is up. */
+int kernel_boot_run_tls_smoke(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  if (embedded_progs_lookup("/bin/tls_smoke", &data, &size) != 0) {
+    return KERNEL_SPAWN_BAD_ELF;
+  }
+  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+
+  struct process *p = process_create("tls_smoke", 0, 0);
+  if (!p) return KERNEL_SPAWN_NO_PROCESS;
+
+  if (elf_load_into_process(p, data, size) != 0) {
+    process_destroy(p);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+
+  /* `process_enter_user_mode` is noreturn on success. */
+  process_enter_user_mode(p);
+  return -1;
+}
+#endif

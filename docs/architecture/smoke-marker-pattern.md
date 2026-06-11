@@ -30,6 +30,8 @@ Exemplos atuais:
 | `[smoke] storage-stack ready` | storage | 1 read/write OK em AHCI **ou** NVMe | 250 (Slice 3E.4) + 252 (audit) |
 | `[smoke] scheduler-fairness ready` | scheduler | 3 task IDs despachados 2× cada | Etapa 4 Fase C |
 | `[smoke] compositor-damage-track ready` | compositor | 2 frames parciais com dirty rects | Etapa 4 Fase D |
+| `[smoke] thread-crash-survives ready` | scheduler/processo | Processo morto por fault (exit ≥ 128) + N ticks de scheduler depois | Etapa 4 Fase E |
+| `[smoke] tls-handshake ready` | TLS userland | `tls_smoke` (ring-3) faz GET HTTPS válido OK **e** GET de cert inválido recusado, então sai 0 | Etapa 5 Slice 5.6 |
 
 ## 2. Invariantes obrigatórios
 
@@ -248,6 +250,8 @@ com os alvos `smoke-x64-vmware-*` em `Makefile`.
 | `[net] DHCP: lease acquired.` | embutido no stack TCP/IP | `src/net/dhcp/*` | direct `com1_puts` | base | `docs/operations/vmware-e1000-validation-playbook.md` |
 | `[smoke] usb-hid-keyboard ready` | `include/drivers/usb/usb_hid_smoke.h` | `src/drivers/usb/usb_hid_smoke.c` | `src/drivers/usb/usb_hid_smoke_io.c` | `smoke-x64-vmware-usb-hid-keyboard` | `docs/operations/etapa-3-external-validation-playbook.md` |
 | `[smoke] storage-stack ready` | `include/drivers/storage/storage_smoke.h` | `src/drivers/storage/storage_smoke.c` | `src/drivers/storage/storage_smoke_io.c` | `smoke-x64-vmware-storage-resilience` | `docs/operations/etapa-3-slice-3e-validation-playbook.md` |
+| `[smoke] thread-crash-survives ready` | `include/kernel/thread_crash_smoke.h` | `src/kernel/thread_crash_smoke.c` | `src/kernel/thread_crash_smoke_io.c` | `smoke-x64-vmware-thread-crash-survives` | `docs/operations/etapa-4-external-validation-playbook.md` |
+| `[smoke] tls-handshake ready` | `include/kernel/tls_handshake_smoke.h` | `src/kernel/tls_handshake_smoke.c` | `src/kernel/tls_handshake_smoke_io.c` | `smoke-x64-vmware-tls-handshake` | `docs/operations/etapa-5-external-validation-playbook.md` |
 
 ## 8. Histórico de evolução
 
@@ -263,6 +267,19 @@ com os alvos `smoke-x64-vmware-*` em `Makefile`.
 - **alpha.252 (audit fix):** BUG #1 corrigido movendo o latch
   para global em `storage_smoke.c`. Este documento foi criado
   para formalizar o pattern e prevenir reincidência.
+- **Etapa 4 Fases C/D/E:** três latches kernel-side seguindo o
+  pattern (`scheduler-fairness`, `compositor-damage-track`,
+  `thread-crash-survives`). A Fase E introduziu o idioma de
+  **alimentar o latch pelo exit code do processo** em
+  `process_exit` (exit ≥ 128 = morte por fault).
+- **Etapa 5 Slice 5.6 (`[smoke] tls-handshake ready`):** primeiro
+  marker que valida um caminho **userland** (handshake TLS real).
+  Reusa o idioma exit-code da Fase E ao contrário: o programa
+  ring-3 `tls_smoke` sai **0** só quando o GET HTTPS válido OK e o
+  GET de cert inválido falhou fechado, e o latch em `process_exit`
+  emite no COM1. Necessário porque `capy_write(1,...)` de ring-3
+  cai na porta 0xE9 (debug-console), que o VMware não captura — só
+  o COM1 kernel-side chega ao harness.
 
 ## 9. Referências cruzadas
 
@@ -270,6 +287,10 @@ com os alvos `smoke-x64-vmware-*` em `Makefile`.
   runbook do gate USB HID.
 - `docs/operations/etapa-3-slice-3e-validation-playbook.md` —
   runbook do gate storage.
+- `docs/operations/etapa-4-external-validation-playbook.md` —
+  runbook dos gates scheduler/compositor/thread-crash (Fases C/D/E).
+- `docs/operations/etapa-5-external-validation-playbook.md` —
+  runbook do gate tls-handshake (Slice 5.6).
 - `docs/architecture/etapa-3-slice-3e-plan.md` §3.Audit fix —
   registro técnico do BUG #1.
 - `tools/scripts/smoke_marker_policy.py` —

@@ -73,11 +73,42 @@ static void test_every_anchor_well_formed(void) {
   }
 }
 
+static void test_key_type_distribution_is_locked(void) {
+  /* The userland trust metadata (tests/userland/test_capylibc_tls_trust.c)
+   * documents this kernel bundle as 106 RSA + 40 EC anchors and declares
+   * itself derived from it. test_every_anchor_well_formed only proves each
+   * anchor is RSA *or* EC, so a re-bundle that kept the total at 146 but
+   * shifted the split (e.g. 100/46) would pass there yet silently diverge
+   * from the userland metadata claim. Lock the real distribution here so
+   * such a drift is caught on the host instead of only at handshake time;
+   * a deliberate bundle change must update both sides together. */
+  const br_x509_trust_anchor *tas = capyos_tls_trust_anchors();
+  size_t n = capyos_tls_trust_anchor_count();
+  size_t rsa = 0u;
+  size_t ec = 0u;
+  size_t i;
+  if (!tas) {
+    fail("null anchor table");
+    return;
+  }
+  for (i = 0; i < n; i++) {
+    if (tas[i].pkey.key_type == BR_KEYTYPE_RSA) rsa++;
+    else if (tas[i].pkey.key_type == BR_KEYTYPE_EC) ec++;
+  }
+  if (rsa != 106u)
+    fail("RSA anchor count drifted from 106 (userland metadata claims 106)");
+  if (ec != 40u)
+    fail("EC anchor count drifted from 40 (userland metadata claims 40)");
+  if (rsa + ec != n)
+    fail("RSA+EC count must account for every anchor");
+}
+
 int run_tls_trust_anchors_tests(void) {
   g_failures = 0;
   test_count_is_known();
   test_table_non_null();
   test_every_anchor_well_formed();
+  test_key_type_distribution_is_locked();
   if (g_failures == 0)
     printf("[tests] tls_trust_anchors OK (%zu anchors)\n",
            capyos_tls_trust_anchor_count());

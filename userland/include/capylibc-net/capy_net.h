@@ -37,6 +37,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* libcapy-tls types for the network diagnostic below: capy_net_diagnose_stage
+ * combines the net error with the TLS state, since TLS handshake/cert failures
+ * otherwise collapse into a generic net error code. capy_tls.h is a small,
+ * dependency-free sibling header (no reverse include of capy_net.h). */
+#include "capylibc-tls/capy_tls.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -295,6 +301,49 @@ typedef enum {
  * static int (libcapy-net is single-threaded today; pthread-style
  * TLS will land alongside the threading work). */
 capy_net_err_t capy_net_last_error(void);
+
+/* Stable, human-readable English description of a libcapy-net error
+ * code (POSIX-strerror style). Always returns a non-NULL static string
+ * — including for unknown/out-of-range codes — so callers can print it
+ * unconditionally. This is the EN base; the CapyBrowse Text app layers
+ * a localized, stage-aware diagnostic (DNS/TCP/TLS/HTTP) on top. */
+const char *capy_net_strerror(capy_net_err_t err);
+
+/* === Diagnostic stage (Etapa 6 / Slice 6.3) ================== */
+
+/* User-facing stage of a failed network fetch. CapyBrowse Text uses
+ * this to show a clear DNS/TCP/TLS/HTTP error. The base system owns
+ * this error UX (browser-core-integration-contract.md §"CapyOS base
+ * fornece ... UX de erro"); the HTML-to-text core stays in CapyBrowser. */
+typedef enum {
+  CAPY_NET_STAGE_OK    = 0,  /* no error */
+  CAPY_NET_STAGE_INPUT,      /* URL/argument/unsupported feature */
+  CAPY_NET_STAGE_DNS,        /* name resolution */
+  CAPY_NET_STAGE_TCP,        /* socket / connect / send / recv */
+  CAPY_NET_STAGE_TLS,        /* TLS handshake / certificate */
+  CAPY_NET_STAGE_HTTP        /* HTTP response framing */
+} capy_net_stage_t;
+
+/* Classify a failed fetch into a stage. `tls_state` is the libcapy-tls
+ * state for THIS request (`capy_tls_last_state()`, or CAPY_TLS_STATE_INIT
+ * for a plain-HTTP request): a CAPY_TLS_STATE_ERROR pins the stage to TLS
+ * even though the net layer collapses handshake/cert failures into a
+ * generic code. Pure function — no global state, never fails. */
+capy_net_stage_t capy_net_diagnose_stage(capy_net_err_t net_err,
+                                         capy_tls_state_t tls_state);
+
+/* Stable EN label for a stage (e.g. "TLS"). Always non-NULL. */
+const char *capy_net_stage_name(capy_net_stage_t stage);
+
+/* Friendly, localized one-line message for a diagnostic stage, for the
+ * CapyBrowse Text error UX. `lang` is a language tag ("pt-BR", "en", "es",
+ * NULL); EN is the mandatory fallback base (matches the system
+ * localization_select rule). Strings are ASCII-only (same convention as the
+ * kernel localization catalog, e.g. "Portugues"/"Espanol") so they render on
+ * the framebuffer font without accent handling. libcapy-net is ring-3 and
+ * cannot link the kernel localization catalog, so it carries its own scoped
+ * net-diagnostic vocabulary here. Always non-NULL. */
+const char *capy_net_stage_message(capy_net_stage_t stage, const char *lang);
 
 #ifdef __cplusplus
 }

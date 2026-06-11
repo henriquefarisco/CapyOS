@@ -1,5 +1,13 @@
 # CapyOS — Adaptador BearSSL metadata-only em libcapy-tls
 
+> **Status (alpha.264, Etapa 5 concluída):** este documento descreve o
+> adaptador **metadata-only** (alpha.93), que segue valendo como o
+> caminho de **opt-out** / fail-closed (`CAPYOS_TLS_USERLAND_HANDSHAKE=0`). A Etapa 5 plugou **in-tree**
+> o engine BearSSL userland real (`br_ssl_client` + `br_sslio`) em
+> `capy_tls_backend_connect`, atrás de `CAPYOS_TLS_USERLAND_HANDSHAKE`
+> (**promovida a default em alpha.264**; opt-out com `=0`). Estado vivo por slice em
+> [`etapa-5-tls-userland-readiness.md`](etapa-5-tls-userland-readiness.md).
+
 ## Objetivo
 
 `libcapy-tls` precisa declarar a fronteira do futuro adaptador BearSSL userland antes de inicializar qualquer engine real. `0.8.0-alpha.93+20260510` adiciona um contrato metadata-only para o adaptador, gated pelo backend plan e pelo estado BearSSL reservado, mantendo fail-closed e handshake desabilitado.

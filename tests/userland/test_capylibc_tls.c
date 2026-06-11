@@ -101,6 +101,33 @@ static void test_tls_config_resolve_rejects_invalid_output(void) {
   else FAIL("NULL output accepted");
 }
 
+static void test_tls_config_resolve_fail_closed(void) {
+  struct capy_tls_effective_config effective;
+  uint8_t cert = 0;
+  /* Security-critical invariant (Etapa 5 §8 #1/#3): capy_tls_config_resolve
+   * must REJECT any config that would weaken peer authentication or framing,
+   * so a caller can never disable certificate verification and proceed. This
+   * locks the fail-closed gate at the config layer, independent of the
+   * backend's defense-in-depth re-check. */
+  struct capy_tls_config no_verify        = { 0, 0, 0, 1000 };
+  struct capy_tls_config odd_verify       = { 2, 0, 0, 1000 };
+  struct capy_tls_config cert_no_len      = { 1, &cert, 0, 1000 };
+  struct capy_tls_config len_no_cert      = { 1, 0, 4, 1000 };
+  struct capy_tls_config timeout_too_big  = { 1, 0, 0, CAPY_TLS_TIMEOUT_MAX_MS + 1u };
+  struct capy_tls_config timeout_too_small = { 1, 0, 0, CAPY_TLS_TIMEOUT_MIN_MS - 1u };
+  TEST("capy_tls_config_resolve fails closed (cannot disable verify_peer)");
+  if (!capy_tls_config_resolve(&no_verify, &effective) &&
+      !capy_tls_config_resolve(&odd_verify, &effective) &&
+      !capy_tls_config_resolve(&cert_no_len, &effective) &&
+      !capy_tls_config_resolve(&len_no_cert, &effective) &&
+      !capy_tls_config_resolve(&timeout_too_big, &effective) &&
+      !capy_tls_config_resolve(&timeout_too_small, &effective) &&
+      /* Even on rejection the output is left at the secure default, never a
+       * verification-disabled state, in case a caller ignores the return. */
+      effective.verify_peer == 1) PASS();
+  else FAIL("config_resolve accepted a fail-open / malformed config");
+}
+
 /* === Context: prepare / reset / clear =========================== */
 
 static void test_tls_context_prepare_snapshots_ready_context(void) {
@@ -604,6 +631,7 @@ int test_capylibc_tls_run(void) {
   test_tls_config_resolve_defaults();
   test_tls_config_resolve_custom_config();
   test_tls_config_resolve_rejects_invalid_output();
+  test_tls_config_resolve_fail_closed();
   test_tls_context_prepare_snapshots_ready_context();
   test_tls_context_prepare_rejects_invalid_inputs();
   test_tls_context_reset_and_clear_scrub_state();

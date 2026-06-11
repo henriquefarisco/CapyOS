@@ -4,7 +4,7 @@
 /*
  * src/services/capypkg/internal/capypkg_internal.h
  *
- * Shared state and helpers between the four capypkg TUs.
+ * Shared state and helpers between the five capypkg TUs.
  * Strictly internal: callers must use the public API in
  * include/services/capypkg.h.
  */
@@ -13,6 +13,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+/* Serialization buffer ceilings shared by the index-fetch path
+ * (capypkg_install.c) and the persisted-state path (capypkg_persist.c). */
+#define CAPYPKG_INDEX_BUFFER_BYTES 16384u
+#define CAPYPKG_DB_BUFFER_BYTES    8192u
 
 struct capypkg_runtime {
     uint8_t initialized;
@@ -34,9 +39,21 @@ extern capypkg_write_bytes_fn g_capypkg_bytes_writer;
 extern capypkg_remove_file_fn g_capypkg_remover;
 extern capypkg_mkdir_fn       g_capypkg_mkdir;
 
-extern capypkg_fetch_text_fn       g_capypkg_text_fetcher;
-extern capypkg_fetch_bytes_fn      g_capypkg_bytes_fetcher;
-extern capypkg_verify_signature_fn g_capypkg_signature_verifier;
+extern capypkg_fetch_text_fn          g_capypkg_text_fetcher;
+extern capypkg_fetch_bytes_fn         g_capypkg_bytes_fetcher;
+extern capypkg_fetch_bytes_progress_fn g_capypkg_bytes_fetcher_progress;
+extern capypkg_verify_signature_fn    g_capypkg_signature_verifier;
+
+/* Per-package install progress observer (see services/capypkg.h). */
+extern capypkg_install_progress_fn g_capypkg_install_observer;
+extern void                       *g_capypkg_install_observer_ctx;
+
+/* Emit one install-progress event when an observer is installed; no-op
+ * otherwise. Used by the install pipeline to surface resolve/download/
+ * verify/stage/done phases (and download byte counts) to the wizard. */
+void capypkg_emit_install_phase(const char *name,
+                                enum capypkg_install_phase phase,
+                                uint64_t cur, uint64_t total);
 
 /* Generic byte/string helpers (no libc, kernel freestanding). */
 void capypkg_local_zero(void *ptr, size_t len);

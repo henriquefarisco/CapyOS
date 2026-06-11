@@ -144,6 +144,20 @@
 #define CAPYOS_VOLUME_KDF_SALT_MAX 64u
 
 /*
+ * Upper bounds on the KDF cost parameters. The header is parsed and the KDF
+ * is run to DERIVE keys *before* `kdf_check_tag` is authenticated, so a
+ * crafted header (valid magic/version/CRC -- none of which are keyed) with an
+ * absurd cost would otherwise force a huge allocation (`m_cost`) or an
+ * effectively-unbounded derivation (`t_cost`/iterations) at mount time,
+ * pre-authentication. Production tuning is Argon2id t=3 / m=8192 KiB and
+ * legacy PBKDF2 ~16000 iterations; these ceilings sit far above that and only
+ * reject tampered/degenerate values.
+ */
+#define CAPYOS_VOLUME_KDF_ARGON2_T_COST_MAX 4096u     /* Argon2id passes */
+#define CAPYOS_VOLUME_KDF_ARGON2_M_COST_MAX 1048576u  /* Argon2id memory, KiB (1 GiB) */
+#define CAPYOS_VOLUME_KDF_PBKDF2_ITERS_MAX 100000000u /* PBKDF2 iterations (100M) */
+
+/*
  * Default data offset for new headers. The header itself reserves
  * LBA 0; the encrypted filesystem starts at LBA 1 (= raw byte offset
  * 4096 with 4 KiB sectors). Older bootloaders that read raw LBA 0

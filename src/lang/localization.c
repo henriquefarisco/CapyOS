@@ -112,12 +112,12 @@ const char *localization_select(const char *language, const char *pt_br,
                                 const char *en, const char *es) {
   switch (localization_index_for(language)) {
   case LANG_EN:
-    return en ? en : (pt_br ? pt_br : "");
+    return en ? en : "";
   case LANG_ES:
-    return es ? es : (pt_br ? pt_br : "");
+    return es ? es : (en ? en : "");
   case LANG_PT_BR:
   default:
-    return pt_br ? pt_br : "";
+    return pt_br ? pt_br : (en ? en : "");
   }
 }
 

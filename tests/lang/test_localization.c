@@ -47,8 +47,8 @@ int run_localization_tests(void) {
         printf("[i18n] selecao espanhol inesperada\n");
         fails++;
     }
-    if (localization_select(NULL, "pt", "en", "es")[0] != 'p') {
-        printf("[i18n] selecao padrao inesperada\n");
+    if (localization_select(NULL, "pt", "en", "es")[0] != 'p' || localization_select("pt-BR", NULL, "en", "es")[0] != 'e' || localization_select("es", "pt", "en", NULL)[0] != 'e') {
+        printf("[i18n] selecao padrao PT-BR ou fallback EN (Etapa 6 Slice 6.5) inesperado\n");
         fails++;
     }
 

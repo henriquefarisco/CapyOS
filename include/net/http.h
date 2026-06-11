@@ -92,11 +92,30 @@ struct http_client {
   int error;
 };
 
+/* Byte-level download progress observer.
+ *
+ * `received` is the number of response-body bytes received so far and
+ * `total` is the advertised Content-Length when known (0 for chunked
+ * transfers or responses without a Content-Length). Invoked from the
+ * receive loop of the single in-flight HTTP request, so it fires
+ * repeatedly as the body streams in and one final time at completion.
+ *
+ * NOT reentrant: the CapyOS network stack services one HTTP request at
+ * a time, so progress is delivered through a single global observer
+ * slot installed for the duration of http_download_progress(). */
+typedef void (*http_progress_fn)(size_t received, size_t total, void *ctx);
+
 int http_init(void);
 int http_request(const struct http_request *req, struct http_response *resp);
 int http_get(const char *url, struct http_response *resp);
 int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
                   size_t *out_len);
+/* Identical to http_download but reports byte-level progress through
+ * `cb` (when non-NULL) as the payload streams in. `cb` is cleared
+ * before the call returns, so it never leaks into a later download. */
+int http_download_progress(const char *url, uint8_t *buffer,
+                           size_t buffer_size, size_t *out_len,
+                           http_progress_fn cb, void *ctx);
 int http_last_error(void);
 const char *http_error_string(int error);
 void http_response_free(struct http_response *resp);

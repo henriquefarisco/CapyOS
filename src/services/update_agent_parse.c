@@ -40,7 +40,16 @@ static int read_version_number(const char **cursor, uint32_t *out) {
     return -1;
   }
   while (update_agent_local_is_digit(*p)) {
-    value = value * 10u + (uint32_t)(*p - '0');
+    uint32_t digit = (uint32_t)(*p - '0');
+    /* Reject a version component that would overflow uint32_t rather than
+     * letting it wrap: a wrapped major/minor/patch/prerelease number would
+     * misorder compare_update_versions and could flip an "update available?"
+     * decision on a hostile manifest. Mirrors the guard in capypkg's
+     * parse_uint32. Legitimate version numbers are far below this bound. */
+    if (value > (0xFFFFFFFFu - digit) / 10u) {
+      return -1;
+    }
+    value = value * 10u + digit;
     ++p;
   }
   *cursor = p;

@@ -56,8 +56,15 @@ static inline struct capyfs_mount *inode_mount(struct inode *inode) {
   return ((struct capyfs_inode *)inode->private_data)->mount;
 }
 static inline int names_equal(const char *a, const char *b) {
+  /* `a` may be an on-disk dirent name: a fixed CAPYFS_NAME_MAX-byte field that
+   * is only NUL-terminated when it holds a validly-written name (dir_add
+   * enforces len < CAPYFS_NAME_MAX). Bound the scan to the field size so a
+   * crafted/corrupt image (name field with no terminator) combined with a
+   * long lookup key can never read past the field and its 4 KiB disk block.
+   * Behaviour is identical for valid names, which always terminate < 32. */
   size_t i = 0;
-  while (a[i] && b[i]) { if (a[i] != b[i]) return 0; ++i; }
+  while (i < CAPYFS_NAME_MAX && a[i] && b[i]) { if (a[i] != b[i]) return 0; ++i; }
+  if (i == CAPYFS_NAME_MAX) return 0; /* no terminator in the field: corrupt/over-long, never matches */
   return a[i] == b[i];
 }
 static inline size_t cstring_length(const char *s) {

@@ -104,7 +104,15 @@ Current runtime rule:
   - SYN retransmission with exponential backoff (1 s / 2 s / 4 s ...)
   - receive buffer compaction to prevent TLS handshake corruption
   - up to 8 simultaneous connections (`TCP_MAX_CONNECTIONS`)
-- **TLS** (`src/security/tls.c`, BearSSL): TLS 1.2, 146 trust anchors, ALPN, cipher reporting.
+- **TLS**: the **kernel-side** client (`src/security/tls.c`, BearSSL) is
+  real and in production — TLS 1.2, 146 trust anchors, ALPN, SNI, hostname
+  verification, cipher reporting — and is what `http_get`/capypkg use over
+  HTTPS today. The **userland** `libcapy-tls` (`userland/lib/capylibc-tls/`)
+  is the Etapa 5 target: its real BearSSL handshake is already in-tree but
+  gated behind `CAPYOS_TLS_USERLAND_HANDSHAKE` (default OFF → fail-closed),
+  so ring-3 HTTPS still reports unsupported until Etapa 5 closes with the
+  external smoke. See
+  [`etapa-5-tls-userland-readiness.md`](etapa-5-tls-userland-readiness.md).
 - **HTTP/HTTPS** (`src/net/services/http.c`):
   - `http_get()` follows up to 5 redirects (301/302/303/307/308)
   - resolves absolute, protocol-relative, origin-relative and document-relative `Location:` values
@@ -177,11 +185,11 @@ Current runtime rule:
 
 ## 10. Immediate architecture priorities
 
-Reordered on 2026-05-15 to match the ROI-driven sequence in `docs/plans/active/capyos-master-plan.md` (target audience: common desktop user). Etapa 2 external validation was reported complete on 2026-05-18; Etapa 3 is now active.
+Reordered on 2026-05-15 to match the ROI-driven sequence in `docs/plans/active/capyos-master-plan.md` (target audience: common desktop user). **Etapas 1-4 are closed** (Etapa 3 in `alpha.253`, Etapa 4 in `alpha.262`); **Etapa 5 (TLS userland real) is the active stage.** Stages 3-4 are retained below as a description of delivered scope; `docs/plans/STATUS.md` is the authoritative live status.
 
-1. **Stage 3 (Driver framework + USB HID + storage):** validate the XHCI/USB HID Slice 3D path externally, then mature AHCI/NVMe error handling and add device-manager fallback policy so driver failures don't crash kernel.
-2. **Stage 4 (CapyDisplay 2D + scheduler):** introduce damage-tracked 2D layer and cooperative scheduler/multithread runtime (closes the gap listed in `project-overview.md`).
-3. **Stage 5 (TLS userland real):** advance `libcapy-tls` from metadata-only to real BearSSL handshake with SNI + hostname verification + timeout.
+1. **Stage 3 (Driver framework + USB HID + storage) — closed (`alpha.253`):** XHCI/USB HID Slice 3D validated externally; AHCI/NVMe error handling and the device-manager fallback policy delivered (follow-ups 3F-3J are non-blocking).
+2. **Stage 4 (CapyDisplay 2D + scheduler) — closed (`alpha.262`):** damage-tracked 2D layer and cooperative scheduler/multithread runtime delivered and externally validated (Fase F).
+3. **Stage 5 (TLS userland real):** the real BearSSL `libcapy-tls` handshake (SNI + hostname verification + timeout, reusing the kernel trust bundle) is in-tree behind `CAPYOS_TLS_USERLAND_HANDSHAKE` (default OFF); the remaining work is external build + smoke validation to flip ring-3 HTTPS from unsupported to supported.
 4. **Stage 6 (Apps maduros) and Stage 7 (Browser usável):** integrate decoupled `CapyBrowse Text`/HTML core for simple text sites and network diagnostics first, then wire codec/display-list contracts into the graphical renderer, add HTTP cache, streaming render and basic forms. Closes `feature/browser-internet-improvements`.
 5. **Continued architectural hygiene (cross-stage):**
    - Remove remaining hybrid boot dependency and complete native x64 input.

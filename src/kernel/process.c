@@ -11,6 +11,10 @@
 #include "kernel/thread_crash_smoke.h"
 #endif
 
+#ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
+#include "kernel/tls_handshake_smoke.h"
+#endif
+
 /* 2026-05-02: FD type and pipe direction constants now live in
  * include/kernel/process.h (FD_TYPE_*, FD_PIPE_FLAG_*). Removed
  * the local copies that duplicated them. */
@@ -267,6 +271,16 @@ void process_exit(int code) {
 #ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
   if (thread_crash_smoke_try_latch_exit_global((int32_t)code)) {
     thread_crash_smoke_emit_marker();
+  }
+#endif
+  /* Etapa 5 / Slice 5.6: the userland tls_smoke program signals a fully
+   * validated handshake (valid HTTPS GET ok + invalid-cert GET refused) by
+   * exiting 0. Emit the COM1 marker exactly once on that success. In the
+   * smoke build tls_smoke is the only user process (boot init), so the first
+   * code==0 exit is its success. Gated so production builds pay zero cost. */
+#ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
+  if (tls_handshake_smoke_try_latch_exit_global((int32_t)code)) {
+    tls_handshake_smoke_emit_marker();
   }
 #endif
   task_exit(code);

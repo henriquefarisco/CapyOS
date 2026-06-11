@@ -569,6 +569,101 @@ static void test_last_error_resets(void) {
   else FAIL("error not cleared");
 }
 
+/* === capy_net_strerror (Etapa 6 / Slice 6.2) ================= */
+
+static void test_strerror_codes(void) {
+  fake_reset();
+  TEST("strerror: every code maps to a non-empty string");
+  capy_net_err_t codes[] = {
+      CAPY_NET_OK,    CAPY_NET_EINVAL,   CAPY_NET_EPARSE,
+      CAPY_NET_ESOCK, CAPY_NET_ECONNECT, CAPY_NET_ESEND,
+      CAPY_NET_ERECV, CAPY_NET_EBUF,     CAPY_NET_EDNS,
+      CAPY_NET_EHTTP, CAPY_NET_EUNSUPPORTED,
+  };
+  int ok = 1;
+  for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); ++i) {
+    const char *s = capy_net_strerror(codes[i]);
+    if (!s || !s[0]) {
+      ok = 0;
+    }
+  }
+  /* Unknown / out-of-range code still yields a non-NULL, non-empty string. */
+  const char *unknown = capy_net_strerror((capy_net_err_t)1234);
+  if (!unknown || !unknown[0]) {
+    ok = 0;
+  }
+  /* Distinct codes give distinct text (OK vs a real failure). */
+  if (strcmp(capy_net_strerror(CAPY_NET_OK),
+             capy_net_strerror(CAPY_NET_EDNS)) == 0) {
+    ok = 0;
+  }
+  if (ok) PASS();
+  else FAIL("strerror mapping wrong");
+}
+
+static void test_diagnose_stage(void) {
+  fake_reset();
+  TEST("diagnose_stage: net error + TLS state -> stage");
+  int ok = 1;
+  /* A TLS error state pins TLS even when the net code is the generic
+   * EUNSUPPORTED that handshake/cert failures collapse into. */
+  if (capy_net_diagnose_stage(CAPY_NET_EUNSUPPORTED, CAPY_TLS_STATE_ERROR) !=
+      CAPY_NET_STAGE_TLS) ok = 0;
+  if (capy_net_diagnose_stage(CAPY_NET_OK, CAPY_TLS_STATE_ERROR) !=
+      CAPY_NET_STAGE_TLS) ok = 0;
+  /* Without a TLS error, classify by the net code. */
+  if (capy_net_diagnose_stage(CAPY_NET_EDNS, CAPY_TLS_STATE_INIT) !=
+      CAPY_NET_STAGE_DNS) ok = 0;
+  if (capy_net_diagnose_stage(CAPY_NET_ECONNECT, CAPY_TLS_STATE_INIT) !=
+      CAPY_NET_STAGE_TCP) ok = 0;
+  if (capy_net_diagnose_stage(CAPY_NET_ERECV, CAPY_TLS_STATE_CLOSED) !=
+      CAPY_NET_STAGE_TCP) ok = 0;
+  if (capy_net_diagnose_stage(CAPY_NET_EHTTP, CAPY_TLS_STATE_INIT) !=
+      CAPY_NET_STAGE_HTTP) ok = 0;
+  if (capy_net_diagnose_stage(CAPY_NET_EPARSE, CAPY_TLS_STATE_INIT) !=
+      CAPY_NET_STAGE_INPUT) ok = 0;
+  if (capy_net_diagnose_stage(CAPY_NET_OK, CAPY_TLS_STATE_INIT) !=
+      CAPY_NET_STAGE_OK) ok = 0;
+  /* Stage labels: non-empty, TLS labeled "TLS". */
+  if (strcmp(capy_net_stage_name(CAPY_NET_STAGE_TLS), "TLS") != 0) ok = 0;
+  if (!capy_net_stage_name(CAPY_NET_STAGE_DNS)[0]) ok = 0;
+  if (ok) PASS();
+  else FAIL("diagnose_stage wrong");
+}
+
+static void test_stage_message(void) {
+  fake_reset();
+  TEST("stage_message: localized per stage, EN fallback base");
+  int ok = 1;
+  capy_net_stage_t stages[] = {
+      CAPY_NET_STAGE_OK,  CAPY_NET_STAGE_INPUT, CAPY_NET_STAGE_DNS,
+      CAPY_NET_STAGE_TCP, CAPY_NET_STAGE_TLS,   CAPY_NET_STAGE_HTTP,
+  };
+  const char *langs[] = {"pt-BR", "en", "es", NULL, "xx"};
+  /* Every (stage, lang) yields a non-empty message. */
+  for (size_t s = 0; s < sizeof(stages) / sizeof(stages[0]); ++s) {
+    for (size_t l = 0; l < sizeof(langs) / sizeof(langs[0]); ++l) {
+      const char *m = capy_net_stage_message(stages[s], langs[l]);
+      if (!m || !m[0]) ok = 0;
+    }
+  }
+  /* EN is the fallback base: NULL and unknown lang == "en". */
+  if (strcmp(capy_net_stage_message(CAPY_NET_STAGE_TLS, NULL),
+             capy_net_stage_message(CAPY_NET_STAGE_TLS, "en")) != 0) ok = 0;
+  if (strcmp(capy_net_stage_message(CAPY_NET_STAGE_DNS, "xx"),
+             capy_net_stage_message(CAPY_NET_STAGE_DNS, "en")) != 0) ok = 0;
+  /* pt-BR and es each differ from EN for a real stage. */
+  if (strcmp(capy_net_stage_message(CAPY_NET_STAGE_TLS, "pt-BR"),
+             capy_net_stage_message(CAPY_NET_STAGE_TLS, "en")) == 0) ok = 0;
+  if (strcmp(capy_net_stage_message(CAPY_NET_STAGE_TLS, "es"),
+             capy_net_stage_message(CAPY_NET_STAGE_TLS, "en")) == 0) ok = 0;
+  /* "es" is not mistaken for "en" (both start with 'e') -> es != pt either. */
+  if (strcmp(capy_net_stage_message(CAPY_NET_STAGE_DNS, "es"),
+             capy_net_stage_message(CAPY_NET_STAGE_DNS, "pt-BR")) == 0) ok = 0;
+  if (ok) PASS();
+  else FAIL("stage_message localization wrong");
+}
+
 /* === Entry point ============================================= */
 
 int test_capylibc_net_run(void) {
@@ -606,6 +701,9 @@ int test_capylibc_net_run(void) {
   test_capylibc_net_http_cases();
 
   test_last_error_resets();
+  test_strerror_codes();
+  test_diagnose_stage();
+  test_stage_message();
 
   printf("  -> %d/%d passed\n",
          test_capylibc_net_passes, test_capylibc_net_runs);

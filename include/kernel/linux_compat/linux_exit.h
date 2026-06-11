@@ -7,7 +7,8 @@
  * pre-NPTL semantics this also terminated the process; in
  * modern Linux + glibc/musl it only kills the thread, leaving
  * sibling threads alive. Since CapyOS has no thread groups yet
- * (S1.4 in `firefox-port-platform-shim.md`), `exit` and
+ * (S1.4 in `docs/archive/firefox-port-exploration/firefox-port-platform-shim.md`),
+ * `exit` and
  * `exit_group` are equivalent for us today.
  *
  * `exit_group(status)` terminates *all threads* in the calling

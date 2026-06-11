@@ -378,41 +378,17 @@ static int first_boot_setup_interactive(void) {
     cstring_copy(hostname, sizeof(hostname), "capyos-node");
   }
 
-  {
-    /* 2026-05-01: o tema "love" entra na escolha do wizard.
-     * high-contrast permanece restrito ao CLI por ser tema de
-     * acessibilidade, nao estetico. */
-    const char *theme_items[4];
-    if (strings_equal(setup_language, "en")) {
-      theme_items[0] = "CapyOS - default";
-      theme_items[1] = "Ocean - blue accents";
-      theme_items[2] = "Forest - green accents";
-      theme_items[3] = "Love - magenta/coral accents";
-    } else if (strings_equal(setup_language, "es")) {
-      theme_items[0] = "CapyOS - predeterminado";
-      theme_items[1] = "Ocean - tonos azules";
-      theme_items[2] = "Forest - tonos verdes";
-      theme_items[3] = "Love - tonos magenta/coral";
-    } else {
-      theme_items[0] = "CapyOS - padrao";
-      theme_items[1] = "Ocean - tons azuis";
-      theme_items[2] = "Forest - tons verdes";
-      theme_items[3] = "Love - tons magenta/coral";
-    }
-    int theme_pick = wizard_menu_select_setup(
-        55u, system_ui_text(setup_language, SYS_UI_THEMES_AVAILABLE),
-        setup_language, theme_items,
-        sizeof(theme_items) / sizeof(theme_items[0]), 0);
-    if (theme_pick == 0) {
-      theme = config_validate_theme("capyos");
-    } else if (theme_pick == 1) {
-      theme = config_validate_theme("ocean");
-    } else if (theme_pick == 2) {
-      theme = config_validate_theme("forest");
-    } else {
-      theme = config_validate_theme("love");
-    }
-  }
+  /* alpha.256: the visual theme is no longer chosen in the first-boot
+   * wizard. Theming (ocean/forest/love/...) only has a visible effect
+   * once the optional CapyUI desktop session module is installed, and
+   * that install is decided later in the module-selection step below.
+   * Asking for a theme here would either be a no-op (BASIC profile, no
+   * desktop) or would force a choice before the user has even decided
+   * whether to install the desktop. We therefore keep the canonical
+   * `capyos` default written to /system/config.ini; the desktop module
+   * (and `config-theme` in the CLI) own the user-facing theme switch
+   * after install. `theme` stays "capyos" from its declaration above. */
+  theme = config_validate_theme("capyos");
 
   {
     const char *splash_items[] = {

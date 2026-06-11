@@ -641,6 +641,23 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   g_con.col = 0;
   g_con.row = 0;
 
+#ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
+  /* Etapa 5 / Slice 5.6: the network stage (8/8) above brought up the net
+   * stack, so boot directly into the userland TLS handshake smoke instead of
+   * the login/desktop flow. `kernel_boot_run_tls_smoke` is noreturn on
+   * success (drops to ring 3); the program retries its HTTPS GET until the
+   * async DHCP lease lands (it yields/sleeps between attempts so net kernel
+   * tasks get CPU), then exits 0 — which process_exit observes to emit
+   * `[smoke] tls-handshake ready` on COM1. Gated so production boot is
+   * unaffected. A return means the spawn failed; fall through to login. */
+  dbgcon_write("[user_init] CAPYOS_TLS_HANDSHAKE_SMOKE; spawning tls_smoke.\n");
+  {
+    int tls_smoke_rc = kernel_boot_run_tls_smoke();
+    (void)tls_smoke_rc;
+    klog(KLOG_WARN,
+         "[user_init] tls_smoke spawn returned without entering Ring 3.");
+  }
+#endif
   {
     struct login_runtime_ops login_ops;
     kernel_boot_build_login_ops(&login_ops);

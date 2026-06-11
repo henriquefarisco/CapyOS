@@ -83,4 +83,11 @@ int kernel_boot_run_two_busy_users(void);
  * any future shell binary swapped into the registry. */
 int kernel_boot_run_capysh(void);
 
+#ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
+/* Etapa 5 / Slice 5.6: spawn the embedded `/bin/tls_smoke` program as the
+ * boot init process to drive the userland TLS handshake gate. Same shape
+ * as `kernel_boot_run_capysh`; compiled only under the smoke gate. */
+int kernel_boot_run_tls_smoke(void);
+#endif
+
 #endif /* KERNEL_USER_INIT_H */

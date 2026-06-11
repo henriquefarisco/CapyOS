@@ -1,6 +1,6 @@
 # Browser core — contrato de integração com CapyOS
 
-**Status:** referência para desenvolvimento apartado.
+**Status:** referência para desenvolvimento apartado; handoff textual publicado em `CapyBrowser v0.6.0`.
 **Integração planejada:** `CapyBrowse Text` na Etapa 6; browser gráfico estático na Etapa 7; JavaScript e ports grandes ficam para etapas posteriores.
 **Repositório externo atual:** `CapyBrowser`.
 
@@ -9,7 +9,9 @@
 O browser app histórico não está presente no `src/apps` ativo. O primeiro
 snapshot migrado para `CapyBrowser` é o codec BMP portátil em `src/codecs/`.
 HTML-to-text e HTML/CSS display-list devem ser implementados no repositório
-externo antes da integração CapyOS.
+externo antes da integração CapyOS. O subset textual (`org.capyos.browser.text`)
+foi publicado em `CapyBrowser v0.6.0` para desbloquear a Etapa 6 / Slice 6.4;
+o display-list gráfico continua Etapa 7-gated.
 
 O CapyOS base ainda preserva `browser_homepage` em `struct system_settings`,
 `/system/config.ini` e na tela Settings como preferência de usuário para o
@@ -103,3 +105,15 @@ Quando as etapas correspondentes estiverem ativas, recomendar execução externa
 - `make smoke-x64-vmware-capybrowse-text`;
 - `make smoke-x64-vmware-browser-https-static`;
 - `make smoke-x64-vmware-browser-text-fallback`.
+
+## Handoff de publicação — Etapa 6 / Slice 6.4
+
+- Repo: `CapyBrowser`
+- Tag: `v0.6.0`
+- Pacote: `org.capyos.browser.text`
+- Build: `make package STAGE=text`
+- Dependências de pacote: `depends=` vazio por design; codecs de imagem só
+  entram no pacote gráfico da Etapa 7.
+- Responsabilidade CapyOS após o handoff: adapter pequeno, render/scroll sobre
+  infraestrutura existente, transporte HTTPS/TLS, sandbox/FS, janela/input e
+  smoke `make smoke-x64-vmware-capybrowse-text`.
