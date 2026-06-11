@@ -20,12 +20,21 @@ def run_cmd(
     if expect:
         try:
             if isinstance(expect, (list, tuple)):
-                session.wait_for_any(list(expect), timeout=timeout, start_at=mk)
+                patterns = list(expect)
+                if expect_optional:
+                    patterns.append("> ")
+                session.wait_for_any(patterns, timeout=timeout, start_at=mk)
+            elif expect_optional:
+                session.wait_for_any([expect, "> "], timeout=timeout, start_at=mk)
             else:
                 session.wait_for(expect, timeout=timeout, start_at=mk)
         except TimeoutError:
             if not expect_optional:
                 raise
+            if "> " in session.tail(1600):
+                return
+    if "> " in session.tail(1600):
+        return
     session.wait_for("> ", timeout=timeout, start_at=mk)
 
 

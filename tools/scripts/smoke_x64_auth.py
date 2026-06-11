@@ -222,36 +222,41 @@ def maybe_run_first_boot_setup(
         session.send_line("" if keyboard_layout == "us" else keyboard_layout)
     wait_and_send(session, "Hostname [capyos-node]:", "smoke-node", timeout)
     mk = session.marker()
-    theme_prompt = session.wait_for_any(
-        [
-            "Theme [capyos]:",
-            "Tema [capyos]:",
-            "Available themes: capyos, ocean, forest.",
-            "Available themes: capyos, ocean, forest, love.",
-            "Temas disponibles: capyos, ocean, forest.",
-            "Temas disponibles: capyos, ocean, forest, love.",
-            "Temas disponiveis: capyos, ocean, forest.",
-            "Temas disponiveis: capyos, ocean, forest, love.",
-        ],
+    theme_prompts = [
+        "Theme [capyos]:",
+        "Tema [capyos]:",
+        "Available themes: capyos, ocean, forest.",
+        "Available themes: capyos, ocean, forest, love.",
+        "Temas disponibles: capyos, ocean, forest.",
+        "Temas disponibles: capyos, ocean, forest, love.",
+        "Temas disponiveis: capyos, ocean, forest.",
+        "Temas disponiveis: capyos, ocean, forest, love.",
+    ]
+    splash_prompts = [
+        "Enable animated splash? [Y/n]:",
+        "Ativar splash animado? [S/n]:",
+        "Activar splash animado? [S/n]:",
+        "Animated splash",
+        "Splash animado",
+    ]
+    prompt = session.wait_for_any(
+        theme_prompts + splash_prompts,
         timeout=timeout,
         start_at=mk,
     )
-    if theme_prompt.startswith("Theme [") or theme_prompt.startswith("Tema ["):
-        session.send_line("capyos")
+    if prompt in theme_prompts:
+        if prompt.startswith("Theme [") or prompt.startswith("Tema ["):
+            session.send_line("capyos")
+        else:
+            session.send_text("1", newline=False)
+        mk = session.marker()
+        splash_prompt = session.wait_for_any(
+            splash_prompts,
+            timeout=timeout,
+            start_at=mk,
+        )
     else:
-        session.send_text("1", newline=False)
-    mk = session.marker()
-    splash_prompt = session.wait_for_any(
-        [
-            "Enable animated splash? [Y/n]:",
-            "Ativar splash animado? [S/n]:",
-            "Activar splash animado? [S/n]:",
-            "Animated splash",
-            "Splash animado",
-        ],
-        timeout=timeout,
-        start_at=mk,
-    )
+        splash_prompt = prompt
     if splash_prompt in ("Animated splash", "Splash animado"):
         session.send_text("2", newline=False)
     else:
