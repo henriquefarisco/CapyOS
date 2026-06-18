@@ -54,7 +54,7 @@ e o snapshot técnico atual está em
 | [`CapyBrowser`](../../../CapyBrowser) | `0.6.1` | browser-core text/HTML/CSS est?tico (`capy-browser-core`; pacote textual `org.capyos.browser.text` consumido pelo adapter CapyOS-side da 6.4 (app ring-3 `capybrowse`, build-validado; gate externo pendente); core gráfico ainda Etapa 7) | Etapas 6-7 |
 | [`CapyCodecs`](../../../CapyCodecs) | `0.0.8` | image codecs portáveis (`capy-codec-image` v2: per-call limits, detect/generic, metadata, QOI) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
 | [`CapyLang`](../../../CapyLang) | `0.1.9` | S1-S7 + S6.3 structs/enums entregues (host-only; `capy-lang-host` v0 parcial; +opcodes 0x64-0x66 + trap V0018) | Etapa 15 |
-| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.8` | harness + baseline (`capy-benchmark-report` v1 planejado; +serialização report/eval/replay) | Etapas 15-16 |
+| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.9` | harness + baseline (`capy-benchmark-report` v1 planejado; +serialização report/eval/replay) | Etapas 15-16 |
 
 Regras gerais (válidas mesmo antes da etapa abrir):
 

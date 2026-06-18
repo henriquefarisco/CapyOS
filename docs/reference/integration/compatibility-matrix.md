@@ -1,6 +1,6 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo desde 2026-05-19; atualizacao tecnica em 2026-06-17 (CapyOS core `alpha.266` — Etapa 6 ativa, Slice 6.4 adapter CapyOS implementado + build-validado (gate externo `smoke-x64-vmware-capybrowse-text` pendente); CapyBrowser `0.6.1`; demais pacotes consolidados em alpha.266: CapyUI `2.22.1` / `capy-ui-widget` v2.22, CapyCodecs `0.0.8` / `capy-codec-image` v2, CapyLang `0.1.9`, CapyAgent `0.0.8`, CapyBenchmark `0.0.8`).
+**Status:** autoritativo desde 2026-05-19; atualizacao tecnica em 2026-06-17 (CapyOS core `alpha.266` — Etapa 6 ativa, Slice 6.4 adapter CapyOS implementado + build-validado (gate externo `smoke-x64-vmware-capybrowse-text` pendente); CapyBrowser `0.6.1`; demais pacotes consolidados em alpha.266: CapyUI `2.22.1` / `capy-ui-widget` v2.22, CapyCodecs `0.0.8` / `capy-codec-image` v2, CapyLang `0.1.9`, CapyAgent `0.0.8`, CapyBenchmark `0.0.9`).
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
 **Auditoria atual:** [`compatibility-audit-2026-06-11.md`](compatibility-audit-2026-06-11.md).
 **Auditoria anterior (snapshot histórico):** [`compatibility-audit-2026-05-23.md`](compatibility-audit-2026-05-23.md).
@@ -20,7 +20,7 @@ política de instalação modular.
 | `CapyCodecs` | `0.0.8` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.8` (host-only) | `0.0.8` |
 | `CapyUI` | `2.22.1` | `capy-ui-widget` v2.22 (display-list schema v7) + `capy-ui-desktop-session` v1 | `2.22.1` (cross-repo build / capypkg modulo / display-list adapter Etapa 4) | `2.22.1` (CI release gates com sibling remoto em main) |
 | `CapyLang` | `0.1.9` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes de array 0x60-0x6A incl. push/pop/insert/remove, traps V0017-V0019, 43 opcodes congelados; metodos de array no frontend S10 (a.push/pop/insert/remove/get/set/len, E0022); host-only no sister) | n/a (roadmap-blocked) | n/a |
-| `CapyBenchmark` | `0.0.8` | `capy-benchmark-report` v1 (planejada; serialização report/eval/replay) | n/a (roadmap-blocked) | n/a |
+| `CapyBenchmark` | `0.0.9` | `capy-benchmark-report` v1 (planejada; serialização report/eval/replay + thresholds derivadas de baseline) | n/a (roadmap-blocked) | n/a |
 
 > **Regra de pinagem:** "versão mínima compatível" só conta quando o
 > repositório externo entrega contrato versionado, runner host, testes
