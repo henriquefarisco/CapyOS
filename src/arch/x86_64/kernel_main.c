@@ -658,6 +658,22 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
          "[user_init] tls_smoke spawn returned without entering Ring 3.");
   }
 #endif
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+  /* Etapa 6 / Slice 6.4: boot directly into the CapyBrowse Text smoke instead
+   * of the login/desktop flow. `kernel_boot_run_capybrowse` is noreturn on
+   * success (drops to ring 3); the program retries its HTTPS GET until the
+   * async DHCP lease lands, fetches + renders the controlled page, then exits
+   * 0 — which process_exit observes to emit `[smoke] capybrowse-text ready` on
+   * COM1. Gated so production boot is unaffected; a return means the spawn
+   * failed, so fall through to login. */
+  dbgcon_write("[user_init] CAPYOS_CAPYBROWSE_SMOKE; spawning capybrowse.\n");
+  {
+    int capybrowse_rc = kernel_boot_run_capybrowse();
+    (void)capybrowse_rc;
+    klog(KLOG_WARN,
+         "[user_init] capybrowse spawn returned without entering Ring 3.");
+  }
+#endif
   {
     struct login_runtime_ops login_ops;
     kernel_boot_build_login_ops(&login_ops);

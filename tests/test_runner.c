@@ -91,6 +91,8 @@ int run_usb_hid_smoke_gate_tests(void);
 int run_scheduler_smoke_gate_tests(void);
 int run_thread_crash_smoke_gate_tests(void);
 int run_tls_handshake_smoke_gate_tests(void);
+int run_capybrowse_text_smoke_gate_tests(void);
+int run_apps_roundtrip_smoke_gate_tests(void);
 
 int test_pmm_run(void);
 int test_task_run(void);
@@ -219,6 +221,8 @@ int run_privilege_tests(void);
 int run_buffer_cache_pacing_tests(void);
 int test_syscall_pipe_priority_run(void);
 int test_syscall_net_run(void);
+int test_capylibc_string_run(void);
+int test_capybrowse_view_run(void);
 int test_capylibc_net_run(void);
 int test_capylibc_tls_run(void);
 int test_syscall_net_init_run(void);
@@ -317,6 +321,8 @@ int main(void) {
     failures += run_scheduler_smoke_gate_tests();
     failures += run_thread_crash_smoke_gate_tests();
     failures += run_tls_handshake_smoke_gate_tests();
+    failures += run_capybrowse_text_smoke_gate_tests();
+    failures += run_apps_roundtrip_smoke_gate_tests();
 
     failures += test_pmm_run();
     failures += test_task_run();
@@ -445,6 +451,8 @@ int main(void) {
     failures += run_buffer_cache_pacing_tests();
     failures += test_syscall_pipe_priority_run();
     failures += test_syscall_net_run();
+    failures += test_capylibc_string_run();
+    failures += test_capybrowse_view_run();
     failures += test_capylibc_net_run();
     failures += test_capylibc_tls_run();
     failures += test_syscall_net_init_run();

@@ -200,3 +200,32 @@ int kernel_boot_run_tls_smoke(void) {
   return -1;
 }
 #endif
+
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+/* Etapa 6 / Slice 6.4: boot directly into the embedded capybrowse program,
+ * the CapyBrowse Text gate. Same control-flow shape as
+ * kernel_boot_run_tls_smoke, resolving /bin/capybrowse through the
+ * embedded_progs registry. Compiled only under the smoke gate (the blob exists
+ * only then). The program retries its HTTPS GET until the async DHCP lease
+ * lands, so it tolerates running before the network is up. */
+int kernel_boot_run_capybrowse(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  if (embedded_progs_lookup("/bin/capybrowse", &data, &size) != 0) {
+    return KERNEL_SPAWN_BAD_ELF;
+  }
+  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+
+  struct process *p = process_create("capybrowse", 0, 0);
+  if (!p) return KERNEL_SPAWN_NO_PROCESS;
+
+  if (elf_load_into_process(p, data, size) != 0) {
+    process_destroy(p);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+
+  /* `process_enter_user_mode` is noreturn on success. */
+  process_enter_user_mode(p);
+  return -1;
+}
+#endif

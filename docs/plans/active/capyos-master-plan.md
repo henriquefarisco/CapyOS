@@ -371,7 +371,7 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > estado em
 > [`../../architecture/etapa-6-desktop-apps-readiness.md`](../../architecture/etapa-6-desktop-apps-readiness.md).
 >
-> **Slice 6.1 (concluído) · 6.2–6.3 + 6.5 entregues in-tree · 6.4 desbloqueado por handoff:** readiness audit + plano por
+> **Slice 6.1 (concluído) · 6.2–6.5 entregues in-tree (6.4 adapter + app + smoke wiring; pendente só o smoke externo):** readiness audit + plano por
 > slice (o documento de readiness acima) — mapeia o estado CapyOS-side **já existente**
 > (i18n `localization_select`/`APP_T` em produção desde a F4; apps in-tree
 > fallback + CapyUI; tema da Etapa 1) versus os gaps reais: seam

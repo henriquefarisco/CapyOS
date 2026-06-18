@@ -488,6 +488,10 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/thread_crash_smoke_io.o \
 	$(BUILD)/x86_64/kernel/tls_handshake_smoke.o \
 	$(BUILD)/x86_64/kernel/tls_handshake_smoke_io.o \
+	$(BUILD)/x86_64/kernel/capybrowse_text_smoke.o \
+	$(BUILD)/x86_64/kernel/capybrowse_text_smoke_io.o \
+	$(BUILD)/x86_64/kernel/apps_roundtrip_smoke.o \
+	$(BUILD)/x86_64/kernel/apps_roundtrip_smoke_io.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
 	$(BUILD)/x86_64/kernel/worker.o \
 	$(BUILD)/x86_64/kernel/syscall.o \
@@ -828,6 +832,80 @@ CAPYLIBC_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc/crt0.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc/syscall_stubs.o
 
+# Freestanding <string.h> for ring-3 (userland/include/string.h +
+# userland/lib/capylibc/string.c). Kept as a SEPARATE object group so the
+# deliberately-minimal binaries (hello, capysh) are not forced to link unused
+# string code; only binaries that embed a decoupled core needing <string.h>
+# (e.g. capybrowse over the CapyBrowser text core, Etapa 6 / Slice 6.4) link
+# $(CAPYLIBC_STRING_OBJS). The dedicated rule adds -fno-builtin
+# -fno-tree-loop-distribute-patterns so GCC's loop-idiom recognition does not
+# rewrite a core's own loop (e.g. strlen) into a self-call (infinite recursion);
+# the word-at-a-time memcpy/memset are unaffected, matching the kernel stub.
+CAPYLIBC_STRING_OBJS = $(CAPYLIBC_BUILD_DIR)/lib/capylibc/string.o
+
+$(CAPYLIBC_BUILD_DIR)/lib/capylibc/string.o: $(USERLAND_DIR)/lib/capylibc/string.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) -fno-builtin -fno-tree-loop-distribute-patterns $(DEPFLAGS64) -c $< -o $@
+
+# ── Etapa 6 / Slice 6.4: CapyBrowser text core (capy-browser-core) ──────────
+# The ring-3 CapyBrowse Text app (userland/bin/capybrowse, Slice 6.4b) consumes
+# the PUBLISHED text subset of capy-browser-core (CapyBrowser v0.6.0, package
+# org.capyos.browser.text) by compiling the sibling's pure core TUs into the
+# binary — the same build-time sibling-detection used for the CapyUI desktop/
+# widget subtree (above). Authoritative source list = the CapyBrowser Makefile's
+# URL_SRC + TEXT_SRC (its `STAGE=text` / `test-text` set): url parse/normalize/
+# origin + html entities/tokenizer/text_emit. The DOM/CSS/layout/display-list
+# graphical core (Etapa 7, which pulls image codecs) is intentionally excluded —
+# that is why org.capyos.browser.text ships with `depends=` empty. The core uses
+# only <string.h> (now provided by $(CAPYLIBC_STRING_OBJS)) + <stddef/stdint.h>,
+# so it compiles freestanding. Consumption is through the versioned contract
+# docs/reference/integration/browser-core-integration-contract.md; these headers
+# are NEVER imported into src/ or include/ (kernel) — only into the ring-3
+# binary. When the sibling is absent (CapyOS-only checkout) the app is simply not
+# built (CAPYBROWSER_TEXT_AVAILABLE stays unset).
+CAPYBROWSER_DIR ?= ../CapyBrowser
+CAPYBROWSER_TEXT_OBJS :=
+ifneq ($(strip $(CAPYBROWSER_DIR)),)
+  ifneq ($(wildcard $(CAPYBROWSER_DIR)/src/text/html_text.h),)
+    CAPYBROWSER_TEXT_AVAILABLE := 1
+    CAPYBROWSER_TEXT_CFLAGS := -DCAPYOS_HAVE_CAPYBROWSER_TEXT \
+                               -I$(CAPYBROWSER_DIR)/src/text \
+                               -I$(CAPYBROWSER_DIR)/src/url
+    # capy-browser-core's URL parser is named capy_url_parse, which collides
+    # with capylibc-net's own capy_url_parse (used by capy_http_get). Rename the
+    # CORE's symbol so the two coexist at compile + link. Applied ONLY to the
+    # core TUs below (and matched by an in-source #define in capybrowse main.c);
+    # deliberately NOT added to HOST_CFLAGS, which must keep capylibc-net's
+    # capy_url_parse intact for the net tests.
+    CAPYBROWSER_TEXT_RENAME := -Dcapy_url_parse=capybrowse_core_url_parse
+    CAPYBROWSER_TEXT_OBJS := \
+        $(CAPYLIBC_BUILD_DIR)/capybrowser-core/url_parse.o \
+        $(CAPYLIBC_BUILD_DIR)/capybrowser-core/url_normalize.o \
+        $(CAPYLIBC_BUILD_DIR)/capybrowser-core/origin.o \
+        $(CAPYLIBC_BUILD_DIR)/capybrowser-core/html_entities.o \
+        $(CAPYLIBC_BUILD_DIR)/capybrowser-core/html_tokenizer.o \
+        $(CAPYLIBC_BUILD_DIR)/capybrowser-core/text_emit.o
+    $(info [build] CapyBrowser text core detected at $(CAPYBROWSER_DIR)/src (capybrowse enabled))
+  else
+    $(info [build] CapyBrowser present but text core (src/text/html_text.h) absent; capybrowse skipped)
+  endif
+else
+  $(info [build] CapyBrowser sibling not set; capybrowse text core unavailable)
+endif
+
+# Cross-repo compile rules: build the CapyBrowser text-core TUs as ring-3
+# userland objects under USERLAND_CFLAGS + the sibling include paths. The linked
+# binary supplies the freestanding <string.h> via $(CAPYLIBC_STRING_OBJS). Two
+# rules (url/ and text/) feed one output dir; Make selects the rule whose sibling
+# source exists for each stem.
+$(CAPYLIBC_BUILD_DIR)/capybrowser-core/%.o: $(CAPYBROWSER_DIR)/src/url/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_TEXT_CFLAGS) $(CAPYBROWSER_TEXT_RENAME) $(DEPFLAGS64) -c $< -o $@
+
+$(CAPYLIBC_BUILD_DIR)/capybrowser-core/%.o: $(CAPYBROWSER_DIR)/src/text/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_TEXT_CFLAGS) $(CAPYBROWSER_TEXT_RENAME) $(DEPFLAGS64) -c $< -o $@
+
 # F4 seção c parte 2/2 (2026-05-08): libcapy-net high-level userland
 # TCP client façade. Built as a separate object set so binaries that
 # don't need network I/O (hello, capysh) aren't forced to link the
@@ -1000,7 +1078,8 @@ TLS_SMOKE_ELF = $(CAPYLIBC_BUILD_DIR)/bin/tls_smoke/tls_smoke.elf
 TLS_SMOKE_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/bin/tls_smoke/main.o \
 	$(CAPYLIBC_OBJS) \
-	$(CAPYLIBC_NET_OBJS)
+	$(CAPYLIBC_NET_OBJS) \
+	$(CAPYLIBC_STRING_OBJS)
 
 $(TLS_SMOKE_ELF): $(TLS_SMOKE_OBJS)
 	@mkdir -p $(dir $@)
@@ -1031,6 +1110,65 @@ tls-smoke-blob: $(TLS_SMOKE_BLOB_OBJ)
 # is passed via EXTRA_CFLAGS64 by the smoke target. Default OFF = unchanged.
 ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
 CAPYOS64_OBJS += $(TLS_SMOKE_BLOB_OBJ)
+endif
+
+# ── User binary: capybrowse (Etapa 6 / Slice 6.4, ring-3 CapyBrowse Text) ───
+# Built only when the CapyBrowser text core sibling is present (the 6.4a
+# detection above set CAPYBROWSER_TEXT_AVAILABLE). Mirrors the tls_smoke
+# template: a ring-3 ELF linking capylibc + capylibc-net (Etapa 5 HTTPS fetch) +
+# the freestanding <string.h> ($(CAPYLIBC_STRING_OBJS), used by the core) + the
+# published capy-browser-core text objects ($(CAPYBROWSER_TEXT_OBJS)) + the
+# CapyOS-side view formatter. main.o and capybrowse_view.o compile with
+# $(CAPYBROWSER_TEXT_CFLAGS) so they see the sibling html_text.h. CAPYBROWSE_OBJS
+# is deferred (`=`) because $(CAPYLIBC_NET_OBJS) is defined earlier but expands
+# fully at link time. The blob + boot-embedding for
+# `make smoke-x64-vmware-capybrowse-text` are a follow-up slice (kernel-side
+# registration, like tls_smoke); this block only produces the linkable ELF
+# (verify with `make capybrowse-elf`).
+ifdef CAPYBROWSER_TEXT_AVAILABLE
+CAPYBROWSE_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capybrowse/capybrowse.elf
+CAPYBROWSE_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/capybrowse/main.o \
+	$(CAPYLIBC_BUILD_DIR)/bin/capybrowse/capybrowse_view.o \
+	$(CAPYLIBC_OBJS) \
+	$(CAPYLIBC_NET_OBJS) \
+	$(CAPYLIBC_STRING_OBJS) \
+	$(CAPYBROWSER_TEXT_OBJS)
+
+$(CAPYLIBC_BUILD_DIR)/bin/capybrowse/%.o: $(USERLAND_DIR)/bin/capybrowse/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_TEXT_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+$(CAPYBROWSE_ELF): $(CAPYBROWSE_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYBROWSE_OBJS)
+
+.PHONY: capybrowse-elf
+capybrowse-elf: $(CAPYBROWSE_ELF)
+	@echo "[ok] user binary linked: $(CAPYBROWSE_ELF)"
+
+# objcopy input MUST be `capybrowse.elf` so the magic symbols come out as
+# `_binary_capybrowse_elf_start/_end` (consumed by embedded_progs.c).
+CAPYBROWSE_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capybrowse/capybrowse_elf_blob.o
+
+$(CAPYBROWSE_BLOB_OBJ): $(CAPYBROWSE_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: capybrowse-blob
+capybrowse-blob: $(CAPYBROWSE_BLOB_OBJ)
+	@echo "[ok] capybrowse blob ready for kernel link: $(CAPYBROWSE_BLOB_OBJ)"
+
+# Embed the capybrowse blob into the kernel image only under the smoke gate.
+# The matching -DCAPYOS_CAPYBROWSE_SMOKE (kernel TUs: embedded_progs.c
+# registration + user_init boot hook + kernel_main branch + process_exit latch)
+# is passed via EXTRA_CFLAGS64 by the smoke target. Default OFF = unchanged.
+ifdef CAPYOS_CAPYBROWSE_SMOKE
+CAPYOS64_OBJS += $(CAPYBROWSE_BLOB_OBJ)
+endif
 endif
 
 # Sessao 6 (2026-05-05): regras do navegador legado erradicadas.
@@ -1505,6 +1643,13 @@ HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Isrc -Iuserland/include -Itools
 ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
 HOST_CFLAGS += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
 endif
+# Etapa 6 / Slice 6.4: host tests of the CapyBrowse Text adapter see the
+# published capy-browser-core text headers (struct capy_text_doc) only when the
+# CapyBrowser sibling is present. $(CAPYBROWSER_TEXT_CFLAGS) carries
+# -DCAPYOS_HAVE_CAPYBROWSER_TEXT + the sibling include paths (defined above).
+ifneq ($(strip $(CAPYBROWSER_TEXT_AVAILABLE)),)
+HOST_CFLAGS += $(CAPYBROWSER_TEXT_CFLAGS) -Iuserland/bin/capybrowse
+endif
 TEST_BIN    := $(BUILD)/tests/unit_tests
 # --- Host test sources, organized by domain to mirror the
 #     tests/<domain>/ folder layout introduced on 2026-05-15.
@@ -1636,6 +1781,8 @@ TEST_SRCS   := \
                tests/net/test_syscall_net_init.c src/kernel/syscall_net_init.c \
                \
                tests/userland/test_capylibc_abi.c \
+               tests/userland/test_capylibc_string.c \
+               tests/userland/test_capybrowse_view.c \
                tests/userland/test_capylibc_net.c \
                tests/userland/test_capylibc_net_url.c \
                tests/userland/test_capylibc_net_http.c \
@@ -1715,6 +1862,8 @@ TEST_SRCS   := \
                tests/kernel/test_scheduler_smoke_gate.c src/kernel/scheduler_smoke.c tests/stubs/stub_scheduler_smoke_io.c \
                tests/kernel/test_thread_crash_smoke_gate.c src/kernel/thread_crash_smoke.c tests/stubs/stub_thread_crash_smoke_io.c \
                tests/kernel/test_tls_handshake_smoke_gate.c src/kernel/tls_handshake_smoke.c tests/stubs/stub_tls_handshake_smoke_io.c \
+               tests/kernel/test_capybrowse_text_smoke_gate.c src/kernel/capybrowse_text_smoke.c tests/stubs/stub_capybrowse_text_smoke_io.c \
+               tests/kernel/test_apps_roundtrip_smoke_gate.c src/kernel/apps_roundtrip_smoke.c tests/stubs/stub_apps_roundtrip_smoke_io.c \
                tests/kernel/test_syscall_msr.c \
                tests/kernel/test_fault_classify.c src/arch/x86_64/fault_classify.c \
                tests/kernel/test_pmm_refcount.c src/memory/pmm_refcount.c \
@@ -1826,6 +1975,14 @@ TEST_SRCS   := \
 ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
 TEST_SRCS += $(CAPYUI_WIDGET_DIR)/capy_display_list.c \
              $(CAPYUI_WIDGET_DIR)/capy_widget.c
+endif
+
+# Etapa 6 / Slice 6.4: the CapyBrowse Text view formatter is compiled (and
+# host-tested) only when the CapyBrowser text core is present — it includes the
+# sibling's html_text.h for struct capy_text_doc. test_capybrowse_view.c is in
+# the unconditional list above and no-ops (returns 0) when the flag is unset.
+ifneq ($(strip $(CAPYBROWSER_TEXT_AVAILABLE)),)
+TEST_SRCS += userland/bin/capybrowse/capybrowse_view.c
 endif
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)
@@ -2170,6 +2327,34 @@ smoke-x64-vmware-tls-handshake:
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] tls-handshake ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 6 / Slice 6.4 external validation gate — CapyBrowse Text.
+# Builds the real userland TLS path (CAPYOS_TLS_USERLAND_HANDSHAKE=1, the
+# default) and embeds + boots the capybrowse ring-3 program
+# (CAPYOS_CAPYBROWSE_SMOKE: blob in the image + kernel-side registration/boot
+# hook + process_exit latch). The program fetches a controlled URL over HTTPS,
+# runs the published capy-browser-core HTML-to-text, formats + prints the page,
+# then exits 0 on success. The kernel latch (process_exit, gated) emits the
+# single COM1 marker "[smoke] capybrowse-text ready" on that exit-0 — ring-3
+# stdout would land on 0xE9 (not COM1), so the exit code is the authoritative
+# VMware signal. Requires the ../CapyBrowser sibling (text core) and a
+# controlled HTTP/HTTPS server reachable from the VM; point the endpoint via
+# EXTRA_USERLAND_CFLAGS, e.g.:
+#   EXTRA_USERLAND_CFLAGS='-DCAPYOS_CAPYBROWSE_URL=\"https://lab/\"'
+.PHONY: smoke-x64-vmware-capybrowse-text
+smoke-x64-vmware-capybrowse-text:
+	@echo "Executando smoke test VMware+E1000 capybrowse-text..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full \
+		CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
+		CAPYOS_CAPYBROWSE_SMOKE=1 \
+		EXTRA_CFLAGS64='-DCAPYOS_CAPYBROWSE_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] capybrowse-text ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
 .PHONY: smoke-x64-hyperv-boot

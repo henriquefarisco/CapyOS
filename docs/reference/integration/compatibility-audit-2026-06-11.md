@@ -55,3 +55,72 @@ passar o smoke `make smoke-x64-vmware-capybrowse-text`.
 - `CapyOS/docs/reference/integration/external-core-repositories.md`
 - `CapyOS/docs/architecture/etapa-6-desktop-apps-readiness.md`
 - `CapyOS/docs/plans/active/capyos-master-plan.md`
+
+## Addendum — adapter CapyOS-side da Slice 6.4 implementado + build-validado (in-tree)
+
+O adapter CapyOS-side que o "Estado CapyOS alpha.265" acima listava como
+proximo trabalho foi **implementado e build-validado in-tree**, sem bump de
+alpha (o bump fica para o fecho apos o gate externo, como na Etapa 5):
+
+- **App ring-3 `userland/bin/capybrowse`** consome a ABI publicada
+  `capy_html_to_text` / `struct capy_text_doc` do `capy-browser-core` (subset
+  `STAGE=text`: url parse/normalize/origin + html entities/tokenizer/text_emit),
+  **sem reinventar** HTML-to-text. Fetch HTTPS da Etapa 5 -> `capy_html_to_text`
+  -> formatter puro host-testado (`capybrowse_view`) -> stdout; erro de
+  transporte via o diagnostico 6.2/6.3 (`capy_net_diagnose_stage` +
+  `capy_net_stage_message`). Sem JavaScript.
+- **Pre-requisito entregue:** lib de string freestanding do `capylibc`
+  (`<string.h>`) que o core exige, com guarda `#include_next`/`UNIT_TEST` para
+  nao sombrear o `<string.h>` do host nos testes.
+- **Sibling-detection no Makefile** (mesmo padrao do CapyUI) compila o subset
+  textual de `../CapyBrowser` so quando o sibling existe; smoke `capybrowse`
+  (latch host-testado + embedding gated `CAPYOS_CAPYBROWSE_SMOKE`) com build de
+  producao byte-identico por default.
+
+**Dois fixes de integracao cross-repo** apareceram no link `make capybrowse-elf`
+(licao registrada para futuros consumos de core externo):
+
+1. **Colisao de simbolo `capy_url_parse`** — `capy-browser-core` e
+   `capylibc-net` exportam ambos `capy_url_parse` (parsers de URL distintos).
+   Resolvido namespando o simbolo do **core** no lado CapyOS
+   (`-Dcapy_url_parse=capybrowse_core_url_parse` so nas TUs do core + `#define`
+   casado no `main.c`); fora do `HOST_CFLAGS` para nao tocar os testes do net.
+2. **`time()` do BearSSL X.509** — `x509_minimal` referencia o relogio `time()`
+   da libc no link freestanding ring-3; o userland nao o tinha (o kernel prove
+   em `stubs.c`, mas binarios ring-3 nao linkam os stubs do kernel). Resolvido
+   com stub `time()` em `capy_tls_backend.c` (ao lado do `br_prng_seeder_system`,
+   guardado por `CAPYOS_TLS_USERLAND_HANDSHAKE` + `!UNIT_TEST`); o `tls_smoke`
+   foi alinhado linkando tambem `CAPYLIBC_STRING_OBJS`.
+
+**Validado:** `make capybrowse-elf` (link cross-repo) + `make test` verdes.
+**Gate de fecho pendente (externo):** `make smoke-x64-vmware-capybrowse-text` +
+`release-check`. A Slice 6.4 segue **nao concluida** ate esse gate; o bump de
+alpha e a promocao de runtime acontecem no fecho.
+
+## Addendum 2026-06-17 - Consolidacao de release alpha.266
+
+Evento: bump coordenado dos 7 repositorios consolidando o trabalho aditivo
+in-tree acumulado. Nenhuma mudanca de ABI base do kernel; nenhuma mudanca
+quebra contrato. Cada pacote irmao validado no host (exit=0) apos o bump.
+
+| Repo | De | Para | Mudanca aditiva |
+|---|---|---|---|
+| CapyOS | alpha.265+20260611 | alpha.266+20260617 | Etapa 6 in-tree (apps-roundtrip + capybrowse-text smokes, capybrowse userland, capylibc string ops) + pivot de versao |
+| CapyUI | 2.22.0 | 2.22.1 | capy_widget_type_name (helper puro; ABI v2.22 inalterada) |
+| CapyCodecs | 0.0.7 | 0.0.8 | capy_image_format_name + CAPY_IMAGE_FEATURE_FORMAT_NAME |
+| CapyAgent | 0.0.7 | 0.0.8 | capy_manifest_emit rejeita dependencia duplicada (CAPY_MANIFEST_DEPENDS_INVALID) |
+| CapyBrowser | 0.6.0 | 0.6.1 | refs numericas WHATWG NULL/surrogate/>0x10FFFF resolvem para U+FFFD (ENTITY_INVALID); <pre> preserva whitespace; marcadores de lista |
+| CapyLang | 0.1.8 | 0.1.9 | opcodes de array push/pop (0x67-0x68) + insert/remove (0x69-0x6A); 43 opcodes congelados |
+| CapyBenchmark | 0.0.7 | 0.0.8 | read-side parse trilogy replay/report/evaluation (round-trip + fail-closed) |
+
+Gates executados no host (`Automation/remote-exec.sh`), exit=0:
+- Irmaos: `make validate` (CapyUI, CapyAgent, CapyBrowser, CapyCodecs, CapyBenchmark) + `make rust-validate` (CapyLang).
+- CapyOS: `make version-audit` (current=alpha.266 alinhado), `make layout-audit`, `make test`.
+
+Pendente (nao alterado por este evento):
+- Etapa 6 aberta: `smoke-x64-vmware-capybrowse-text` e `smoke-x64-vmware-apps-basic-roundtrip` externos.
+- P0: signer Ed25519 do CapyAgent ainda nao registrado via `capypkg_set_signature_verifier`; publishing assinado segue fail-closed.
+
+Pin de core CapyOS nos irmaos: preservado (estes bumps de irmao nao mudam a
+superficie de contrato consumida pelo adapter; o pin so move quando um bump de
+core afeta o contrato do irmao).

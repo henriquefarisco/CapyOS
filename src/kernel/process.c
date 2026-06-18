@@ -15,6 +15,10 @@
 #include "kernel/tls_handshake_smoke.h"
 #endif
 
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+#include "kernel/capybrowse_text_smoke.h"
+#endif
+
 /* 2026-05-02: FD type and pipe direction constants now live in
  * include/kernel/process.h (FD_TYPE_*, FD_PIPE_FLAG_*). Removed
  * the local copies that duplicated them. */
@@ -281,6 +285,15 @@ void process_exit(int code) {
 #ifdef CAPYOS_TLS_HANDSHAKE_SMOKE
   if (tls_handshake_smoke_try_latch_exit_global((int32_t)code)) {
     tls_handshake_smoke_emit_marker();
+  }
+#endif
+  /* Etapa 6 / Slice 6.4: the userland capybrowse program signals a successful
+   * fetch + HTML-to-text render by exiting 0. Emit the COM1 marker exactly once
+   * on that success. In the smoke build capybrowse is the boot init process, so
+   * the first code==0 exit is its success. Gated so production pays zero cost. */
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+  if (capybrowse_text_smoke_try_latch_exit_global((int32_t)code)) {
+    capybrowse_text_smoke_emit_marker();
   }
 #endif
   task_exit(code);

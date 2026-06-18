@@ -10,6 +10,7 @@ govc VM name plus an accessible serial log source.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -158,9 +159,13 @@ def wait_for_govc_markers(
     return False, last, ""
 
 
-def vmrun_start(vmrun: str, vmx: Path, nogui: bool) -> int:
+def vmrun_start(vmrun: str, vmx: Path, nogui: bool, password: str | None = None) -> int:
     mode = "nogui" if nogui else "gui"
-    proc = run_command([vmrun, "start", str(vmx), mode])
+    cmd = [vmrun]
+    if password:
+        cmd += ["-vp", password]
+    cmd += ["start", str(vmx), mode]
+    proc = run_command(cmd)
     if proc.returncode != 0:
         print(proc.stdout, end="")
         print(proc.stderr, end="", file=sys.stderr)
@@ -168,8 +173,12 @@ def vmrun_start(vmrun: str, vmx: Path, nogui: bool) -> int:
     return 0
 
 
-def vmrun_stop(vmrun: str, vmx: Path) -> None:
-    run_command([vmrun, "stop", str(vmx), "hard"])
+def vmrun_stop(vmrun: str, vmx: Path, password: str | None = None) -> None:
+    cmd = [vmrun]
+    if password:
+        cmd += ["-vp", password]
+    cmd += ["stop", str(vmx), "hard"]
+    run_command(cmd)
 
 
 def govc_power_on(govc: str, vm_name: str) -> int:
@@ -189,6 +198,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="CapyOS VMware+E1000 DHCP smoke harness")
     parser.add_argument("--provider", choices=("vmrun", "govc"), default="vmrun")
     parser.add_argument("--vmx", type=Path, help="Path to a vmrun-compatible .vmx template/VM")
+    parser.add_argument(
+        "--vmx-password",
+        help="Encryption password for an encrypted VMware VM (passed to vmrun -vp). "
+        "For security prefer the CAPYOS_VMX_PASSWORD env var, which is used when this "
+        "flag is omitted; a command-line password is visible in the process list.",
+    )
     parser.add_argument("--vm-name", help="govc VM inventory name")
     parser.add_argument("--serial-log", type=Path, default=Path("build/ci/smoke_x64_vmware.serial.log"))
     parser.add_argument("--govc-serial-log", help="Datastore path used by govc datastore.download for the VM serial log")
@@ -239,19 +254,20 @@ def main() -> int:
         vmx = args.vmx.resolve()
         if not vmx.exists():
             return fail(f"VMX ausente: {vmx}")
+        vmx_password = args.vmx_password or os.environ.get("CAPYOS_VMX_PASSWORD")
         print(f"[info] provider=vmrun vmx={vmx} serial_log={serial_log}")
         if args.dry_run:
             return 0
         serial_log.parent.mkdir(parents=True, exist_ok=True)
         serial_log.write_text("", encoding="utf-8")
         try:
-            rc = vmrun_start(vmrun, vmx, not args.gui)
+            rc = vmrun_start(vmrun, vmx, not args.gui, vmx_password)
             if rc != 0:
                 return rc
             ok, log, failure_marker = wait_for_markers(serial_log, markers, args.timeout, args.poll)
         finally:
             if not args.no_poweroff:
-                vmrun_stop(vmrun, vmx)
+                vmrun_stop(vmrun, vmx, vmx_password)
     else:
         if not args.vm_name:
             return fail("--vm-name e obrigatorio para provider govc")

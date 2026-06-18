@@ -21,6 +21,33 @@ br_prng_seeder br_prng_seeder_system(const char **name) {
   return 0;
 }
 
+/* BearSSL's x509_minimal validator references the libc clock time() as a
+ * fallback for the validation "now". CapyOS always sets the validation time
+ * explicitly via br_x509_minimal_set_time() (capy_tls_engine_set_time below),
+ * so this is normally dead code — but x509_minimal.o still references the
+ * symbol, so the freestanding ring-3 link (tls_smoke, capybrowse, any binary
+ * embedding the BearSSL path) must define it. Same role as
+ * br_prng_seeder_system above; signature matches the kernel stub in
+ * src/arch/x86_64/stubs.c. Returns the real calendar time (SYS_CLOCK_REALTIME)
+ * so that, even on a path that skipped set_time, validity windows stay
+ * correct rather than defaulting to the 1970 epoch.
+ *
+ * Excluded from the host unit-test build (UNIT_TEST): there `time` is the real
+ * C library symbol, and the host libc provides it — defining our own would
+ * collide. Only the freestanding ring-3 build (no libc) needs the stub. */
+#ifndef UNIT_TEST
+long time(long *out) {
+  long now = capy_clock_realtime();
+  if (now < 0) {
+    now = 0;
+  }
+  if (out) {
+    *out = now;
+  }
+  return now;
+}
+#endif /* !UNIT_TEST */
+
 static int capy_tls_engine_socket_read(void *read_context,
                                        unsigned char *data, size_t len) {
   struct capy_tls_context *ctx = (struct capy_tls_context *)read_context;

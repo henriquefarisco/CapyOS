@@ -664,6 +664,40 @@ static void test_stage_message(void) {
   else FAIL("stage_message localization wrong");
 }
 
+static void test_stage_hint(void) {
+  fake_reset();
+  TEST("stage_hint: actionable, localized, EN fallback, OK empty");
+  int ok = 1;
+  capy_net_stage_t err_stages[] = {CAPY_NET_STAGE_INPUT, CAPY_NET_STAGE_DNS,
+                                   CAPY_NET_STAGE_TCP, CAPY_NET_STAGE_TLS,
+                                   CAPY_NET_STAGE_HTTP};
+  const char *langs[] = {"pt-BR", "en", "es", NULL, "xx"};
+  /* Every real failure stage has a non-empty hint in every language. */
+  for (size_t s = 0; s < sizeof(err_stages) / sizeof(err_stages[0]); ++s) {
+    for (size_t l = 0; l < sizeof(langs) / sizeof(langs[0]); ++l) {
+      const char *h = capy_net_stage_hint(err_stages[s], langs[l]);
+      if (!h || !h[0]) ok = 0;
+    }
+  }
+  /* OK carries no actionable hint. */
+  if (capy_net_stage_hint(CAPY_NET_STAGE_OK, "en")[0] != '\0') ok = 0;
+  /* EN is the fallback base: NULL and unknown lang == "en". */
+  if (strcmp(capy_net_stage_hint(CAPY_NET_STAGE_TLS, NULL),
+             capy_net_stage_hint(CAPY_NET_STAGE_TLS, "en")) != 0) ok = 0;
+  if (strcmp(capy_net_stage_hint(CAPY_NET_STAGE_DNS, "xx"),
+             capy_net_stage_hint(CAPY_NET_STAGE_DNS, "en")) != 0) ok = 0;
+  /* pt-BR and es each differ from EN for a real stage. */
+  if (strcmp(capy_net_stage_hint(CAPY_NET_STAGE_TLS, "pt-BR"),
+             capy_net_stage_hint(CAPY_NET_STAGE_TLS, "en")) == 0) ok = 0;
+  if (strcmp(capy_net_stage_hint(CAPY_NET_STAGE_TLS, "es"),
+             capy_net_stage_hint(CAPY_NET_STAGE_TLS, "en")) == 0) ok = 0;
+  /* "es" is not mistaken for "en" (both start with 'e') -> es != pt either. */
+  if (strcmp(capy_net_stage_hint(CAPY_NET_STAGE_DNS, "es"),
+             capy_net_stage_hint(CAPY_NET_STAGE_DNS, "pt-BR")) == 0) ok = 0;
+  if (ok) PASS();
+  else FAIL("stage_hint localization wrong");
+}
+
 /* === Entry point ============================================= */
 
 int test_capylibc_net_run(void) {
@@ -704,6 +738,7 @@ int test_capylibc_net_run(void) {
   test_strerror_codes();
   test_diagnose_stage();
   test_stage_message();
+  test_stage_hint();
 
   printf("  -> %d/%d passed\n",
          test_capylibc_net_passes, test_capylibc_net_runs);

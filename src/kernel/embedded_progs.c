@@ -119,6 +119,31 @@ static size_t tls_smoke_size(void) {
     return (size_t)(end - start);
 }
 #endif
+
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+/* Etapa 6 / Slice 6.4: the capybrowse blob is embedded only under this gate
+ * (Makefile adds $(CAPYBROWSE_BLOB_OBJ) to CAPYOS64_OBJS), so its magic
+ * symbols exist only here. Default + UNIT_TEST builds never see this. */
+extern const uint8_t _binary_capybrowse_elf_start[];
+extern const uint8_t _binary_capybrowse_elf_end[];
+
+static const void *capybrowse_data(void) {
+    const uint8_t *start;
+    __asm__ volatile("lea _binary_capybrowse_elf_start(%%rip), %0"
+                     : "=r"(start));
+    return (const void *)start;
+}
+
+static size_t capybrowse_size(void) {
+    const uint8_t *start;
+    const uint8_t *end;
+    __asm__ volatile("lea _binary_capybrowse_elf_start(%%rip), %0"
+                     : "=r"(start));
+    __asm__ volatile("lea _binary_capybrowse_elf_end(%%rip), %0"
+                     : "=r"(end));
+    return (size_t)(end - start);
+}
+#endif
 #endif
 
 static int prog_path_eq(const char *a, const char *b) {
@@ -154,6 +179,13 @@ int embedded_progs_lookup(const char *path,
     if (prog_path_eq(path, "/bin/tls_smoke")) {
         *out_data = (const uint8_t *)tls_smoke_data();
         *out_size = tls_smoke_size();
+        return 0;
+    }
+#endif
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+    if (prog_path_eq(path, "/bin/capybrowse")) {
+        *out_data = (const uint8_t *)capybrowse_data();
+        *out_size = capybrowse_size();
         return 0;
     }
 #endif

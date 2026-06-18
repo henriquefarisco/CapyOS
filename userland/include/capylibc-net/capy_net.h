@@ -345,6 +345,13 @@ const char *capy_net_stage_name(capy_net_stage_t stage);
  * net-diagnostic vocabulary here. Always non-NULL. */
 const char *capy_net_stage_message(capy_net_stage_t stage, const char *lang);
 
+/* Actionable localized hint to pair with capy_net_stage_message: the message
+ * states what failed, the hint tells the user what to do next (check the
+ * network, the address, or note that the certificate is untrusted). Same lang
+ * rule and ASCII-only convention; CAPY_NET_STAGE_OK returns "" (no hint). The
+ * CapyBrowse Text app prints it as a second line. Always non-NULL. */
+const char *capy_net_stage_hint(capy_net_stage_t stage, const char *lang);
+
 #ifdef __cplusplus
 }
 #endif

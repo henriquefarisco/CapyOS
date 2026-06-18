@@ -90,4 +90,11 @@ int kernel_boot_run_capysh(void);
 int kernel_boot_run_tls_smoke(void);
 #endif
 
+#ifdef CAPYOS_CAPYBROWSE_SMOKE
+/* Etapa 6 / Slice 6.4: spawn the embedded `/bin/capybrowse` program as the
+ * boot init process to drive the CapyBrowse Text smoke gate. Same shape as
+ * `kernel_boot_run_tls_smoke`; compiled only under the smoke gate. */
+int kernel_boot_run_capybrowse(void);
+#endif
+
 #endif /* KERNEL_USER_INIT_H */

@@ -159,3 +159,41 @@ const char *capy_net_stage_message(capy_net_stage_t stage, const char *lang) {
   }
   return net_pick(lang, "Erro de rede.", "Network error.", "Error de red.");
 }
+
+/*
+ * Actionable follow-up hint for a diagnostic stage (Etapa 6 UX maturity).
+ * `capy_net_stage_message` says WHAT failed; this says WHAT THE USER CAN DO,
+ * so the non-technical target user gets a clear next step. Same language rule
+ * and ASCII-only convention as `capy_net_stage_message`. CAPY_NET_STAGE_OK has
+ * no hint (empty string); the CapyBrowse Text app prints the hint as a second
+ * line under the message only when it is non-empty. Pure, always non-NULL.
+ */
+const char *capy_net_stage_hint(capy_net_stage_t stage, const char *lang) {
+  switch (stage) {
+  case CAPY_NET_STAGE_OK:
+    return "";
+  case CAPY_NET_STAGE_INPUT:
+    return net_pick(lang, "Verifique o endereco e tente novamente.",
+                    "Check the address and try again.",
+                    "Verifique la direccion e intente de nuevo.");
+  case CAPY_NET_STAGE_DNS:
+    return net_pick(
+        lang, "Verifique sua conexao de rede ou a grafia do endereco.",
+        "Check your network connection or the spelling of the address.",
+        "Verifique su conexion de red o la escritura de la direccion.");
+  case CAPY_NET_STAGE_TCP:
+    return net_pick(
+        lang, "O servidor pode estar fora do ar; tente novamente mais tarde.",
+        "The server may be down; try again later.",
+        "El servidor puede estar caido; intente de nuevo mas tarde.");
+  case CAPY_NET_STAGE_TLS:
+    return net_pick(lang, "O certificado de seguranca do site nao e confiavel.",
+                    "The site's security certificate is not trusted.",
+                    "El certificado de seguridad del sitio no es de confianza.");
+  case CAPY_NET_STAGE_HTTP:
+    return net_pick(lang, "Pode nao ser um site de texto simples.",
+                    "It may not be a plain-text site.",
+                    "Puede no ser un sitio de texto simple.");
+  }
+  return net_pick(lang, "Tente novamente.", "Try again.", "Intente de nuevo.");
+}
