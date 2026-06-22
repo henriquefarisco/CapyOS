@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-06-17 ? **Vers?o:** `0.8.0-alpha.268+20260617` ? **Plataforma oficial:** VMware + UEFI + E1000 ? **P?blico alvo:** usu?rio desktop comum
+**Data:** 2026-06-17 ? **Vers?o:** `0.8.0-alpha.269+20260617` ? **Plataforma oficial:** VMware + UEFI + E1000 ? **P?blico alvo:** usu?rio desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -21,7 +21,7 @@
 
 - **Base histórica:** 100% consolidada até `alpha.93`; Etapa 1 fechada em `alpha.100`.
 - **Plano sequencial novo (pós-reordenação ROI):** Etapas 1-5 oficialmente fechadas; 5/16 etapas concluídas.
-- **Etapa atual:** Etapa 6 — Apps básicos do desktop maduros + `CapyBrowse Text` (desbloqueada pelo fecho da Etapa 5 em alpha.264; Slice 6.4 com adapter CapyOS-side implementado + build-validado in-tree — `make capybrowse-elf` (link cross-repo) + `make test` verdes — pendente do gate externo `make smoke-x64-vmware-capybrowse-text` para fecho). **Atualizacao alpha.267 (2026-06-17):** corrigido o bloqueador central de exec userland ring-3 -- process_enter_user_mode passou a carregar o CR3 do address space do processo antes da transicao (o caminho boot-direct nao passava pelo context switch do scheduler, entao o CR3 ficava no kernel AS sem a imagem ELF do usuario -> #PF de instruction-fetch em _start em TODO programa). make smoke-x64-hello-user passa sob QEMU+OVMF (hello chega a ring 3 e imprime hello, capyland; zero panics) e make test verde (commit d759900). Os gates externos VMware capybrowse-text e apps-basic-roundtrip seguem pendentes (QEMU = feedback de dev; VMware = aceite oficial).
+- **Etapa atual:** Etapa 6 — Apps básicos do desktop maduros + `CapyBrowse Text` (desbloqueada pelo fecho da Etapa 5 em alpha.264; Slice 6.4 com adapter CapyOS-side implementado + build-validado in-tree — `make capybrowse-elf` (link cross-repo) + `make test` verdes — pendente do gate externo `make smoke-x64-vmware-capybrowse-text` para fecho). **Atualizacao alpha.267 (2026-06-17):** corrigido o bloqueador central de exec userland ring-3 -- process_enter_user_mode passou a carregar o CR3 do address space do processo antes da transicao (o caminho boot-direct nao passava pelo context switch do scheduler, entao o CR3 ficava no kernel AS sem a imagem ELF do usuario -> #PF de instruction-fetch em _start em TODO programa). make smoke-x64-hello-user passa sob QEMU+OVMF (hello chega a ring 3 e imprime hello, capyland; zero panics) e make test verde (commit d759900). Os gates externos VMware capybrowse-text e apps-basic-roundtrip seguem pendentes (QEMU = feedback de dev; VMware = aceite oficial). **Atualizacao alpha.269 (2026-06-17):** corrigida a ordem de bytes do endereco de destino no socket_connect do kernel -- o sin_addr nao era convertido de network para host order (so a porta era), entao um connect literal para 10.0.2.2 saia no fio como 2.2.0.10 (trocado duas vezes, comprovado por pcap QEMU). Com o fix simetrico, o gate de dev smoke-x64-qemu-capybrowse-text passa ponta-a-ponta (SYN -> 10.0.2.2, handshake TCP + roundtrip HTTP, marker [smoke] capybrowse-text ready) e make test segue verde. VMware capybrowse-text e apps-basic-roundtrip seguem como gates oficiais pendentes.
 - **Slice 3D fechado em 2026-05-21 (alpha.245):** gate externo `make smoke-x64-vmware-usb-hid-keyboard` validado em VMware + UEFI + E1000 com teclado USB HID real, marker `[smoke] usb-hid-keyboard ready` observado no COM1, follow-ups §14.1-§14.3 entregues, audit fixes §15.1-§15.5 corrigidos e bug W (slot reuse collision) resolvido. 25 novos host tests cobrem smoke gate, event pump, release slot, port ack CSC, Ctrl combinations, LED dispatch e caps lock.
 - **Slice 3E.1 entregue em 2026-05-21 (alpha.246):** extração host-testável dos AHCI/NVMe command builders.
 - **Slice 3E.2.A entregue em 2026-05-21 (alpha.247):** unified block-I/O error classifier `block_io_classify_ahci`/`block_io_classify_nvme` com 5 classes. AHCI integrado em 3 sites de `ahci_exec`; NVMe em 4 sites. 15 novos host tests.
@@ -38,7 +38,7 @@
 - **Etapa 5 fechada em `alpha.264`:** `libcapy-tls` userland agora faz handshake BearSSL **real** (`capy_tls_is_supported()==1`) — entropia/wall-clock syscalls, trust anchors reais, ClientHello+SNI, handshake-drive, validação X.509 fail-closed e o seam HTTPS de `capy_net`. A flag `CAPYOS_TLS_USERLAND_HANDSHAKE` foi **promovida a default** após o gate externo (`make smoke-x64-vmware-tls-handshake`, marker `[smoke] tls-handshake ready` no COM1, + `release-check`). Hardening de segurança nesta janela: overflows de integer no ELF loader (userland + boot, corrigidos + testes), tetos de custo KDF no volume header, robustez adversarial de DNS/DHCP/ICMP/ARP e bound do `names_equal` do CAPYFS.
 - **Etapas bloqueadas:** Etapas 7-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.268, Etapa 6 ativa)
+## Repositórios apartados (estado em alpha.269, Etapa 6 ativa)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A
