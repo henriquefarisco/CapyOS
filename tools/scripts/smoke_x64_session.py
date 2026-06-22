@@ -309,6 +309,14 @@ def make_qemu_cmd(
             pcap = debugcon_log.with_name("qemu_net.pcap")
             cmd.extend(
                 ["-object", f"filter-dump,id=netdump,netdev=net0,file={pcap}"])
+    else:
+        # Isolated SLIRP NIC: DHCP still works (ISO smoke network_mode=dhcp
+        # persistence check), but restrict=on blocks host/internet egress so
+        # best-effort net-fetch demos fail fast instead of hanging on a real,
+        # slow-under-TCG TLS handshake. Explicit NIC also avoids inheriting
+        # QEMU implicit default user-net NIC with full internet access.
+        cmd.extend(["-netdev", "user,id=net0,restrict=on",
+                    "-device", "e1000,netdev=net0"])
 
     if debugcon_log is not None:
         cmd.extend(
