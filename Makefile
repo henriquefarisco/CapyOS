@@ -2076,8 +2076,28 @@ $(CAPYPKG_LOCAL_BUNDLE_C) $(CAPYPKG_LOCAL_BUNDLE_H): $(CAPYPKG_LOCAL_BUNDLE_STAM
 
 $(BUILD)/x86_64/generated/capypkg_local_bundle_data.o: $(CAPYPKG_LOCAL_BUNDLE_STAMP) $(CAPYPKG_LOCAL_BUNDLE_C) $(CAPYPKG_LOCAL_BUNDLE_H)
 
+.PHONY: smoke-x64-iso-local-modules
+# Dev gate: clean build of the local-bundle lab ISO + a first-boot FULL
+# install smoke that MUST install the embedded modules end-to-end with no
+# DNS, no network and no signer. Requires the sibling repos packaged under
+# $(LOCAL_MODULES_WORKSPACE) (each `make package`). VMware remains the
+# official acceptance platform; this is local dev feedback.
+smoke-x64-iso-local-modules:
+	$(MAKE) clean
+	$(MAKE) iso-uefi-local-modules TOOLCHAIN64="$(TOOLCHAIN64)" \
+	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
+	  LOCAL_MODULES_REPOS="$(LOCAL_MODULES_REPOS)"
+	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full $(SMOKE_X64_ISO_ARGS)
+	@if grep -q "Desktop module not installed" build/ci/smoke_x64_iso_install.boot1.debugcon.log; then \
+	  echo "[FAIL] local-bundle modules did not install (FULL profile)"; exit 1; fi
+	@echo "[ok] local-bundle FULL module install validated"
+
 .PHONY: iso-uefi-local-modules
 iso-uefi-local-modules:
+	$(MAKE) local-modules-bundle \
+	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
+	  LOCAL_MODULES_REPOS="$(LOCAL_MODULES_REPOS)" \
+	  CAPYPKG_LOCAL_BUNDLE_BASE_URL="$(CAPYPKG_LOCAL_BUNDLE_BASE_URL)"
 	$(MAKE) all64 iso-uefi \
 	  CAPYOS_LOCAL_MODULES=1 \
 	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
