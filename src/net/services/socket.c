@@ -130,12 +130,19 @@ int socket_connect(int fd, const struct sockaddr_in *addr) {
       s->local_addr.sin_addr = ipv4.addr;
     }
 
-    /* sin_port is in network byte order (BSD convention); tcp_open expects
-       host byte order because tcp_send_segment will call tcp_htons() on it. */
+    /* sin_port and sin_addr are in network byte order (BSD convention);
+       tcp_open expects host byte order because the IPv4 layer calls
+       net_stack_htonl32() on the destination address and tcp_send_segment
+       calls tcp_htons() on the port. We therefore byte-swap both here.
+       Without the sin_addr swap, a literal connect to 10.0.2.2 reaches the
+       wire as 2.2.0.10 (the address is effectively swapped twice). */
     uint16_t rp = addr->sin_port;
     uint16_t rp_h = (uint16_t)((rp >> 8) | ((rp & 0xFF) << 8));
+    uint32_t ra = addr->sin_addr;
+    uint32_t ra_h = ((ra >> 24) & 0xFFu) | ((ra >> 8) & 0xFF00u) |
+                    ((ra << 8) & 0xFF0000u) | ((ra << 24) & 0xFF000000u);
     int conn = tcp_open(s->local_addr.sin_addr, s->local_addr.sin_port,
-                        addr->sin_addr, rp_h, fd);
+                        ra_h, rp_h, fd);
     if (conn < 0) {
       s->state = SOCK_STATE_ERROR;
       s->error = conn;
