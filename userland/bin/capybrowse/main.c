@@ -70,6 +70,14 @@ static uint8_t g_fetch[CAPYBROWSE_FETCH_MAX];
 static char g_text[CAPYBROWSE_TEXT_MAX];
 static char g_view[CAPYBROWSE_VIEW_MAX];
 
+/* The HTTP response and parsed-document structs also live in .bss, not on
+ * main()'s stack. As stack locals they push main()'s frame to ~140 KiB, which
+ * exceeds the kernel's eagerly-mapped top-of-stack window and would force a
+ * demand-paged stack-clash probe on entry. capybrowse is a single-shot,
+ * single-threaded program, so file scope is safe and keeps the frame small. */
+static struct capy_http_response resp;
+static struct capy_text_doc doc;
+
 static size_t cb_cstr_len(const char *s) {
   size_t n = 0u;
   while (s[n]) {
@@ -98,8 +106,6 @@ static void cb_fail(capy_net_err_t net_err, capy_tls_state_t tls_state) {
 }
 
 int main(int rank) {
-  struct capy_http_response resp;
-  struct capy_text_doc doc;
   unsigned attempt;
   int got_response = 0;
 

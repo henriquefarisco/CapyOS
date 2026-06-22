@@ -1,4 +1,5 @@
 #include "arch/x86_64/cpu_local.h"
+#include "kernel/arch_sched_hooks.h"
 #include "kernel/process.h"
 #include "kernel/task.h"
 #include "memory/vmm.h"
@@ -44,6 +45,19 @@ int process_enter_user_mode(struct process *proc) {
   if (rsp == 0) {
     return PROCESS_ENTER_USER_MODE_BAD_RSP;
   }
+
+  /* Establish proc as the current task before the ring transition, exactly as
+   * the scheduler does on a context switch (and as the TWO_BUSY boot path does
+   * inline). The boot-direct spawn path does not pass through the scheduler, so
+   * without this process_current() stays NULL and a later user #PF -- e.g.
+   * demand-paged stack growth past the eager top-of-stack pages, which the
+   * stack-clash probe in a large main() frame triggers -- would resolve no
+   * address space in vmm_handle_page_fault and escalate to a fatal fault
+   * instead of mapping the anonymous stack region. Also refreshes TSS RSP0 so
+   * ring-3 -> ring-0 traps land on this task's kernel stack. */
+  proc->main_thread->state = TASK_STATE_RUNNING;
+  task_set_current(proc->main_thread);
+  arch_sched_apply_kernel_stack(proc->main_thread);
 
   /* Activate the process address space before the ring transition. This
    * path does not pass through the scheduler context switch, so CR3 would

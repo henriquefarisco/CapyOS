@@ -27,8 +27,15 @@ void arch_sched_apply_kernel_stack(const struct task *next) {
     if (!next || !next->kernel_stack || next->kernel_stack_size == 0u) {
         return;
     }
+    /* Force 16-byte alignment of the stack top. The SysV x86-64 ABI and the
+     * syscall/IRQ entry stubs assume a 16-byte-aligned kernel stack, so the C
+     * handlers' aligned SSE spills (e.g. sys_connect copying a struct
+     * sockaddr_in local via `movaps`) #GP if the top is only 8-byte aligned.
+     * kmalloc does not guarantee 16-byte alignment, so mask the raw top down,
+     * matching the scheduler context stack_top handling in task.c. */
     uint64_t top =
-        (uint64_t)(uintptr_t)(next->kernel_stack + next->kernel_stack_size);
+        ((uint64_t)(uintptr_t)(next->kernel_stack + next->kernel_stack_size)) &
+        ~0xFULL;
 
     /* Both writes target globals that are already locked by their
      * own host tests (test_cpu_local + test_tss_layout). The order
