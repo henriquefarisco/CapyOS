@@ -465,8 +465,23 @@ int capypkg_install(const char *name) {
     static uint8_t payload_buffer[CAPYPKG_PAYLOAD_MAX];
     size_t payload_buffer_cap = sizeof(payload_buffer);
 #else
-    uint8_t *payload_buffer = (uint8_t *)kalloc(CAPYPKG_PAYLOAD_MAX);
+    /* Size the download buffer to the package's declared payload size
+     * (capped at the 8 MiB contract) instead of always reserving the full
+     * 8 MiB. kalloc draws from the 16 MiB kernel heap, and a fixed 8 MiB
+     * request -- half the heap in one contiguous block -- routinely fails
+     * once the first-boot heap is partly used/fragmented, which aborted
+     * every module install with CAPYPKG_ERR_QUOTA (the local-bundle modules
+     * are ~1.2 MiB each). size_bytes is only a hint, so the fetcher still
+     * enforces this cap and capypkg_verify_payload re-checks the SHA-256: a
+     * wrong hint can only shrink the buffer and trip a clean verify failure,
+     * never smuggle unverified bytes through. A missing/oversized hint falls
+     * back to the full contract size (prior behaviour). */
     size_t payload_buffer_cap = CAPYPKG_PAYLOAD_MAX;
+    if (avail->size_bytes > 0u &&
+        (size_t)avail->size_bytes <= CAPYPKG_PAYLOAD_MAX) {
+        payload_buffer_cap = (size_t)avail->size_bytes;
+    }
+    uint8_t *payload_buffer = (uint8_t *)kalloc(payload_buffer_cap);
     if (!payload_buffer) {
         avail->state = CAPYPKG_STATE_BROKEN;
         klog(KLOG_WARN,
