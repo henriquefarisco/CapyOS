@@ -247,6 +247,14 @@ static int setup_write_settings_and_mark(const char *setup_language,
   settings.ipv4_dns = 0;
   settings.splash_enabled = 1;
   settings.diagnostics_enabled = 0;
+  /* Initialize browser_homepage explicitly: it is the one system_settings
+   * field this function does not otherwise set, so without this it is
+   * uninitialized stack memory and config_write_settings_file() persists
+   * garbage to /system/config.ini (the writer emits the field whenever its
+   * first byte is non-zero). Mirrors system_settings_set_defaults() and
+   * apply_default_settings(). */
+  cstring_copy(settings.browser_homepage, sizeof(settings.browser_homepage),
+               "https://wikipedia.org");
 
   const char *keyboard_value = keyboard_current_layout();
   if (!keyboard_value || !keyboard_value[0]) {
