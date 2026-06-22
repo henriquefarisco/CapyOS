@@ -539,6 +539,14 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
  * Callers that need the (a)/(b) distinction pass a non-NULL out_neg_ttl
  * and check `*out_neg_ttl > 0` after rc == -1. Older callers still get
  * the binary 0/-1 contract by passing NULL. */
+/* DNS runs over UDP, so the query or its reply can be silently dropped.
+   Rather than burn the whole timeout window on a single send, resend the
+   same query (unchanged query_id, so a late reply to an earlier datagram
+   still matches) at this interval up to NET_DNS_MAX_RETRANSMITS times --
+   mirroring the TCP SYN retransmit in net/services/socket.c. */
+#define NET_DNS_RETRANSMIT_INTERVAL_MS 1000u
+#define NET_DNS_MAX_RETRANSMITS 2u
+
 int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
                           uint32_t *out_ip, uint32_t *out_ttl,
                           uint32_t *out_neg_ttl) {
@@ -561,6 +569,8 @@ int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
     return -1;
   }
 
+  uint32_t next_retransmit_at = NET_DNS_RETRANSMIT_INTERVAL_MS;
+  uint32_t retransmit_count = 0;
   for (uint32_t elapsed = 0; elapsed <= timeout_ms; ++elapsed) {
     (void)net_stack_poll();
     if (g_net.dns.response_ready) {
@@ -576,6 +586,13 @@ int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
     }
     if (g_net.dns.response_failed) {
       break;
+    }
+    if (elapsed >= next_retransmit_at &&
+        retransmit_count < NET_DNS_MAX_RETRANSMITS) {
+      (void)net_dns_send_query(&g_net.dns, &g_net.ipv4, hostname,
+                               net_stack_send_ipv4);
+      retransmit_count++;
+      next_retransmit_at += NET_DNS_RETRANSMIT_INTERVAL_MS;
     }
     net_stack_delay_approx_1ms();
   }
