@@ -393,6 +393,44 @@ sem precisar reinstalar a ISO.
 - repositório `signed` sem verifier plugado →
   `CAPYPKG_ERR_SIGNATURE`.
 
+### 5.6 Offline / bundle local embutido (sem rede, laboratório)
+
+Para validar a instalação de módulos sem nenhuma rede (sem DNS, sem repo
+remoto, sem signer), os payloads dos repos irmãos podem ser embutidos na
+própria ISO como um *bundle local* e servidos pelo `capypkg` a partir de
+URLs `https://local.capyos.invalid/capypkg/...`, resolvidas em memória e
+nunca pela rede.
+
+Pré-requisito: os 6 repos irmãos empacotados (cada um `make package`,
+gerando `build/capypkg/*.manifest` + `.bin`) sob
+`$(LOCAL_MODULES_WORKSPACE)` (padrão `..`).
+
+```sh
+# Gera o bundle C embutido + ISO de laboratório (CAPYOS_LOCAL_MODULES=1).
+# O wizard de first-boot passa a usar a URL do bundle local por padrão.
+make iso-uefi-local-modules
+
+# Gate de dev ponta-a-ponta (clean + ISO + smoke de install FULL):
+make smoke-x64-iso-local-modules
+```
+
+No primeiro boot, escolha o perfil FULL (ou CUSTOM): o índice e os
+payloads vêm do bundle embutido, o repositório é registrado como
+`unsigned` (`repo_signed=0`, sem verifier necessário) e os módulos
+`org.capyos.ui.*` (e demais) instalam ponta-a-ponta sem rede
+(`Completed: N  Failed: 0`).
+
+Notas:
+
+- `make` recompila por timestamp, não por flag; alternar
+  `CAPYOS_LOCAL_MODULES` exige um `make clean` antes (o gate já limpa).
+- Cada payload é alocado pelo tamanho real declarado (`size_bytes`), não
+  pelo teto de 8 MiB — necessário para caber no heap de 16 MiB durante o
+  first-boot.
+- Este é um caminho de laboratório/offline; o canal oficial assinado
+  (seção 4) continua sendo o de produção e segue bloqueado pelo signer
+  Ed25519 da CapyAgent.
+
 ## 6. Remoção e atualização
 
 ```text
