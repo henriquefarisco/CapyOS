@@ -311,6 +311,7 @@ def boot_with_session(
     verbose: bool,
     iso_path: Path | None = None,
     boot_from: str = "disk",
+    networking: bool = False,
 ) -> SmokeSession:
     port = choose_free_port()
     cmd = make_qemu_cmd(
@@ -324,6 +325,7 @@ def boot_with_session(
         debugcon_log=debugcon_log,
         iso_path=iso_path,
         boot_from=boot_from,
+        networking=networking,
     )
     session = SmokeSession(
         cmd=cmd,

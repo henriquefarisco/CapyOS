@@ -2357,6 +2357,24 @@ smoke-x64-vmware-capybrowse-text:
 		--marker "[smoke] capybrowse-text ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
+# Local QEMU+OVMF mirror of smoke-x64-vmware-capybrowse-text (development
+# feedback only; VMware + UEFI + E1000 stays the official release-acceptance
+# gate, see docs/operations/etapa-6-external-validation-playbook.md). Same
+# kernel build flags; boots the provisioned disk under QEMU with an E1000
+# user-net NIC (SLIRP DHCP + outbound NAT) and asserts the two COM1 markers in
+# order. Needs outbound network reachability from the QEMU host; the default
+# endpoint is https://example.com/, override the kernel build via
+# EXTRA_USERLAND_CFLAGS='-DCAPYOS_CAPYBROWSE_URL=\"https://lab/\"' for a
+# controlled server. Unblocked by alpha.267 (ring-3 userland exec CR3 fix).
+.PHONY: smoke-x64-qemu-capybrowse-text
+smoke-x64-qemu-capybrowse-text:
+	@echo "Executando smoke test QEMU+E1000 capybrowse-text (dev feedback)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1 CAPYOS_CAPYBROWSE_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_CAPYBROWSE_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYOS_CAPYBROWSE_URL=\"http://10.0.2.2:18080/\"'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_capybrowse.py $(SMOKE_X64_QEMU_CAPYBROWSE_ARGS)
+
 .PHONY: smoke-x64-hyperv-boot
 smoke-x64-hyperv-boot:
 	@if [ -z "$(IMG)" ]; then echo "Usage: make smoke-x64-hyperv-boot IMG=/path/to/CapyOSGen2.vhd"; echo "See docs/operations/hyperv-gen2-baseline-runbook.md"; exit 2; fi

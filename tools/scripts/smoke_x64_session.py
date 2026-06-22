@@ -272,6 +272,7 @@ def make_qemu_cmd(
     debugcon_log: Path | None = None,
     iso_path: Path | None = None,
     boot_from: str = "disk",
+    networking: bool = False,
 ) -> list[str]:
     cmd = [
         qemu_bin,
@@ -293,6 +294,21 @@ def make_qemu_cmd(
         "none",
         "-no-reboot",
     ]
+
+    if networking:
+        # E1000 NIC on QEMU user-mode networking (SLIRP): the guest gets a
+        # DHCP lease (10.0.2.15), gateway/DNS 10.0.2.2/10.0.2.3 and outbound
+        # NAT. The e1000 model matches the official VMware + E1000 platform so
+        # the same kernel NIC driver path is exercised; no inbound host ports
+        # are forwarded. Used by the networked Etapa 6 smokes (capybrowse-text).
+        cmd.extend(["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"])
+        if debugcon_log is not None:
+            # Capture all guest NIC traffic to a pcap next to the logs for
+            # network debugging (ARP / DHCP / TCP handshakes). Harmless to
+            # leave on for the dev smokes.
+            pcap = debugcon_log.with_name("qemu_net.pcap")
+            cmd.extend(
+                ["-object", f"filter-dump,id=netdump,netdev=net0,file={pcap}"])
 
     if debugcon_log is not None:
         cmd.extend(
