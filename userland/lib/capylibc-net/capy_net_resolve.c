@@ -9,9 +9,11 @@
  *        and never reaches the kernel resolver. This matches what
  *        glibc / musl do (`getaddrinfo` first checks AI_NUMERICHOST).
  *     2. On parse failure, fall back to `capy_dns_resolve(host,
- *        &ip, 0)` which queries the kernel-side DNS cache via
- *        SYS_DNS_RESOLVE. A miss propagates as -1 with
- *        CAPY_NET_EDNS in `capy_net_last_error()`.
+ *        &ip, 0)` which goes through SYS_DNS_RESOLVE to the kernel
+ *        resolver: it checks the DHCP-seeded cache first and, on a
+ *        miss, sends a real DNS query (net_stack_dns_resolve) and
+ *        seeds the cache on success. A definitive miss/NXDOMAIN
+ *        propagates as -1 with CAPY_NET_EDNS in `capy_net_last_error()`.
  *
  *   capy_tcp_connect_host(host, port):
  *     Resolve via the helper above, then delegate to
@@ -21,11 +23,11 @@
  *     contexts; e.g. an updater that only ever connects to a
  *     hard-coded IP).
  *
- * Note: the kernel does NOT auto-promote a cache miss into an
- * active DNS query in this iteration. The cache is seeded by
- * DHCP discovery + (future) libcapy-net DNS client. Callers
- * that need a guaranteed lookup should populate the cache out of
- * band -- the active resolver is a follow-up.
+ * Note: since the kernel-side wiring in F4 seção c parte 4/4,
+ * SYS_DNS_RESOLVE promotes a cache miss into a real active DNS
+ * query (syscall_dns_resolve_with_active -> net_stack_dns_resolve)
+ * and seeds the cache on success, so callers can resolve hostnames
+ * never seen before without populating the cache out of band.
  */
 
 #include "capylibc-net/capy_net.h"
@@ -52,8 +54,8 @@ int capy_resolve_host_ip4(const char *host, uint32_t *out_ip) {
   }
   capy_net_internal_reset_error();
 
-  /* Step 2: kernel DNS cache. A miss is the common failure mode
-   * today (cache is sparsely seeded). flags == 0. */
+  /* Step 2: kernel resolver via SYS_DNS_RESOLVE (cache first, then a
+   * real active DNS query on miss, then cache seed). flags == 0. */
   if (capy_dns_resolve(host, out_ip, 0) != 0) {
     capy_net_internal_set_error(CAPY_NET_EDNS);
     return -1;
