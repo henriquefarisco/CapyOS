@@ -395,6 +395,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('q');
   dbgcon_putc(kmem_debug_header_ok() ? 'd' : 'D');
   dbgcon_putc('w');
+  dbgcon_write("[user_init] CAPYOS_BOOT_RUN_HELLO defined; spawning hello.\n");
   {
 #if defined(CAPYOS_BOOT_RUN_CAPYSH)
     int hello_rc = kernel_boot_run_capysh();

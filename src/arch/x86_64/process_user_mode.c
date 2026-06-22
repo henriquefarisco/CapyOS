@@ -1,6 +1,7 @@
 #include "arch/x86_64/cpu_local.h"
 #include "kernel/process.h"
 #include "kernel/task.h"
+#include "memory/vmm.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -42,6 +43,17 @@ int process_enter_user_mode(struct process *proc) {
   }
   if (rsp == 0) {
     return PROCESS_ENTER_USER_MODE_BAD_RSP;
+  }
+
+  /* Activate the process address space before the ring transition. This
+   * path does not pass through the scheduler context switch, so CR3 would
+   * otherwise stay on the kernel address space -- whose low region is a
+   * supervisor huge identity map that does not contain the ELF-loaded user
+   * image, making the ring-3 entry fetch fault (present, supervisor). The
+   * process AS clones the kernel low half, so kernel code/stack and the
+   * syscall %gs state stay mapped across the switch. */
+  if (proc->address_space) {
+    vmm_switch_address_space(proc->address_space);
   }
 
   /* On the success path enter_user_mode() never returns. The
