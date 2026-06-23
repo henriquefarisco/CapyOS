@@ -23,4 +23,10 @@ void text_editor_save(struct text_editor_app *app);
 void text_editor_handle_key(struct text_editor_app *app, uint32_t keycode, char ch);
 void text_editor_paint(struct text_editor_app *app);
 
+/* Etapa 6 / Slice 6.6: headless smoke roundtrip (no GUI). Returns 0 when the
+ * editor's primary text-buffer logic (insert / backspace / newline via
+ * text_editor_handle_key) behaves as expected, non-zero otherwise. Called by the
+ * apps-basic-roundtrip orchestrator via the apps/apps_smoke.h contract. */
+int text_editor_smoke_roundtrip(void);
+
 #endif

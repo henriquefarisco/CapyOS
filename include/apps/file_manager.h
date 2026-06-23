@@ -51,4 +51,10 @@ int file_manager_preview_drop_path_at(int32_t screen_x, int32_t screen_y,
                                       const char *src_path);
 void file_manager_clear_external_drop(void);
 
+/* Etapa 6 / Slice 6.6: headless smoke roundtrip (no GUI/FS). Returns 0 when the
+ * file manager's pure path-manipulation logic (join / compare / containment /
+ * basename) behaves as expected, non-zero otherwise. Called by the
+ * apps-basic-roundtrip orchestrator via the apps/apps_smoke.h contract. */
+int file_manager_smoke_roundtrip(void);
+
 #endif

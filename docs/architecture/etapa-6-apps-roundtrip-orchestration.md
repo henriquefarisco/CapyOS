@@ -15,12 +15,14 @@ a partir de `alpha.278`/`alpha.279` (+ CapyUI); expande app-a-app.
 > (`kernel_boot_run_apps_roundtrip`, gated `CAPYOS_APPS_ROUNDTRIP_SMOKE`) que
 > roda cada smoke e alimenta o latch `apps_roundtrip_smoke` (reusado, **sem**
 > `process_exit`), emitindo `[smoke] apps-basic-roundtrip ready`. O primeiro
-> milestone cobriu o `calculator` (`calc_eval`); `alpha.279` adiciona o
-> `task_manager` (`task_iter`/`process_iter` headless: snapshot são = `>=1` task
-> viva + process count não-negativo), com `REQUIRED_APPS=2`. O orquestrador
-> valida `total()==REQUIRED_APPS` (recusa rodar em drift, evitando falso-positivo
-> do latch count-to-N); file_manager/text_editor/settings seguem app-a-app. As
-> seções A/B/C abaixo ficam como **histórico de design**.
+> milestone cobriu o `calculator` (`calc_eval`); `alpha.279` adicionou o
+> `task_manager` e `alpha.280` completou o conjunto com `file_manager` (helpers
+> puros de path), `text_editor` (`handle_key` sobre o singleton `g_editor`) e
+> `settings` (validador de username) -- os **5 apps basicos**, com
+> `REQUIRED_APPS=5`. O orquestrador valida `total()==REQUIRED_APPS` (recusa rodar
+> em drift, evitando falso-positivo do latch count-to-N). Slice 6.6 completo no
+> nivel de codigo/build; resta o gate VMware externo. As seções A/B/C abaixo
+> ficam como **histórico de design**.
 **Escopo:** como validar, num smoke automatizado VMware, o critério de aceite da
 Slice 6.6 — "cada app abre, executa função primária e fecha sem crash" + "falha
 de um app não derruba o desktop".

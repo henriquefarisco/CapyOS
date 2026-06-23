@@ -416,6 +416,11 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > headless); `REQUIRED_APPS=2` e o orquestrador valida `total()==REQUIRED_APPS`
 > (recusa rodar em drift -> gate falha, sem falso-positivo).
 > file_manager/text_editor/settings seguem.
+>
+> **Atualizacao alpha.280 (apps-roundtrip COMPLETO, + CapyUI 2.22.5):** o conjunto
+> passa a cobrir os 5 apps basicos (+file_manager/text_editor/settings),
+> `REQUIRED_APPS=5`. Slice 6.6 completo no nivel de codigo/build; resta o gate
+> VMware externo (operador).
 
 ### Entregáveis
 

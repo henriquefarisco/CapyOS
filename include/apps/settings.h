@@ -33,4 +33,10 @@ void settings_open(void);
 void settings_switch_tab(struct settings_app *app, enum settings_tab tab);
 void settings_paint(struct settings_app *app);
 
+/* Etapa 6 / Slice 6.6: headless smoke roundtrip (no GUI/persistence). Returns 0
+ * when the settings username-policy validator (charset + length) accepts valid
+ * names and rejects invalid ones, non-zero otherwise. Called by the
+ * apps-basic-roundtrip orchestrator via the apps/apps_smoke.h contract. */
+int settings_smoke_roundtrip(void);
+
 #endif
