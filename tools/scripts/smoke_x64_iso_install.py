@@ -89,6 +89,13 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Override the first-boot modules-index URL prompt",
     )
+    parser.add_argument(
+        "--first-boot-net",
+        action="store_true",
+        help="Attach real QEMU user-net (SLIRP NAT) on first boot so the "
+        "module bootstrap can fetch the index/payloads over DNS+TLS+redirect "
+        "(networked module-download regression gate; off by default)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
     return parser.parse_args()
 
@@ -162,6 +169,7 @@ def run_boot1(
         memory_mb=parsed.memory,
         storage_bus=parsed.storage_bus,
         verbose=parsed.verbose,
+        networking=parsed.first_boot_net,
     )
     try:
         try:

@@ -1,0 +1,76 @@
+name: Modules download gate
+
+# Networked regression gate for the module-install path (DNS + TLS + GitHub
+# release redirect). The standard CI smoke uses profile=basic + SLIRP
+# restrict=on, so it never exercises a real module download -- which let the
+# alpha.286 sin_addr byte-order bug (every module download failed) slip for ~17
+# alphas. This boots a full ISO install with real QEMU user-net (SLIRP NAT) and
+# asserts the 7 official modules actually install. It is networked, slow under
+# TCG and depends on GitHub availability, so it runs on a schedule + manual
+# dispatch rather than per-push (advisory).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: modules-download-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  modules-download:
+    name: Networked full-install module download
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Checkout CapyUI sibling
+        shell: bash
+        run: |
+          CAPYUI_REF=main
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            CAPYUI_REF=develop
+          fi
+          git clone --depth 1 --branch "$CAPYUI_REF" \
+            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-x86-64-linux-gnu \
+            build-essential \
+            gcc-x86-64-linux-gnu \
+            gnu-efi \
+            make \
+            ovmf \
+            qemu-system-x86 \
+            xorriso
+
+      - name: Check dependencies
+        run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+
+      - name: Run networked module-download gate
+        run: make smoke-x64-iso-modules-net TOOLCHAIN64=host
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capyos-modules-download-${{ github.run_id }}
+          path: |
+            build/ci
+            build/*.log
+          if-no-files-found: ignore

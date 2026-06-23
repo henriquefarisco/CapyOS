@@ -114,6 +114,31 @@ def main() -> int:
         except RuntimeError as exc:
             errors.append(str(exc))
 
+    # Modules-index pin: the first-boot default in modules.c MUST match the
+    # single-sourced pin in VERSION.yaml (modules_index.url). Makes the
+    # otherwise-buried C constant explicit + audited and fails on drift (the
+    # fragility class behind the alpha.286 install bug). Full resolve-at-publish
+    # (signed token-addressed index) is sequenced to Etapa 8.
+    try:
+        declared_url = require_match(
+            r'^modules_index:\n(?:[ \t].*\n)*?[ \t]+url:\s*"([^"]+)"',
+            version_yaml,
+            "modules_index.url",
+        )
+        modules_c = read_text(repo / "src/config/first_boot/modules.c")
+        code_url = require_match(
+            r'#\s*define\s+CAPYOS_DEFAULT_MODULES_INDEX_URL\s*\\[^\n]*\n\s*"([^"]+)"',
+            modules_c,
+            "CAPYOS_DEFAULT_MODULES_INDEX_URL",
+        )
+        if declared_url != code_url:
+            errors.append(
+                f"modules_index.url (VERSION.yaml)={declared_url} difere do "
+                f"CAPYOS_DEFAULT_MODULES_INDEX_URL (modules.c)={code_url}"
+            )
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
     if errors:
         print("[err] auditoria de versao encontrou divergencias:")
         for error in errors:

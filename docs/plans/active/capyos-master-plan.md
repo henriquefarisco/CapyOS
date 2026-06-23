@@ -83,9 +83,9 @@ Referências obrigatórias:
 | 2 | Sessão gráfica operacional | Concluída | Etapa 1 | login GUI real e smokes `gui-session`/`mouse-events` |
 | 3 | Driver framework + entrada USB HID + storage estável | Concluída (alpha.253) | Etapa 2 | XHCI/USB HID maduro, AHCI/NVMe estáveis, VirtIO opcional, política fail-safe de driver |
 | 4 | CapyDisplay 2D + scheduler/multithread runtime | Concluída (alpha.262) | Etapa 3 | camada 2D com damage/double buffer, scheduler cooperativo, multithread runtime e contrato widget/display-list |
-| 5 | TLS userland real | Em andamento | Etapa 4 | BearSSL userland com handshake real validado |
-| 6 | Apps básicos do desktop maduros | Bloqueada | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
-| 7 | Browser usável com web estática moderna | Bloqueada | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
+| 5 | TLS userland real | Concluída (alpha.264) | Etapa 4 | BearSSL userland com handshake real validado |
+| 6 | Apps básicos do desktop maduros | Concluída (alpha.287) | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
+| 7 | Browser usável com web estática moderna | Próxima (desbloqueada) | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
 | 8 | Release/update gate oficial + instalador polido | Bloqueada | Etapa 7 | smoke VMware+E1000 oficial, update HTTPS, instalador wizard amigável |
 | 9 | Package manager + SDK + ABI estável | Bloqueada | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
 | 10 | Áudio + multimídia básica | Bloqueada | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist e codecs por contrato |
@@ -353,13 +353,13 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - `make smoke-x64-vmware-tls-handshake` (novo).
 - `make release-check` continua passando.
 
-## 9. Etapa 6 — Apps básicos do desktop maduros (em andamento — ativa desde alpha.264)
+## 9. Etapa 6 — Apps básicos do desktop maduros (concluída em alpha.287 — gates externos VMware validados)
 
 **Objetivo:** entregar o primeiro conjunto de apps verdadeiramente usáveis sem CLI, com toolkit estável, ícones oficiais, localização nativa e um navegador textual inicial para validar rede/HTTPS em páginas simples. Esta é a etapa onde o usuário comum começa a perceber valor real.
 
 **ROI:** muito alto — primeiro valor visível ao usuário final.
 
-> **ATIVA desde `alpha.264`** (Etapa 5 fechada). Etapa grande e
+> **CONCLUÍDA em `alpha.287`** (gates externos VMware validados pelo operador). Etapa grande e
 > majoritariamente de repos desacoplados: os apps e o toolkit vivem em
 > **CapyUI** (`capy-ui-widget` / `capy-ui-desktop-session`) e o core
 > HTML-to-text em **CapyBrowser** (`capy-browser-core`, planejado). O lado
@@ -441,18 +441,24 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 
 ### Critérios de aceite
 
-- [ ] Cada app abre, executa função primária e fecha sem crash.
-- [ ] Falha de um app não derruba desktop.
-- [ ] `CapyBrowse Text` abre páginas alvo de texto/HTML simples, mostra erros claros de DNS/TLS/HTTP e não executa JavaScript.
-- [ ] HTML-to-text e widget layout entram por contratos versionados, com adaptador
+- [x] Cada app abre, executa função primária e fecha sem crash.
+- [x] Falha de um app não derruba desktop.
+- [x] `CapyBrowse Text` abre páginas alvo de texto/HTML simples, mostra erros claros de DNS/TLS/HTTP e não executa JavaScript.
+- [x] HTML-to-text e widget layout entram por contratos versionados, com adaptador
       CapyOS pequeno e testável.
-- [ ] Apps usam o tema da Etapa 1.
-- [ ] Strings de UI dos apps estão localizadas em PT-BR e ES com fallback EN.
+- [x] Apps usam o tema da Etapa 1.
+- [x] Strings de UI dos apps estão localizadas em PT-BR e ES com fallback EN.
 
-### Gates externos recomendados
+### Gates externos validados
 
-- `make smoke-x64-vmware-apps-basic-roundtrip` (novo): abre cada app, executa função primária, fecha sem leak/crash.
-- `make smoke-x64-vmware-capybrowse-text` (novo): abre página HTTP/HTTPS controlada, valida texto, links numerados, scroll e erro TLS fail-closed.
+- `make smoke-x64-vmware-apps-basic-roundtrip`: VALIDADO em VMware + UEFI + E1000 (operador).
+- `make smoke-x64-vmware-capybrowse-text`: VALIDADO em VMware + UEFI + E1000 (operador).
+
+Etapa 6 fechada em `alpha.287`. Nota: o caminho de instalação de módulos remotos
+(que entrega a desktop session do CapyUI) estava quebrado por um bug de byte-order
+no `connect` do kernel, corrigido e validado em runtime em `alpha.286`; o
+`alpha.287` adiciona o gate de CI de download real de módulos + a guarda
+anti-drift do pin, fechando a lacuna que deixou o bug escapar.
 
 ## 10. Etapa 7 — Browser usável com web estática moderna
 
