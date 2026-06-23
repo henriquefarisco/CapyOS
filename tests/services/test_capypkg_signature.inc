@@ -101,3 +101,66 @@ static void test_signature_rejects_malformed_hex(void) {
            "over-long signature must be rejected");
     capypkg_clear_trusted_publisher_key();
 }
+
+/* End-to-end through the install gate with the REAL verifier registered. This
+ * uniquely exercises build_signed_descriptor (capypkg_install.c): the manifest
+ * carries the KAT name/version/payload_sha256/payload_url, the fake fetcher
+ * returns "test" (whose sha256 IS the KAT payload_sha256), so the gate rebuilds
+ * the canonical descriptor from the entry fields and the KAT signature must
+ * verify -- locking the install-path descriptor format to the canonical KAT. */
+static void test_install_real_verifier_accepts_kat(void) {
+    static char idx[1024];
+    reset_state(1);
+    capypkg_set_signature_verifier(capypkg_ed25519_verify_signature);
+    sig_kat_pin_key();
+    snprintf(idx, sizeof(idx),
+             "name=org.capyos.agent.core\nversion=1.2.3\n"
+             "payload_url=https://github.com/henriquefarisco/CapyAgent/releases/"
+             "download/v1.2.3/org.capyos.agent.core-1.2.3.bin\n"
+             "payload_sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n"
+             "signature_ed25519=%s\n"
+             "payload_size=4\ninstall_root=/var/capypkg/org.capyos.agent.core\n---\n",
+             SIG_KAT_SIGNATURE_HEX);
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "KAT manifest must populate the catalog");
+    g_payload_bytes = (const uint8_t *)"test";
+    g_payload_len = 4u;
+    g_payload_rc = 0;
+    EXPECT(capypkg_install("org.capyos.agent.core") == CAPYPKG_OK,
+           "real verifier must accept the KAT-signed package end-to-end");
+    EXPECT(capypkg_installed_count() == 1u,
+           "KAT-signed package must be tracked as installed");
+    capypkg_clear_trusted_publisher_key();
+}
+
+static void test_install_real_verifier_rejects_tampered_kat(void) {
+    static char idx[1024];
+    char badsig[129];
+    reset_state(1);
+    capypkg_set_signature_verifier(capypkg_ed25519_verify_signature);
+    sig_kat_pin_key();
+    strcpy(badsig, SIG_KAT_SIGNATURE_HEX);
+    badsig[10] = (badsig[10] == 'a') ? 'b' : 'a'; /* still 128 hex, wrong sig */
+    snprintf(idx, sizeof(idx),
+             "name=org.capyos.agent.core\nversion=1.2.3\n"
+             "payload_url=https://github.com/henriquefarisco/CapyAgent/releases/"
+             "download/v1.2.3/org.capyos.agent.core-1.2.3.bin\n"
+             "payload_sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n"
+             "signature_ed25519=%s\n"
+             "payload_size=4\ninstall_root=/var/capypkg/org.capyos.agent.core\n---\n",
+             badsig);
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "tampered-KAT manifest must populate the catalog");
+    g_payload_bytes = (const uint8_t *)"test";
+    g_payload_len = 4u;
+    g_payload_rc = 0;
+    EXPECT(capypkg_install("org.capyos.agent.core") == CAPYPKG_ERR_SIGNATURE,
+           "real verifier must reject a tampered KAT signature at the install gate");
+    EXPECT(capypkg_installed_count() == 0u,
+           "rejected install must not be staged");
+    capypkg_clear_trusted_publisher_key();
+}

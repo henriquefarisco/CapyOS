@@ -117,5 +117,7 @@ int run_capypkg_tests(void) {
     test_signature_rejects_tampered_descriptor();
     test_signature_rejects_tampered_signature();
     test_signature_rejects_malformed_hex();
+    test_install_real_verifier_accepts_kat();
+    test_install_real_verifier_rejects_tampered_kat();
     return g_test_failures;
 }
