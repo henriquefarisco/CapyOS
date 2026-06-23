@@ -228,8 +228,47 @@ int test_capylibc_tls_run(void);
 int test_syscall_net_init_run(void);
 int test_process_current_dynamic_run(void);
 
-int main(void) {
+/* Minimal NUL-terminated string equality. Avoids depending on <string.h>:
+ * the host test build resolves standard headers against project shims that do
+ * not declare strcmp. Used only for the test-group argv selector below. */
+static int tr_arg_eq(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+int main(int argc, char **argv) {
     int failures = 0;
+
+    /* Focused security regression (see docs/security/audit-playbook.md):
+     * untrusted-input parsers + crypto + package signature. Selected by
+     * `make security-selftest` (runs the test binary with the `security`
+     * argument). Reuses the full-link test binary; with no argument the whole
+     * suite runs as before. */
+    if (argc > 1 && tr_arg_eq(argv[1], "security")) {
+        failures += run_csprng_tests();
+        failures += run_crypt_vector_tests();
+        failures += run_volume_header_tests();
+        failures += run_volume_provider_tests();
+        failures += run_volume_provider_rekey_tests();
+        failures += run_volume_provider_execute_tests();
+        failures += run_volume_provider_rekey_execute_tests();
+        failures += run_volume_provider_rekey_copy_tests();
+        failures += run_volume_provider_rekey_commit_tests();
+        failures += run_volume_provider_rekey_recovery_tests();
+        failures += run_volume_provider_rekey_orchestrator_tests();
+        failures += run_user_password_hash_tests();
+        failures += run_capypkg_tests();
+        failures += run_net_dns_tests();
+        failures += run_net_dhcp_options_tests();
+        failures += run_net_icmp_tests();
+        failures += run_net_arp_tests();
+        failures += run_elf_bounds_tests();
+        printf("\n[security-selftest] %s (%d falha%s)\n",
+               failures == 0 ? "OK" : "FALHOU", failures,
+               failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
     failures += run_block_wrapper_tests();
     failures += run_partition_tests();
     failures += run_keyboard_layout_tests();

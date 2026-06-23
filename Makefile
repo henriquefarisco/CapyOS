@@ -2009,6 +2009,14 @@ test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 
+.PHONY: security-selftest
+# Focused security regression: untrusted-input parsers + crypto + package
+# signature (see docs/security/audit-playbook.md). Reuses the full-link test
+# binary; the `security` argument selects the subset in tests/test_runner.c.
+security-selftest: $(TEST_BIN)
+	@echo "Executando regressao focada de seguranca..."
+	$(TEST_BIN) security
+
 # Quick iteration target: builds and runs ONLY the capypkg unit tests
 # against the in-tree adapter sources, without dragging in the full
 # host test aggregate. Useful during package adapter development.
@@ -2121,6 +2129,18 @@ layout-audit-report:
 version-audit:
 	@echo "Auditando manifesto de versao..."
 	python3 tools/scripts/audit_version_manifest.py
+
+.PHONY: bump-alpha
+# Deterministic alpha version bump (tools/scripts/bump_alpha.py) + self-check.
+# Updates VERSION.yaml/version.h/README/STATUS + scaffolds the release note
+# from docs/releases/_template.md, then runs version-audit.
+#   make bump-alpha TO=283 SUMMARY="resumo de uma linha"
+#   make bump-alpha TO=283 SUMMARY="..." BUMP_ALPHA_ARGS=--dry-run
+bump-alpha:
+	@if [ -z "$(TO)" ]; then echo "[err] informe TO=<numero alpha> (ex: make bump-alpha TO=283 SUMMARY=resumo)"; exit 2; fi
+	@if [ -z "$(SUMMARY)$(SUMMARY_FILE)" ]; then echo "[err] informe SUMMARY=... ou SUMMARY_FILE=<path>"; exit 2; fi
+	python3 tools/scripts/bump_alpha.py --to $(TO) $(if $(SUMMARY_FILE),--summary-file $(SUMMARY_FILE),--summary "$(SUMMARY)") $(if $(DATE),--date $(DATE),) $(BUMP_ALPHA_ARGS)
+	$(MAKE) version-audit
 
 .PHONY: boot-perf-baseline-selftest
 boot-perf-baseline-selftest:
