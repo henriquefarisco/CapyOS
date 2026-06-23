@@ -2454,6 +2454,28 @@ smoke-x64-vmware-apps-basic-roundtrip:
 		--marker "[smoke] apps-basic-roundtrip ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
+.PHONY: etapa-6-qemu-preflight etapa-6-vmware-gates
+# Operador, fecho da Etapa 6 em um comando: roda os dois gates externos
+# pendentes (apps-basic-roundtrip + capybrowse-text). O pre-voo QEMU local
+# (gratis) roda primeiro, entao um build que falha localmente nunca queima
+# tempo de VMware; pule com ETAPA6_SKIP_QEMU_PREFLIGHT=1 (hosts sem QEMU).
+# Os gates VMware sao o aceite oficial e exigem SMOKE_X64_VMWARE_ARGS (VM +
+# serial-log + timeout; ver docs/operations/etapa-6-external-validation-playbook.md).
+#   make etapa-6-vmware-gates SMOKE_X64_VMWARE_ARGS="--vmx ... --serial-log ... --timeout ..."
+etapa-6-qemu-preflight:
+	@echo "=== [etapa-6] pre-voo QEMU local (gratis) ==="
+	$(MAKE) smoke-x64-qemu-apps-basic-roundtrip
+	$(MAKE) smoke-x64-qemu-capybrowse-text
+
+etapa-6-vmware-gates:
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=... (ver docs/operations/etapa-6-external-validation-playbook.md)"; exit 2; fi
+	@if [ -z "$(ETAPA6_SKIP_QEMU_PREFLIGHT)" ]; then $(MAKE) etapa-6-qemu-preflight; else echo "=== [etapa-6] pre-voo QEMU PULADO (ETAPA6_SKIP_QEMU_PREFLIGHT) ==="; fi
+	@echo "=== [etapa-6] gate VMware 1/2: apps-basic-roundtrip (aceite oficial) ==="
+	$(MAKE) smoke-x64-vmware-apps-basic-roundtrip
+	@echo "=== [etapa-6] gate VMware 2/2: capybrowse-text (aceite oficial) ==="
+	$(MAKE) smoke-x64-vmware-capybrowse-text
+	@echo "=== [etapa-6] OK: ambos os gates passaram (QEMU pre-voo + VMware). Etapa 6 pronta para fecho. ==="
+
 .PHONY: smoke-x64-hyperv-boot
 smoke-x64-hyperv-boot:
 	@if [ -z "$(IMG)" ]; then echo "Usage: make smoke-x64-hyperv-boot IMG=/path/to/CapyOSGen2.vhd"; echo "See docs/operations/hyperv-gen2-baseline-runbook.md"; exit 2; fi

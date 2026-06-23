@@ -14,6 +14,28 @@ gate aqui é executado localmente (ver §7).
 
 ---
 
+## 0. Atalho: fechar a Etapa 6 em um comando
+
+```sh
+make etapa-6-vmware-gates SMOKE_X64_VMWARE_ARGS="--vmx ... --serial-log ... --timeout ..."
+```
+
+Roda, em sequência: (1) **pré-voo QEMU local** (grátis) dos dois markers —
+`smoke-x64-qemu-apps-basic-roundtrip` + `smoke-x64-qemu-capybrowse-text` — para
+que um build quebrado falhe localmente **antes** de gastar tempo de VMware; (2)
+os **gates VMware oficiais** `smoke-x64-vmware-apps-basic-roundtrip` +
+`smoke-x64-vmware-capybrowse-text`. Aborta no primeiro que falhar; imprime
+banners por etapa e um `OK` final quando ambos passam.
+
+- Sem QEMU no host? Pule o pré-voo: `ETAPA6_SKIP_QEMU_PREFLIGHT=1`.
+- O `apps-basic-roundtrip` já roda continuamente como **gate de runtime na CI**
+  (job `qemu-apps-roundtrip`, QEMU+OVMF), então o build chega ao VMware
+  pré-validado.
+- As seções abaixo detalham cada gate isoladamente, pré-requisitos e o formato
+  de report.
+
+---
+
 ## 1. Por que este playbook existe
 
 A Etapa 6 entrega os apps básicos do desktop maduros e o `CapyBrowse Text` — o
