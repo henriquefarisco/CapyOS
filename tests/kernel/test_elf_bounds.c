@@ -58,6 +58,26 @@ int run_elf_bounds_tests(void) {
     fails++;
   }
 
+  /* elf_vaddr_in_user_range: accept spans inside [0, user_top]
+   * (incl. empty, exact fit at top, and a typical user segment). */
+  const uint64_t UTOP = 0x00007FFFFFFFF000u; /* VMM_USER_TOP */
+  if (!elf_vaddr_in_user_range(0x400000u, 0x1000u, UTOP) ||
+      !elf_vaddr_in_user_range(0u, 0u, UTOP) ||
+      !elf_vaddr_in_user_range(UTOP, 0u, UTOP) ||
+      !elf_vaddr_in_user_range(UTOP - 0x1000u, 0x1000u, UTOP)) {
+    printf("[elf-bounds] valid user-range span rejected\n");
+    fails++;
+  }
+  /* elf_vaddr_in_user_range: reject kernel-half base, end-past-top, vaddr
+   * wrap, and a span that overruns the top. */
+  if (elf_vaddr_in_user_range(0xFFFF800000000000u, 0x1000u, UTOP) ||
+      elf_vaddr_in_user_range(UTOP, 0x1000u, UTOP) ||
+      elf_vaddr_in_user_range(MAXU - 0x100u, 0x1000u, UTOP) ||
+      elf_vaddr_in_user_range(UTOP - 0x800u, 0x1000u, UTOP)) {
+    printf("[elf-bounds] out-of-range user span accepted\n");
+    fails++;
+  }
+
   if (fails == 0) {
     printf("[tests] elf_bounds OK\n");
   }

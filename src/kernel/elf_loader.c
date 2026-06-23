@@ -68,6 +68,16 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
      * into an enormous mapping loop. */
     if (!elf_sum_no_wrap(phdr->p_vaddr, phdr->p_memsz)) return -1;
 
+    /* The virtual span is untrusted; require it inside the user half
+     * [0, VMM_USER_TOP]. Without this a crafted p_vaddr near UINT64_MAX makes
+     * the `+ VMM_PAGE_SIZE - 1` page rounding below wrap (huge num_pages ->
+     * runaway mapping loop / memory exhaustion), and a kernel-half p_vaddr
+     * would install USER-flagged PTEs over the kernel-half page tables
+     * (vmm_map_page does not range-check the virtual address). VMM_USER_TOP is
+     * far below UINT64_MAX, so the rounding cannot overflow once this passes. */
+    if (!elf_vaddr_in_user_range(phdr->p_vaddr, phdr->p_memsz, VMM_USER_TOP))
+      return -1;
+
     uint64_t vaddr_start = phdr->p_vaddr & ~(VMM_PAGE_SIZE - 1);
     uint64_t vaddr_end = (phdr->p_vaddr + phdr->p_memsz + VMM_PAGE_SIZE - 1) &
                           ~(VMM_PAGE_SIZE - 1);

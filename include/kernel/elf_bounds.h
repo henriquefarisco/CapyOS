@@ -42,4 +42,19 @@ static inline int elf_sum_no_wrap(uint64_t base, uint64_t span) {
   return base <= ~(uint64_t)0 - span;
 }
 
+/* True iff a segment's virtual span [vaddr, vaddr + memsz) lies fully within
+ * the user range [0, user_top]. Subtraction-only (no wrap). `p_vaddr`/`p_memsz`
+ * are untrusted: this rejects (a) a span that would round past UINT64_MAX when
+ * the loader page-aligns vaddr_end (`+ VMM_PAGE_SIZE - 1`), which would blow up
+ * the mapping page count, and (b) a kernel-half / non-canonical vaddr, which
+ * would otherwise install USER-flagged PTEs over the kernel-half page tables
+ * (vmm_map_page does not itself range-check the virtual address). `user_top`
+ * is the highest mappable user virtual address (VMM_USER_TOP). */
+static inline int elf_vaddr_in_user_range(uint64_t vaddr, uint64_t memsz,
+                                          uint64_t user_top) {
+  if (vaddr > user_top) return 0;
+  if (memsz > user_top - vaddr) return 0;
+  return 1;
+}
+
 #endif /* KERNEL_ELF_BOUNDS_H */
