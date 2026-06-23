@@ -1,7 +1,23 @@
 # Etapa 6 / Slice 6.6 — apps-basic-roundtrip orchestration (design proposal)
 
-**Status:** proposta de design (não implementado). Requer acordo cross-repo com
-`CapyUI` antes de cabear código de runtime.
+**Status:** IMPLEMENTADO (modelo corrigido) para o `calculator` a partir de
+`alpha.278` (+ CapyUI); expande app-a-app.
+
+> **Correcao de premissa (2026-06-17):** a investigação de implementação mostrou
+> que os apps básicos do CapyUI são funções **in-kernel** (compiladas no kernel
+> ELF, chamam o compositor direto), **não processos ring-3**. Logo o modelo de
+> "exit de processo + latch em `process_exit`" das Opções A/B/C abaixo é
+> **inviável** como descrito. A implementação real (entregue):
+> funções `<app>_smoke_roundtrip()` **in-kernel** no CapyUI (lógica primária
+> headless, sem GUI) + o contrato CapyOS `include/apps/apps_smoke.h`
+> (`apps_smoke_roundtrip_total`/`apps_smoke_roundtrip_run`, implementado por
+> `CapyUI/src/apps/apps_smoke.c`) + um orquestrador **in-kernel** no CapyOS
+> (`kernel_boot_run_apps_roundtrip`, gated `CAPYOS_APPS_ROUNDTRIP_SMOKE`) que
+> roda cada smoke e alimenta o latch `apps_roundtrip_smoke` (reusado, **sem**
+> `process_exit`), emitindo `[smoke] apps-basic-roundtrip ready`. O primeiro
+> milestone cobre o `calculator` (lógica `calc_eval` 100% separável,
+> `REQUIRED_APPS=1`); file_manager/text_editor/settings/task_manager seguem
+> app-a-app. As seções A/B/C abaixo ficam como **histórico de design**.
 **Escopo:** como validar, num smoke automatizado VMware, o critério de aceite da
 Slice 6.6 — "cada app abre, executa função primária e fecha sem crash" + "falha
 de um app não derruba o desktop".

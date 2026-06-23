@@ -229,3 +229,32 @@ int kernel_boot_run_capybrowse(void) {
   return -1;
 }
 #endif
+
+#ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
+#include "apps/apps_smoke.h"
+#include "kernel/apps_roundtrip_smoke.h"
+#include <stdint.h>
+
+/* Etapa 6 / Slice 6.6: in-kernel apps-basic-roundtrip orchestrator.
+ *
+ * Unlike the capybrowse/tls smokes (ring-3 ELFs that exit), the basic desktop
+ * apps are in-kernel functions compiled into the kernel ELF (CapyUI desktop
+ * session), so there is no process to spawn or exit. This orchestrator runs
+ * each app's headless primary-function roundtrip via the apps/apps_smoke.h
+ * contract (implemented by CapyUI) and feeds each 0/non-0 result to the
+ * apps_roundtrip_smoke latch, which emits `[smoke] apps-basic-roundtrip ready`
+ * on COM1 once APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes are observed. A
+ * failure (non-0) is not counted, so the gate times out (fail) instead of
+ * reporting ready. Returns after running; the caller falls through to login. */
+int kernel_boot_run_apps_roundtrip(void) {
+  unsigned total = apps_smoke_roundtrip_total();
+  unsigned i;
+  for (i = 0u; i < total; i++) {
+    int rc = apps_smoke_roundtrip_run(i);
+    if (apps_roundtrip_smoke_try_latch_exit_global((int32_t)rc)) {
+      apps_roundtrip_smoke_emit_marker();
+    }
+  }
+  return 0;
+}
+#endif

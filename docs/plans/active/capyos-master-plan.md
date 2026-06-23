@@ -402,6 +402,14 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > binario (imagem/PDF/octet-stream/...), mostra um aviso localizado PT-BR/EN/ES e
 > encerra limpo em vez de passar bytes binarios ao core HTML-to-text (que so geraria
 > ruido). text/*, html, xml, json e Content-Type ausente seguem renderizando.
+>
+> **Atualizacao alpha.278 (Slice 6.6 -- apps-basic-roundtrip, 1o milestone, in-kernel):**
+> os apps basicos do CapyUI sao funcoes in-kernel (nao processos ring-3), entao o
+> smoke roda cada `<app>_smoke_roundtrip()` headless via o contrato
+> `include/apps/apps_smoke.h` (CapyUI 2.22.3) + o orquestrador in-kernel
+> `kernel_boot_run_apps_roundtrip` (gated `CAPYOS_APPS_ROUNDTRIP_SMOKE`) que alimenta
+> o latch `apps_roundtrip_smoke` (sem `process_exit`) e emite o marker. 1o milestone:
+> calculator; expande app-a-app. Gate VMware externo pendente.
 
 ### Entregáveis
 

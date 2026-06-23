@@ -675,6 +675,19 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
          "[user_init] capybrowse spawn returned without entering Ring 3.");
   }
 #endif
+#ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
+  /* Etapa 6 / Slice 6.6: run the apps-basic-roundtrip orchestrator in-kernel
+   * (the basic apps are in-kernel functions, not ring-3 processes). It runs
+   * each app's headless primary-function smoke and the latch emits
+   * `[smoke] apps-basic-roundtrip ready` on COM1 after the required clean
+   * passes. Returns after running; falls through to login. Gated so production
+   * boot is unaffected. */
+  dbgcon_write("[user_init] CAPYOS_APPS_ROUNDTRIP_SMOKE; running apps roundtrip.\n");
+  {
+    int apps_roundtrip_rc = kernel_boot_run_apps_roundtrip();
+    (void)apps_roundtrip_rc;
+  }
+#endif
   {
     struct login_runtime_ops login_ops;
     kernel_boot_build_login_ops(&login_ops);

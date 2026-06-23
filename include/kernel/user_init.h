@@ -97,4 +97,15 @@ int kernel_boot_run_tls_smoke(void);
 int kernel_boot_run_capybrowse(void);
 #endif
 
+#ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
+/* Etapa 6 / Slice 6.6: run the apps-basic-roundtrip orchestrator in-kernel.
+ * The basic desktop apps are in-kernel functions (not ring-3 processes), so
+ * this calls each app's headless primary-function smoke via the
+ * apps/apps_smoke.h contract (implemented by CapyUI) and feeds the
+ * apps_roundtrip_smoke latch, which emits `[smoke] apps-basic-roundtrip ready`
+ * on COM1 after APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes. Returns after
+ * running. Compiled only under the smoke gate. */
+int kernel_boot_run_apps_roundtrip(void);
+#endif
+
 #endif /* KERNEL_USER_INIT_H */

@@ -18,4 +18,10 @@ void calculator_open(void);
 void calculator_handle_button(struct calculator_app *app, const char *label);
 void calculator_paint(struct calculator_app *app);
 
+/* Etapa 6 / Slice 6.6: headless smoke roundtrip (no GUI). Returns 0 if the
+ * calculator's primary function (expression evaluation) produces the expected
+ * results, non-zero otherwise. Called by the apps-basic-roundtrip orchestrator
+ * via the apps/apps_smoke.h contract. */
+int calculator_smoke_roundtrip(void);
+
 #endif

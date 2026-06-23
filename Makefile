@@ -710,6 +710,7 @@ WINDOW_OBJS += $(BUILD)/x86_64/capyui-window/notification_display_list.o
 endif
 APPS_OBJS := \
 	$(BUILD)/x86_64/capyui-apps/calculator.o \
+	$(BUILD)/x86_64/capyui-apps/apps_smoke.o \
 	$(BUILD)/x86_64/capyui-apps/file_manager.o \
 	$(BUILD)/x86_64/capyui-apps/file_manager_view.o \
 	$(BUILD)/x86_64/capyui-apps/file_manager_dnd.o \
@@ -2395,6 +2396,27 @@ smoke-x64-qemu-capybrowse-text:
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capybrowse.py $(SMOKE_X64_QEMU_CAPYBROWSE_ARGS)
+
+# Etapa 6 / Slice 6.6 external validation gate -- apps-basic-roundtrip.
+# The basic desktop apps are in-kernel functions (CapyUI desktop session),
+# not ring-3 processes, so the in-kernel orchestrator
+# (kernel_boot_run_apps_roundtrip) runs each app's headless primary-function
+# smoke and the latch emits "[smoke] apps-basic-roundtrip ready" on COM1 once
+# APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes are observed. The first
+# milestone covers the calculator (REQUIRED_APPS=1) and grows app-by-app.
+# Requires the CapyUI sibling (apps + apps_smoke.c).
+.PHONY: smoke-x64-vmware-apps-basic-roundtrip
+smoke-x64-vmware-apps-basic-roundtrip:
+	@echo "Executando smoke test VMware+E1000 apps-basic-roundtrip..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full \
+		CAPYOS_APPS_ROUNDTRIP_SMOKE=1 \
+		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=1'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[smoke] apps-basic-roundtrip ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
 
 .PHONY: smoke-x64-hyperv-boot
 smoke-x64-hyperv-boot:
