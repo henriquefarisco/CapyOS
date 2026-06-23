@@ -58,10 +58,10 @@ void task_manager_tick(void);
 void task_manager_kill_selected(struct task_manager_app *app);
 
 /* Etapa 6 / Slice 6.6: headless smoke roundtrip (no GUI). Returns 0 when the
- * Task Manager's primary data path (task_iter / process_iter enumeration)
- * produces a sane snapshot (>= 1 live task, non-negative process count),
- * non-zero otherwise. Called by the apps-basic-roundtrip orchestrator via the
- * apps/apps_smoke.h contract. */
+ * Task Manager's primary data path (task_iter / process_iter enumeration) runs
+ * and terminates with sane, stable counts. The pre-login run queue may be empty
+ * (0 tasks/processes), so success does NOT require any task to exist. Called by
+ * the apps-basic-roundtrip orchestrator via the apps/apps_smoke.h contract. */
 int task_manager_smoke_roundtrip(void);
 
 #endif

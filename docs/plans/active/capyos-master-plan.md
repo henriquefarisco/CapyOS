@@ -421,6 +421,12 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > passa a cobrir os 5 apps basicos (+file_manager/text_editor/settings),
 > `REQUIRED_APPS=5`. Slice 6.6 completo no nivel de codigo/build; resta o gate
 > VMware externo (operador).
+>
+> **Atualizacao alpha.281 (correcao, + CapyUI 2.22.6):** revisao de correcao
+> pegou que `task_manager_smoke_roundtrip` exigia `count_tasks()>=1`, mas a run
+> queue pre-login esta vazia (`task_current()==NULL`; o demo que criaria tasks e
+> no-op sem `CAPYOS_PREEMPTIVE_DEMO`) -> o gate VMware falharia por timeout em
+> runtime. Fix: criterio data-independent (a enumeracao roda + termina estavel).
 
 ### Entregáveis
 
