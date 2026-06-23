@@ -124,3 +124,30 @@ Pendente (nao alterado por este evento):
 Pin de core CapyOS nos irmaos: preservado (estes bumps de irmao nao mudam a
 superficie de contrato consumida pelo adapter; o pin so move quando um bump de
 core afeta o contrato do irmao).
+
+
+## Addendum 2026-06-17 -- verifier Ed25519 do capypkg registrado (alpha.276)
+
+O slot de verificacao de assinatura do capypkg, antes NULL por design, passou a
+ser preenchido por um verifier CapyOS-side real:
+`src/services/capypkg/capypkg_signature.c::capypkg_ed25519_verify_signature`
+decodifica os 128 hex da assinatura (fail-closed) e chama o `ed25519_verify`
+auditado do kernel (`src/security/ed25519.c`) sobre o descritor canonico, usando
+a chave publica do publisher pinada via `capypkg_set_trusted_publisher_key`. O
+binder (`src/arch/x86_64/kernel_services_capypkg.c`) registra o verifier por
+`capypkg_set_signature_verifier`.
+
+**Sem mudanca de comportamento em producao:** nenhum trust anchor e pinado por
+padrao, entao o verifier devolve -1 e repos `signed` continuam fail-closed com
+`CAPYPKG_ERR_SIGNATURE`. A chave de TESTE do KAT (seed publica) nunca e pinada.
+
+**Validacao:** 6 casos host-side novos em `tests/services/test_capypkg.c`
+(fragmento `test_capypkg_signature.inc`) provam que a assinatura que o signer do
+CapyAgent produz (KAT congelado em `CapyAgent/docs/compatibility.md`) verifica com
+o `ed25519_verify` do kernel; descritor/assinatura adulterados, ausencia de chave,
+e hex malformado/curto/longo sao rejeitados. `make test` verde.
+
+**Pendente para promover repo `signed` a user-facing:** (1) pinar a chave de
+release offline real (operador) via `capypkg_set_trusted_publisher_key`; (2) KAT
+externo do signer do CapyAgent (`make validate` no CapyAgent). Ate la, a politica
+fail-closed permanece.

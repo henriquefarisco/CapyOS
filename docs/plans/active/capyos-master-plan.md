@@ -507,6 +507,15 @@ integração futura. Não conta como progresso desta etapa; serve apenas
 de fronteira estável para o resolver externo plugar quando a etapa
 abrir.
 
+> **Atualizacao alpha.276 (verifier Ed25519 registrado):** o slot de verificacao
+> de assinatura do capypkg deixou de ser NULL -- `src/services/capypkg/capypkg_signature.c`
+> liga o `ed25519_verify` auditado do kernel ao gate de assinatura e o binder do kernel
+> o registra via `capypkg_set_signature_verifier`. Continua **fail-closed** em producao:
+> nenhum trust anchor e pinado por padrao (a chave de TESTE do KAT nunca e pinada), entao
+> repos `signed` ainda recusam com `CAPYPKG_ERR_SIGNATURE`. Host-validado contra o KAT
+> cross-repo congelado. Falta, para install signed user-facing: pinar a chave de release
+> offline real + KAT externo do signer do CapyAgent.
+
 - **Código:** `src/services/capypkg/` (4 TUs runtime, todos < 900 LOC),
   `include/services/capypkg.h` (API pública), adapter de kernel em
   `src/arch/x86_64/kernel_services.c` (binding VFS + HTTPS).

@@ -321,6 +321,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/capypkg/capypkg_manifest.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_repo.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_install.o \
+	$(BUILD)/x86_64/services/capypkg/capypkg_signature.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_persist.o \
 	$(BUILD)/x86_64/services/capypkg_local_bundle.o \
 	$(BUILD)/x86_64/services/capypkg_bootstrap.o \
@@ -1961,7 +1962,7 @@ TEST_SRCS   := \
                tests/services/test_work_queue.c src/core/work_queue.c \
                tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
                tests/services/test_update_transact.c src/services/update_agent_transact.c \
-               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c src/services/capypkg/capypkg_persist.c \
+               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c src/services/capypkg/capypkg_persist.c src/services/capypkg/capypkg_signature.c \
                tests/services/test_capypkg_local_bundle.c src/services/capypkg_local_bundle.c \
                tests/services/test_install_profile.c src/services/install_profile.c \
                \

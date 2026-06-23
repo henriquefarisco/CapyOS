@@ -356,9 +356,12 @@ void kernel_capypkg_bind_runtime_adapters(void) {
   capypkg_set_text_fetcher(capypkg_runtime_fetch_text);
   capypkg_set_bytes_fetcher(capypkg_runtime_fetch_bytes);
   capypkg_set_bytes_fetcher_progress(capypkg_runtime_fetch_bytes_progress);
-  /* signature verifier intentionally left NULL: until CapyAgent's
-   * ed25519 verifier is integrated the adapter must fail closed for
-   * signed repos. capypkg_install will refuse with CAPYPKG_ERR_SIGNATURE. */
+  /* Register the real CapyOS-side Ed25519 descriptor verifier (over the kernel
+   * ed25519_verify). It stays fail-closed until an operator pins the official
+   * offline-generated publisher key via capypkg_set_trusted_publisher_key();
+   * none is pinned here, so signed repos still fail with CAPYPKG_ERR_SIGNATURE
+   * in production (the publicly-known KAT test key is never trusted). */
+  capypkg_set_signature_verifier(capypkg_ed25519_verify_signature);
   (void)capypkg_init();
   g_capypkg_bound = 1;
 }

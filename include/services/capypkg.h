@@ -225,6 +225,24 @@ void capypkg_set_bytes_fetcher(capypkg_fetch_bytes_fn fn);
 void capypkg_set_bytes_fetcher_progress(capypkg_fetch_bytes_progress_fn fn);
 void capypkg_set_signature_verifier(capypkg_verify_signature_fn fn);
 
+/* CapyOS-side Ed25519 descriptor verifier (src/services/capypkg/
+ * capypkg_signature.c), wired over the kernel's audited ed25519_verify and
+ * registered as the signature verifier in the kernel binder. Matches
+ * capypkg_verify_signature_fn: returns 0 iff `signature_hex` (exactly 128 hex
+ * digits) is a valid Ed25519 signature, by the pinned trusted publisher key,
+ * over the `signed_len` bytes at `signed_text`. Fail-closed (non-zero) when no
+ * key is pinned, on NULL input, or on malformed hex. */
+int capypkg_ed25519_verify_signature(const char *signed_text, size_t signed_len,
+                                     const char *signature_hex);
+
+/* Pin / clear the trusted publisher Ed25519 public key (32 bytes) used by
+ * capypkg_ed25519_verify_signature. Unset by default, so signed installs stay
+ * fail-closed until an operator pins the official offline-generated release key
+ * (the publicly-known KAT test key must never be pinned in production). Passing
+ * NULL clears the key. */
+void capypkg_set_trusted_publisher_key(const uint8_t *key);
+void capypkg_clear_trusted_publisher_key(void);
+
 /* Install a fine-grained per-package install progress observer. NULL
  * disables it. The wizard installs this to drive its live status bar. */
 void capypkg_set_install_observer(capypkg_install_progress_fn fn, void *ctx);

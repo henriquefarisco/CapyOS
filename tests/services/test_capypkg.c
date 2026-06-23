@@ -45,6 +45,8 @@
 
 #include "test_capypkg_install_manifest.inc"
 
+#include "test_capypkg_signature.inc"
+
 /* ── runner entry ─────────────────────────────────────────────────── */
 
 int run_capypkg_tests(void) {
@@ -109,5 +111,11 @@ int run_capypkg_tests(void) {
     test_manifest_rejects_unsafe_dependency_name();
     test_manifest_rejects_payload_size_overflow();
     test_state_and_result_labels_are_well_formed();
+    test_signature_descriptor_is_235_bytes();
+    test_signature_verifies_kat();
+    test_signature_fail_closed_without_key();
+    test_signature_rejects_tampered_descriptor();
+    test_signature_rejects_tampered_signature();
+    test_signature_rejects_malformed_hex();
     return g_test_failures;
 }

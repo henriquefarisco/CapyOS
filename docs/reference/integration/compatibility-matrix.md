@@ -15,7 +15,7 @@ política de instalação modular.
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
 | `CapyOS` | `0.8.0-alpha.265+20260611` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
-| `CapyAgent` | `0.0.8` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier pendente de KAT externo + registro; emit rejeita dependencia duplicada) | `0.0.8` | `0.0.8` |
+| `CapyAgent` | `0.0.8` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276), fail-closed ate o trust anchor de producao; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.8` | `0.0.8` |
 | `CapyBrowser` | `0.6.1` | `capy-browser-core` v1 text subset publicado (`org.capyos.browser.text`; URL + HTML-to-text + links + erro/warning deterministico; refs numericas WHATWG -> U+FFFD; `<pre>` preserva whitespace; marcadores de lista); core grafico segue Etapa 7 | `0.6.1` (Etapa 6 / Slice 6.4; adapter CapyOS-side implementado + build-validado, gate externo pendente) | `0.6.1` |
 | `CapyCodecs` | `0.0.8` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.8` (host-only) | `0.0.8` |
 | `CapyUI` | `2.22.1` | `capy-ui-widget` v2.22 (display-list schema v7) + `capy-ui-desktop-session` v1 | `2.22.1` (cross-repo build / capypkg modulo / display-list adapter Etapa 4) | `2.22.1` (CI release gates com sibling remoto em main) |
@@ -40,7 +40,7 @@ instaláveis devem declarar `required_abis` por nome.
 |---|---|---|---|
 | `capyos-base` | CapyOS | v3 | implícito; sempre presente no runtime |
 | `capyos-package-apply` | CapyOS | v1 | implícito; aplicação de pacote |
-| `capy-agent-component-index` | CapyAgent | v1 | descritor de pacote; Ed25519 signer publicado host-side (verifier pendente de registro via `capypkg_set_signature_verifier`) |
+| `capy-agent-component-index` | CapyAgent | v1 | descritor de pacote; Ed25519 signer publicado host-side; verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276), fail-closed ate o trust anchor de producao |
 | `capy-codec-image` | CapyCodecs | v2 | decodificação de imagem (aditiva sobre v1: per-call limits, detect/generic decode, metadata query, QOI) |
 | `capy-browser-core` | CapyBrowser | v1 text subset publicado em CapyBrowser `0.6.0`; core grafico planejado | adapter CapyOS-side (app ring-3 `capybrowse` consumindo `capy_html_to_text`/`capy_text_doc`) implementado + build-validado (`make capybrowse-elf` + `make test`); runtime depende do gate externo `smoke-x64-vmware-capybrowse-text` |
 | `capy-ui-widget` | CapyUI | v2.22 (display-list schema v7; v1.x LTS preservado no sister) | Etapa 4 consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side; ops básicos 2D renderizam no core, ops sem provider (`IMAGE_REF`, transforms, plugins) ficam fail-safe/skip até providers dedicados |
@@ -56,7 +56,7 @@ breaking explícita.
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
 | `CapyOS` | `0.8.0-alpha.265+20260611` | `capyos-base` v3 + `capyos-package-apply` v1 | ? (autoritativo) | ? |
-| `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); pendente KAT externo + registro via `capypkg_set_signature_verifier`** |
+| `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276) e KAT host-validado, fail-closed ate o trust anchor de producao; KAT externo do signer pendente** |
 | `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
 | `CapyUI` | semver `MAJOR.MINOR.PATCH` (versão 2.x ativa; absorveu desktop+window+apps em alpha.241; modules `widget-core` + `desktop-session`) | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote signed |
@@ -100,7 +100,7 @@ Independentemente da etapa, o adapter `capypkg` garante:
 - `install_root` restrito a `/var/capypkg` ou `/opt/`;
 - alfabeto restrito `[a-zA-Z0-9._-]` em `name` e `depends`;
 - rejeição de bytes não-printable em todos os campos do manifest;
-- fail-closed em `signature_required` sem verifier plugado;
+- fail-closed em `signature_required` sem trust anchor de publisher pinado (verifier Ed25519 registrado em alpha.276);
 - staging sem execução de bytes do payload;
 - audit trail completo via `[audit] [capypkg]` no klog;
 - quotas de pacote, instalado, disponível e repositório aplicadas;
