@@ -513,6 +513,37 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 - `make smoke-x64-vmware-installer-wizard` (novo).
 - `make release-check` com payload assinado.
 
+### Robustez de entrega de módulos (follow-up não-bloqueante, registrado em alpha.286)
+
+O bug crítico do `alpha.286` (instalação completa não baixava nenhum módulo por
+inversão de byte-order no `connect`) expôs uma fragilidade estrutural na entrega
+de módulos, independente daquele fix pontual:
+
+- O índice de módulos default do first-boot é um **pin de versão hardcoded em C**
+  (`CAPYOS_DEFAULT_MODULES_INDEX_URL` em `src/config/first_boot/modules.c`, hoje
+  `CapyUI v2.13.0`), que **dessincroniza silenciosamente** quando os repos irmãos
+  sobem de versão — bump manual fácil de esquecer e sem guarda no `version-audit`.
+- O caminho real de download de módulos (DNS + TLS + redirect GitHub ->
+  release-assets) **não é exercido pela CI** (`smoke-x64-iso` usa `profile=basic`
+  + SLIRP `restrict=on`), então uma quebra de transporte passa verde — foi
+  exatamente o que deixou o byte-order bug escapar por ~17 alphas.
+
+**Direção proposta (resolver no _publish_, não em runtime no kernel):** cada
+manifesto declara `provides_abi` / `abi_version` + faixa de core suportada; o
+agregador `tools/scripts/build_modules_index.py` **resolve, no momento da
+publicação**, a versão mais nova compatível por _token de ABI_ e emite um índice
+**assinado e endereçado por token**; o SO declara apenas seu token de
+compatibilidade (sem versão de módulo hardcoded) e busca o índice
+correspondente; uma **guarda anti-drift no `version-audit`/CI** falha se o
+pin/token divergir da `compatibility-matrix`. Mantém a postura fail-closed
+(resolve a mais nova *assinada + compatível + known-good*, nunca a mais nova
+cega) — é onde o signer Ed25519 do CapyAgent (P0) finalmente paga. Complemento:
+um gate de regressão de download real de módulos (networked full-install) como
+opt-in, já que foi a reprodução networked-full-install que pegou o `alpha.286`.
+
+Não-bloqueante para a Etapa 6; encaixa no fechamento da Etapa 8 (pipeline de
+release/instalador) e na Etapa 9 (package manager / ABI estável).
+
 ## 12. Etapa 9 — Package manager + SDK + ABI estável
 
 **Objetivo:** permitir apps fora da imagem base e que terceiros publiquem software para CapyOS.

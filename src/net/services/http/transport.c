@@ -73,7 +73,14 @@ int http_transport_connect(struct http_transport *transport,
   http_memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port = ((req->port >> 8) & 0xFF) | ((req->port << 8) & 0xFF00);
-  addr.sin_addr = ip;
+  /* sin_addr is network byte order (BSD convention); socket_connect()
+   * byte-swaps the remote address back to host order for tcp_open(). The
+   * resolved ip arrives in host order (NET_IPV4_ADDR / net_dns_parse_first_a),
+   * so convert it here -- mirror of the sin_port swap above. Without this
+   * the SYN is emitted to a byte-reversed (dead) IP and every DNS-based
+   * connect fails with HTTP_ERR_CONNECT (tls never starts). */
+  addr.sin_addr = ((ip >> 24) & 0xFFu) | ((ip >> 8) & 0xFF00u) |
+                  ((ip << 8) & 0xFF0000u) | ((ip << 24) & 0xFF000000u);
 
   if (req->timeout_ms > 0) {
     (void)socket_setsockopt(transport->socket_fd, SOL_SOCKET, SO_RCVTIMEO,
