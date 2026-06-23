@@ -2417,6 +2417,20 @@ smoke-x64-qemu-capybrowse-text:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capybrowse.py $(SMOKE_X64_QEMU_CAPYBROWSE_ARGS)
 
+.PHONY: smoke-x64-qemu-apps-basic-roundtrip
+# Local QEMU+OVMF mirror of smoke-x64-vmware-apps-basic-roundtrip (dev
+# feedback / CI pre-flight; VMware + UEFI + E1000 stays the official
+# release-acceptance gate). The gated in-kernel orchestrator emits the
+# marker pre-login, so no network is needed. REQUIRED_APPS=5 must match
+# CapyUI's apps_smoke_roundtrip_total().
+smoke-x64-qemu-apps-basic-roundtrip:
+	@echo "Executando smoke QEMU apps-basic-roundtrip (dev feedback / CI pre-flight)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_APPS_ROUNDTRIP_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=5'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] apps-basic-roundtrip ready" --timeout 300 --log build/ci/smoke_x64_qemu_apps_roundtrip.log $(SMOKE_X64_QEMU_MARKER_ARGS)
+
 # Etapa 6 / Slice 6.6 external validation gate -- apps-basic-roundtrip.
 # The basic desktop apps are in-kernel functions (CapyUI desktop session),
 # not ring-3 processes, so the in-kernel orchestrator

@@ -163,3 +163,64 @@ jobs:
             build/ci
             build/*.log
           if-no-files-found: ignore
+
+  qemu-apps-roundtrip:
+    name: QEMU apps-basic-roundtrip
+    runs-on: ubuntu-latest
+    needs: release-gates
+    # Etapa 6 apps-basic-roundtrip RUNTIME gate: boots the gated kernel under
+    # QEMU+OVMF and asserts the COM1 marker (the in-kernel orchestrator runs all
+    # five app smokes pre-login). Catches the class of bug that the link-only CI
+    # missed (e.g. the alpha.281 task_manager fix). Advisory during rollout
+    # (continue-on-error) until its TCG stability is observed across a few runs;
+    # then promote to a required check by removing continue-on-error.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Checkout CapyUI sibling
+        shell: bash
+        run: |
+          CAPYUI_REF=main
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            CAPYUI_REF=develop
+          fi
+          git clone --depth 1 --branch "$CAPYUI_REF" \
+            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-x86-64-linux-gnu \
+            build-essential \
+            gcc-x86-64-linux-gnu \
+            gnu-efi \
+            make \
+            ovmf \
+            qemu-system-x86 \
+            xorriso
+
+      - name: Check dependencies
+        run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
+
+      - name: Run apps-basic-roundtrip QEMU marker gate
+        run: make smoke-x64-qemu-apps-basic-roundtrip TOOLCHAIN64=host
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capyos-qemu-apps-roundtrip-${{ github.run_id }}
+          path: |
+            build/ci
+            build/*.log
+          if-no-files-found: ignore
