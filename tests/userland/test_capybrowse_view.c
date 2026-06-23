@@ -147,6 +147,35 @@ int test_capybrowse_view_run(void) {
           "NULL out safe");
   }
 
+  /* Slice 6.9: Content-Type gating + non-text notice. */
+  {
+    char cb[160];
+    CHECK(capybrowse_content_is_text("text/html; charset=utf-8") == 1,
+          "text/html -> text");
+    CHECK(capybrowse_content_is_text("text/plain") == 1, "text/plain -> text");
+    CHECK(capybrowse_content_is_text("application/json") == 1, "json -> text");
+    CHECK(capybrowse_content_is_text("application/xhtml+xml") == 1,
+          "xhtml -> text");
+    CHECK(capybrowse_content_is_text("IMAGE/PNG") == 0,
+          "image/png -> non-text (case-insensitive)");
+    CHECK(capybrowse_content_is_text("application/pdf") == 0, "pdf -> non-text");
+    CHECK(capybrowse_content_is_text("application/octet-stream") == 0,
+          "octet-stream -> non-text");
+    CHECK(capybrowse_content_is_text(NULL) == 1, "absent -> tolerant text");
+    CHECK(capybrowse_content_is_text("") == 1, "empty -> tolerant text");
+    {
+      size_t n =
+          capybrowse_format_content_notice("image/png", "en", cb, sizeof(cb));
+      CHECK(n > 0u && strlen(cb) == n, "content notice bounded");
+      CHECK(strstr(cb, "image/png") != NULL, "notice carries the type");
+      CHECK(strstr(cb, "Non-text content") != NULL, "notice en phrase");
+    }
+    capybrowse_format_content_notice("image/png", "pt-BR", cb, sizeof(cb));
+    CHECK(strstr(cb, "Conteudo nao-textual") != NULL, "notice pt-BR phrase");
+    capybrowse_format_content_notice(NULL, "en", cb, sizeof(cb));
+    CHECK(strstr(cb, "unknown") != NULL, "NULL type -> unknown");
+  }
+
   printf("  -> %d/%d passed\n", g_passes, g_runs);
   return g_runs - g_passes;
 #else

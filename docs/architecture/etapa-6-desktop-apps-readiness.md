@@ -220,6 +220,17 @@ Contratos autoritativos relevantes:
   Sec.4 ("erros claros de DNS/TLS/HTTP"). `make test` verde (`test_capybrowse_view`
   31/31, +11 casos), `make capybrowse-elf` linka, `layout-audit` sem warnings.
   Smoke-safe: `example.com` -> 200 -> sem aviso, marker inalterado. **Entregue em alpha.274.**
+- **Slice 6.9 -- gating por Content-Type no CapyBrowse Text (entregue in-tree).**
+  Nova funcao pura e host-testada `capybrowse_content_is_text(content_type)`
+  (`capybrowse_view`): classifica o tipo por substring case-insensitive sem libc --
+  `text/*`, `html`, `xml`, `json` e Content-Type ausente/vazio -> exibivel; o resto
+  (imagem/audio/video/PDF/octet-stream/...) -> binario. Para binario,
+  `capybrowse_format_content_notice` emite um aviso localizado PT-BR/EN/ES
+  ("Conteudo nao-textual (<tipo>): nao exibivel em modo texto") e `main.c` encerra
+  limpo (exit 0) sem chamar o core, em vez de mangle os bytes. O tipo vem de
+  `capy_http_response_find_header(resp, "Content-Type")`. `make test` verde
+  (`test_capybrowse_view` 45/45, +14 casos), `capybrowse-elf` linka, `layout-audit`
+  sem warnings. Smoke-safe: `example.com` -> `text/html` -> exibivel. **Entregue em alpha.275.**
 
 > **Reordenação vs. o rascunho inicial:** o consumo do core (antes 6.2) foi
 > movido para 6.4 porque o `capy-browser-core` ainda não tinha sido publicado — os

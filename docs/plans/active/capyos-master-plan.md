@@ -396,6 +396,12 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > -- ex. `HTTP 404: Pagina nao encontrada` em PT-BR/EN/ES (fallback EN) --, fechando
 > a parte HTTP do criterio "mostra erros claros de DNS/TLS/HTTP". Status < 400
 > (sucesso/redirect) nao gera aviso, entao o caminho feliz fica inalterado.
+>
+> **Atualizacao alpha.275 (Slice 6.9 -- so renderiza conteudo textual):** o
+> `CapyBrowse Text` passou a checar o Content-Type da resposta e, para conteudo
+> binario (imagem/PDF/octet-stream/...), mostra um aviso localizado PT-BR/EN/ES e
+> encerra limpo em vez de passar bytes binarios ao core HTML-to-text (que so geraria
+> ruido). text/*, html, xml, json e Content-Type ausente seguem renderizando.
 
 ### Entregáveis
 

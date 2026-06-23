@@ -158,3 +158,66 @@ size_t capybrowse_format_status_notice(int status_code, const char *lang,
   vw_putc(out, out_cap, &pos, '\n');
   return pos;
 }
+
+/* Case-insensitive substring search; `needle` must be lowercase ASCII. Pure,
+ * freestanding (no libc): the ring-3 app links only the minimal capylibc. */
+static int vw_ci_substr(const char *hay, const char *needle) {
+  if (!hay || !needle) {
+    return 0;
+  }
+  for (const char *p = hay; *p; p++) {
+    const char *h = p;
+    const char *n = needle;
+    while (*h && *n) {
+      char a = *h;
+      if (a >= 'A' && a <= 'Z') {
+        a = (char)(a + 32);
+      }
+      if (a != *n) {
+        break;
+      }
+      h++;
+      n++;
+    }
+    if (*n == '\0') {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int capybrowse_content_is_text(const char *content_type) {
+  if (!content_type || !content_type[0]) {
+    return 1; /* absent header: stay tolerant (servers often omit it) */
+  }
+  if (vw_ci_substr(content_type, "text/") || vw_ci_substr(content_type, "html") ||
+      vw_ci_substr(content_type, "xml") || vw_ci_substr(content_type, "json")) {
+    return 1;
+  }
+  return 0;
+}
+
+size_t capybrowse_format_content_notice(const char *content_type,
+                                        const char *lang, char *out,
+                                        size_t out_cap) {
+  size_t pos = 0u;
+  if (!out || out_cap == 0u) {
+    return 0u;
+  }
+  out[0] = '\0';
+  vw_puts(out, out_cap, &pos,
+          vw_pick(lang, "Conteudo nao-textual", "Non-text content",
+                  "Contenido no textual"));
+  vw_puts(out, out_cap, &pos, " (");
+  vw_puts(out, out_cap, &pos,
+          (content_type && content_type[0])
+              ? content_type
+              : vw_pick(lang, "desconhecido", "unknown", "desconocido"));
+  vw_puts(out, out_cap, &pos, "): ");
+  vw_puts(out, out_cap, &pos,
+          vw_pick(lang, "nao exibivel em modo texto.",
+                  "cannot be shown in text mode.",
+                  "no se puede mostrar en modo texto."));
+  vw_putc(out, out_cap, &pos, '\n');
+  return pos;
+}

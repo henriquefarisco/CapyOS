@@ -44,4 +44,25 @@ const char *capybrowse_session_lang_string(long lang_code);
 size_t capybrowse_format_status_notice(int status_code, const char *lang,
                                        char *out, size_t out_cap);
 
+/*
+ * Decide whether a response body with this Content-Type can be shown as text.
+ * The HTML-to-text core only makes sense for textual content; feeding it binary
+ * bytes (images, fonts, downloads, ...) just yields garbage. Returns 1 for
+ * text/* and for html/xml/json families (case-insensitive substring), and for a
+ * NULL/empty Content-Type (absent header -> stay tolerant, as servers often
+ * omit it and the core copes). Returns 0 for anything else (binary). Pure.
+ */
+int capybrowse_content_is_text(const char *content_type);
+
+/*
+ * Format a localized one-line notice for a non-text response:
+ * "Non-text content (<type>): cannot be shown in text mode.\n". `content_type`
+ * may be NULL/empty (rendered as "unknown"). `lang` follows the same short
+ * string convention as capy_net_stage_message ("pt-BR"/"en"/"es", EN base).
+ * Pure + bounded; returns the byte length written.
+ */
+size_t capybrowse_format_content_notice(const char *content_type,
+                                        const char *lang, char *out,
+                                        size_t out_cap);
+
 #endif /* CAPYBROWSE_VIEW_H */

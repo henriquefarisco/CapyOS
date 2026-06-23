@@ -149,6 +149,19 @@ int main(int rank) {
     cb_print(notice);
   }
 
+  /* 1c. Only render bodies we can show as text. Feeding binary content (images,
+   *     fonts, downloads, ...) to the HTML-to-text core would just yield garbage,
+   *     so emit a clear localized notice and stop cleanly instead. */
+  {
+    const char *ctype = capy_http_response_find_header(&resp, "Content-Type");
+    if (!capybrowse_content_is_text(ctype)) {
+      char cnotice[160];
+      capybrowse_format_content_notice(ctype, lang, cnotice, sizeof(cnotice));
+      cb_print(cnotice);
+      capy_exit(0);
+    }
+  }
+
   /* 2. HTML -> deterministic text view via the decoupled core. */
   if (capy_html_to_text(g_fetch, resp.body_len, CAPYOS_CAPYBROWSE_URL, g_text,
                         sizeof(g_text), &doc) != CAPY_TEXT_OK) {
