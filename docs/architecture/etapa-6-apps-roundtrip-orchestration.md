@@ -1,7 +1,7 @@
 # Etapa 6 / Slice 6.6 — apps-basic-roundtrip orchestration (design proposal)
 
-**Status:** IMPLEMENTADO (modelo corrigido) para o `calculator` a partir de
-`alpha.278` (+ CapyUI); expande app-a-app.
+**Status:** IMPLEMENTADO (modelo corrigido) para `calculator` + `task_manager`
+a partir de `alpha.278`/`alpha.279` (+ CapyUI); expande app-a-app.
 
 > **Correcao de premissa (2026-06-17):** a investigação de implementação mostrou
 > que os apps básicos do CapyUI são funções **in-kernel** (compiladas no kernel
@@ -15,9 +15,12 @@
 > (`kernel_boot_run_apps_roundtrip`, gated `CAPYOS_APPS_ROUNDTRIP_SMOKE`) que
 > roda cada smoke e alimenta o latch `apps_roundtrip_smoke` (reusado, **sem**
 > `process_exit`), emitindo `[smoke] apps-basic-roundtrip ready`. O primeiro
-> milestone cobre o `calculator` (lógica `calc_eval` 100% separável,
-> `REQUIRED_APPS=1`); file_manager/text_editor/settings/task_manager seguem
-> app-a-app. As seções A/B/C abaixo ficam como **histórico de design**.
+> milestone cobriu o `calculator` (`calc_eval`); `alpha.279` adiciona o
+> `task_manager` (`task_iter`/`process_iter` headless: snapshot são = `>=1` task
+> viva + process count não-negativo), com `REQUIRED_APPS=2`. O orquestrador
+> valida `total()==REQUIRED_APPS` (recusa rodar em drift, evitando falso-positivo
+> do latch count-to-N); file_manager/text_editor/settings seguem app-a-app. As
+> seções A/B/C abaixo ficam como **histórico de design**.
 **Escopo:** como validar, num smoke automatizado VMware, o critério de aceite da
 Slice 6.6 — "cada app abre, executa função primária e fecha sem crash" + "falha
 de um app não derruba o desktop".

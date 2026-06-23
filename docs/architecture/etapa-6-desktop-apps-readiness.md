@@ -191,14 +191,16 @@ Contratos autoritativos relevantes:
     "saem 0" como os binários de smoke single-shot) + o alvo
     `make smoke-x64-vmware-apps-basic-roundtrip`. **Proposta de design da
     orquestração:** [`etapa-6-apps-roundtrip-orchestration.md`](etapa-6-apps-roundtrip-orchestration.md).
-  - **Entregue (1o milestone, alpha.278 + CapyUI 2.22.3) -- modelo corrigido in-kernel:**
+  - **Entregue (alpha.278-279 + CapyUI 2.22.3-2.22.4) -- modelo corrigido in-kernel:**
     a investigacao mostrou que os apps sao funcoes in-kernel (nao processos), entao o
     modelo de exit-de-processo acima e inviavel. Real: `calculator_smoke_roundtrip()`
+    + `task_manager_smoke_roundtrip()`
     (CapyUI) + agregador `apps_smoke.c` via o contrato `include/apps/apps_smoke.h` +
     orquestrador in-kernel `kernel_boot_run_apps_roundtrip` (gated) que alimenta o latch
-    (sem `process_exit`) + alvo `make smoke-x64-vmware-apps-basic-roundtrip`. REQUIRED_APPS=1
-    (calculator); expande app-a-app. `make test` verde + all64 gatado linka. Gate VMware
-    externo pendente.
+    (sem `process_exit`) + alvo `make smoke-x64-vmware-apps-basic-roundtrip`. REQUIRED_APPS=2
+    (calculator + task_manager; o orquestrador valida total()==REQUIRED_APPS para
+    evitar falso-positivo); file_manager/text_editor/settings seguem app-a-app.
+    `make test` verde + all64 gatado linka. Gate VMware externo pendente.
 - **Slice 6.7 -- idioma de sessao para o diagnostico do CapyBrowse Text (entregue
   in-tree).** Novo syscall `SYS_GET_SESSION_LANG` (=44, `SYSCALL_COUNT` 44->45): o
   handler `sys_get_session_lang` (`src/kernel/syscall.c`) le

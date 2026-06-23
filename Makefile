@@ -2402,16 +2402,17 @@ smoke-x64-qemu-capybrowse-text:
 # not ring-3 processes, so the in-kernel orchestrator
 # (kernel_boot_run_apps_roundtrip) runs each app's headless primary-function
 # smoke and the latch emits "[smoke] apps-basic-roundtrip ready" on COM1 once
-# APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes are observed. The first
-# milestone covers the calculator (REQUIRED_APPS=1) and grows app-by-app.
-# Requires the CapyUI sibling (apps + apps_smoke.c).
+# APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes are observed. The set grows
+# app-by-app; it now covers the calculator + task_manager (REQUIRED_APPS=2).
+# This value MUST equal CapyUI's apps_smoke_roundtrip_total(); the orchestrator
+# refuses to run (gate fails) on a mismatch. Requires the CapyUI sibling.
 .PHONY: smoke-x64-vmware-apps-basic-roundtrip
 smoke-x64-vmware-apps-basic-roundtrip:
 	@echo "Executando smoke test VMware+E1000 apps-basic-roundtrip..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full \
 		CAPYOS_APPS_ROUNDTRIP_SMOKE=1 \
-		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=1'
+		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=2'
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \

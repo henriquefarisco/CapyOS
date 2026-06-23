@@ -410,6 +410,12 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > `kernel_boot_run_apps_roundtrip` (gated `CAPYOS_APPS_ROUNDTRIP_SMOKE`) que alimenta
 > o latch `apps_roundtrip_smoke` (sem `process_exit`) e emite o marker. 1o milestone:
 > calculator; expande app-a-app. Gate VMware externo pendente.
+>
+> **Atualizacao alpha.279 (2o app, + CapyUI 2.22.4):** o conjunto cresce para o
+> `task_manager` (`task_manager_smoke_roundtrip` exercita `task_iter`/`process_iter`
+> headless); `REQUIRED_APPS=2` e o orquestrador valida `total()==REQUIRED_APPS`
+> (recusa rodar em drift -> gate falha, sem falso-positivo).
+> file_manager/text_editor/settings seguem.
 
 ### Entregáveis
 

@@ -249,6 +249,16 @@ int kernel_boot_run_capybrowse(void) {
 int kernel_boot_run_apps_roundtrip(void) {
   unsigned total = apps_smoke_roundtrip_total();
   unsigned i;
+  /* The latch threshold (APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS, compile-time) must
+   * equal the app-set size CapyUI reports, or the count-to-N marker would
+   * mis-fire: if REQUIRED < total the latch emits "ready" before the last apps
+   * run (a later failure could no longer retract it -> false pass); if
+   * REQUIRED > total it can never fire. Guard the drift so a mismatch fails the
+   * gate (no marker -> times out) instead of producing a false pass. With them
+   * equal, the latch emits iff every one of the `total` apps exits cleanly. */
+  if (total != APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS) {
+    return -1;
+  }
   for (i = 0u; i < total; i++) {
     int rc = apps_smoke_roundtrip_run(i);
     if (apps_roundtrip_smoke_try_latch_exit_global((int32_t)rc)) {

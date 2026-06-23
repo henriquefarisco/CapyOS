@@ -57,4 +57,11 @@ void task_manager_tick(void);
  * Quietly no-ops if the row is invalid or the kill would self-kill. */
 void task_manager_kill_selected(struct task_manager_app *app);
 
+/* Etapa 6 / Slice 6.6: headless smoke roundtrip (no GUI). Returns 0 when the
+ * Task Manager's primary data path (task_iter / process_iter enumeration)
+ * produces a sane snapshot (>= 1 live task, non-negative process count),
+ * non-zero otherwise. Called by the apps-basic-roundtrip orchestrator via the
+ * apps/apps_smoke.h contract. */
+int task_manager_smoke_roundtrip(void);
+
 #endif
