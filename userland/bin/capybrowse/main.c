@@ -21,8 +21,10 @@
  * capylibc <string.h> the core links, mutable bulk state in zero-initialised
  * .bss (the ELF loader zeroes .bss). The endpoint is compile-time configurable
  * for the controlled smoke (make smoke-x64-vmware-capybrowse-text), like
- * tls_smoke; the language defaults to the mandatory EN base until a ring-3
- * "current session language" syscall exists.
+ * tls_smoke; the diagnostic language now follows the logged-in session at
+ * runtime (capy_get_session_lang, SYS_GET_SESSION_LANG), so PT-BR/ES users see
+ * localized errors, with a -DCAPYOS_CAPYBROWSE_LANG="xx" compile-time override
+ * for deterministic tests.
  */
 
 #include <capylibc/capylibc.h>
@@ -42,9 +44,6 @@
 
 #ifndef CAPYOS_CAPYBROWSE_URL
 #define CAPYOS_CAPYBROWSE_URL "https://example.com/"
-#endif
-#ifndef CAPYOS_CAPYBROWSE_LANG
-#define CAPYOS_CAPYBROWSE_LANG "en"
 #endif
 
 /* Bounded retry to absorb the async DHCP lease window (mirrors tls_smoke). */
@@ -88,16 +87,29 @@ static size_t cb_cstr_len(const char *s) {
 
 static void cb_print(const char *s) { capy_write(1, s, cb_cstr_len(s)); }
 
+/* Diagnostic language: by default the logged-in session's language at runtime
+ * (SYS_GET_SESSION_LANG via capy_get_session_lang), so PT-BR/ES users see
+ * localized errors. A compile-time -DCAPYOS_CAPYBROWSE_LANG="xx" overrides it
+ * with a fixed value for deterministic tests. */
+static const char *cb_diag_lang(void) {
+#ifdef CAPYOS_CAPYBROWSE_LANG
+  return CAPYOS_CAPYBROWSE_LANG;
+#else
+  return capybrowse_session_lang_string(capy_get_session_lang());
+#endif
+}
+
 /* Print the friendly stage-aware localized diagnostic for the current error
  * and exit fail-closed. tls_state distinguishes a real TLS handshake/cert
  * failure from a generic transport error even though the net layer collapses
  * them into one code. */
 static void cb_fail(capy_net_err_t net_err, capy_tls_state_t tls_state) {
   capy_net_stage_t stage = capy_net_diagnose_stage(net_err, tls_state);
+  const char *lang = cb_diag_lang();
   const char *hint;
-  cb_print(capy_net_stage_message(stage, CAPYOS_CAPYBROWSE_LANG));
+  cb_print(capy_net_stage_message(stage, lang));
   cb_print("\n");
-  hint = capy_net_stage_hint(stage, CAPYOS_CAPYBROWSE_LANG);
+  hint = capy_net_stage_hint(stage, lang);
   if (hint[0]) {
     cb_print(hint);
     cb_print("\n");
@@ -131,9 +143,10 @@ int main(int rank) {
   if (capy_html_to_text(g_fetch, resp.body_len, CAPYOS_CAPYBROWSE_URL, g_text,
                         sizeof(g_text), &doc) != CAPY_TEXT_OK) {
     /* Only NULL inputs make the tolerant core fail; treat as an input error. */
-    cb_print(capy_net_stage_message(CAPY_NET_STAGE_INPUT, CAPYOS_CAPYBROWSE_LANG));
+    const char *lang = cb_diag_lang();
+    cb_print(capy_net_stage_message(CAPY_NET_STAGE_INPUT, lang));
     cb_print("\n");
-    cb_print(capy_net_stage_hint(CAPY_NET_STAGE_INPUT, CAPYOS_CAPYBROWSE_LANG));
+    cb_print(capy_net_stage_hint(CAPY_NET_STAGE_INPUT, lang));
     cb_print("\n");
     capy_exit(1);
   }

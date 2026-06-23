@@ -328,5 +328,17 @@ capy_clock_realtime:
     ret
 .size capy_clock_realtime, .-capy_clock_realtime
 
+# long capy_get_session_lang(void);
+#
+# Active session UI language code (CAPY_SESSION_LANG_*: 0=pt-BR, 1=en, 2=es).
+# No arguments. Lets a ring-3 app localize its user-facing diagnostics to the
+# logged-in user's language; no session -> pt-BR (the selection default).
+.global capy_get_session_lang
+capy_get_session_lang:
+    movq $SYS_GET_SESSION_LANG, %rax
+    syscall
+    ret
+.size capy_get_session_lang, .-capy_get_session_lang
+
 # Mark stack as non-executable to satisfy modern binutils hardening.
 .section .note.GNU-stack,"",@progbits

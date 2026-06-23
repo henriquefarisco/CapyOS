@@ -86,3 +86,15 @@ size_t capybrowse_format_page(const struct capy_text_doc *doc, const char *body,
 
   return pos;
 }
+
+const char *capybrowse_session_lang_string(long lang_code) {
+  switch (lang_code) {
+  case 0: /* CAPY_SESSION_LANG_PT_BR */
+    return "pt-BR";
+  case 2: /* CAPY_SESSION_LANG_ES */
+    return "es";
+  case 1: /* CAPY_SESSION_LANG_EN */
+  default: /* unknown -> EN universal fallback base */
+    return "en";
+  }
+}

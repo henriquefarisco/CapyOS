@@ -102,6 +102,20 @@ int test_capybrowse_view_run(void) {
     CHECK(n5 == 9u && strcmp(o5, "just body") == 0, "NULL doc renders body");
   }
 
+  /* Slice 6.7: SYS_GET_SESSION_LANG code -> diagnostic language string. The
+   * codes mirror CAPY_SESSION_LANG_* (0=pt-BR, 1=en, 2=es); the strings feed
+   * capy_net_stage_message's net_pick (keys on the leading "pt"/"en"/"es"). */
+  CHECK(strcmp(capybrowse_session_lang_string(0), "pt-BR") == 0,
+        "lang code 0 -> pt-BR");
+  CHECK(strcmp(capybrowse_session_lang_string(1), "en") == 0,
+        "lang code 1 -> en");
+  CHECK(strcmp(capybrowse_session_lang_string(2), "es") == 0,
+        "lang code 2 -> es");
+  CHECK(strcmp(capybrowse_session_lang_string(99), "en") == 0,
+        "unknown lang code -> en (universal fallback)");
+  CHECK(strcmp(capybrowse_session_lang_string(-1), "en") == 0,
+        "negative lang code -> en (universal fallback)");
+
   printf("  -> %d/%d passed\n", g_passes, g_runs);
   return g_runs - g_passes;
 #else

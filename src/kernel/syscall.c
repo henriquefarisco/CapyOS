@@ -10,6 +10,7 @@
 #include "fs/vfs.h"
 #include "security/csprng.h"
 #include "drivers/rtc/rtc.h"
+#include "auth/session.h"
 #include <stddef.h>
 
 /* 2026-05-02: FD type discriminators (FD_TYPE_FREE/VFS/PIPE) and
@@ -359,6 +360,28 @@ static int64_t sys_clock_realtime(struct syscall_frame *f) {
   return (int64_t)rtc_unix_timestamp();
 }
 
+/* Etapa 6 / Slice 6.7: SYS_GET_SESSION_LANG — active session UI language.
+ *
+ * Returns a small stable code (CAPY_SESSION_LANG_*) for the logged-in
+ * session's language so a ring-3 app (CapyBrowse Text) can localize its
+ * user-facing diagnostics instead of hardcoding a base language. No session
+ * (or an empty language) maps to PT-BR, mirroring app_current_language()'s
+ * default and the locked selection-default invariant; an unrecognized
+ * non-empty language falls back to EN, the universal string-fallback base.
+ * Reads the session string directly (auth/session is always linked). No
+ * arguments. es-before-en because both begin with 'e'. */
+static int64_t sys_get_session_lang(struct syscall_frame *f) {
+  (void)f;
+  struct session_context *sess = session_active();
+  const char *lang = sess ? session_language(sess) : NULL;
+  if (!lang || !lang[0]) return CAPY_SESSION_LANG_PT_BR;
+  if ((lang[0] == 'e' || lang[0] == 'E') && (lang[1] == 's' || lang[1] == 'S'))
+    return CAPY_SESSION_LANG_ES;
+  if (lang[0] == 'e' || lang[0] == 'E') return CAPY_SESSION_LANG_EN;
+  if (lang[0] == 'p' || lang[0] == 'P') return CAPY_SESSION_LANG_PT_BR;
+  return CAPY_SESSION_LANG_EN;
+}
+
 /* M5 phase A.3: SYS_FORK.
  *
  * Splits the current process into two: parent gets the child PID
@@ -566,6 +589,7 @@ void syscall_init(void) {
   syscall_table[SYS_TIME]    = sys_time;
   syscall_table[SYS_GETRANDOM] = sys_getrandom;
   syscall_table[SYS_CLOCK_REALTIME] = sys_clock_realtime;
+  syscall_table[SYS_GET_SESSION_LANG] = sys_get_session_lang;
   syscall_table[SYS_FORK]    = sys_fork;
   syscall_table[SYS_EXEC]    = sys_exec;
   syscall_table[SYS_WAIT]    = sys_wait;

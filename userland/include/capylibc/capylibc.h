@@ -174,6 +174,13 @@ long capy_getrandom(void *buf, size_t len, unsigned int flags);
  * certificate validity (notBefore/notAfter) in ring 3. */
 long capy_clock_realtime(void);
 
+/* Etapa 6 / Slice 6.7: active session UI language code (CAPY_SESSION_LANG_*
+ * from kernel/syscall_numbers.h: 0=pt-BR, 1=en, 2=es). Lets a ring-3 app
+ * (CapyBrowse Text) localize its user-facing diagnostics to the logged-in
+ * user's language instead of a hardcoded base. No session -> pt-BR (the
+ * selection default). */
+long capy_get_session_lang(void);
+
 #ifdef __cplusplus
 }
 #endif

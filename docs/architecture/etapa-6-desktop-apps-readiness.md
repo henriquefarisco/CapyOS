@@ -191,6 +191,24 @@ Contratos autoritativos relevantes:
     "saem 0" como os binários de smoke single-shot) + o alvo
     `make smoke-x64-vmware-apps-basic-roundtrip`. **Proposta de design da
     orquestração:** [`etapa-6-apps-roundtrip-orchestration.md`](etapa-6-apps-roundtrip-orchestration.md).
+- **Slice 6.7 -- idioma de sessao para o diagnostico do CapyBrowse Text (entregue
+  in-tree).** Novo syscall `SYS_GET_SESSION_LANG` (=44, `SYSCALL_COUNT` 44->45): o
+  handler `sys_get_session_lang` (`src/kernel/syscall.c`) le
+  `session_active()`/`session_language()` (auth/session, sempre linkado) e devolve um
+  codigo estavel `CAPY_SESSION_LANG_*` (0=pt-BR, 1=en, 2=es); sem sessao / idioma vazio
+  -> pt-BR (espelha `app_current_language` e o invariante "selecao padrao" travado em
+  `test_localization.c`), nao reconhecido -> en (base de fallback universal). Userland:
+  stub asm `capy_get_session_lang` + decl em `capylibc.h`; mapeador puro e host-testado
+  `capybrowse_session_lang_string` (codigo -> "pt-BR"/"en"/"es", consumido pelo
+  `net_pick` de `capy_net_stage_message`/`_hint`) no `capybrowse_view`; `cb_diag_lang()`
+  do `userland/bin/capybrowse/main.c` resolve o idioma em runtime (override de
+  compilacao `-DCAPYOS_CAPYBROWSE_LANG` mantido para testes deterministicos). Fecha o
+  gap que o proprio `main.c` documentava ("until a ring-3 current session language
+  syscall exists") e o criterio i18n do Sec.4 para o caminho de erro do navegador.
+  `make test` verde (ABI `SYS_GET_SESSION_LANG==44` / `SYSCALL_COUNT==45`;
+  `test_capybrowse_view` 20/20 com 5 casos novos), `syscall.o` compila limpo,
+  `make capybrowse-elf` linka, `layout-audit` sem warnings. ABI aditiva de `capyos-base`;
+  sem mudanca de contrato cross-repo. **Entregue em alpha.273.**
 
 > **Reordenação vs. o rascunho inicial:** o consumo do core (antes 6.2) foi
 > movido para 6.4 porque o `capy-browser-core` ainda não tinha sido publicado — os

@@ -384,6 +384,13 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > **código** sai do audit; nada de ampliar parser/render acoplado antes de
 > extrair a lógica pura.
 
+> **Atualizacao alpha.273 (Slice 6.7 -- idioma de sessao):** novo syscall
+> `SYS_GET_SESSION_LANG` (=44, `SYSCALL_COUNT` 44->45) expoe o idioma da sessao
+> logada ao ring-3; o `CapyBrowse Text` passou a localizar seus diagnosticos em
+> PT-BR/ES (antes fixo em EN), fechando o criterio i18n desta etapa para o caminho
+> de erro do navegador. Detalhe por slice em
+> [`../../architecture/etapa-6-desktop-apps-readiness.md`](../../architecture/etapa-6-desktop-apps-readiness.md).
+
 ### Entregáveis
 
 - File Manager, Text Editor, Settings, Image Viewer, Calculator, Log Viewer, Notes/Calendar simples, Media Player de áudio e imagem (sem vídeo ainda — vídeo entra na Etapa 10).

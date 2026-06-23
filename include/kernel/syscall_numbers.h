@@ -87,6 +87,20 @@
  * since boot, NOT wall-clock, so it cannot drive cert expiry.
  * Handler: src/kernel/syscall.c::sys_clock_realtime. */
 #define SYS_CLOCK_REALTIME 43
-#define SYSCALL_COUNT   44
+/* Etapa 6 / Slice 6.7: active session UI language for ring-3 apps. Lets a
+ * userland app (CapyBrowse Text) localize its user-facing diagnostics to the
+ * logged-in user's language instead of a hardcoded base. No arguments; returns
+ * a small stable code (see CAPY_SESSION_LANG_* below).
+ * Handler: src/kernel/syscall.c::sys_get_session_lang. */
+#define SYS_GET_SESSION_LANG 44
+#define SYSCALL_COUNT   45
+
+/* Stable return codes for SYS_GET_SESSION_LANG (additive ABI). PT_BR is the
+ * no-session default, matching app_current_language() and the locked
+ * "selection default is PT-BR" invariant; EN stays the string-fallback base
+ * the userland diagnostics use when a specific translation is missing. */
+#define CAPY_SESSION_LANG_PT_BR 0
+#define CAPY_SESSION_LANG_EN    1
+#define CAPY_SESSION_LANG_ES    2
 
 #endif /* KERNEL_SYSCALL_NUMBERS_H */

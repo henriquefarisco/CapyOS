@@ -24,4 +24,13 @@
 size_t capybrowse_format_page(const struct capy_text_doc *doc, const char *body,
                               char *out, size_t out_cap);
 
+/*
+ * Map a SYS_GET_SESSION_LANG return code (from capy_get_session_lang) to the
+ * short language string the capylibc-net diagnostics consume ("pt-BR" / "en" /
+ * "es"). Pure, no syscalls — so it stays host-testable next to the formatter.
+ * Codes: 0 = pt-BR, 1 = en, 2 = es; any unknown code falls back to "en" (the
+ * universal string-fallback base). Returns a static string literal, never NULL.
+ */
+const char *capybrowse_session_lang_string(long lang_code);
+
 #endif /* CAPYBROWSE_VIEW_H */
