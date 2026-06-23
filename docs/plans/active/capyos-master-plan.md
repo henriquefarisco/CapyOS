@@ -390,6 +390,12 @@ Evidência externa registrada em `docs/operations/etapa-3-external-validation-pl
 > PT-BR/ES (antes fixo em EN), fechando o criterio i18n desta etapa para o caminho
 > de erro do navegador. Detalhe por slice em
 > [`../../architecture/etapa-6-desktop-apps-readiness.md`](../../architecture/etapa-6-desktop-apps-readiness.md).
+>
+> **Atualizacao alpha.274 (Slice 6.8 -- erros HTTP claros):** o `CapyBrowse Text`
+> passou a exibir um aviso localizado de uma linha para status HTTP de erro (>= 400)
+> -- ex. `HTTP 404: Pagina nao encontrada` em PT-BR/EN/ES (fallback EN) --, fechando
+> a parte HTTP do criterio "mostra erros claros de DNS/TLS/HTTP". Status < 400
+> (sucesso/redirect) nao gera aviso, entao o caminho feliz fica inalterado.
 
 ### Entregáveis
 

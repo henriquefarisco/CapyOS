@@ -103,9 +103,9 @@ static const char *cb_diag_lang(void) {
  * and exit fail-closed. tls_state distinguishes a real TLS handshake/cert
  * failure from a generic transport error even though the net layer collapses
  * them into one code. */
-static void cb_fail(capy_net_err_t net_err, capy_tls_state_t tls_state) {
+static void cb_fail(capy_net_err_t net_err, capy_tls_state_t tls_state,
+                    const char *lang) {
   capy_net_stage_t stage = capy_net_diagnose_stage(net_err, tls_state);
-  const char *lang = cb_diag_lang();
   const char *hint;
   cb_print(capy_net_stage_message(stage, lang));
   cb_print("\n");
@@ -120,6 +120,7 @@ static void cb_fail(capy_net_err_t net_err, capy_tls_state_t tls_state) {
 int main(int rank) {
   unsigned attempt;
   int got_response = 0;
+  const char *lang = cb_diag_lang();
 
   (void)rank;
 
@@ -136,14 +137,22 @@ int main(int rank) {
     capy_sleep(CAPYBROWSE_SLEEP_TICKS);
   }
   if (!got_response) {
-    cb_fail(capy_net_last_error(), capy_tls_last_state());
+    cb_fail(capy_net_last_error(), capy_tls_last_state(), lang);
+  }
+
+  /* 1b. Surface a clear localized notice for HTTP error statuses (4xx/5xx);
+   *     the body is still rendered below so any server-provided detail shows. */
+  if (resp.status_code >= 400) {
+    char notice[96];
+    capybrowse_format_status_notice(resp.status_code, lang, notice,
+                                    sizeof(notice));
+    cb_print(notice);
   }
 
   /* 2. HTML -> deterministic text view via the decoupled core. */
   if (capy_html_to_text(g_fetch, resp.body_len, CAPYOS_CAPYBROWSE_URL, g_text,
                         sizeof(g_text), &doc) != CAPY_TEXT_OK) {
     /* Only NULL inputs make the tolerant core fail; treat as an input error. */
-    const char *lang = cb_diag_lang();
     cb_print(capy_net_stage_message(CAPY_NET_STAGE_INPUT, lang));
     cb_print("\n");
     cb_print(capy_net_stage_hint(CAPY_NET_STAGE_INPUT, lang));

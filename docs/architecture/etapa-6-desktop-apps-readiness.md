@@ -209,6 +209,17 @@ Contratos autoritativos relevantes:
   `test_capybrowse_view` 20/20 com 5 casos novos), `syscall.o` compila limpo,
   `make capybrowse-elf` linka, `layout-audit` sem warnings. ABI aditiva de `capyos-base`;
   sem mudanca de contrato cross-repo. **Entregue em alpha.273.**
+- **Slice 6.8 -- aviso de erro HTTP no CapyBrowse Text (entregue in-tree).** Nova
+  funcao pura e host-testada `capybrowse_format_status_notice(status, lang, out, cap)`
+  em `capybrowse_view`: para status HTTP >= 400 escreve um aviso de uma linha
+  `HTTP <code>: <frase localizada>` (404/403/500/503 especificos + 4xx/5xx genericos)
+  em PT-BR/EN/ES com fallback EN; para < 400 (sucesso/redirect) nao escreve nada e o
+  caminho feliz fica inalterado. `userland/bin/capybrowse/main.c` imprime o aviso
+  antes do corpo (o corpo ainda e renderizado, para nao perder detalhe do servidor) e
+  `cb_fail` passou a receber o idioma ja resolvido. Fecha a parte HTTP do criterio do
+  Sec.4 ("erros claros de DNS/TLS/HTTP"). `make test` verde (`test_capybrowse_view`
+  31/31, +11 casos), `make capybrowse-elf` linka, `layout-audit` sem warnings.
+  Smoke-safe: `example.com` -> 200 -> sem aviso, marker inalterado. **Entregue em alpha.274.**
 
 > **Reordenação vs. o rascunho inicial:** o consumo do core (antes 6.2) foi
 > movido para 6.4 porque o `capy-browser-core` ainda não tinha sido publicado — os

@@ -33,4 +33,15 @@ size_t capybrowse_format_page(const struct capy_text_doc *doc, const char *body,
  */
 const char *capybrowse_session_lang_string(long lang_code);
 
+/*
+ * Format a one-line localized notice for an HTTP *error* status (>= 400):
+ * "HTTP <code>: <localized phrase>\n\n". For < 400 (success / redirect) writes
+ * nothing and returns 0. Pure + bounded (mirrors capybrowse_format_page, always
+ * NUL-terminated when out_cap > 0). `lang` is the short language string
+ * ("pt-BR" / "en" / "es", EN as the fallback base), the same convention
+ * capy_net_stage_message uses. Returns the byte length written (excluding NUL).
+ */
+size_t capybrowse_format_status_notice(int status_code, const char *lang,
+                                       char *out, size_t out_cap);
+
 #endif /* CAPYBROWSE_VIEW_H */

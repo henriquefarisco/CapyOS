@@ -116,6 +116,37 @@ int test_capybrowse_view_run(void) {
   CHECK(strcmp(capybrowse_session_lang_string(-1), "en") == 0,
         "negative lang code -> en (universal fallback)");
 
+  /* Slice 6.8: HTTP error-status notice (>= 400 only), localized. */
+  {
+    char nb[96];
+    size_t n;
+    n = capybrowse_format_status_notice(404, "pt-BR", nb, sizeof(nb));
+    CHECK(n > 0u && strlen(nb) == n, "404 notice bounded + NUL-terminated");
+    CHECK(strstr(nb, "HTTP 404") != NULL, "404 notice carries the code");
+    CHECK(strstr(nb, "nao encontrada") != NULL, "404 pt-BR phrase");
+    capybrowse_format_status_notice(404, "en", nb, sizeof(nb));
+    CHECK(strstr(nb, "Page not found.") != NULL, "404 en phrase");
+    capybrowse_format_status_notice(500, "en", nb, sizeof(nb));
+    CHECK(strstr(nb, "HTTP 500") != NULL &&
+              strstr(nb, "Internal server error.") != NULL,
+          "500 en phrase");
+    capybrowse_format_status_notice(503, "es", nb, sizeof(nb));
+    CHECK(strstr(nb, "Servicio no disponible.") != NULL, "503 es phrase");
+    capybrowse_format_status_notice(418, "en", nb, sizeof(nb));
+    CHECK(strstr(nb, "HTTP 418") != NULL && strstr(nb, "Request error.") != NULL,
+          "generic 4xx en phrase");
+    capybrowse_format_status_notice(502, "en", nb, sizeof(nb));
+    CHECK(strstr(nb, "Server error.") != NULL, "generic 5xx en phrase");
+    nb[0] = 'x';
+    CHECK(capybrowse_format_status_notice(200, "en", nb, sizeof(nb)) == 0u &&
+              nb[0] == '\0',
+          "200 -> no notice (empty)");
+    CHECK(capybrowse_format_status_notice(301, "en", nb, sizeof(nb)) == 0u,
+          "3xx -> no notice");
+    CHECK(capybrowse_format_status_notice(404, "en", NULL, 0u) == 0u,
+          "NULL out safe");
+  }
+
   printf("  -> %d/%d passed\n", g_passes, g_runs);
   return g_runs - g_passes;
 #else

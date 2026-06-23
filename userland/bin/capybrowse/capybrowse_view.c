@@ -98,3 +98,63 @@ const char *capybrowse_session_lang_string(long lang_code) {
     return "en";
   }
 }
+
+/* Language pick mirroring capylibc-net's net_pick (EN is the fallback base):
+ * "es"/"es-*" -> ES; "pt"/"pt-*" -> PT-BR; everything else -> EN. es-before-pt
+ * is irrelevant here, but es-before-en matters since both begin with 'e'. */
+static const char *vw_pick(const char *lang, const char *pt, const char *en,
+                           const char *es) {
+  if (lang && (lang[0] == 'e' || lang[0] == 'E') &&
+      (lang[1] == 's' || lang[1] == 'S')) {
+    return es;
+  }
+  if (lang && (lang[0] == 'p' || lang[0] == 'P')) {
+    return pt;
+  }
+  return en;
+}
+
+/* Short localized phrase for an HTTP error status. Specific phrases for the
+ * common codes; generic 4xx vs 5xx otherwise (status is 400..599 here). */
+static const char *vw_status_phrase(int status, const char *lang) {
+  switch (status) {
+  case 404:
+    return vw_pick(lang, "Pagina nao encontrada.", "Page not found.",
+                   "Pagina no encontrada.");
+  case 403:
+    return vw_pick(lang, "Acesso negado.", "Access denied.", "Acceso denegado.");
+  case 500:
+    return vw_pick(lang, "Erro interno do servidor.", "Internal server error.",
+                   "Error interno del servidor.");
+  case 503:
+    return vw_pick(lang, "Servico indisponivel.", "Service unavailable.",
+                   "Servicio no disponible.");
+  default:
+    break;
+  }
+  if (status >= 500) {
+    return vw_pick(lang, "Erro do servidor.", "Server error.",
+                   "Error del servidor.");
+  }
+  return vw_pick(lang, "Erro na requisicao.", "Request error.",
+                 "Error en la solicitud.");
+}
+
+size_t capybrowse_format_status_notice(int status_code, const char *lang,
+                                       char *out, size_t out_cap) {
+  size_t pos = 0u;
+  if (!out || out_cap == 0u) {
+    return 0u;
+  }
+  out[0] = '\0';
+  if (status_code < 400) {
+    return 0u; /* success / redirect: no error notice */
+  }
+  vw_puts(out, out_cap, &pos, "HTTP ");
+  vw_putu(out, out_cap, &pos, (unsigned)status_code);
+  vw_puts(out, out_cap, &pos, ": ");
+  vw_puts(out, out_cap, &pos, vw_status_phrase(status_code, lang));
+  vw_putc(out, out_cap, &pos, '\n');
+  vw_putc(out, out_cap, &pos, '\n');
+  return pos;
+}
