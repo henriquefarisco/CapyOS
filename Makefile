@@ -2107,6 +2107,9 @@ $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 test: $(TEST_BIN)
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+	@$(MAKE) --no-print-directory test-browser-pipeline
+endif
 
 .PHONY: security-selftest
 # Focused security regression: untrusted-input parsers + crypto + package
@@ -2143,6 +2146,52 @@ $(TEST_CAPYPKG_BIN): $(TEST_CAPYPKG_SRCS) | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	@printf '#include <stdint.h>\nuint64_t pit_ticks(void){static uint64_t t=0;return ++t;}\nint run_capypkg_tests(void);\nint main(void){return run_capypkg_tests();}\n' > $(TEST_CAPYPKG_MAIN)
 	$(HOST_CC) $(HOST_CFLAGS) -DCAPYPKG_BOOTSTRAP_TESTS -o $@ $(TEST_CAPYPKG_SRCS) $(TEST_CAPYPKG_MAIN)
+
+# Etapa 7 / Slice 7.3: focused host test for the CapyOS-side driver of the
+# capy-browser-core static-render pipeline (HTML -> DOM -> CSS -> cascade ->
+# layout -> display-list) + the pixel rasterizer (HTML -> pixels end-to-end).
+# A SEPARATE binary (not the unit_tests aggregate) because the sibling's
+# url_parse.c defines `capy_url_parse`, which collides with capylibc-net's
+# same-named symbol present in the aggregate; this binary links the browser core
+# WITHOUT capylibc-net, so there is no collision. Built only when the CapyBrowser
+# graphical core sibling is present (CAPYBROWSER_CORE_AVAILABLE); `make test`
+# runs it automatically in that case.
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+TEST_PIPELINE_BIN := $(BUILD)/tests/browser_pipeline_tests
+TEST_PIPELINE_SRCS := \
+	tests/userland/test_browser_pipeline.c \
+	userland/bin/capybrowse/browser_pipeline.c \
+	userland/bin/capybrowse/browser_render_pixel.c \
+	src/gui/core/font8x8_data.c \
+	$(CAPYBROWSER_DIR)/src/url/url_parse.c \
+	$(CAPYBROWSER_DIR)/src/url/url_normalize.c \
+	$(CAPYBROWSER_DIR)/src/url/origin.c \
+	$(CAPYBROWSER_DIR)/src/text/html_entities.c \
+	$(CAPYBROWSER_DIR)/src/text/html_tokenizer.c \
+	$(CAPYBROWSER_DIR)/src/html/dom.c \
+	$(CAPYBROWSER_DIR)/src/html/html_parse.c \
+	$(CAPYBROWSER_DIR)/src/css/css_parse.c \
+	$(CAPYBROWSER_DIR)/src/css/cascade.c \
+	$(CAPYBROWSER_DIR)/src/layout/layout.c \
+	$(CAPYBROWSER_DIR)/src/displaylist/display_list.c
+TEST_PIPELINE_MAIN := $(BUILD)/tests/browser_pipeline_main.c
+TEST_PIPELINE_INCLUDES := \
+	-I$(CAPYBROWSER_DIR)/src/url -I$(CAPYBROWSER_DIR)/src/text \
+	-I$(CAPYBROWSER_DIR)/src/html -I$(CAPYBROWSER_DIR)/src/css \
+	-I$(CAPYBROWSER_DIR)/src/layout -I$(CAPYBROWSER_DIR)/src/displaylist \
+	-Iuserland/bin/capybrowse
+
+.PHONY: test-browser-pipeline
+test-browser-pipeline: $(TEST_PIPELINE_BIN)
+	@echo "Executando testes do pipeline HTML->display-list (Slice 7.3)..."
+	$(TEST_PIPELINE_BIN)
+	@echo "[ok] browser-pipeline tests passed."
+
+$(TEST_PIPELINE_BIN): $(TEST_PIPELINE_SRCS) | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	@printf '#include <stdint.h>\nint run_browser_pipeline_tests(void);\nint main(void){return run_browser_pipeline_tests();}\n' > $(TEST_PIPELINE_MAIN)
+	$(HOST_CC) $(HOST_CFLAGS) $(TEST_PIPELINE_INCLUDES) -o $@ $(TEST_PIPELINE_SRCS) $(TEST_PIPELINE_MAIN)
+endif
 
 .PHONY: modules-index
 # modules-index: aggregate per-repo capypkg manifests (produced by
