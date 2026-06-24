@@ -626,6 +626,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/net/services/http/http_cache.o \
 	$(BUILD)/x86_64/net/services/http/http_cookies.o \
 	$(BUILD)/x86_64/net/services/http/http_session.o \
+	$(BUILD)/x86_64/net/services/http/http_fetch_policy.o \
 	$(BUILD)/x86_64/third_party/tinf/tinflate.o \
 	$(BUILD)/x86_64/third_party/tinf/tinfgzip.o \
 	$(BUILD)/x86_64/third_party/tinf/tinfzlib.o \
@@ -2006,6 +2007,7 @@ TEST_SRCS   := \
                tests/net/test_http_cache.c src/net/services/http/http_cache.c \
                tests/net/test_http_cookies.c src/net/services/http/http_cookies.c \
                tests/net/test_http_session.c src/net/services/http/http_session.c \
+               tests/net/test_http_fetch_policy.c src/net/services/http/http_fetch_policy.c \
                tests/net/test_net_dns.c src/net/services/dns.c \
                tests/net/test_net_dhcp_options.c src/net/core/dhcp_options.c \
                tests/net/test_net_icmp.c src/net/protocols/stack_icmp.c \
