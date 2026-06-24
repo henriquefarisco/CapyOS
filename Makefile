@@ -895,6 +895,29 @@ else
   $(info [build] CapyBrowser sibling not set; capybrowse text core unavailable)
 endif
 
+# ── Etapa 7 / Slice 7.1: CapyBrowser graphical core (display list) ──────────
+# The CapyOS-side render backend (userland/bin/capybrowse/browser_render.c) and
+# its host test consume the DECOUPLED capy-browser-core display list (struct
+# capy_dl, src/displaylist/display_list.h, which pulls dom/css/layout headers).
+# Detected separately from the text core: when present, host-test + ring-3 builds
+# add -DCAPYOS_HAVE_CAPYBROWSER_CORE + the four sibling include paths. Only the
+# headers are consumed for Slice 7.1 (the renderer walks the plain-data display
+# list); no extra sibling TUs are linked yet (those arrive with the pipeline
+# wiring slice). Same decoupling discipline as the text core: never imported
+# into src/ or include/ (kernel) -- only the ring-3 binary + host tests.
+CAPYBROWSER_CORE_CFLAGS :=
+ifneq ($(strip $(CAPYBROWSER_DIR)),)
+  ifneq ($(wildcard $(CAPYBROWSER_DIR)/src/displaylist/display_list.h),)
+    CAPYBROWSER_CORE_AVAILABLE := 1
+    CAPYBROWSER_CORE_CFLAGS := -DCAPYOS_HAVE_CAPYBROWSER_CORE \
+                               -I$(CAPYBROWSER_DIR)/src/displaylist \
+                               -I$(CAPYBROWSER_DIR)/src/css \
+                               -I$(CAPYBROWSER_DIR)/src/html \
+                               -I$(CAPYBROWSER_DIR)/src/layout
+    $(info [build] CapyBrowser graphical core (display list) detected; browser_render enabled)
+  endif
+endif
+
 # Cross-repo compile rules: build the CapyBrowser text-core TUs as ring-3
 # userland objects under USERLAND_CFLAGS + the sibling include paths. The linked
 # binary supplies the freestanding <string.h> via $(CAPYLIBC_STRING_OBJS). Two
@@ -1652,6 +1675,12 @@ endif
 ifneq ($(strip $(CAPYBROWSER_TEXT_AVAILABLE)),)
 HOST_CFLAGS += $(CAPYBROWSER_TEXT_CFLAGS) -Iuserland/bin/capybrowse
 endif
+# Etapa 7 / Slice 7.1: host tests of the CapyOS display-list render backend see
+# the sibling display_list.h (+ its dom/css/layout includes) only when the
+# CapyBrowser graphical core is present.
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+HOST_CFLAGS += $(CAPYBROWSER_CORE_CFLAGS) -Iuserland/bin/capybrowse
+endif
 TEST_BIN    := $(BUILD)/tests/unit_tests
 # --- Host test sources, organized by domain to mirror the
 #     tests/<domain>/ folder layout introduced on 2026-05-15.
@@ -1785,6 +1814,7 @@ TEST_SRCS   := \
                tests/userland/test_capylibc_abi.c \
                tests/userland/test_capylibc_string.c \
                tests/userland/test_capybrowse_view.c \
+               tests/userland/test_browser_render.c \
                tests/userland/test_capylibc_net.c \
                tests/userland/test_capylibc_net_url.c \
                tests/userland/test_capylibc_net_http.c \
@@ -1985,6 +2015,13 @@ endif
 # the unconditional list above and no-ops (returns 0) when the flag is unset.
 ifneq ($(strip $(CAPYBROWSER_TEXT_AVAILABLE)),)
 TEST_SRCS += userland/bin/capybrowse/capybrowse_view.c
+endif
+# Etapa 7 / Slice 7.1: the CapyOS display-list render backend is compiled (and
+# host-tested) only when the CapyBrowser graphical core is present -- it includes
+# the sibling's display_list.h. test_browser_render.c is in the unconditional
+# list above and no-ops (returns 0) when CAPYOS_HAVE_CAPYBROWSER_CORE is unset.
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+TEST_SRCS += userland/bin/capybrowse/browser_render.c
 endif
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)

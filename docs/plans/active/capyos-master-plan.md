@@ -85,7 +85,7 @@ Referências obrigatórias:
 | 4 | CapyDisplay 2D + scheduler/multithread runtime | Concluída (alpha.262) | Etapa 3 | camada 2D com damage/double buffer, scheduler cooperativo, multithread runtime e contrato widget/display-list |
 | 5 | TLS userland real | Concluída (alpha.264) | Etapa 4 | BearSSL userland com handshake real validado |
 | 6 | Apps básicos do desktop maduros | Concluída (alpha.287) | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
-| 7 | Browser usável com web estática moderna | Próxima (desbloqueada) | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
+| 7 | Browser usável com web estática moderna | Em andamento (alpha.288) | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
 | 8 | Release/update gate oficial + instalador polido | Bloqueada | Etapa 7 | smoke VMware+E1000 oficial, update HTTPS, instalador wizard amigável |
 | 9 | Package manager + SDK + ABI estável | Bloqueada | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
 | 10 | Áudio + multimídia básica | Bloqueada | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist e codecs por contrato |
@@ -465,6 +465,24 @@ anti-drift do pin, fechando a lacuna que deixou o bug escapar.
 **Objetivo:** evoluir o `CapyBrowse Text`/`html_viewer` para browser gráfico usável em sites HTTPS estáticos modernos. JavaScript fica fora desta etapa (entra na Etapa 12); o foco é HTTPS, decode robusto, streaming render, cache e formulários.
 
 **ROI:** muito alto — abre acesso à internet real para o usuário.
+
+> **ATIVA desde `alpha.288`** (Etapa 6 fechada em alpha.287). Etapa grande e
+> majoritariamente de repos desacoplados: o core estático já está pronto e
+> host-testado em **CapyBrowser** (`capy-browser-core` v0.6.5: DOM M1, CSS M2,
+> block layout M3a, display-list versionado `capy_dl` M3b) e os decoders em
+> **CapyCodecs** (`capy-codec-image` v2). O lado CapyOS é o **render backend**
+> (consumir o display-list desacoplado), a superfície gráfica ring-3, o decode
+> inline, cache/cookies e o wiring do app — compositor e input permanecem no
+> CapyOS base; o parser/layout/display-list permanecem substituíveis (critério 6).
+
+### Plano de slices (sequencial, fatias verticais testadas)
+
+- **7.1 — render backend do display-list (CONCLUÍDO em `alpha.288`):** consumidor CapyOS-side `userland/bin/capybrowse/browser_render.{c,h}` (`capyos_browser_render_text`) que rasteriza o `capy_dl` desacoplado num grid de caracteres (modo texto; fiel porque a geometria já é em células), determinístico, fail-closed, com sanitização de conteúdo remoto não-confiável; host-testado. Primeiro backend substituível do display-list (critério 6).
+- **7.2 — superfície gráfica ring-3 + raster em pixels:** syscalls seguros de janela/blit/present (copy-in validado, sem mapear memória de kernel no ring-3) + render do mesmo `capy_dl` em pixels via compositor.
+- **7.3 — decode de imagem inline:** adapter CapyOS para `capy-codec-image` v2 (injeção de allocator + inflater); nós IMAGE renderizados, placeholder no fallback.
+- **7.4 — pipeline real no app:** orquestrar fetch → DOM → CSS (UA default + `<style>`) → cascade → layout → display-list → render, com modo texto como fallback (critério 5).
+- **7.5 — HTTP cache (memória + disco), cookies por domínio, formulários simples.**
+- **7.6 — streaming render, limites de memória/tempo por página, endurecimento da política de certificado/mixed-content.**
 
 ### Entregáveis
 

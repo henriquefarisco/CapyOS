@@ -223,6 +223,7 @@ int test_syscall_pipe_priority_run(void);
 int test_syscall_net_run(void);
 int test_capylibc_string_run(void);
 int test_capybrowse_view_run(void);
+int test_browser_render_run(void);
 int test_capylibc_net_run(void);
 int test_capylibc_tls_run(void);
 int test_syscall_net_init_run(void);
@@ -492,6 +493,7 @@ int main(int argc, char **argv) {
     failures += test_syscall_net_run();
     failures += test_capylibc_string_run();
     failures += test_capybrowse_view_run();
+    failures += test_browser_render_run();
     failures += test_capylibc_net_run();
     failures += test_capylibc_tls_run();
     failures += test_syscall_net_init_run();
