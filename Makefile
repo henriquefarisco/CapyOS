@@ -498,6 +498,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/syscall.o \
 	$(BUILD)/x86_64/kernel/syscall_net.o \
 	$(BUILD)/x86_64/kernel/syscall_net_init.o \
+	$(BUILD)/x86_64/kernel/syscall_gfx.o \
+	$(BUILD)/x86_64/kernel/syscall_gfx_init.o \
 	$(BUILD)/x86_64/kernel/linux_compat/linux_syscall.o \
 	$(BUILD)/x86_64/kernel/linux_compat/linux_clock.o \
 	$(BUILD)/x86_64/kernel/linux_compat/linux_clock_init.o \
@@ -1810,11 +1812,13 @@ TEST_SRCS   := \
                tests/net/test_dns_cache.c src/net/services/dns_cache.c \
                tests/net/test_syscall_net.c src/kernel/syscall_net.c \
                tests/net/test_syscall_net_init.c src/kernel/syscall_net_init.c \
+               tests/kernel/test_syscall_gfx.c src/kernel/syscall_gfx.c \
                \
                tests/userland/test_capylibc_abi.c \
                tests/userland/test_capylibc_string.c \
                tests/userland/test_capybrowse_view.c \
                tests/userland/test_browser_render.c \
+               tests/userland/test_browser_render_pixel.c \
                tests/userland/test_capylibc_net.c \
                tests/userland/test_capylibc_net_url.c \
                tests/userland/test_capylibc_net_http.c \
@@ -2022,6 +2026,14 @@ endif
 # list above and no-ops (returns 0) when CAPYOS_HAVE_CAPYBROWSER_CORE is unset.
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
 TEST_SRCS += userland/bin/capybrowse/browser_render.c
+endif
+# Etapa 7 / Slice 7.2: the CapyOS pixel render backend + its host test consume
+# the sibling display_list.h and the shared console font (font8x8_data.c, pure
+# const data, no kernel deps). test_browser_render_pixel.c is in the
+# unconditional list above and no-ops when CAPYOS_HAVE_CAPYBROWSER_CORE is unset.
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+TEST_SRCS += userland/bin/capybrowse/browser_render_pixel.c \
+             src/gui/core/font8x8_data.c
 endif
 
 $(GRUB_CFG_GEN): tools/host/src/gen_grub_cfg.c tools/host/src/grub_cfg_builder.c | $(BUILD)

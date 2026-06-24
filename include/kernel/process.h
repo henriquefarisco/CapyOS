@@ -225,4 +225,13 @@ typedef int (*process_fd_socket_close_fn)(int kernel_socket_fd);
 void process_fd_register_socket_close(process_fd_socket_close_fn fn);
 process_fd_socket_close_fn process_fd_socket_close_get(void);
 
+/* Etapa 7 / Slice 7.2: process-teardown observer, called with the dying
+ * process's pid from process_exit (voluntary exit) and process_destroy (reap /
+ * failure cleanup). Same injection model as the socket-close hook: production
+ * graphical-syscall wiring registers `syscall_gfx_release_owner` so a process
+ * that owns ring-3 compositor windows cannot leak them; host tests and the
+ * no-GUI profile leave it NULL (no-op, no compositor link dependency). */
+typedef void (*process_teardown_fn)(uint32_t pid);
+void process_register_teardown_observer(process_teardown_fn fn);
+
 #endif /* KERNEL_PROCESS_H */

@@ -1,5 +1,6 @@
 #include "kernel/syscall.h"
 #include "kernel/syscall_net.h"
+#include "kernel/syscall_gfx.h"
 #include "kernel/task.h"
 #include "kernel/process.h"
 #include "kernel/scheduler.h"
@@ -600,6 +601,12 @@ void syscall_init(void) {
    * separately by `syscall_net_install_default_ops` during boot,
    * so the table entries fail with -1 until that runs. */
   syscall_net_register_handlers();
+
+  /* Etapa 7 / Slice 7.2: wire SYS_WINDOW_CREATE..SYS_WINDOW_DESTROY (45..50).
+   * The compositor-backed backend is installed separately at boot
+   * (syscall_gfx_install_default_ops) so the table entries fail with -1 until
+   * that runs; host tests inject a fake backend instead. */
+  syscall_gfx_register_handlers();
 
   syscall_init_msr();
 }

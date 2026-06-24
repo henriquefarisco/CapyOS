@@ -35,6 +35,12 @@ static struct process proc_table[PROCESS_MAX];
 static uint32_t next_proc_pid = 1;
 static struct process *current_proc = NULL;
 
+/* Etapa 7 / Slice 7.2: process-teardown observer (e.g. syscall_gfx_release_owner)
+ * called with the dying pid from process_exit / process_destroy. Declared here,
+ * ahead of those functions; registered via process_register_teardown_observer
+ * below. NULL by default (host tests + no-GUI profile pay nothing). */
+static process_teardown_fn g_teardown_fn = NULL;
+
 static void proc_memset(void *dst, int val, size_t len) {
   uint8_t *d = (uint8_t *)dst;
   for (size_t i = 0; i < len; i++) d[i] = (uint8_t)val;
@@ -263,6 +269,10 @@ void process_exit(int code) {
   for (int i = 0; i < PROCESS_FD_MAX; i++) {
     process_fd_free(me, i);
   }
+  /* Etapa 7 / Slice 7.2: release any ring-3 compositor windows this process
+   * owns before it becomes a zombie (no-op unless the GUI wiring registered
+   * the observer). */
+  if (g_teardown_fn) g_teardown_fn(me->pid);
   /* Etapa 4 Fase E: feed the thread-crash-survives smoke latch.
    * `code >= 128` is the POSIX-style "death by signal" encoding used
    * by `process_exit(128 + vector)` in x64_exception_dispatch when a
@@ -358,6 +368,11 @@ void process_destroy(struct process *p) {
   for (int i = 0; i < PROCESS_FD_MAX; i++) {
     process_fd_free(p, i);
   }
+
+  /* Etapa 7 / Slice 7.2: release any ring-3 compositor windows owned by this
+   * pid (idempotent: a clean exit already released them in process_exit; a
+   * force-destroyed/reaped owner is cleaned up here). No-op unless registered. */
+  if (g_teardown_fn) g_teardown_fn(p->pid);
 
   /* Finally release the slot for reuse. We deliberately do NOT
    * zero the entire struct: `process_create` re-initialises the
@@ -517,6 +532,16 @@ void process_fd_register_socket_close(process_fd_socket_close_fn fn) {
 
 process_fd_socket_close_fn process_fd_socket_close_get(void) {
   return g_socket_close_fn;
+}
+
+/* Etapa 7 / Slice 7.2: register the process-teardown observer (e.g.
+ * syscall_gfx_release_owner) so a process that owns ring-3 compositor windows
+ * has them destroyed when it exits or is reaped -- a dying pid must not leak a
+ * window or leave a handle owned by a pid the table can reuse. The storage
+ * (g_teardown_fn) is declared near the top of this file, ahead of process_exit /
+ * process_destroy which consume it. Mirrors the socket-close hook above. */
+void process_register_teardown_observer(process_teardown_fn fn) {
+  g_teardown_fn = fn;
 }
 
 void process_fd_free(struct process *proc, int fd) {

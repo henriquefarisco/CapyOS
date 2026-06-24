@@ -102,6 +102,12 @@ static void test_syscall_numbers(void) {
         { "SYS_GETRANDOM == 42", SYS_GETRANDOM, 42 },
         { "SYS_CLOCK_REALTIME == 43", SYS_CLOCK_REALTIME, 43 },
         { "SYS_GET_SESSION_LANG == 44", SYS_GET_SESSION_LANG, 44 },
+        { "SYS_WINDOW_CREATE == 45", SYS_WINDOW_CREATE, 45 },
+        { "SYS_SURFACE_FILL == 46", SYS_SURFACE_FILL, 46 },
+        { "SYS_SURFACE_BLIT == 47", SYS_SURFACE_BLIT, 47 },
+        { "SYS_WINDOW_POLL_EVENT == 48", SYS_WINDOW_POLL_EVENT, 48 },
+        { "SYS_WINDOW_PRESENT == 49", SYS_WINDOW_PRESENT, 49 },
+        { "SYS_WINDOW_DESTROY == 50", SYS_WINDOW_DESTROY, 50 },
     };
 
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
@@ -110,8 +116,8 @@ static void test_syscall_numbers(void) {
         else FAIL("syscall number drift");
     }
 
-    TEST("SYSCALL_COUNT == 45");
-    if (SYSCALL_COUNT == 45) PASS();
+    TEST("SYSCALL_COUNT == 51");
+    if (SYSCALL_COUNT == 51) PASS();
     else FAIL("syscall table size drift");
 }
 

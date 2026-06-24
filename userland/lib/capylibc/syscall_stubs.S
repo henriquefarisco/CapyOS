@@ -340,5 +340,72 @@ capy_get_session_lang:
     ret
 .size capy_get_session_lang, .-capy_get_session_lang
 
+# === Etapa 7 / Slice 7.2 — ring-3 graphical surface ABI ============
+#
+# Six syscalls so a ring-3 app can own a compositor window and draw the
+# decoupled display-list to pixels without ever touching a kernel surface
+# pointer (Option A isolation). Numbers from kernel/syscall_numbers.h; ABI
+# structs from kernel/syscall_gfx_abi.h. A handler returning -1 means an invalid
+# argument, an unowned handle, or no installed backend (the compositor backend
+# is wired by syscall_gfx_install_default_ops at GUI bring-up).
+
+# int capy_window_create(const char *title, unsigned int w, unsigned int h);
+# 3 args (title, w, h) -> rdi, rsi, rdx; no shuffle. Returns a handle > 0, or -1.
+.global capy_window_create
+capy_window_create:
+    movq $SYS_WINDOW_CREATE, %rax
+    syscall
+    ret
+.size capy_window_create, .-capy_window_create
+
+# int capy_surface_fill(int handle, unsigned int x, unsigned int y,
+#                       unsigned int w, unsigned int h, unsigned int argb);
+# 6 args: C ABI puts arg index 3 (w) in %rcx; SYSCALL needs it in %r10.
+# args 4,5 (h, argb) are already in %r8,%r9. Returns 0 | -1.
+.global capy_surface_fill
+capy_surface_fill:
+    movq %rcx, %r10
+    movq $SYS_SURFACE_FILL, %rax
+    syscall
+    ret
+.size capy_surface_fill, .-capy_surface_fill
+
+# int capy_surface_blit(int handle, const unsigned int *src, unsigned int sw,
+#                       unsigned int sh, unsigned int dx, unsigned int dy);
+# 6 args: arg index 3 (sh) moves %rcx -> %r10; dx,dy already in %r8,%r9.
+# Returns 0 | -1. `src` is sw*sh ARGB32 pixels in the caller's address space.
+.global capy_surface_blit
+capy_surface_blit:
+    movq %rcx, %r10
+    movq $SYS_SURFACE_BLIT, %rax
+    syscall
+    ret
+.size capy_surface_blit, .-capy_surface_blit
+
+# int capy_window_poll_event(int handle, struct capy_gfx_event *out);
+# 2 args; no shuffle. Returns 1 (event written), 0 (none), or -1.
+.global capy_window_poll_event
+capy_window_poll_event:
+    movq $SYS_WINDOW_POLL_EVENT, %rax
+    syscall
+    ret
+.size capy_window_poll_event, .-capy_window_poll_event
+
+# int capy_window_present(int handle);
+.global capy_window_present
+capy_window_present:
+    movq $SYS_WINDOW_PRESENT, %rax
+    syscall
+    ret
+.size capy_window_present, .-capy_window_present
+
+# int capy_window_destroy(int handle);
+.global capy_window_destroy
+capy_window_destroy:
+    movq $SYS_WINDOW_DESTROY, %rax
+    syscall
+    ret
+.size capy_window_destroy, .-capy_window_destroy
+
 # Mark stack as non-executable to satisfy modern binutils hardening.
 .section .note.GNU-stack,"",@progbits

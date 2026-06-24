@@ -93,7 +93,27 @@
  * a small stable code (see CAPY_SESSION_LANG_* below).
  * Handler: src/kernel/syscall.c::sys_get_session_lang. */
 #define SYS_GET_SESSION_LANG 44
-#define SYSCALL_COUNT   45
+/* Etapa 7 / Slice 7.2: ring-3 graphical surface ABI. The first userland-facing
+ * window/surface syscalls so a ring-3 app (the static web browser) can own a
+ * compositor window and draw the decoupled display-list to pixels WITHOUT ever
+ * touching a kernel surface pointer (Option A isolation). Wired as a dedicated
+ * module (src/kernel/syscall_gfx.c) via syscall_gfx_register_handlers(), with
+ * the real compositor backend installed separately (syscall_gfx_init.c) so host
+ * tests inject a fake surface. ABI structs/limits: kernel/syscall_gfx_abi.h.
+ *
+ *   SYS_WINDOW_CREATE     rdi=title* rsi=w rdx=h            -> handle>0 | -1
+ *   SYS_SURFACE_FILL      rdi=handle rsi=x rdx=y r10=w r8=h r9=argb -> 0 | -1
+ *   SYS_SURFACE_BLIT      rdi=handle rsi=src* rdx=sw r10=sh r8=dx r9=dy -> 0 | -1
+ *   SYS_WINDOW_POLL_EVENT rdi=handle rsi=capy_gfx_event*    -> 1 got | 0 none | -1
+ *   SYS_WINDOW_PRESENT    rdi=handle                        -> 0 | -1
+ *   SYS_WINDOW_DESTROY    rdi=handle                        -> 0 | -1 */
+#define SYS_WINDOW_CREATE     45
+#define SYS_SURFACE_FILL      46
+#define SYS_SURFACE_BLIT      47
+#define SYS_WINDOW_POLL_EVENT 48
+#define SYS_WINDOW_PRESENT    49
+#define SYS_WINDOW_DESTROY    50
+#define SYSCALL_COUNT   51
 
 /* Stable return codes for SYS_GET_SESSION_LANG (additive ABI). PT_BR is the
  * no-session default, matching app_current_language() and the locked
