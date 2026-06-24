@@ -623,6 +623,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/net/services/http/transport.o \
 	$(BUILD)/x86_64/net/services/http/request_response.o \
 	$(BUILD)/x86_64/net/services/http/redirect_download.o \
+	$(BUILD)/x86_64/net/services/http/http_cache.o \
 	$(BUILD)/x86_64/third_party/tinf/tinflate.o \
 	$(BUILD)/x86_64/third_party/tinf/tinfgzip.o \
 	$(BUILD)/x86_64/third_party/tinf/tinfzlib.o \
@@ -2000,6 +2001,7 @@ TEST_SRCS   := \
                tests/net/test_http_encoding.c src/net/services/http_encoding.c \
                tests/net/test_http_url.c src/net/services/http/url_request_builder.c \
                tests/net/test_http_chunked.c src/net/services/http/http_chunked.c \
+               tests/net/test_http_cache.c src/net/services/http/http_cache.c \
                tests/net/test_net_dns.c src/net/services/dns.c \
                tests/net/test_net_dhcp_options.c src/net/core/dhcp_options.c \
                tests/net/test_net_icmp.c src/net/protocols/stack_icmp.c \
