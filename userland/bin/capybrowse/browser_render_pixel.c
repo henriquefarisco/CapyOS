@@ -61,6 +61,35 @@ static int px_glyph(uint32_t *out, uint32_t ow, uint32_t oh, int64_t px,
   return any;
 }
 
+/* Blit a src (sw x sh ARGB32) into the dst box [dx,dy,dw,dh] with nearest-
+ * neighbor scaling, clipped to the surface. Used to draw a decoded image at an
+ * IMAGE node's box. */
+static void px_blit_scaled(uint32_t *out, uint32_t ow, uint32_t oh, int64_t dx,
+                           int64_t dy, int64_t dw, int64_t dh,
+                           const uint32_t *src, uint32_t sw, uint32_t sh,
+                           int *clipped) {
+  int64_t x, y;
+  if (dw <= 0 || dh <= 0 || sw == 0u || sh == 0u || src == 0) return;
+  if (clipped && (dx < 0 || dy < 0 || dx + dw > (int64_t)ow ||
+                  dy + dh > (int64_t)oh))
+    *clipped = 1;
+  for (y = 0; y < dh; ++y) {
+    int64_t oy = dy + y;
+    uint32_t syc;
+    if (oy < 0 || (uint64_t)oy >= oh) continue;
+    syc = (uint32_t)((uint64_t)y * sh / (uint64_t)dh);
+    if (syc >= sh) syc = sh - 1u;
+    for (x = 0; x < dw; ++x) {
+      int64_t ox = dx + x;
+      uint32_t sxc;
+      if (ox < 0 || (uint64_t)ox >= ow) continue;
+      sxc = (uint32_t)((uint64_t)x * sw / (uint64_t)dw);
+      if (sxc >= sw) sxc = sw - 1u;
+      out[(size_t)oy * ow + (size_t)ox] = src[(size_t)syc * sw + sxc];
+    }
+  }
+}
+
 /* ---- CSS color parsing --------------------------------------------------- */
 
 static int hexval(char c) {
@@ -173,6 +202,8 @@ int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
                                  struct capyos_browser_pixel_stats *stats) {
   struct capyos_browser_pixel_stats sink;
   uint32_t cw, ch, bg, fg, link;
+  capyos_browser_image_resolver resolve_image = (opts) ? opts->resolve_image : 0;
+  void *image_ctx = (opts) ? opts->image_ctx : 0;
   size_t n;
   int clipped_ignore = 0;
 
@@ -180,6 +211,7 @@ int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
   stats->text_nodes = 0u;
   stats->rect_nodes = 0u;
   stats->image_nodes = 0u;
+  stats->images_decoded = 0u;
   stats->link_nodes = 0u;
   stats->glyphs_drawn = 0u;
   stats->clipped = 0;
@@ -249,11 +281,25 @@ int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
       break;
     }
     case CAPY_DL_IMAGE: {
-      /* Placeholder: bordered light box + alt label (no decode this slice). */
+      /* Decode (via the injected resolver) and draw the real image when
+       * available; else a bordered placeholder box + alt label. */
       int64_t w = (int64_t)(nd->width > 0 ? nd->width : 10) * (int64_t)cw;
       int64_t h = (int64_t)(nd->height > 0 ? nd->height : 3) * (int64_t)ch;
       const char *ls = dl_slice(dl, nd->label_off, nd->label_len);
       stats->image_nodes++;
+      if (resolve_image != 0 && nd->url_len > 0u) {
+        const char *src = dl_slice(dl, nd->url_off, nd->url_len);
+        const uint32_t *ipx = 0;
+        uint32_t iw = 0u, ih = 0u;
+        if (src != 0 &&
+            resolve_image(image_ctx, src, nd->url_len, &ipx, &iw, &ih) == 1 &&
+            ipx != 0 && iw > 0u && ih > 0u) {
+          px_blit_scaled(out, out_w, out_h, px, py, w, h, ipx, iw, ih,
+                         &stats->clipped);
+          stats->images_decoded++;
+          break; /* drawn the decoded image; skip the placeholder */
+        }
+      }
       px_fill(out, out_w, out_h, px, py, w, h, 0xFFE8E8E8u, &stats->clipped);
       px_fill(out, out_w, out_h, px, py, w, 1, 0xFF888888u, &clipped_ignore);
       px_fill(out, out_w, out_h, px, py + h - 1, w, 1, 0xFF888888u,

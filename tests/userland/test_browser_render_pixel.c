@@ -102,6 +102,8 @@ static struct capyos_browser_pixel_opts opts88(void) {
   o.bg = 0xFFFFFFFFu;
   o.fg = 0xFF112233u;
   o.link = 0xFF1A4FD0u;
+  o.resolve_image = 0;
+  o.image_ctx = 0;
   return o;
 }
 

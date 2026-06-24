@@ -983,6 +983,37 @@ $(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/font8x8_data.o: src/gui/core/font8x8_data.
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 endif
 
+# ── Etapa 7 / Slice 7.4: CapyCodecs image-decode core (capy-codec-image v2) ──
+# When the CapyCodecs sibling is present, its pure image decoders + the in-tree
+# tinf inflater compile alongside the CapyOS adapter (browser_image.c) so a ring-3
+# binary / focused host test can decode BMP/PNG/JPEG/QOI/ICO -> ARGB32. Pure, no
+# host libc; no symbol collision with the CapyBrowser core (distinct prefixes).
+# Never linked into the kernel. CAPYCODECS_IMAGE_SRCS / TINF_IMAGE_SRCS are reused
+# by the focused host test and (Slice 7.4b) the ring-3 capygfx link.
+CAPYCODECS_DIR ?= ../CapyCodecs
+CAPYCODECS_IMAGE_CFLAGS :=
+ifneq ($(strip $(CAPYCODECS_DIR)),)
+  ifneq ($(wildcard $(CAPYCODECS_DIR)/src/image/capy_image.h),)
+    CAPYCODECS_IMAGE_AVAILABLE := 1
+    CAPYCODECS_IMAGE_CFLAGS := -DCAPYOS_HAVE_CAPYCODECS_IMAGE \
+                               -I$(CAPYCODECS_DIR)/src/image -Ithird_party/tinf
+    $(info [build] CapyCodecs image core (capy-codec-image) detected; image decode enabled)
+  endif
+endif
+CAPYCODECS_IMAGE_SRCS := \
+	$(CAPYCODECS_DIR)/src/image/image.c \
+	$(CAPYCODECS_DIR)/src/image/detect.c \
+	$(CAPYCODECS_DIR)/src/image/metadata.c \
+	$(CAPYCODECS_DIR)/src/image/bmp_decode.c \
+	$(CAPYCODECS_DIR)/src/image/png_decode.c \
+	$(CAPYCODECS_DIR)/src/image/jpeg_decode.c \
+	$(CAPYCODECS_DIR)/src/image/qoi_decode.c \
+	$(CAPYCODECS_DIR)/src/image/ico_decode.c
+TINF_IMAGE_SRCS := \
+	third_party/tinf/tinflate.c \
+	third_party/tinf/tinfzlib.c \
+	third_party/tinf/adler32.c
+
 # Cross-repo compile rules: build the CapyBrowser text-core TUs as ring-3
 # userland objects under USERLAND_CFLAGS + the sibling include paths. The linked
 # binary supplies the freestanding <string.h> via $(CAPYLIBC_STRING_OBJS). Two
@@ -2258,6 +2289,14 @@ TEST_PIPELINE_INCLUDES := \
 	-I$(CAPYBROWSER_DIR)/src/html -I$(CAPYBROWSER_DIR)/src/css \
 	-I$(CAPYBROWSER_DIR)/src/layout -I$(CAPYBROWSER_DIR)/src/displaylist \
 	-Iuserland/bin/capybrowse
+# Slice 7.4: when CapyCodecs is present, also link the image decode adapter +
+# the codec TUs + tinf, and define CAPYOS_HAVE_CAPYCODECS_IMAGE so the test's
+# image-decode / rasterize-with-image checks compile in.
+ifneq ($(strip $(CAPYCODECS_IMAGE_AVAILABLE)),)
+TEST_PIPELINE_SRCS += userland/bin/capybrowse/browser_image.c \
+	$(CAPYCODECS_IMAGE_SRCS) $(TINF_IMAGE_SRCS)
+TEST_PIPELINE_INCLUDES += $(CAPYCODECS_IMAGE_CFLAGS)
+endif
 
 .PHONY: test-browser-pipeline
 test-browser-pipeline: $(TEST_PIPELINE_BIN)

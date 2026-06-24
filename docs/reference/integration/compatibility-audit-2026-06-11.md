@@ -151,3 +151,48 @@ e hex malformado/curto/longo sao rejeitados. `make test` verde.
 release offline real (operador) via `capypkg_set_trusted_publisher_key`; (2) KAT
 externo do signer do CapyAgent (`make validate` no CapyAgent). Ate la, a politica
 fail-closed permanece.
+
+
+## Addendum 2026-06-17 -- Slice 7.4: display-list IMAGE carrega src + decode CapyOS (alpha.293, CapyBrowser 0.6.6)
+
+Etapa 7 / Slice 7.4 (decode de imagem inline, nucleo host-provado). Fecha a cadeia
+`<img>` -> pixels no backend de render do CapyOS, em duas partes desacopladas.
+
+**CROSS-REPO -- CapyBrowser `0.6.5` -> `0.6.6` (`capy-browser-core` v1, aditivo):** o
+emissor de display-list (`src/displaylist/display_list.c`) resolve o `src` de um
+`<img>` contra `base_url` pelo nucleo de URL Fase C1 (espelhando `<a href>`) e o
+grava nos campos `url_off`/`url_len` do no IMAGE -- os mesmos campos que LINK ja
+usava. Aditivo e retrocompativel: `CAPY_DL_VERSION` continua 1 (o campo ja existia
+para LINK); um `src` que nao resolve deixa o payload vazio. **Sem bump de ABI**
+(aditivo dentro de v1). CapyBrowser liberado (develop+main `a6c506e`, CI + Security
+verdes, tag `v0.6.6`); golden/dump do display-list + `docs/compatibility.md`
+atualizados; `make validate` verde.
+
+**CAPYOS -- adapter de decode + rasterizador (kernel byte-identico):** novo
+`userland/bin/capybrowse/browser_image.{c,h}` sobre o ABI `capy-codec-image` v2 do
+CapyCodecs injeta um bump allocator de arena `.bss` (512 KiB, reset por decode, cap
+192x192, fail-closed em OOM) + um inflater zlib via `tinf` in-tree (PNG/ICO),
+entregando `capy_image_rgba32` (ARGB32) -- o CapyOS nunca decoda por conta propria. O
+rasterizador `browser_render_pixel.{c,h}` ganha um callback opcional `resolve_image`
+(image-provider; desacopla render de decode/fetch) + blit escalado: um no IMAGE com
+`src` resolvido + pixels decodificados e blitado escalado a caixa do no (incrementa
+`images_decoded`), com o placeholder bordado + label `alt` como fallback. Makefile
+detecta o core CapyCodecs (`CAPYCODECS_IMAGE_*` + `TINF_IMAGE_SRCS`) e liga as 8 TUs
+de codec + 3 de tinf + `browser_image.o` no binario de teste focado com
+`-DCAPYOS_HAVE_CAPYCODECS_IMAGE` (sem colisao de simbolo; codecs/tinf nao tem
+`capy_url_parse`).
+
+**Validacao:** `make test` verde + `make test-browser-pipeline` `19/19` (decode BMP
+1x1 -> ARGB `0xFF112233`, PNG 2x2 real via tinf -> red/green/blue/white, bytes
+nao-imagem -> fail-closed, rasteriza pagina com `<img>` -> `images_decoded>=1`);
+`make layout-audit` limpo; `make all64` (clean) verde -> `build/capyos64.bin`. Kernel
+byte-identico ao alpha.292.
+
+**Pins:** CapyBrowser `0.6.1` -> `0.6.6` na matriz/STATUS/external-core-repos;
+`capy-codec-image` v2 consumido como-esta (8 TUs + tinf so no binario de teste focado,
+nunca no kernel). Os 5 repos irmaos restantes inalterados.
+
+**Pendente:** a prova de decode EM RING-3 (`capygfx` renderiza pagina com imagem
+embutida, decodando em ring-3 -> blit -> present, via `make smoke-x64-qemu-capygfx`)
+fica para a sub-fatia 7.4.2 / `alpha.294`. Gate VMware oficial
+`smoke-x64-vmware-browser-graphical` mapeado e pulado (sustentado por QEMU).

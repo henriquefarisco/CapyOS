@@ -41,18 +41,32 @@
 #define CAPYOS_BROWSER_PX_FG 0xFF111111u   /* body text: near-black */
 #define CAPYOS_BROWSER_PX_LINK 0xFF1A4FD0u /* links: blue */
 
+/* Optional image resolver (Slice 7.4): given an IMAGE node's resolved src URL
+ * (a slice of the display-list string arena, NOT NUL-terminated), return the
+ * decoded ARGB32 pixels for that image. Return 1 and set px, w and h to draw the
+ * image (scaled to the node's box); return 0 to fall back to the placeholder.
+ * `ctx` is passed through. Lets the rasterizer stay decoupled from the decoder
+ * (CapyCodecs) and from fetching: the caller resolves src -> bytes -> decode. */
+typedef int (*capyos_browser_image_resolver)(void *ctx, const char *src,
+                                             size_t src_len, const uint32_t **px,
+                                             uint32_t *w, uint32_t *h);
+
 struct capyos_browser_pixel_opts {
   uint32_t cell_w; /* pixels per cell column (0 -> default) */
   uint32_t cell_h; /* pixels per cell row (0 -> default) */
   uint32_t bg;     /* page background fill */
   uint32_t fg;     /* default text color */
   uint32_t link;   /* link underline color */
+  /* Optional: NULL -> IMAGE nodes render as placeholder boxes (Slice 7.2/7.3). */
+  capyos_browser_image_resolver resolve_image;
+  void *image_ctx;
 };
 
 struct capyos_browser_pixel_stats {
   size_t text_nodes;   /* TEXT nodes placed */
   size_t rect_nodes;   /* RECT nodes filled */
-  size_t image_nodes;  /* IMAGE placeholders drawn */
+  size_t image_nodes;  /* IMAGE nodes seen */
+  size_t images_decoded; /* IMAGE nodes drawn from a resolved decoded image */
   size_t link_nodes;   /* LINK underlines drawn */
   size_t glyphs_drawn; /* glyph cells actually rasterized */
   int clipped;         /* a node fell partly/fully outside the surface */

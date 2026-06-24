@@ -115,6 +115,8 @@ int main(int rank) {
     o.bg = 0xFFFFFFFFu;
     o.fg = 0xFF111111u;
     o.link = 0xFF1A4FD0u;
+    o.resolve_image = 0; /* Slice 7.4b (alpha.292+1) wires a real resolver */
+    o.image_ctx = 0;
     if (capyos_browser_render_pixels(dl, g_fb, CAPYGFX_W, CAPYGFX_H, &o, &rs) != 0)
       fail("rasterize");
   }
