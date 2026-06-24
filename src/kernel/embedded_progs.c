@@ -144,6 +144,31 @@ static size_t capybrowse_size(void) {
     return (size_t)(end - start);
 }
 #endif
+
+#ifdef CAPYOS_GFX_SMOKE
+/* Etapa 7 / Slice 7.2.2: the capygfx blob is embedded only under this gate
+ * (Makefile adds $(CAPYGFX_BLOB_OBJ) to CAPYOS64_OBJS), so its magic symbols
+ * exist only here. Default + UNIT_TEST builds never see this. */
+extern const uint8_t _binary_capygfx_elf_start[];
+extern const uint8_t _binary_capygfx_elf_end[];
+
+static const void *capygfx_data(void) {
+    const uint8_t *start;
+    __asm__ volatile("lea _binary_capygfx_elf_start(%%rip), %0"
+                     : "=r"(start));
+    return (const void *)start;
+}
+
+static size_t capygfx_size(void) {
+    const uint8_t *start;
+    const uint8_t *end;
+    __asm__ volatile("lea _binary_capygfx_elf_start(%%rip), %0"
+                     : "=r"(start));
+    __asm__ volatile("lea _binary_capygfx_elf_end(%%rip), %0"
+                     : "=r"(end));
+    return (size_t)(end - start);
+}
+#endif
 #endif
 
 static int prog_path_eq(const char *a, const char *b) {
@@ -186,6 +211,13 @@ int embedded_progs_lookup(const char *path,
     if (prog_path_eq(path, "/bin/capybrowse")) {
         *out_data = (const uint8_t *)capybrowse_data();
         *out_size = capybrowse_size();
+        return 0;
+    }
+#endif
+#ifdef CAPYOS_GFX_SMOKE
+    if (prog_path_eq(path, "/bin/capygfx")) {
+        *out_data = (const uint8_t *)capygfx_data();
+        *out_size = capygfx_size();
         return 0;
     }
 #endif

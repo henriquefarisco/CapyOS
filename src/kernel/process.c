@@ -19,6 +19,10 @@
 #include "kernel/capybrowse_text_smoke.h"
 #endif
 
+#ifdef CAPYOS_GFX_SMOKE
+#include "kernel/capygfx_smoke.h"
+#endif
+
 /* 2026-05-02: FD type and pipe direction constants now live in
  * include/kernel/process.h (FD_TYPE_*, FD_PIPE_FLAG_*). Removed
  * the local copies that duplicated them. */
@@ -304,6 +308,15 @@ void process_exit(int code) {
 #ifdef CAPYOS_CAPYBROWSE_SMOKE
   if (capybrowse_text_smoke_try_latch_exit_global((int32_t)code)) {
     capybrowse_text_smoke_emit_marker();
+  }
+#endif
+  /* Etapa 7 / Slice 7.2.2: the userland capygfx program signals that every
+   * ring-3 graphical syscall succeeded by exiting 0. Emit the COM1 marker
+   * exactly once on that success (capygfx is the boot init process in the smoke
+   * build). Gated so production pays zero cost. */
+#ifdef CAPYOS_GFX_SMOKE
+  if (capygfx_smoke_try_latch_exit_global((int32_t)code)) {
+    capygfx_smoke_emit_marker();
   }
 #endif
   task_exit(code);

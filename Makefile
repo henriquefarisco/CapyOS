@@ -491,6 +491,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/tls_handshake_smoke_io.o \
 	$(BUILD)/x86_64/kernel/capybrowse_text_smoke.o \
 	$(BUILD)/x86_64/kernel/capybrowse_text_smoke_io.o \
+	$(BUILD)/x86_64/kernel/capygfx_smoke.o \
+	$(BUILD)/x86_64/kernel/capygfx_smoke_io.o \
 	$(BUILD)/x86_64/kernel/apps_roundtrip_smoke.o \
 	$(BUILD)/x86_64/kernel/apps_roundtrip_smoke_io.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
@@ -1198,6 +1200,53 @@ CAPYOS64_OBJS += $(CAPYBROWSE_BLOB_OBJ)
 endif
 endif
 
+# ── User binary: capygfx (Etapa 7 / Slice 7.2.2, ring-3 graphical surface smoke) ──
+# Self-contained ring-3 ELF (capylibc only; NO CapyBrowser dependency) that
+# exercises the Slice 7.2 graphical syscalls (window/fill/blit/present/poll)
+# against the real kernel compositor. The blob is embedded into the kernel image
+# only under CAPYOS_GFX_SMOKE (gated block below + the smoke-x64-*-capygfx
+# targets), so the default image is unchanged.
+CAPYGFX_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capygfx/capygfx.elf
+CAPYGFX_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/bin/capygfx/main.o \
+	$(CAPYLIBC_OBJS)
+
+$(CAPYLIBC_BUILD_DIR)/bin/capygfx/%.o: $(USERLAND_DIR)/bin/capygfx/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+$(CAPYGFX_ELF): $(CAPYGFX_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYGFX_OBJS)
+
+.PHONY: capygfx-elf
+capygfx-elf: $(CAPYGFX_ELF)
+	@echo "[ok] user binary linked: $(CAPYGFX_ELF)"
+
+# objcopy input MUST be `capygfx.elf` so the magic symbols come out as
+# `_binary_capygfx_elf_start/_end` (consumed by embedded_progs.c).
+CAPYGFX_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capygfx/capygfx_elf_blob.o
+
+$(CAPYGFX_BLOB_OBJ): $(CAPYGFX_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: capygfx-blob
+capygfx-blob: $(CAPYGFX_BLOB_OBJ)
+	@echo "[ok] capygfx blob ready for kernel link: $(CAPYGFX_BLOB_OBJ)"
+
+# Embed the capygfx blob into the kernel image only under the smoke gate. The
+# matching -DCAPYOS_GFX_SMOKE (kernel TUs: embedded_progs.c registration +
+# user_init boot hook + kernel_main branch (compositor_init +
+# syscall_gfx_install_default_ops) + process_exit latch) is passed via
+# EXTRA_CFLAGS64 by the smoke target. Default OFF = unchanged.
+ifdef CAPYOS_GFX_SMOKE
+CAPYOS64_OBJS += $(CAPYGFX_BLOB_OBJ)
+endif
+
 # Sessao 6 (2026-05-05): regras do navegador legado erradicadas.
 # Serao reabertas somente por adaptador versionado na etapa correta.
 
@@ -1899,6 +1948,7 @@ TEST_SRCS   := \
                tests/kernel/test_thread_crash_smoke_gate.c src/kernel/thread_crash_smoke.c tests/stubs/stub_thread_crash_smoke_io.c \
                tests/kernel/test_tls_handshake_smoke_gate.c src/kernel/tls_handshake_smoke.c tests/stubs/stub_tls_handshake_smoke_io.c \
                tests/kernel/test_capybrowse_text_smoke_gate.c src/kernel/capybrowse_text_smoke.c tests/stubs/stub_capybrowse_text_smoke_io.c \
+               tests/kernel/test_capygfx_smoke_gate.c src/kernel/capygfx_smoke.c tests/stubs/stub_capygfx_smoke_io.c \
                tests/kernel/test_apps_roundtrip_smoke_gate.c src/kernel/apps_roundtrip_smoke.c tests/stubs/stub_apps_roundtrip_smoke_io.c \
                tests/kernel/test_syscall_msr.c \
                tests/kernel/test_fault_classify.c src/arch/x86_64/fault_classify.c \
@@ -2479,6 +2529,39 @@ smoke-x64-qemu-apps-basic-roundtrip:
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] apps-basic-roundtrip ready" --timeout 300 --log build/ci/smoke_x64_qemu_apps_roundtrip.log $(SMOKE_X64_QEMU_MARKER_ARGS)
+
+.PHONY: smoke-x64-qemu-capygfx
+# Etapa 7 / Slice 7.2.2 dev/CI QEMU mirror of the (mapped) VMware gate
+# smoke-x64-vmware-browser-graphical. Boots directly into the ring-3 /bin/capygfx
+# app under CAPYOS_GFX_SMOKE; the kernel inits the compositor over the boot
+# framebuffer + installs the gfx backend, the app exercises the 6 graphical
+# syscalls (window create/fill/blit/present/poll) against the real compositor
+# and exits 0, and process_exit latches "[smoke] capygfx ready" on COM1. No
+# network needed. VMware + UEFI + E1000 stays the official release gate.
+smoke-x64-qemu-capygfx:
+	@echo "Executando smoke QEMU capygfx (dev feedback / CI pre-flight)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] capygfx ready" --timeout 300 --log build/ci/smoke_x64_qemu_capygfx.log $(SMOKE_X64_QEMU_MARKER_ARGS)
+
+.PHONY: smoke-x64-vmware-browser-graphical
+# Etapa 7 / Slice 7.2.2 OFFICIAL release-acceptance gate (VMware + UEFI + E1000).
+# Same image as smoke-x64-qemu-capygfx; the VMware harness reads COM1 and must
+# observe "[smoke] capygfx ready". COMO TESTAR (ao reabilitar a validacao
+# VMware): build sob CAPYOS_GFX_SMOKE, boote a ISO em VMware + UEFI + E1000,
+# confirme a janela composta na tela + o marker COM1. PULADO neste ciclo
+# (sustentado por smoke-x64-qemu-capygfx); QEMU = feedback de dev, VMware =
+# plataforma de aceite oficial. Quando a Slice 7.3 (desktop interativo) ligar o
+# loop do compositor, este gate tambem confirma o render visual ao vivo.
+smoke-x64-vmware-browser-graphical:
+	@echo "Executando smoke test VMware+E1000 browser-graphical (capygfx)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
 # Etapa 6 / Slice 6.6 external validation gate -- apps-basic-roundtrip.
 # The basic desktop apps are in-kernel functions (CapyUI desktop session),

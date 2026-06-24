@@ -97,6 +97,14 @@ int kernel_boot_run_tls_smoke(void);
 int kernel_boot_run_capybrowse(void);
 #endif
 
+#ifdef CAPYOS_GFX_SMOKE
+/* Etapa 7 / Slice 7.2.2: spawn the embedded `/bin/capygfx` program as the boot
+ * init process to drive the ring-3 graphical surface smoke gate. The caller
+ * initialises the compositor + installs the graphical-syscall backend first.
+ * Compiled only under the smoke gate. */
+int kernel_boot_run_capygfx(void);
+#endif
+
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
 /* Etapa 6 / Slice 6.6: run the apps-basic-roundtrip orchestrator in-kernel.
  * The basic desktop apps are in-kernel functions (not ring-3 processes), so

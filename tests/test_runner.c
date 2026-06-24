@@ -92,6 +92,7 @@ int run_scheduler_smoke_gate_tests(void);
 int run_thread_crash_smoke_gate_tests(void);
 int run_tls_handshake_smoke_gate_tests(void);
 int run_capybrowse_text_smoke_gate_tests(void);
+int run_capygfx_smoke_gate_tests(void);
 int run_apps_roundtrip_smoke_gate_tests(void);
 
 int test_pmm_run(void);
@@ -364,6 +365,7 @@ int main(int argc, char **argv) {
     failures += run_thread_crash_smoke_gate_tests();
     failures += run_tls_handshake_smoke_gate_tests();
     failures += run_capybrowse_text_smoke_gate_tests();
+    failures += run_capygfx_smoke_gate_tests();
     failures += run_apps_roundtrip_smoke_gate_tests();
 
     failures += test_pmm_run();

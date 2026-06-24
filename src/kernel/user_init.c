@@ -230,6 +230,38 @@ int kernel_boot_run_capybrowse(void) {
 }
 #endif
 
+#ifdef CAPYOS_GFX_SMOKE
+/* Etapa 7 / Slice 7.2.2: boot directly into the embedded capygfx program, the
+ * ring-3 graphical surface gate. Same control-flow shape as
+ * kernel_boot_run_capybrowse, resolving /bin/capygfx through the embedded_progs
+ * registry. Compiled only under the smoke gate. The caller (kernel_main) must
+ * have already initialised the compositor over the boot framebuffer and
+ * installed the graphical-syscall backend (syscall_gfx_install_default_ops);
+ * the program then creates a window, fills it, rasterizes a display list and
+ * blits it, presents, and exits 0 -- which process_exit latches into the COM1
+ * marker. */
+int kernel_boot_run_capygfx(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  if (embedded_progs_lookup("/bin/capygfx", &data, &size) != 0) {
+    return KERNEL_SPAWN_BAD_ELF;
+  }
+  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+
+  struct process *p = process_create("capygfx", 0, 0);
+  if (!p) return KERNEL_SPAWN_NO_PROCESS;
+
+  if (elf_load_into_process(p, data, size) != 0) {
+    process_destroy(p);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+
+  /* `process_enter_user_mode` is noreturn on success. */
+  process_enter_user_mode(p);
+  return -1;
+}
+#endif
+
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
 #include "apps/apps_smoke.h"
 #include "kernel/apps_roundtrip_smoke.h"

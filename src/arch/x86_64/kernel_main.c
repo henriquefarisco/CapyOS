@@ -68,6 +68,13 @@
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
+#ifdef CAPYOS_GFX_SMOKE
+/* Etapa 7 / Slice 7.2.2: the graphical-surface boot smoke brings up the
+ * compositor over the boot framebuffer and installs the ring-3 gfx backend
+ * before spawning /bin/capygfx. Only the smoke build pulls these in. */
+#include "gui/compositor.h"
+#include "kernel/syscall_gfx.h"
+#endif
 #include "memory/pmm.h"
 #include "memory/vmm.h"
 #include "memory/kmem.h"
@@ -673,6 +680,26 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)capybrowse_rc;
     klog(KLOG_WARN,
          "[user_init] capybrowse spawn returned without entering Ring 3.");
+  }
+#endif
+#ifdef CAPYOS_GFX_SMOKE
+  /* Etapa 7 / Slice 7.2.2: boot directly into the ring-3 graphical surface
+   * smoke. The login/desktop path (which normally brings up the compositor) is
+   * bypassed here, so initialise the compositor over the boot framebuffer and
+   * install the graphical-syscall backend BEFORE spawning the ring-3 app, then
+   * drop into /bin/capygfx (noreturn on success). The program creates a window,
+   * fills it, rasterizes a display list and blits it, presents, and exits 0 —
+   * which process_exit observes to emit `[smoke] capygfx ready` on COM1. Gated
+   * so production boot is unaffected; a return means the spawn failed, so fall
+   * through to login. */
+  dbgcon_write("[user_init] CAPYOS_GFX_SMOKE; init compositor + spawning capygfx.\n");
+  compositor_init(g_con.fb, g_con.width, g_con.height, g_con.stride * 4u);
+  syscall_gfx_install_default_ops();
+  {
+    int capygfx_rc = kernel_boot_run_capygfx();
+    (void)capygfx_rc;
+    klog(KLOG_WARN,
+         "[user_init] capygfx spawn returned without entering Ring 3.");
   }
 #endif
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
