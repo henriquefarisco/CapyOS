@@ -1014,6 +1014,38 @@ TINF_IMAGE_SRCS := \
 	third_party/tinf/tinfzlib.c \
 	third_party/tinf/adler32.c
 
+# Slice 7.4b (ring-3): the same decode adapter + CapyCodecs decoders + tinf,
+# compiled as ring-3 userland objects (CC64, freestanding) into the shared
+# capybrowser-gfx/ dir, so the capygfx binary can decode an inline image IN
+# RING-3. browser_image.o additionally needs the capybrowse include; all codec/
+# tinf TUs take the CapyCodecs include set. Distinct stems from the CapyBrowser
+# core TUs -> no pattern-rule collision. Never linked into the kernel.
+ifneq ($(strip $(CAPYCODECS_IMAGE_AVAILABLE)),)
+CAPYCODECS_IMAGE_GFX_OBJS := \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_image.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/image.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/detect.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/metadata.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/bmp_decode.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/png_decode.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/jpeg_decode.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/qoi_decode.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/ico_decode.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/tinflate.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/tinfzlib.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/adler32.o
+
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_image.o: $(USERLAND_DIR)/bin/capybrowse/browser_image.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) -Iuserland/bin/capybrowse $(CAPYCODECS_IMAGE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYCODECS_DIR)/src/image/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYCODECS_IMAGE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: third_party/tinf/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYCODECS_IMAGE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+endif
+
 # Cross-repo compile rules: build the CapyBrowser text-core TUs as ring-3
 # userland objects under USERLAND_CFLAGS + the sibling include paths. The linked
 # binary supplies the freestanding <string.h> via $(CAPYLIBC_STRING_OBJS). Two
@@ -1318,6 +1350,13 @@ CAPYGFX_OBJS += \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/font8x8_data.o \
 	$(CAPYLIBC_STRING_OBJS) \
 	$(CAPYBROWSER_PIPELINE_OBJS)
+# Slice 7.4b: when CapyCodecs is also present, link the decode adapter + codecs +
+# tinf and compile main.c with -DCAPYOS_HAVE_CAPYCODECS_IMAGE, so capygfx decodes
+# an inline image IN RING-3 and blits it (else the IMAGE node stays a placeholder).
+ifneq ($(strip $(CAPYCODECS_IMAGE_AVAILABLE)),)
+CAPYGFX_EXTRA_CFLAGS += $(CAPYCODECS_IMAGE_CFLAGS)
+CAPYGFX_OBJS += $(CAPYCODECS_IMAGE_GFX_OBJS)
+endif
 endif
 
 $(CAPYLIBC_BUILD_DIR)/bin/capygfx/%.o: $(USERLAND_DIR)/bin/capygfx/%.c

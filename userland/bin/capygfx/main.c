@@ -27,14 +27,49 @@
  * pipeline (HTML -> DOM -> CSS -> cascade -> layout -> display-list) and the 7.2
  * pixel rasterizer, then blits it — proving HTML -> pixels -> window in ring-3
  * against the real compositor. Without the core, it falls back to a
- * self-composed pattern (still exercises the full graphical syscall path). */
+ * self-composed pattern (still exercises the full graphical syscall path).
+ *
+ * Slice 7.4b: when CapyCodecs is ALSO present, the embedded page carries an
+ * <img> and a resolver decodes an embedded PNG IN RING-3 (via the CapyCodecs
+ * core + the in-tree tinf inflater) into ARGB32, which the rasterizer blits at
+ * the IMAGE node's box — proving inline image decode end-to-end in ring-3 (the
+ * smoke fails closed if images_decoded < 1). */
 #ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
 #include "browser_pipeline.h"
 #include "browser_render_pixel.h"
+#ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
+#include "browser_image.h"
+/* A real 2x2 RGB PNG (pixels red/green/blue/white) embedded so the resolver can
+ * decode it IN RING-3 via the CapyCodecs core + the in-tree tinf inflater,
+ * proving inline image decode end-to-end (bytes -> ARGB32 -> scaled blit). */
+static const unsigned char g_logo_png[] = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00,
+    0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+    0x00, 0x02, 0x08, 0x02, 0x00, 0x00, 0x00, 0xfd, 0xd4, 0x9a, 0x73,
+    0x00, 0x00, 0x00, 0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63,
+    0xf8, 0xcf, 0xc0, 0xc0, 0x00, 0xc2, 0x0c, 0xff, 0x81, 0x00, 0x00,
+    0x1f, 0xee, 0x05, 0xfb, 0xf1, 0xab, 0xba, 0x77, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+/* Image resolver: decode the embedded PNG (ignoring the src) and hand back its
+ * ARGB32 pixels for the rasterizer to blit (scaled) at the IMAGE node's box. */
+static int cb_resolve_image(void *ctx, const char *src, size_t src_len,
+                            const uint32_t **px, uint32_t *w, uint32_t *h) {
+  struct capyos_image img;
+  (void)ctx;
+  (void)src;
+  (void)src_len;
+  if (capyos_image_decode(g_logo_png, sizeof(g_logo_png), &img) != 0) return 0;
+  *px = img.pixels;
+  *w = img.width;
+  *h = img.height;
+  return 1;
+}
+#endif /* CAPYOS_HAVE_CAPYCODECS_IMAGE */
 static const char g_html[] =
     "<html><body>"
     "<h1>CapyOS</h1>"
     "<p>Navegador grafico: pipeline HTML para pixels.</p>"
+    "<img src=\"logo.png\">"
     "<p>Veja <a href=\"sobre.html\">sobre</a>.</p>"
     "</body></html>";
 #endif
@@ -115,10 +150,17 @@ int main(int rank) {
     o.bg = 0xFFFFFFFFu;
     o.fg = 0xFF111111u;
     o.link = 0xFF1A4FD0u;
-    o.resolve_image = 0; /* Slice 7.4b (alpha.292+1) wires a real resolver */
+    o.resolve_image = 0;
     o.image_ctx = 0;
+#ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
+    o.resolve_image = cb_resolve_image; /* decode the embedded image in ring-3 */
+#endif
     if (capyos_browser_render_pixels(dl, g_fb, CAPYGFX_W, CAPYGFX_H, &o, &rs) != 0)
       fail("rasterize");
+#ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
+    /* Prove the inline image actually decoded + drew in ring-3 (not placeholder). */
+    if (rs.images_decoded < 1u) fail("image decode (ring-3)");
+#endif
   }
 #else
   compose();
