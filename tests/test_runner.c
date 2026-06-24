@@ -49,6 +49,7 @@ int run_http_cache_tests(void);
 int run_http_cookies_tests(void);
 int run_http_session_tests(void);
 int run_http_fetch_policy_tests(void);
+int run_http_hsts_tests(void);
 int run_net_dns_tests(void);
 int run_net_dhcp_options_tests(void);
 int run_net_icmp_tests(void);
@@ -326,6 +327,7 @@ int main(int argc, char **argv) {
     failures += run_http_cookies_tests();
     failures += run_http_session_tests();
     failures += run_http_fetch_policy_tests();
+    failures += run_http_hsts_tests();
     failures += run_net_dns_tests();
     failures += run_net_dhcp_options_tests();
     failures += run_net_icmp_tests();
