@@ -55,6 +55,10 @@ struct http_cache_entry {
   /* validators (verbatim header values, for conditional requests) */
   char etag[HTTP_CACHE_VALIDATOR_MAX];
   char last_modified[HTTP_CACHE_VALIDATOR_MAX];
+  /* stored response headers + Location, for faithful serving from cache */
+  struct http_header headers[HTTP_MAX_HEADERS];
+  uint32_t header_count;
+  char location[HTTP_MAX_URL];
   /* stored body */
   uint8_t body[HTTP_CACHE_BODY_MAX];
   size_t body_len;
@@ -112,5 +116,36 @@ int http_cache_add_conditional_headers(const struct http_cache_entry *e,
  * the 304's headers and stamp response_time = `now`. */
 void http_cache_refresh_on_304(struct http_cache *c, struct http_cache_entry *e,
                                const struct http_response *resp_304, long now);
+
+/* Transport fetch injected into the orchestrator: performs the real fetch of
+ * `req` into `resp`, returning 0 on success or non-zero on a transport error.
+ * Decouples the cache flow from the actual HTTP client (kernel http_request,
+ * a userland transport, or a host fake), so the flow is deterministically
+ * testable without a network. */
+typedef int (*http_cache_fetch_fn)(const struct http_request *req,
+                                    struct http_response *resp, void *ctx);
+
+enum http_cache_result {
+  HTTP_CACHE_RESULT_ERROR = -1,       /* NULL arg or transport error */
+  HTTP_CACHE_RESULT_MISS_FETCHED = 0, /* not cached -> fetched (stored if able) */
+  HTTP_CACHE_RESULT_FRESH_SERVED = 1, /* served from cache, NO fetch issued */
+  HTTP_CACHE_RESULT_REVALIDATED = 2,  /* stale -> 304 -> served cached body */
+  HTTP_CACHE_RESULT_REFETCHED = 3     /* stale -> 200 -> replaced */
+};
+
+/*
+ * RFC 7234 fetch flow around the cache, the entry point a fetcher uses:
+ *   - FRESH hit  -> serve from cache, NO transport fetch (the fast 2nd visit);
+ *   - STALE hit  -> add conditional headers, fetch; 304 reuses the cached body,
+ *                   200 replaces it;
+ *   - MISS       -> fetch, then store when cacheable.
+ * `fetch` performs the transport; `now` is the cache clock. On a served or
+ * revalidated result, `resp` points into the cache entry (valid until the next
+ * cache mutation). `req` may gain conditional headers, so pass a fresh request
+ * per call. Returns an enum http_cache_result.
+ */
+int http_cache_fetch(struct http_cache *c, struct http_request *req,
+                     struct http_response *resp, long now,
+                     http_cache_fetch_fn fetch, void *ctx);
 
 #endif /* NET_HTTP_CACHE_H */

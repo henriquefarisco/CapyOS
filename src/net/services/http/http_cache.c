@@ -385,6 +385,11 @@ int http_cache_store(struct http_cache *c, const struct http_request *req,
   e->body_len = resp->body_len;
   for (i = 0; i < resp->body_len && i < HTTP_CACHE_BODY_MAX; i++)
     e->body[i] = resp->body[i];
+  e->header_count =
+      (resp->header_count < HTTP_MAX_HEADERS) ? resp->header_count
+                                              : HTTP_MAX_HEADERS;
+  for (i = 0; i < e->header_count; i++) e->headers[i] = resp->headers[i];
+  s_copy(e->location, resp->location, sizeof(e->location));
   e->valid = 1;
   e->lru = ++c->clock;
   c->stores++;
@@ -447,4 +452,51 @@ void http_cache_refresh_on_304(struct http_cache *c, struct http_cache_entry *e,
   lm = resp_header(resp_304, "Last-Modified");
   if (lm) s_copy(e->last_modified, lm, HTTP_CACHE_VALIDATOR_MAX);
   e->lru = c ? ++c->clock : e->lru;
+}
+
+/* ---- fetch orchestration (RFC 7234 flow) -------------------------------- */
+
+/* Fill `resp` from a stored entry (status + headers + Location + body). The
+ * served body points into the entry (valid until the next cache mutation). */
+static void serve_entry(const struct http_cache_entry *e,
+                        struct http_response *resp) {
+  uint32_t i;
+  resp->status_code = e->status_code;
+  resp->header_count = e->header_count;
+  for (i = 0; i < e->header_count && i < HTTP_MAX_HEADERS; i++)
+    resp->headers[i] = e->headers[i];
+  s_copy(resp->location, e->location, sizeof(resp->location));
+  resp->body = (uint8_t *)e->body;
+  resp->body_len = e->body_len;
+  resp->content_length = e->body_len;
+  resp->chunked = 0;
+}
+
+int http_cache_fetch(struct http_cache *c, struct http_request *req,
+                     struct http_response *resp, long now,
+                     http_cache_fetch_fn fetch, void *ctx) {
+  struct http_cache_entry *e = NULL;
+  enum http_cache_status st;
+  if (!c || !req || !resp || !fetch) return HTTP_CACHE_RESULT_ERROR;
+
+  st = http_cache_lookup(c, req, now, &e);
+  if (st == HTTP_CACHE_FRESH && e) {
+    serve_entry(e, resp); /* fast path: no transport fetch issued */
+    return HTTP_CACHE_RESULT_FRESH_SERVED;
+  }
+  if (st == HTTP_CACHE_STALE && e) {
+    http_cache_add_conditional_headers(e, req);
+    if (fetch(req, resp, ctx) != 0) return HTTP_CACHE_RESULT_ERROR;
+    if (resp->status_code == 304) {
+      http_cache_refresh_on_304(c, e, resp, now);
+      serve_entry(e, resp); /* 304 carries no body; serve the cached one */
+      return HTTP_CACHE_RESULT_REVALIDATED;
+    }
+    http_cache_store(c, req, resp, now); /* 200 etc. -> replace */
+    return HTTP_CACHE_RESULT_REFETCHED;
+  }
+  /* MISS */
+  if (fetch(req, resp, ctx) != 0) return HTTP_CACHE_RESULT_ERROR;
+  http_cache_store(c, req, resp, now);
+  return HTTP_CACHE_RESULT_MISS_FETCHED;
 }

@@ -312,6 +312,135 @@ static void test_oversize_and_fail_closed(void) {
   CHECK(http_cache_is_cacheable(NULL, &r) == 0, "NULL req not cacheable");
 }
 
+/* ---- fetch orchestration (injected transport) --------------------------- */
+
+struct fake_fetch {
+  int calls;
+  int status;
+  const char *cc;    /* Cache-Control (optional) */
+  const char *etag;  /* ETag (optional) */
+  const char *ctype; /* Content-Type (optional) */
+  const uint8_t *body;
+  size_t body_len;
+};
+
+static int fake_fetch(const struct http_request *req, struct http_response *resp,
+                      void *ctx) {
+  struct fake_fetch *f = (struct fake_fetch *)ctx;
+  (void)req;
+  f->calls++;
+  resp_reset(resp, f->status);
+  if (f->cc) resp_add(resp, "Cache-Control", f->cc);
+  if (f->etag) resp_add(resp, "ETag", f->etag);
+  if (f->ctype) resp_add(resp, "Content-Type", f->ctype);
+  resp->body = (uint8_t *)f->body;
+  resp->body_len = f->body_len;
+  return 0;
+}
+
+static int fail_fetch(const struct http_request *req, struct http_response *resp,
+                      void *ctx) {
+  (void)req;
+  (void)resp;
+  ((struct fake_fetch *)ctx)->calls++;
+  return -1;
+}
+
+static void test_fetch_orchestration(void) {
+  static struct http_cache c;
+  struct http_request q;
+  struct http_response resp;
+  struct fake_fetch f;
+  static const uint8_t body1[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+  static const uint8_t body2[3] = {1, 2, 3};
+  int r;
+
+  http_cache_init(&c);
+
+  /* MISS -> fetch -> store. */
+  f.calls = 0;
+  f.status = 200;
+  f.cc = "max-age=100";
+  f.etag = "\"e1\"";
+  f.ctype = "text/html";
+  f.body = body1;
+  f.body_len = 4;
+  get_req(&q, "ex.com", "/a", 1);
+  r = http_cache_fetch(&c, &q, &resp, 1000, fake_fetch, &f);
+  CHECK(r == HTTP_CACHE_RESULT_MISS_FETCHED && f.calls == 1, "miss -> fetched");
+
+  /* FRESH 2nd visit -> served from cache, NO 2nd transport fetch. */
+  get_req(&q, "ex.com", "/a", 1);
+  r = http_cache_fetch(&c, &q, &resp, 1050, fake_fetch, &f);
+  CHECK(r == HTTP_CACHE_RESULT_FRESH_SERVED && f.calls == 1,
+        "fresh 2nd visit served from cache, NO refetch");
+  CHECK(resp.status_code == 200 && resp.body_len == 4 && resp.body[0] == 0xDE &&
+            resp.body[3] == 0xEF,
+        "served cached status + body");
+  {
+    int found = 0;
+    uint32_t i;
+    for (i = 0; i < resp.header_count; i++)
+      if (strcmp(resp.headers[i].name, "Content-Type") == 0 &&
+          strcmp(resp.headers[i].value, "text/html") == 0)
+        found = 1;
+    CHECK(found, "served response restores cached Content-Type");
+  }
+
+  /* STALE -> conditional fetch -> 304 -> cached body reused. */
+  f.status = 304;
+  f.cc = "max-age=100";
+  f.etag = NULL;
+  f.ctype = NULL;
+  f.body = NULL;
+  f.body_len = 0;
+  get_req(&q, "ex.com", "/a", 1);
+  r = http_cache_fetch(&c, &q, &resp, 2000, fake_fetch, &f); /* age 1000>100 */
+  CHECK(r == HTTP_CACHE_RESULT_REVALIDATED && f.calls == 2,
+        "stale -> 304 revalidated");
+  CHECK(resp.status_code == 200 && resp.body_len == 4 && resp.body[0] == 0xDE,
+        "304 serves the cached body, not the empty 304");
+  CHECK(q.header_count >= 1, "conditional header added to the request");
+
+  /* fresh again after the 304 refresh. */
+  get_req(&q, "ex.com", "/a", 1);
+  r = http_cache_fetch(&c, &q, &resp, 2050, fake_fetch, &f);
+  CHECK(r == HTTP_CACHE_RESULT_FRESH_SERVED && f.calls == 2,
+        "fresh after 304 refresh, no refetch");
+
+  /* STALE -> 200 -> replaced with the new body. */
+  http_cache_init(&c);
+  f.calls = 0;
+  f.status = 200;
+  f.cc = "max-age=10";
+  f.etag = "\"e2\"";
+  f.ctype = "text/plain";
+  f.body = body1;
+  f.body_len = 4;
+  get_req(&q, "ex.com", "/b", 1);
+  http_cache_fetch(&c, &q, &resp, 1000, fake_fetch, &f); /* store */
+  f.body = body2;
+  f.body_len = 3;
+  f.etag = "\"e3\"";
+  get_req(&q, "ex.com", "/b", 1);
+  r = http_cache_fetch(&c, &q, &resp, 2000, fake_fetch, &f); /* stale -> 200 */
+  CHECK(r == HTTP_CACHE_RESULT_REFETCHED && f.calls == 2,
+        "stale -> 200 refetched (replaced)");
+  CHECK(resp.body_len == 3 && resp.body[0] == 1, "refetched new body");
+
+  /* transport error + NULL fetch fail closed. */
+  http_cache_init(&c);
+  f.calls = 0;
+  get_req(&q, "ex.com", "/e", 1);
+  CHECK(http_cache_fetch(&c, &q, &resp, 1000, fail_fetch, &f) ==
+            HTTP_CACHE_RESULT_ERROR,
+        "transport error -> ERROR");
+  get_req(&q, "ex.com", "/n", 1);
+  CHECK(http_cache_fetch(&c, &q, &resp, 1000, NULL, NULL) ==
+            HTTP_CACHE_RESULT_ERROR,
+        "NULL fetch fn -> ERROR");
+}
+
 int run_http_cache_tests(void) {
   g_failures = 0;
   test_parse_date();
@@ -324,6 +453,7 @@ int run_http_cache_tests(void) {
   test_refresh_on_304();
   test_lru_eviction();
   test_oversize_and_fail_closed();
+  test_fetch_orchestration();
   if (g_failures == 0) printf("[http_cache] all cache tests passed\n");
   return g_failures;
 }
