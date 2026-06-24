@@ -922,6 +922,67 @@ ifneq ($(strip $(CAPYBROWSER_DIR)),)
   endif
 endif
 
+# ── Etapa 7 / Slice 7.3: CapyBrowser graphical PIPELINE TUs (HTML->display-list) ──
+# When the graphical core sibling is present, the 11 pure core TUs (DOM + CSS +
+# cascade + layout + display-list + their url/text deps) are compiled as ring-3
+# userland objects so a binary (capygfx) can drive the full pipeline via the
+# CapyOS adapter (browser_pipeline.c). Built into a DEDICATED object dir WITHOUT
+# the text core's `capy_url_parse` rename: a binary linking these must NOT also
+# link capylibc-net (the rename exists only so the text core can coexist with the
+# net stack in one binary). Never linked into the kernel. The pipeline cflags add
+# the url/ + text/ include paths the core TUs need on top of the display-list
+# include set (CAPYBROWSER_CORE_CFLAGS).
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+CAPYBROWSER_PIPELINE_CFLAGS := $(CAPYBROWSER_CORE_CFLAGS) \
+                               -I$(CAPYBROWSER_DIR)/src/url \
+                               -I$(CAPYBROWSER_DIR)/src/text
+CAPYBROWSER_PIPELINE_OBJS := \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/url_parse.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/url_normalize.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/origin.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/html_entities.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/html_tokenizer.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/dom.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/html_parse.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/css_parse.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/cascade.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/layout.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/display_list.o
+
+# One rule per sibling source dir feeding the shared output dir; Make selects the
+# rule whose source exists for each (unique) stem.
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/url/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/text/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/html/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/css/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/layout/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/displaylist/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+
+# CapyOS-side pipeline adapter + pixel rasterizer + shared console font, built as
+# ring-3 objects with the pipeline cflags (for the capygfx graphical render path).
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_pipeline.o: $(USERLAND_DIR)/bin/capybrowse/browser_pipeline.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_render_pixel.o: $(USERLAND_DIR)/bin/capybrowse/browser_render_pixel.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/font8x8_data.o: src/gui/core/font8x8_data.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+endif
+
 # Cross-repo compile rules: build the CapyBrowser text-core TUs as ring-3
 # userland objects under USERLAND_CFLAGS + the sibling include paths. The linked
 # binary supplies the freestanding <string.h> via $(CAPYLIBC_STRING_OBJS). Two
@@ -1210,10 +1271,27 @@ CAPYGFX_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capygfx/capygfx.elf
 CAPYGFX_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/bin/capygfx/main.o \
 	$(CAPYLIBC_OBJS)
+# Etapa 7 / Slice 7.3: when the CapyBrowser graphical core is present, capygfx
+# renders a REAL embedded HTML page via the pipeline (adapter browser_pipeline.c
+# + the 11 core TUs + the 7.2 rasterizer); main.c is compiled with
+# -DCAPYOS_HAVE_CAPYBROWSER_CORE (from the pipeline cflags) + the core includes,
+# and the pipeline objects + freestanding <string.h> are linked. NO capylibc-net
+# here, so the core's `capy_url_parse` does not collide. Absent the core, capygfx
+# stays the self-contained pattern smoke (current behaviour).
+CAPYGFX_EXTRA_CFLAGS :=
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+CAPYGFX_EXTRA_CFLAGS := $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse
+CAPYGFX_OBJS += \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_pipeline.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_render_pixel.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/font8x8_data.o \
+	$(CAPYLIBC_STRING_OBJS) \
+	$(CAPYBROWSER_PIPELINE_OBJS)
+endif
 
 $(CAPYLIBC_BUILD_DIR)/bin/capygfx/%.o: $(USERLAND_DIR)/bin/capygfx/%.c
 	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYGFX_EXTRA_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 
 $(CAPYGFX_ELF): $(CAPYGFX_OBJS)
 	@mkdir -p $(dir $@)

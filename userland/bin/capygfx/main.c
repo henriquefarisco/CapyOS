@@ -22,6 +22,23 @@
 #include <capylibc/capylibc.h>
 #include <capylibc/capy_gfx.h>
 
+/* Etapa 7 / Slice 7.3 (runtime proof): when built with the CapyBrowser graphical
+ * core present, capygfx renders a REAL embedded HTML page through the decoupled
+ * pipeline (HTML -> DOM -> CSS -> cascade -> layout -> display-list) and the 7.2
+ * pixel rasterizer, then blits it — proving HTML -> pixels -> window in ring-3
+ * against the real compositor. Without the core, it falls back to a
+ * self-composed pattern (still exercises the full graphical syscall path). */
+#ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
+#include "browser_pipeline.h"
+#include "browser_render_pixel.h"
+static const char g_html[] =
+    "<html><body>"
+    "<h1>CapyOS</h1>"
+    "<p>Navegador grafico: pipeline HTML para pixels.</p>"
+    "<p>Veja <a href=\"sobre.html\">sobre</a>.</p>"
+    "</body></html>";
+#endif
+
 #define CAPYGFX_W 320u
 #define CAPYGFX_H 240u
 
@@ -43,8 +60,10 @@ static void fail(const char *why) {
   capy_exit(1);
 }
 
+#ifndef CAPYOS_HAVE_CAPYBROWSER_CORE
 /* Paint a deterministic, recognizable image into the app's own buffer: a
- * vertical gradient with an accent header band and a centered solid block. */
+ * vertical gradient with an accent header band and a centered solid block.
+ * Fallback when the CapyBrowser core is absent (no real page to render). */
 static void compose(void) {
   unsigned int x, y;
   for (y = 0u; y < CAPYGFX_H; ++y) {
@@ -59,6 +78,7 @@ static void compose(void) {
     }
   }
 }
+#endif /* !CAPYOS_HAVE_CAPYBROWSER_CORE */
 
 int main(int rank) {
   int win;
@@ -75,8 +95,32 @@ int main(int rank) {
   if (capy_surface_fill((int)win, 0u, 0u, CAPYGFX_W, 4u, 0xFF1A4FD0u) != 0)
     fail("surface_fill bar");
 
-  /* Compose in our own buffer and blit it in (exercises SYS_SURFACE_BLIT). */
+  /* Compose into our own buffer: a real HTML page via the pipeline when the
+   * CapyBrowser core is present, else a self-composed pattern. Then blit it in
+   * (exercises SYS_SURFACE_BLIT). */
+#ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
+  {
+    const struct capy_dl *dl;
+    struct capyos_browser_pipeline_stats ps;
+    struct capyos_browser_pixel_opts o;
+    struct capyos_browser_pixel_stats rs;
+    /* Drive HTML+CSS through the five decoupled core stages -> display list. */
+    dl = capyos_browser_build_display_list(g_html, cb_strlen(g_html), "", 0u,
+                                           "https://capy.example/",
+                                           (long)(CAPYGFX_W / 8u), &ps);
+    if (dl == 0) fail("pipeline");
+    /* Rasterize the real display list into our buffer (cell 8x16). */
+    o.cell_w = 8u;
+    o.cell_h = 16u;
+    o.bg = 0xFFFFFFFFu;
+    o.fg = 0xFF111111u;
+    o.link = 0xFF1A4FD0u;
+    if (capyos_browser_render_pixels(dl, g_fb, CAPYGFX_W, CAPYGFX_H, &o, &rs) != 0)
+      fail("rasterize");
+  }
+#else
   compose();
+#endif
   if (capy_surface_blit((int)win, g_fb, CAPYGFX_W, CAPYGFX_H, 0u, 0u) != 0)
     fail("surface_blit");
 
