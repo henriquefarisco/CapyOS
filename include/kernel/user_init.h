@@ -97,12 +97,59 @@ int kernel_boot_run_tls_smoke(void);
 int kernel_boot_run_capybrowse(void);
 #endif
 
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+/* Etapa 7 / Slice 7.5: spawn the embedded `/bin/capymultifetch` program as the
+ * boot init process to drive the browser-multifetch smoke gate. Same shape as
+ * `kernel_boot_run_capybrowse`; compiled only under the smoke gate. */
+int kernel_boot_run_capymultifetch(void);
+#endif
+
 #ifdef CAPYOS_GFX_SMOKE
 /* Etapa 7 / Slice 7.2.2: spawn the embedded `/bin/capygfx` program as the boot
  * init process to drive the ring-3 graphical surface smoke gate. The caller
  * initialises the compositor + installs the graphical-syscall backend first.
  * Compiled only under the smoke gate. */
 int kernel_boot_run_capygfx(void);
+#endif
+
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+/* Etapa 7 / Slice 7.5 (alpha.304): spawn the embedded `/bin/capygfx` program
+ * as an ORDINARY process from a caller that is NOT noreturn -- unlike every
+ * other `kernel_boot_run_*` above (all boot-time, noreturn on success, mutually
+ * exclusive with login/desktop). This is the first spawn path meant to be
+ * called from WITHIN an already-running desktop session (e.g. a shell command
+ * dispatched from the desktop terminal), so the CALLER keeps running: the new
+ * process is created, its main thread is armed for first dispatch
+ * (user_task_arm_for_first_dispatch_with_rax) and queued
+ * (scheduler_add) exactly like the second process in
+ * kernel_boot_run_two_busy_users, but WITHOUT calling process_enter_user_mode
+ * (which is noreturn and would hijack the caller's own execution). The
+ * scheduler's next voluntary task_yield() (cooperative -- no
+ * CAPYOS_PREEMPTIVE_SCHEDULER required; context_switch is agnostic of what
+ * triggered it) dispatches the new task via the same synthetic-IRET-frame
+ * trampoline (x64_user_first_dispatch) used by preemptive quantum exhaustion.
+ * Idempotently installs the production graphical-syscall backend
+ * (syscall_gfx_install_default_ops) on every call, since by construction the
+ * caller is already inside a live desktop session (compositor already
+ * initialised by desktop_init); installing the same ops vtable twice is a
+ * harmless no-op. Returns a KERNEL_SPAWN_* status (0 = OK); never noreturn. */
+int kernel_spawn_capygfx_desktop(void);
+#endif
+
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE
+/* Etapa 7 / Slice 7.5 (alpha.304): mechanical proof that
+ * kernel_spawn_capygfx_desktop actually gets scheduled and runs to completion
+ * when queued BEHIND another ring-3 process already occupying "current".
+ * Mirrors kernel_boot_run_two_busy_users exactly (pa enters ring 3 directly
+ * and is noreturn on success; pb is armed for first dispatch + queued), except
+ * pb here IS capygfx via kernel_spawn_capygfx_desktop instead of a second
+ * hello copy. This does NOT exercise the real CapyUI desktop_runtime_start
+ * loop (that integration remains untested -- see the release notes); it
+ * proves the SPAWN + SCHEDULER mechanics in isolation using the same proven
+ * primitives (context_switch, user_task_arm_for_first_dispatch_with_rax,
+ * scheduler_add) the eventual real integration relies on. The caller
+ * (kernel_main) must have already initialised the compositor. */
+int kernel_boot_run_capygfx_desktop_spawn_smoke(void);
 #endif
 
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE

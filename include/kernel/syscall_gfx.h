@@ -34,8 +34,15 @@
  * backend is stateless w.r.t. ownership. */
 struct syscall_gfx_ops {
   /* Create a WxH window titled `title` (already copied/sanitized by the
-   * handler). Returns a backend id > 0 on success, <= 0 on failure. */
-  int32_t (*win_create)(const char *title, uint32_t w, uint32_t h);
+   * handler), owned by `pid`. Returns a backend id > 0 on success, <= 0 on
+   * failure. Etapa 7 / Slice 7.5 (alpha.305): `pid` lets the production
+   * backend mark the compositor window as ring-3-owned
+   * (struct gui_window.gfx_owner_pid) so the desktop's input dispatcher can
+   * route mouse/keyboard for that window through the event queue
+   * (gui_event_push_*) instead of the direct on_mouse/on_key callback path --
+   * see src/kernel/syscall_gfx_init.c. */
+  int32_t (*win_create)(const char *title, uint32_t w, uint32_t h,
+                        uint32_t pid);
   /* Destroy a backend window. Idempotent for an unknown id. */
   void (*win_destroy)(int32_t backend_id);
   /* Report the surface dimensions (pixels). Returns 0 on success and writes

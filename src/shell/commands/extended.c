@@ -19,6 +19,7 @@
 #include "drivers/input/mouse.h"
 #include "drivers/input/keyboard_layout.h"
 #include "kernel/module_gate.h"
+#include "kernel/user_init.h"
 #ifndef CAPYOS_PROFILE_CORE_ONLY
 #include "gui/desktop.h"
 #include "gui/desktop_runtime.h"
@@ -338,6 +339,32 @@ static int cmd_open_settings(struct shell_context *c, int a, char **v) {
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   settings_open(); return 0;
 }
+/* Etapa 7 / Slice 7.5 (alpha.304): launch the ring-3 graphical browser
+ * (capygfx) as a REAL process alongside the running desktop session, unlike
+ * the apps above (in-kernel functions, no process). Only present when the
+ * kernel was built with the blob embedded (CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+ * -- reports a clear message otherwise instead of silently failing. See
+ * kernel_spawn_capygfx_desktop (include/kernel/user_init.h) for the spawn
+ * mechanics (armed for first dispatch + scheduler_add, no noreturn). */
+static int cmd_open_browser_graphical(struct shell_context *c, int a, char **v) {
+  (void)a; (void)v;
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+  int rc;
+  if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
+  rc = kernel_spawn_capygfx_desktop();
+  if (rc != KERNEL_SPAWN_OK) {
+    fbcon_print("Failed to launch the graphical browser (spawn error).\n");
+    return -1;
+  }
+  return 0;
+#else
+  (void)c;
+  fbcon_print(
+      "Graphical browser not built into this kernel (rebuild with "
+      "CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1).\n");
+  return -1;
+#endif
+}
 #else /* CAPYOS_PROFILE_CORE_ONLY */
 /* core-only profile: desktop/apps symbols are not linked. Provide a
  * single explanatory stub for the shell so registry references stay
@@ -355,7 +382,7 @@ static int cmd_desktop_unavailable(struct shell_context *ctx, int argc, char **a
  * browser legado foi removido; o sucessor deve voltar como adaptador
  * versionado na etapa correta. */
 
-#define EXT_CMD_COUNT 23
+#define EXT_CMD_COUNT 24
 #define EXT_EARLY_COUNT 6
 
 static struct shell_command g_extended_commands[EXT_CMD_COUNT];
@@ -387,12 +414,14 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "open-editor",      cmd_open_editor);
   set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_open_tasks);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_open_settings);
+  set_cmd(&g_extended_commands[i++], "open-browser-graphical", cmd_open_browser_graphical);
 #else
   set_cmd(&g_extended_commands[i++], "open-calculator",  cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-files",       cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-editor",      cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "open-browser-graphical", cmd_desktop_unavailable);
 #endif
   set_cmd(&g_extended_commands[i++], "print-tasks",      cmd_print_tasks);
   set_cmd(&g_extended_commands[i++], "print-mem",        cmd_print_mem);

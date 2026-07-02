@@ -145,10 +145,11 @@ static size_t capybrowse_size(void) {
 }
 #endif
 
-#ifdef CAPYOS_GFX_SMOKE
-/* Etapa 7 / Slice 7.2.2: the capygfx blob is embedded only under this gate
- * (Makefile adds $(CAPYGFX_BLOB_OBJ) to CAPYOS64_OBJS), so its magic symbols
- * exist only here. Default + UNIT_TEST builds never see this. */
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+/* Etapa 7 / Slice 7.2.2 (+ Slice 7.5 alpha.304): the capygfx blob is embedded
+ * under EITHER gate (Makefile adds $(CAPYGFX_BLOB_OBJ) to CAPYOS64_OBJS when
+ * CAPYOS_GFX_SMOKE OR CAPYOS_DESKTOP_GRAPHICAL_BROWSER is set), so its magic
+ * symbols exist only then. Default + UNIT_TEST builds never see this. */
 extern const uint8_t _binary_capygfx_elf_start[];
 extern const uint8_t _binary_capygfx_elf_end[];
 
@@ -165,6 +166,31 @@ static size_t capygfx_size(void) {
     __asm__ volatile("lea _binary_capygfx_elf_start(%%rip), %0"
                      : "=r"(start));
     __asm__ volatile("lea _binary_capygfx_elf_end(%%rip), %0"
+                     : "=r"(end));
+    return (size_t)(end - start);
+}
+#endif
+
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+/* Etapa 7 / Slice 7.5: the capymultifetch blob is embedded only under this
+ * gate (Makefile adds $(CAPYMULTIFETCH_BLOB_OBJ) to CAPYOS64_OBJS), so its
+ * magic symbols exist only here. Default + UNIT_TEST builds never see this. */
+extern const uint8_t _binary_capymultifetch_elf_start[];
+extern const uint8_t _binary_capymultifetch_elf_end[];
+
+static const void *capymultifetch_data(void) {
+    const uint8_t *start;
+    __asm__ volatile("lea _binary_capymultifetch_elf_start(%%rip), %0"
+                     : "=r"(start));
+    return (const void *)start;
+}
+
+static size_t capymultifetch_size(void) {
+    const uint8_t *start;
+    const uint8_t *end;
+    __asm__ volatile("lea _binary_capymultifetch_elf_start(%%rip), %0"
+                     : "=r"(start));
+    __asm__ volatile("lea _binary_capymultifetch_elf_end(%%rip), %0"
                      : "=r"(end));
     return (size_t)(end - start);
 }
@@ -214,10 +240,17 @@ int embedded_progs_lookup(const char *path,
         return 0;
     }
 #endif
-#ifdef CAPYOS_GFX_SMOKE
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
     if (prog_path_eq(path, "/bin/capygfx")) {
         *out_data = (const uint8_t *)capygfx_data();
         *out_size = capygfx_size();
+        return 0;
+    }
+#endif
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+    if (prog_path_eq(path, "/bin/capymultifetch")) {
+        *out_data = (const uint8_t *)capymultifetch_data();
+        *out_size = capymultifetch_size();
         return 0;
     }
 #endif

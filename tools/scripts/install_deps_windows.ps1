@@ -33,7 +33,7 @@ function Invoke-Step {
 
 function Assert-Windows {
     if ($env:OS -ne "Windows_NT") {
-        throw "Este instalador e exclusivo para Windows. Use ./install.sh no Linux/WSL ou bash install-macos.sh no macOS."
+        throw "Este instalador e exclusivo para Windows. Use ./install.sh no Linux/WSL."
     }
 }
 

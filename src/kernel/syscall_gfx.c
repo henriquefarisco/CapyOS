@@ -137,7 +137,7 @@ int64_t sys_window_create(struct syscall_frame *f) {
   if (i == GFX_MAX_HANDLES) return -1; /* table full */
 
   gfx_copy_title(user_title, title, sizeof(title));
-  backend_id = g_ops->win_create(title, w, h);
+  backend_id = g_ops->win_create(title, w, h, pid);
   if (backend_id <= 0) return -1; /* backend refused; slot untouched */
 
   g_handles[i].in_use = 1;

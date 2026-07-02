@@ -65,6 +65,72 @@ static int cb_resolve_image(void *ctx, const char *src, size_t src_len,
   return 1;
 }
 #endif /* CAPYOS_HAVE_CAPYCODECS_IMAGE */
+/* Etapa 7 / Slice 7.5 (alpha.303): OPT-IN sub-resource-over-the-network smoke.
+ * OFF by default (a new, separate compile define -- CAPYGFX_NET_IMAGE_SMOKE --
+ * never implied by CAPYOS_HAVE_CAPYGFX_NET alone), so the proven alpha.294
+ * embedded-image smoke (CAPYOS_GFX_SMOKE, no networking) is byte-for-byte
+ * unchanged unless a NEW dedicated smoke target opts in. When active, the
+ * resolver fetches the <img> src for real over the network through a
+ * persistent browser_fetch_ctx, gated by the mixed-content policy
+ * (browser_fetch_subresource_allowed) exactly like a real page load would be,
+ * then decodes the fetched bytes with the SAME CapyCodecs adapter used for the
+ * embedded image. Fails closed (returns 0, no fallback) on any blocked/failed
+ * fetch/decode so the smoke's pass/fail genuinely reflects this path. */
+#if defined(CAPYOS_HAVE_CAPYGFX_NET) && defined(CAPYGFX_NET_IMAGE_SMOKE)
+#include "browser_fetch.h"
+#ifndef CAPYGFX_IMAGE_URL
+#define CAPYGFX_IMAGE_URL "http://10.0.2.2:18082/logo.png"
+#endif
+/* Bulk state in .bss: the fetch context holds the ~0.5 MiB cache, far too
+ * large for the stack. Persistent across the (single) resolve call the smoke
+ * makes, mirroring the multi-fetch runtime's own ownership convention. */
+static struct browser_fetch_ctx g_net_ctx;
+static struct http_response g_net_resp;
+
+static int cb_resolve_image_net(void *ctx, const char *src, size_t src_len,
+                                const uint32_t **px, uint32_t *w,
+                                uint32_t *h) {
+  struct capyos_image img;
+  char url[BROWSER_FETCH_URL_MAX];
+  size_t i;
+  static int s_ctx_ready;
+  (void)ctx;
+  if (!s_ctx_ready) {
+    browser_fetch_init(&g_net_ctx);
+    s_ctx_ready = 1;
+  }
+  if (!src || src_len == 0u || src_len >= sizeof(url)) return 0;
+  for (i = 0u; i < src_len; ++i) url[i] = src[i];
+  url[src_len] = '\0';
+
+  /* Mixed-content gate: this smoke's own page is served over plain HTTP (see
+   * the hermetic QEMU endpoint), so page_secure=0 -- an http sub-resource on
+   * an http page is same-scheme and allowed. The BLOCK path (http image on an
+   * https page) is exhaustively host-tested in tests/net/test_browser_fetch.c
+   * and needs no network to verify; this smoke's job is proving the ALLOW +
+   * real-fetch + decode path end-to-end against a real server. */
+  if (!browser_fetch_subresource_allowed(0, url)) return 0;
+
+  if (browser_fetch_get(&g_net_ctx, url, &g_net_resp, 0) < 0) return 0;
+  if (g_net_resp.status_code < 200 || g_net_resp.status_code >= 300) return 0;
+  if (capyos_image_decode(g_net_resp.body, g_net_resp.body_len, &img) != 0)
+    return 0;
+
+  *px = img.pixels;
+  *w = img.width;
+  *h = img.height;
+  return 1;
+}
+#endif /* CAPYOS_HAVE_CAPYGFX_NET && CAPYGFX_NET_IMAGE_SMOKE */
+#if defined(CAPYOS_HAVE_CAPYGFX_NET) && defined(CAPYGFX_NET_IMAGE_SMOKE)
+static const char g_html[] =
+    "<html><body>"
+    "<h1>CapyOS</h1>"
+    "<p>Navegador grafico: pipeline HTML para pixels (imagem pela rede).</p>"
+    "<img src=\"" CAPYGFX_IMAGE_URL "\">"
+    "<p>Veja <a href=\"sobre.html\">sobre</a>.</p>"
+    "</body></html>";
+#else
 static const char g_html[] =
     "<html><body>"
     "<h1>CapyOS</h1>"
@@ -73,9 +139,32 @@ static const char g_html[] =
     "<p>Veja <a href=\"sobre.html\">sobre</a>.</p>"
     "</body></html>";
 #endif
+#endif
 
 #define CAPYGFX_W 320u
 #define CAPYGFX_H 240u
+
+/* Etapa 7 / Slice 7.5 (alpha.304): OPT-IN interactive-desktop-launch mode. OFF
+ * by default (never implied by CAPYOS_HAVE_CAPYGFX_NET or any other existing
+ * define), so every proven boot-smoke behavior (alpha.290/292/294/303: single
+ * poll then exit) stays byte-for-byte unchanged. When active (built for
+ * kernel_spawn_capygfx_desktop, i.e. launched from a running desktop session
+ * instead of a boot-exclusive smoke), the app stays open, cooperatively
+ * yielding between polls, until it observes a WINDOW_CLOSE event (the
+ * title-bar X -- a compositor lifecycle event already pushed to
+ * gui_event_poll in production, see src/gui/core/compositor.c) or a
+ * generous iteration cap is hit (fail-safe: must never wedge the desktop's
+ * cooperative scheduler forever). Mouse/keyboard are NOT yet bridged to this
+ * event queue in production (only window lifecycle events are), so this loop
+ * cannot yet react to clicks/typing -- see docs/releases for the tracked gap. */
+#ifdef CAPYGFX_DESKTOP_INTERACTIVE
+#ifndef CAPYGFX_DESKTOP_POLL_MAX_ITERS
+#define CAPYGFX_DESKTOP_POLL_MAX_ITERS 12000u
+#endif
+#ifndef CAPYGFX_DESKTOP_POLL_SLEEP_TICKS
+#define CAPYGFX_DESKTOP_POLL_SLEEP_TICKS 5u
+#endif
+#endif
 
 /* Composition buffer in .bss (zeroed by the loader): the app owns these pixels
  * and hands them to the kernel via a bounds-checked blit. */
@@ -155,6 +244,9 @@ int main(int rank) {
 #ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
     o.resolve_image = cb_resolve_image; /* decode the embedded image in ring-3 */
 #endif
+#if defined(CAPYOS_HAVE_CAPYGFX_NET) && defined(CAPYGFX_NET_IMAGE_SMOKE)
+    o.resolve_image = cb_resolve_image_net; /* fetch the image over the network */
+#endif
     if (capyos_browser_render_pixels(dl, g_fb, CAPYGFX_W, CAPYGFX_H, &o, &rs) != 0)
       fail("rasterize");
 #ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
@@ -173,7 +265,23 @@ int main(int rank) {
   if (capy_window_present((int)win) != 0) fail("window_present");
   if (capy_window_poll_event((int)win, &ev) < 0) fail("window_poll_event");
 
+#ifdef CAPYGFX_DESKTOP_INTERACTIVE
+  /* Stay open: cooperatively yield + poll until WINDOW_CLOSE or the fail-safe
+   * iteration cap (see the doc comment near CAPYGFX_DESKTOP_POLL_MAX_ITERS). */
+  {
+    unsigned iters;
+    for (iters = 0u; iters < CAPYGFX_DESKTOP_POLL_MAX_ITERS; ++iters) {
+      struct capy_gfx_event pev;
+      int pr = capy_window_poll_event((int)win, &pev);
+      if (pr > 0 && pev.kind == CAPY_GFX_EV_CLOSE) break;
+      capy_yield();
+      capy_sleep(CAPYGFX_DESKTOP_POLL_SLEEP_TICKS);
+    }
+  }
+  cb_print("capygfx: window closed (or poll cap reached)\n");
+#else
   cb_print("capygfx: window+fill+blit+present+poll ok\n");
+#endif
   /* Exit 0; the kernel latches the COM1 marker and the teardown observer
    * destroys the owned window. */
   capy_exit(0);

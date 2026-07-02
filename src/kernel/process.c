@@ -19,8 +19,12 @@
 #include "kernel/capybrowse_text_smoke.h"
 #endif
 
-#ifdef CAPYOS_GFX_SMOKE
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE)
 #include "kernel/capygfx_smoke.h"
+#endif
+
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+#include "kernel/capymultifetch_smoke.h"
 #endif
 
 /* 2026-05-02: FD type and pipe direction constants now live in
@@ -313,10 +317,28 @@ void process_exit(int code) {
   /* Etapa 7 / Slice 7.2.2: the userland capygfx program signals that every
    * ring-3 graphical syscall succeeded by exiting 0. Emit the COM1 marker
    * exactly once on that success (capygfx is the boot init process in the smoke
-   * build). Gated so production pays zero cost. */
-#ifdef CAPYOS_GFX_SMOKE
+   * build). Gated so production pays zero cost.
+   *
+   * Etapa 7 / Slice 7.5 (alpha.304): CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE
+   * reuses the SAME marker for a DIFFERENT launch path: capygfx spawned via
+   * kernel_spawn_capygfx_desktop (armed for first dispatch + scheduler_add,
+   * queued BEHIND another ring-3 process already in ring 3) instead of being
+   * the boot init process itself. The underlying capability the marker
+   * documents (capygfx ran every graphical syscall to completion and exited
+   * 0) is the same either way; only how it got scheduled differs. */
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE)
   if (capygfx_smoke_try_latch_exit_global((int32_t)code)) {
     capygfx_smoke_emit_marker();
+  }
+#endif
+  /* Etapa 7 / Slice 7.5: the userland capymultifetch program signals a
+   * successful multi-fetch cache short-circuit (2nd visit served without a
+   * 2nd network transport call) by exiting 0. Emit the COM1 marker exactly
+   * once on that success (capymultifetch is the boot init process in the
+   * smoke build). Gated so production pays zero cost. */
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+  if (capymultifetch_smoke_try_latch_exit_global((int32_t)code)) {
+    capymultifetch_smoke_emit_marker();
   }
 #endif
   task_exit(code);

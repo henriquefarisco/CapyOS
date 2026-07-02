@@ -127,6 +127,17 @@ struct gui_window {
    * NULL, o desktop usa ARROW (ou outro inferido por hit-test em
    * borda). */
   comp_cursor_hint_fn on_cursor_hint;
+  /* Etapa 7 / Slice 7.5 (alpha.305): 0 for every window created directly by
+   * an in-kernel app (compositor_create_window, the only path that existed
+   * before this field) -- these keep using the on_mouse/on_key/on_* callback
+   * pointers above. Nonzero (the owning pid) for a window created via the
+   * ring-3 graphical syscall ABI (kernel/syscall_gfx_init.c's
+   * gfx_backend_win_create) on behalf of a process with NO kernel-side
+   * callbacks to call into; the input dispatcher checks this field to route
+   * mouse/keyboard for such a window through gui_event_push_* (the
+   * SYS_WINDOW_POLL_EVENT queue) instead. Additive field at the tail; does
+   * not change any existing window's behavior (defaults to 0). */
+  uint32_t gfx_owner_pid;
 };
 
 struct compositor_stats {

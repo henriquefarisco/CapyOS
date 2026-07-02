@@ -693,6 +693,44 @@ static void test_http_get_request_format(void) {
   else FAIL("request line / Host header malformed");
 }
 
+static void test_http_get_with_headers_sends_cookie_and_conditional(void) {
+  fake_reset();
+  g_fake.dns_canned_ip = 0x7F000001u;
+  g_fake.recv_canned_buf = (const uint8_t *)k_canned_response;
+  g_fake.recv_canned_len = sizeof(k_canned_response) - 1;
+
+  TEST("http_get_with_headers sends Cookie + If-None-Match on the wire");
+  uint8_t body[64];
+  struct capy_http_response r;
+  struct capy_http_header hdrs[2] = {
+    { .name = "Cookie", .value = "sid=42" },
+    { .name = "If-None-Match", .value = "\"v1\"" },
+  };
+  int rc = capy_http_get_with_headers("http://example.com/", hdrs, 2,
+                                      body, sizeof(body), &r);
+  g_fake.send_log[g_fake.send_log_len] = '\0';
+  if (rc == 0 && r.status_code == 200 &&
+      strstr((char *)g_fake.send_log, "Cookie: sid=42\r\n") != NULL &&
+      strstr((char *)g_fake.send_log, "If-None-Match: \"v1\"\r\n") != NULL) PASS();
+  else FAIL("caller headers did not reach the wire");
+}
+
+static void test_http_get_with_headers_reserved_fails_before_connect(void) {
+  fake_reset();
+  g_fake.dns_canned_ip = 0x7F000001u;
+
+  TEST("http_get_with_headers rejects a reserved header before any I/O");
+  uint8_t body[64];
+  struct capy_http_response r;
+  struct capy_http_header h = { .name = "Host", .value = "evil.example" };
+  int rc = capy_http_get_with_headers("http://example.com/", &h, 1,
+                                      body, sizeof(body), &r);
+  if (rc == -1 && capy_net_last_error() == CAPY_NET_EPARSE &&
+      g_fake.socket_calls == 0 && g_fake.connect_calls == 0 &&
+      g_fake.send_calls == 0) PASS();
+  else FAIL("reserved header did not fail closed before I/O");
+}
+
 void test_capylibc_net_http_cases(void) {
   test_http_get_happy_path();
   test_http_get_lf_only_head();
@@ -726,4 +764,6 @@ void test_capylibc_net_http_cases(void) {
   test_http_get_rejects_bad_header_value_after_header_cap();
   test_http_get_strips_fragment_from_request_target();
   test_http_get_request_format();
+  test_http_get_with_headers_sends_cookie_and_conditional();
+  test_http_get_with_headers_reserved_fails_before_connect();
 }

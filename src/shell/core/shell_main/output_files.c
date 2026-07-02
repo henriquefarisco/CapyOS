@@ -60,6 +60,26 @@ void shell_paginate_content(const char *content)
     if (!content) {
         return;
     }
+
+    /* When a redirected output sink is installed (the graphical desktop
+     * terminal registers one via shell_set_output_callbacks in
+     * CapyUI/src/desktop/desktop.c), the raw-framebuffer pager below is both
+     * wrong and dangerous: it writes through vga_putc/vga_newline straight to
+     * the boot framebuffer console hidden behind the compositor (corrupting the
+     * on-screen surface -> solid/"blue" screen) and, worse, blocks on
+     * tty_getc() for its "-- more --" prompt. In a graphical session keyboard
+     * input is delivered through the GUI dispatcher to the terminal widget, not
+     * the TTY getc queue, so that read never returns -> the whole session
+     * freezes. This is exactly the `help`/`help-any` hang reported once enough
+     * desktop-app commands are registered (packages installed) to push the
+     * listing past the pager threshold. The terminal widget keeps its own
+     * scrollback, so route the full content through the sink and skip the
+     * blocking pager entirely. */
+    if (g_shell_output_write) {
+        shell_print(content);
+        return;
+    }
+
     const int lines_per_page = 20;
     int line_count = 0;
     const char *p = content;

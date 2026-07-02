@@ -7,7 +7,7 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.8.0-alpha.300` (build `0.8.0-alpha.300+20260617`; canal `alpha`; ver `VERSION.yaml`)
+Versao de referencia: `0.8.0-alpha.307` (build `0.8.0-alpha.307+20260701`; canal `alpha`; ver `VERSION.yaml`)
 
 ## Destaques
 
@@ -66,40 +66,6 @@ corrija a posse uma vez antes de continuar:
 
 ```bash
 sudo chown -R "$(id -u):$(id -g)" build ../CapyUI/build 2>/dev/null || true
-```
-
-### macOS
-
-```bash
-bash install-macos.sh --local-deps Dependencias
-make test HOST_CC=clang
-```
-
-O modo acima usa apenas ferramentas ja presentes no macOS e arquivos aprovados
-em `Dependencias/`; ele nao usa Homebrew, nao baixa fontes, nao instala QEMU e
-nao compila a toolchain cruzada.
-
-Quando a compilacao local longa de GCC/binutils for permitida:
-
-```bash
-bash install-macos.sh --local-deps Dependencias --with-cross
-source ~/.zprofile
-make all64 TOOLCHAIN64=elf
-```
-
-Quando `gnu-efi`, `xorriso` e a toolchain estiverem aprovados/localmente
-disponiveis:
-
-```bash
-make iso-uefi TOOLCHAIN64=elf
-make smoke-x64-iso TOOLCHAIN64=elf
-```
-
-Se o `gnu-efi` local nao for detectado automaticamente, informe `EFI_PREFIX`,
-por exemplo:
-
-```bash
-make iso-uefi TOOLCHAIN64=elf EFI_PREFIX=/Users/t808981/opt/gnu-efi
 ```
 
 ### Windows

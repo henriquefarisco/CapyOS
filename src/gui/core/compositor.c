@@ -364,6 +364,16 @@ struct gui_window *compositor_create_window(const char *title, int32_t x,
       win->on_hover = NULL;
       win->on_context_menu = NULL;
       win->on_cursor_hint = NULL;
+      /* Etapa 7 / Slice 7.5 (alpha.305): every window created through THIS
+       * function (the only path in-kernel apps use) is NOT ring-3-owned by
+       * default. gfx_backend_win_create (kernel/syscall_gfx_init.c) sets this
+       * nonzero right after this call returns, for windows it creates on
+       * behalf of a ring-3 process. Explicit reset matters because
+       * comp_windows[] slots are reused (this loop finds the first free
+       * `id == 0` slot), so a stale nonzero value from a previous ring-3
+       * owner must not leak onto the next (possibly in-kernel-app) window
+       * created in the same slot. */
+      win->gfx_owner_pid = 0u;
       comp_stats.window_count++;
       return win;
     }

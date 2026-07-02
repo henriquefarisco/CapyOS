@@ -26,6 +26,10 @@
 #include "kernel/task.h"
 #include "kernel/user_task_init.h"
 #include "kernel/arch_sched_hooks.h"
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+#include "kernel/syscall_gfx.h"
+#include "drivers/io.h"
+#endif
 
 int kernel_spawn_embedded_hello(struct process **out_proc) {
   const uint8_t *data = (const uint8_t *)embedded_hello_data();
@@ -230,6 +234,36 @@ int kernel_boot_run_capybrowse(void) {
 }
 #endif
 
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+/* Etapa 7 / Slice 7.5: boot directly into the embedded capymultifetch
+ * program, the browser-multifetch smoke gate. Same control-flow shape as
+ * kernel_boot_run_capybrowse, resolving /bin/capymultifetch through the
+ * embedded_progs registry. Compiled only under the smoke gate (the blob
+ * exists only then). The program fetches its configured URL twice through a
+ * persistent browser_fetch_ctx and exits 0 iff the 2nd visit was served from
+ * the cache without a 2nd network transport call. */
+int kernel_boot_run_capymultifetch(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  if (embedded_progs_lookup("/bin/capymultifetch", &data, &size) != 0) {
+    return KERNEL_SPAWN_BAD_ELF;
+  }
+  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+
+  struct process *p = process_create("capymultifetch", 0, 0);
+  if (!p) return KERNEL_SPAWN_NO_PROCESS;
+
+  if (elf_load_into_process(p, data, size) != 0) {
+    process_destroy(p);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+
+  /* `process_enter_user_mode` is noreturn on success. */
+  process_enter_user_mode(p);
+  return -1;
+}
+#endif
+
 #ifdef CAPYOS_GFX_SMOKE
 /* Etapa 7 / Slice 7.2.2: boot directly into the embedded capygfx program, the
  * ring-3 graphical surface gate. Same control-flow shape as
@@ -258,6 +292,128 @@ int kernel_boot_run_capygfx(void) {
 
   /* `process_enter_user_mode` is noreturn on success. */
   process_enter_user_mode(p);
+  return -1;
+}
+#endif
+
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+/* Etapa 7 / Slice 7.5 (alpha.304): spawn /bin/capygfx as an ORDINARY process
+ * from a caller that keeps running (see the doc comment on the declaration in
+ * include/kernel/user_init.h for the full rationale). Mirrors the "second
+ * process" half of kernel_boot_run_two_busy_users (arm for first dispatch +
+ * scheduler_add) but never calls process_enter_user_mode.
+ *
+ * Etapa 7 / Slice 7.5 (alpha.306) -- CRITICAL FIX after a real VMware crash:
+ * process_create's process-table scan,
+ * elf_load_into_process's page-table/physical-memory mutations and
+ * scheduler_add's run-queue insertion have NO internal locking anywhere in
+ * this kernel -- every OTHER caller of this same sequence
+ * (kernel_boot_run_embedded_hello/_two_busy_users/_capysh/_tls_handshake/
+ * _capybrowse/_capymultifetch/_capygfx, all in this file) runs at boot,
+ * before the preemptive timer IRQ is armed, so the sequence is atomic BY
+ * CONSTRUCTION (nothing else can run concurrently yet). sys_fork
+ * (src/kernel/syscall.c) reaches the SAME process_create from a syscall
+ * trap gate, which masks IF for the duration on this arch. This function is
+ * the FIRST caller of the sequence that runs from a live desktop session
+ * with the preemptive scheduler already ticking and interrupts enabled (a
+ * shell command handler is plain kernel-mode C, not a syscall gate) --
+ * without protection, a timer IRQ landing mid-sequence can hand the
+ * partially-initialised process table / page tables / run queue to whatever
+ * the scheduler switches to next, corrupting shared state. Bracket the
+ * mutating span with cli()/sti() (save/restore, in case a future caller
+ * already runs with interrupts disabled) to make it atomic here too. */
+static inline uint64_t kernel_spawn_save_flags(void) {
+  uint64_t flags;
+  __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
+  return flags;
+}
+static inline void kernel_spawn_restore_flags(uint64_t flags) {
+  __asm__ __volatile__("pushq %0; popfq" : : "r"(flags) : "memory");
+}
+
+int kernel_spawn_capygfx_desktop(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  uint64_t irq_flags;
+
+  /* Idempotent: installing the same ops vtable + teardown observer twice is a
+   * harmless no-op (see syscall_gfx_install_default_ops). The caller is, by
+   * construction, already inside a live desktop session, so the compositor is
+   * already initialised over the real framebuffer. */
+  syscall_gfx_install_default_ops();
+
+  if (embedded_progs_lookup("/bin/capygfx", &data, &size) != 0) {
+    return KERNEL_SPAWN_BAD_ELF;
+  }
+  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+
+  irq_flags = kernel_spawn_save_flags();
+  cli();
+
+  struct process *p = process_create("capygfx", 0, 0);
+  if (!p) {
+    kernel_spawn_restore_flags(irq_flags);
+    return KERNEL_SPAWN_NO_PROCESS;
+  }
+
+  if (elf_load_into_process(p, data, size) != 0) {
+    process_destroy(p);
+    kernel_spawn_restore_flags(irq_flags);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+  if (!p->main_thread || !p->main_thread->kernel_stack) {
+    process_destroy(p);
+    kernel_spawn_restore_flags(irq_flags);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+
+  /* Arm the main thread via the synthetic IRET frame builder: elf_load
+   * already primed context.rip/rsp with the user entry point + stack, so we
+   * hand those straight to the builder (same pattern as pb in
+   * kernel_boot_run_two_busy_users) and queue it for the scheduler to pick up
+   * on the next (voluntary or preemptive) context switch. */
+  {
+    uint64_t rip = p->main_thread->context.rip;
+    uint64_t rsp = p->main_thread->context.rsp;
+    user_task_arm_for_first_dispatch_with_rax(p->main_thread, rip, rsp, 1u);
+  }
+  scheduler_add(p->main_thread);
+  kernel_spawn_restore_flags(irq_flags);
+  return KERNEL_SPAWN_OK;
+}
+#endif
+
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE
+/* Etapa 7 / Slice 7.5 (alpha.304): see the doc comment on the declaration in
+ * include/kernel/user_init.h. Exact shape of kernel_boot_run_two_busy_users
+ * (pa = hello, entered directly; pb = capygfx here, via
+ * kernel_spawn_capygfx_desktop instead of a second hello copy). */
+int kernel_boot_run_capygfx_desktop_spawn_smoke(void) {
+  struct process *pa = NULL;
+
+  int rc = kernel_spawn_embedded_hello(&pa);
+  if (rc != KERNEL_SPAWN_OK || !pa) return rc;
+
+  rc = kernel_spawn_capygfx_desktop();
+  if (rc != KERNEL_SPAWN_OK) {
+    process_destroy(pa);
+    return rc;
+  }
+
+  /* Mark pa as the running task so the first APIC tick / voluntary yield from
+   * ring 3 sees a coherent task_current(). Refresh cpu_local + TSS RSP0 to
+   * pa's per-task kernel stack (same as kernel_boot_run_two_busy_users). */
+  if (pa->main_thread) {
+    extern void task_set_current(struct task *t);
+    pa->main_thread->state = TASK_STATE_RUNNING;
+    task_set_current(pa->main_thread);
+    arch_sched_apply_kernel_stack(pa->main_thread);
+  }
+
+  /* `process_enter_user_mode` is noreturn on success. When pa exits (task_exit
+   * internally yields), the scheduler picks capygfx (pb) off the run queue and
+   * dispatches it via the synthetic IRET trampoline armed above. */
+  process_enter_user_mode(pa);
   return -1;
 }
 #endif

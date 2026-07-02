@@ -242,6 +242,28 @@ int capy_http_get(const char *url,
                   uint8_t *body_buf, size_t body_buf_cap,
                   struct capy_http_response *out);
 
+/* Same as `capy_http_get` but emits `req_header_count` caller-supplied request
+ * headers (e.g. `Cookie`, `If-None-Match`, `If-Modified-Since` from the browser
+ * fetch/cache/cookie layer) after the standard Host/User-Agent/Accept block and
+ * before the framing `Connection: close` terminator. This is the transport seam
+ * a multi-fetch browser runtime drives: the runtime's cache/cookie session
+ * decides which conditional/Cookie headers a request carries, then hands them
+ * here verbatim.
+ *
+ * Each header is validated fail-closed BEFORE any socket is opened: the name
+ * must be a valid HTTP token and the value must contain no raw CTL bytes (so a
+ * `\r`/`\n` in either can never inject a second header line). Framing- and
+ * routing-critical names the builder owns -- `Host`, `Connection`,
+ * `Content-Length`, `Transfer-Encoding` -- are rejected (anti request-smuggling
+ * / anti Host-routing confusion) with `CAPY_NET_EPARSE`. `req_headers` may be
+ * NULL only when `req_header_count == 0`; otherwise it is `CAPY_NET_EINVAL`.
+ * `capy_http_get(url, ...)` is exactly this with `(NULL, 0)` headers. */
+int capy_http_get_with_headers(const char *url,
+                               const struct capy_http_header *req_headers,
+                               int req_header_count,
+                               uint8_t *body_buf, size_t body_buf_cap,
+                               struct capy_http_response *out);
+
 /* Internal helpers exposed for unit tests and potential reuse by
  * a hand-rolled state machine (e.g. capybrowser when it adopts
  * libcapy-net). Stable contract so tests can pin the wire format
@@ -257,6 +279,19 @@ int capy_http_get(const char *url,
 int capy_http_build_get_request(const char *host, uint16_t port,
                                  const char *path,
                                  char *buf, size_t buf_cap);
+
+/* Same as `capy_http_build_get_request` but appends `req_header_count`
+ * caller-supplied headers between the standard Host/User-Agent/Accept block and
+ * the trailing `Connection: close` line. Names/values are validated as in
+ * `capy_http_get_with_headers` (token name, CTL-free value, reserved framing
+ * names rejected) -> -1 with `CAPY_NET_EPARSE` on a bad/reserved header. Returns
+ * the byte count on success, -1 (and `CAPY_NET_EBUF`) if `buf` is too small.
+ * `req_headers` may be NULL only when `req_header_count == 0`. */
+int capy_http_build_get_request_ex(const char *host, uint16_t port,
+                                    const char *path,
+                                    const struct capy_http_header *req_headers,
+                                    int req_header_count,
+                                    char *buf, size_t buf_cap);
 
 /* Parse "HTTP/1.1 200 OK\r\n" (or `\n`-only) into `*out_status`.
  * Status code must be decimal and in the HTTP 100..599 range; the code must be

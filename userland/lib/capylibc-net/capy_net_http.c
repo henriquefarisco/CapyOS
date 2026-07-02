@@ -33,6 +33,7 @@
 #include "capylibc-net/capy_net.h"
 #include "capylibc-tls/capy_tls.h"
 #include "capylibc/capylibc.h"
+#include "capy_net_http_internal.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -46,154 +47,13 @@ extern capy_net_err_t capy_net_internal_tls_error_to_net(capy_tls_err_t err);
 #define HTTP_HEAD_BUF_CAP    4096
 #define HTTP_DRAIN_CHUNK     256
 
-/* === string utils ============================================ */
-
-static int http_streq_ci(const char *a, const char *b) {
-  while (*a && *b) {
-    char ca = *a, cb = *b;
-    if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
-    if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
-    if (ca != cb) return 0;
-    a++; b++;
-  }
-  return *a == '\0' && *b == '\0';
-}
-
-static int http_buf_putc(char *buf, size_t cap, size_t *pos, char c) {
-  if (*pos + 1 >= cap) return -1;
-  buf[(*pos)++] = c;
-  return 0;
-}
-
-static int http_buf_puts(char *buf, size_t cap, size_t *pos, const char *s) {
-  while (*s) {
-    if (http_buf_putc(buf, cap, pos, *s++) != 0) return -1;
-  }
-  return 0;
-}
-
-static int http_buf_putu16(char *buf, size_t cap, size_t *pos, uint16_t v) {
-  /* 5 digits max for uint16_t. */
-  char tmp[6];
-  int n = 0;
-  if (v == 0) tmp[n++] = '0';
-  else {
-    while (v > 0 && n < 5) {
-      tmp[n++] = (char)('0' + (v % 10));
-      v /= 10;
-    }
-  }
-  while (n > 0) {
-    if (http_buf_putc(buf, cap, pos, tmp[--n]) != 0) return -1;
-  }
-  return 0;
-}
-
-static int http_is_raw_ctl_or_space(char c) {
-  unsigned char uc = (unsigned char)c;
-  return uc <= 0x20u || uc == 0x7fu;
-}
-
-static int http_pct_encoded_nul_at(const char *p) {
-  if (p[0] != '%') return 0;
-  if (p[1] == '\0' || p[2] == '\0') return 0;
-  return p[1] == '0' && p[2] == '0';
-}
-
-static int http_host_char_safe(char c) {
-  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-         (c >= '0' && c <= '9') || c == '.' || c == '-';
-}
-
-static int http_host_safe(const char *host) {
-  if (!host || !host[0]) return 0;
-  size_t label_len = 0;
-  char first = '\0';
-  char prev = '\0';
-  while (*host) {
-    char c = *host;
-    if (http_is_raw_ctl_or_space(c) || !http_host_char_safe(c)) return 0;
-    if (c == '.') {
-      if (label_len == 0 || first == '-' || prev == '-') return 0;
-      label_len = 0;
-      first = '\0';
-      prev = c;
-      host++;
-      continue;
-    }
-    if (label_len == 0) first = c;
-    label_len++;
-    if (label_len > 63) return 0;
-    prev = c;
-    host++;
-  }
-  if (label_len == 0 || first == '-' || prev == '-') return 0;
-  return 1;
-}
-
-static int http_path_safe(const char *path) {
-  if (!path) return 0;
-  if (!path[0]) return 1;
-  if (path[0] != '/') return 0;
-  while (*path) {
-    if (http_is_raw_ctl_or_space(*path) || *path == '#' ||
-        *path == '\\' || http_pct_encoded_nul_at(path)) return 0;
-    path++;
-  }
-  return 1;
-}
-
-/* === request builder ========================================= */
-
-int capy_http_build_get_request(const char *host, uint16_t port,
-                                 const char *path,
-                                 char *buf, size_t buf_cap) {
-  capy_net_internal_reset_error();
-  if (!host || !path || !buf || buf_cap < 32) {
-    capy_net_internal_set_error(CAPY_NET_EINVAL);
-    return -1;
-  }
-  if (port == 0) {
-    capy_net_internal_set_error(CAPY_NET_EPARSE);
-    return -1;
-  }
-  if (!http_host_safe(host) || !http_path_safe(path)) {
-    capy_net_internal_set_error(CAPY_NET_EPARSE);
-    return -1;
-  }
-  size_t pos = 0;
-  if (http_buf_puts(buf, buf_cap, &pos, "GET ") != 0 ||
-      http_buf_puts(buf, buf_cap, &pos, path[0] ? path : "/") != 0 ||
-      http_buf_puts(buf, buf_cap, &pos, " HTTP/1.1\r\nHost: ") != 0 ||
-      http_buf_puts(buf, buf_cap, &pos, host) != 0) {
-    capy_net_internal_set_error(CAPY_NET_EBUF);
-    return -1;
-  }
-  /* Only emit ":port" when it differs from a scheme default. Both 80
-   * (http) and 443 (https) are scheme-default ports, so a canonical
-   * Host header omits them: RFC 7230 §5.4 recommends it, and in
-   * practice many virtual-host / SNI setups key on the bare authority
-   * ("example.com") and mis-route or 404 "example.com:443". The builder
-   * is scheme-agnostic (it only sees the resolved port), so it treats
-   * both defaults the same; explicit non-default ports (8080, 8443, ...)
-   * are still emitted. Slice 5.5 (real userland HTTPS via the transport
-   * seam) made the 443 case reachable, so omitting it now matters. */
-  if (port != 80 && port != 443) {
-    if (http_buf_putc(buf, buf_cap, &pos, ':') != 0 ||
-        http_buf_putu16(buf, buf_cap, &pos, port) != 0) {
-      capy_net_internal_set_error(CAPY_NET_EBUF);
-      return -1;
-    }
-  }
-  if (http_buf_puts(buf, buf_cap, &pos,
-                    "\r\nUser-Agent: capylibc-net/0.1"
-                    "\r\nAccept: */*"
-                    "\r\nConnection: close\r\n\r\n") != 0) {
-    capy_net_internal_set_error(CAPY_NET_EBUF);
-    return -1;
-  }
-  return (int)pos;
-}
+/* The HTTP/1.1 GET request builder (capy_http_build_get_request[_ex]) plus its
+ * host/path sanitisation and bounded buffer writers were moved to
+ * capy_net_http_request.c when this file was split for the Slice 7.5 transport
+ * request-header work. The shared header name/value safety predicates
+ * (http_streq_ci, http_header_name_safe, http_header_value_safe) and the caller
+ * request-header validator (http_req_headers_valid) now live in
+ * capy_net_http_internal.h, included above. */
 
 /* === status line parser ====================================== */
 
@@ -292,36 +152,8 @@ static int http_header_copy(char *dst, size_t cap, const char *src,
   return 0;
 }
 
-static int http_header_name_char_safe(char c) {
-  unsigned char uc = (unsigned char)c;
-  if (uc <= 0x20u || uc == 0x7fu) return 0;
-  switch (c) {
-    case '(': case ')': case '<': case '>': case '@':
-    case ',': case ';': case ':': case '\\': case '"':
-    case '/': case '[': case ']': case '?': case '=':
-    case '{': case '}':
-      return 0;
-    default:
-      return 1;
-  }
-}
-
-static int http_header_name_safe(const char *src, size_t len) {
-  if (!src || len == 0) return 0;
-  for (size_t i = 0; i < len; i++) {
-    if (!http_header_name_char_safe(src[i])) return 0;
-  }
-  return 1;
-}
-
-static int http_header_value_safe(const char *src, size_t len) {
-  if (!src) return 0;
-  for (size_t i = 0; i < len; i++) {
-    unsigned char uc = (unsigned char)src[i];
-    if ((uc < 0x20u && src[i] != '\t') || uc == 0x7fu) return 0;
-  }
-  return 1;
-}
+/* http_header_name_safe / http_header_value_safe (and their char predicate)
+ * are shared with the request builder via capy_net_http_internal.h. */
 
 int capy_http_parse_headers(const char *buf, size_t len,
                              struct capy_http_response *out) {
@@ -610,9 +442,11 @@ static void capy_http_conn_close(struct capy_http_conn *c) {
 
 /* === capy_http_get =========================================== */
 
-int capy_http_get(const char *url,
-                  uint8_t *body_buf, size_t body_buf_cap,
-                  struct capy_http_response *out) {
+int capy_http_get_with_headers(const char *url,
+                               const struct capy_http_header *req_headers,
+                               int req_header_count,
+                               uint8_t *body_buf, size_t body_buf_cap,
+                               struct capy_http_response *out) {
   capy_net_internal_reset_error();
   if (!url || !out) {
     capy_net_internal_set_error(CAPY_NET_EINVAL);
@@ -620,6 +454,18 @@ int capy_http_get(const char *url,
   }
   if (!body_buf && body_buf_cap > 0) {
     capy_net_internal_set_error(CAPY_NET_EINVAL);
+    return -1;
+  }
+  /* NULL header array with a positive count is a caller bug. */
+  if (req_header_count > 0 && !req_headers) {
+    capy_net_internal_set_error(CAPY_NET_EINVAL);
+    return -1;
+  }
+  /* Validate caller headers fail-closed BEFORE opening any socket: a malformed
+   * or reserved request header must never reach the wire (and must not waste a
+   * connection). The builder re-validates too (defense in depth). */
+  if (!http_req_headers_valid(req_headers, req_header_count)) {
+    capy_net_internal_set_error(CAPY_NET_EPARSE);
     return -1;
   }
 
@@ -666,12 +512,15 @@ int capy_http_get(const char *url,
     }
   }
 
-  /* Build the request. 1 KB is enough for a GET line + Host header
-   * + a couple of standard headers; we cap at 1 KB to avoid
-   * accidentally building a huge stack frame. */
-  char request_buf[1024];
-  int req_len = capy_http_build_get_request(u.host, u.port, u.path,
-                                              request_buf, sizeof(request_buf));
+  /* Build the request. 2 KB covers the GET line + Host + the standard
+   * headers plus the caller's Cookie / If-None-Match / If-Modified-Since
+   * (the cache validators are bounded at 128 bytes each); the builder fails
+   * closed with CAPY_NET_EBUF rather than overflow if a caller still exceeds
+   * it. Capped to keep the stack frame modest. */
+  char request_buf[2048];
+  int req_len = capy_http_build_get_request_ex(u.host, u.port, u.path,
+                                               req_headers, req_header_count,
+                                               request_buf, sizeof(request_buf));
   if (req_len <= 0) {
     capy_http_conn_close(&conn);
     return -1;
@@ -855,4 +704,10 @@ have_head:;
 
   capy_http_conn_close(&conn);
   return 0;
+}
+
+int capy_http_get(const char *url,
+                  uint8_t *body_buf, size_t body_buf_cap,
+                  struct capy_http_response *out) {
+  return capy_http_get_with_headers(url, NULL, 0, body_buf, body_buf_cap, out);
 }

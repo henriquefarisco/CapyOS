@@ -27,9 +27,18 @@
 
 /* Create a centered WxH window, show + focus it, and return its compositor id
  * as the backend id. Returns -1 fail-closed when the compositor refuses (table
- * full / surface allocation failed). */
+ * full / surface allocation failed).
+ *
+ * Etapa 7 / Slice 7.5 (alpha.305): marks the window `gfx_owner_pid = pid`
+ * (struct gui_window, include/gui/compositor.h) so the desktop's input
+ * dispatcher can tell this window apart from an in-kernel app window (which
+ * never sets this field, so it stays 0) and route mouse/keyboard for it
+ * through the gui_event_poll queue instead of the direct on_mouse/on_key
+ * callback path -- the ring-3 app has no on_mouse/on_key pointers to call
+ * into anyway (it owns no kernel-side callback), it drains
+ * SYS_WINDOW_POLL_EVENT instead. */
 static int32_t gfx_backend_win_create(const char *title, uint32_t w,
-                                      uint32_t h) {
+                                      uint32_t h, uint32_t pid) {
   uint32_t screen_w = 0u, screen_h = 0u;
   int32_t x = 0, y = 0;
   struct gui_window *win;
@@ -40,6 +49,7 @@ static int32_t gfx_backend_win_create(const char *title, uint32_t w,
 
   win = compositor_create_window(title, x, y, w, h);
   if (!win) return -1;
+  win->gfx_owner_pid = pid;
   compositor_show_window(win->id);
   compositor_focus_window(win->id);
   return (int32_t)win->id;

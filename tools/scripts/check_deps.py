@@ -53,15 +53,8 @@ def brew_gnu_efi_prefix():
 def gnu_efi_prefixes():
     prefixes = []
     add_unique(prefixes, os.environ.get("EFI_PREFIX"))
-    if sys.platform == "darwin":
-        add_unique(prefixes, brew_gnu_efi_prefix())
-        add_unique(prefixes, "/opt/homebrew/opt/gnu-efi")
-        add_unique(prefixes, "/usr/local/opt/gnu-efi")
-        add_unique(prefixes, "/opt/brew-master/opt/gnu-efi")
-        add_unique(prefixes, "/usr")
-    else:
-        add_unique(prefixes, "/usr")
-        add_unique(prefixes, brew_gnu_efi_prefix())
+    add_unique(prefixes, "/usr")
+    add_unique(prefixes, brew_gnu_efi_prefix())
     return prefixes
 
 def release_files_for(prefix):
@@ -140,9 +133,7 @@ def main():
             print(f" - {path}")
         print("\nPlease install them with the OS-specific bootstrap script.")
         if missing_release_files:
-            if sys.platform == "darwin":
-                print("On macOS, run: bash install-macos.sh --skip-brew-update")
-            elif os.name == "nt":
+            if os.name == "nt":
                 print("On Windows, run: .\\install-windows.ps1")
             else:
                 print("On Debian/Ubuntu, run: ./install-linux.sh")

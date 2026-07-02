@@ -50,6 +50,7 @@ int run_http_cookies_tests(void);
 int run_http_session_tests(void);
 int run_http_fetch_policy_tests(void);
 int run_http_hsts_tests(void);
+int run_browser_fetch_tests(void);
 int run_net_dns_tests(void);
 int run_net_dhcp_options_tests(void);
 int run_net_icmp_tests(void);
@@ -98,6 +99,7 @@ int run_thread_crash_smoke_gate_tests(void);
 int run_tls_handshake_smoke_gate_tests(void);
 int run_capybrowse_text_smoke_gate_tests(void);
 int run_capygfx_smoke_gate_tests(void);
+int run_capymultifetch_smoke_gate_tests(void);
 int run_apps_roundtrip_smoke_gate_tests(void);
 
 int test_pmm_run(void);
@@ -328,6 +330,7 @@ int main(int argc, char **argv) {
     failures += run_http_session_tests();
     failures += run_http_fetch_policy_tests();
     failures += run_http_hsts_tests();
+    failures += run_browser_fetch_tests();
     failures += run_net_dns_tests();
     failures += run_net_dhcp_options_tests();
     failures += run_net_icmp_tests();
@@ -376,6 +379,7 @@ int main(int argc, char **argv) {
     failures += run_tls_handshake_smoke_gate_tests();
     failures += run_capybrowse_text_smoke_gate_tests();
     failures += run_capygfx_smoke_gate_tests();
+    failures += run_capymultifetch_smoke_gate_tests();
     failures += run_apps_roundtrip_smoke_gate_tests();
 
     failures += test_pmm_run();

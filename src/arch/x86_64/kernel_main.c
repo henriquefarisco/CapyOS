@@ -68,10 +68,12 @@
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
-#ifdef CAPYOS_GFX_SMOKE
-/* Etapa 7 / Slice 7.2.2: the graphical-surface boot smoke brings up the
- * compositor over the boot framebuffer and installs the ring-3 gfx backend
- * before spawning /bin/capygfx. Only the smoke build pulls these in. */
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE)
+/* Etapa 7 / Slice 7.2.2 (+ Slice 7.5 alpha.304): the graphical-surface boot
+ * smoke AND the capygfx-desktop-spawn smoke both bring up the compositor over
+ * the boot framebuffer before spawning capygfx (the latter via
+ * kernel_spawn_capygfx_desktop, which installs the gfx backend itself). Only
+ * these smoke builds pull these in. */
 #include "gui/compositor.h"
 #include "kernel/syscall_gfx.h"
 #endif
@@ -682,6 +684,25 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
          "[user_init] capybrowse spawn returned without entering Ring 3.");
   }
 #endif
+#ifdef CAPYOS_MULTIFETCH_SMOKE
+  /* Etapa 7 / Slice 7.5: boot directly into the browser-multifetch smoke
+   * instead of the login/desktop flow. `kernel_boot_run_capymultifetch` is
+   * noreturn on success (drops to ring 3); the program retries its first fetch
+   * until the async DHCP lease lands, fetches the same cacheable URL twice
+   * through a persistent browser_fetch_ctx, then exits 0 iff the 2nd visit was
+   * served from the cache with zero additional network transport calls —
+   * which process_exit observes to emit `[smoke] browser-multifetch ready` on
+   * COM1. Gated so production boot is unaffected; a return means the spawn
+   * failed, so fall through to login. */
+  dbgcon_write(
+      "[user_init] CAPYOS_MULTIFETCH_SMOKE; spawning capymultifetch.\n");
+  {
+    int capymultifetch_rc = kernel_boot_run_capymultifetch();
+    (void)capymultifetch_rc;
+    klog(KLOG_WARN,
+         "[user_init] capymultifetch spawn returned without entering Ring 3.");
+  }
+#endif
 #ifdef CAPYOS_GFX_SMOKE
   /* Etapa 7 / Slice 7.2.2: boot directly into the ring-3 graphical surface
    * smoke. The login/desktop path (which normally brings up the compositor) is
@@ -700,6 +721,32 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     (void)capygfx_rc;
     klog(KLOG_WARN,
          "[user_init] capygfx spawn returned without entering Ring 3.");
+  }
+#endif
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE
+  /* Etapa 7 / Slice 7.5 (alpha.304): mechanical proof of the NEW
+   * kernel_spawn_capygfx_desktop path (meant to be called from a live desktop
+   * session, unlike every other spawn above which is boot-exclusive/noreturn).
+   * Boots hello (pa) directly into ring 3 and queues capygfx (pb) behind it
+   * via the new non-noreturn spawn helper; when pa exits, the scheduler's
+   * voluntary yield (no CAPYOS_PREEMPTIVE_SCHEDULER needed -- context_switch is
+   * agnostic of what triggered it) dispatches capygfx, which runs to
+   * completion and exits 0, reusing the `[smoke] capygfx ready` marker. Does
+   * NOT exercise the real CapyUI desktop_runtime_start loop (untested
+   * integration, documented in the release notes); proves the spawn +
+   * scheduler mechanics the real integration will rely on. Gated so
+   * production boot is unaffected; a return means the spawn failed, so fall
+   * through to login. */
+  dbgcon_write(
+      "[user_init] CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE; init compositor + "
+      "spawning hello+capygfx.\n");
+  compositor_init(g_con.fb, g_con.width, g_con.height, g_con.stride * 4u);
+  {
+    int spawn_smoke_rc = kernel_boot_run_capygfx_desktop_spawn_smoke();
+    (void)spawn_smoke_rc;
+    klog(KLOG_WARN,
+         "[user_init] capygfx-desktop-spawn-smoke returned without entering "
+         "Ring 3.");
   }
 #endif
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE

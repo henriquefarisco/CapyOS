@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-05-15
-**Vers?o atual:** `0.8.0-alpha.265+20260611`
+**Data de referência:** 2026-07-01 (rev. `alpha.307`)
+**Versão atual:** `0.8.0-alpha.307+20260701`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -85,7 +85,7 @@ Referências obrigatórias:
 | 4 | CapyDisplay 2D + scheduler/multithread runtime | Concluída (alpha.262) | Etapa 3 | camada 2D com damage/double buffer, scheduler cooperativo, multithread runtime e contrato widget/display-list |
 | 5 | TLS userland real | Concluída (alpha.264) | Etapa 4 | BearSSL userland com handshake real validado |
 | 6 | Apps básicos do desktop maduros | Concluída (alpha.287) | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
-| 7 | Browser usável com web estática moderna | Em andamento (alpha.300) | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
+| 7 | Browser usável com web estática moderna | Em andamento (alpha.305) | Etapa 6 | HTTPS real, decode JPEG/PNG/WebP, streaming render, HTTP cache, forms, sem JavaScript |
 | 8 | Release/update gate oficial + instalador polido | Bloqueada | Etapa 7 | smoke VMware+E1000 oficial, update HTTPS, instalador wizard amigável |
 | 9 | Package manager + SDK + ABI estável | Bloqueada | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
 | 10 | Áudio + multimídia básica | Bloqueada | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist e codecs por contrato |
@@ -482,8 +482,8 @@ anti-drift do pin, fechando a lacuna que deixou o bug escapar.
   - **7.2.2 — boot smoke ring-3 (CONCLUÍDO em `alpha.290`):** app gated `/bin/capygfx` que cria uma janela, preenche, compõe pixels no próprio buffer e os blita, apresenta e faz poll — exercitando os 6 syscalls contra o compositor **real** num boot dedicado (`kernel_main` inicializa o compositor sobre o framebuffer de boot + `syscall_gfx_install_default_ops` sob o gate `CAPYOS_GFX_SMOKE`; saída 0 ⇒ `process_exit` emite o marker COM1 `[smoke] capygfx ready` e o observer de teardown destrói a janela). Validado em **QEMU** (`make smoke-x64-qemu-capygfx` — marker observado, smoke passou). Gate VMware oficial `make smoke-x64-vmware-browser-graphical` mapeado (mesma imagem) e **pulado** neste ciclo (sustentado por QEMU); ao reabilitar a validação VMware, confirma também o render visual ao vivo quando a integração com o desktop interativo (CapyUI) ligar o loop do compositor.
 - **7.3 — pipeline real HTML→display-list (núcleo host-provado em `alpha.291`):** adapter CapyOS-side `userland/bin/capybrowse/browser_pipeline.{c,h}` (`capyos_browser_build_display_list`) que dirige os cinco estágios puros do core desacoplado do CapyBrowser — `capy_html_parse` → `capy_css_parse` → `capy_css_cascade` → `capy_layout` → `capy_displaylist` — produzindo o `capy_dl` a partir de HTML(+CSS); arenas em `.bss` (~1 MiB), single-shot, determinístico, fail-closed. **Movido à frente do decode de imagem** porque é o pré-requisito: os nós do display-list (inclusive IMAGE) vêm do pipeline. Provado em host por um binário de teste focado (`make test-browser-pipeline`, sem `capylibc-net` para evitar a colisão de símbolo `capy_url_parse`): HTML→display-list (texto + resolução de link relativo→absoluto) **e** HTML→pixels (rasteriza o display-list real via o backend da 7.2). O boot smoke ring-3 do pipeline foi **CONCLUÍDO em `alpha.292`**: o app gated `/bin/capygfx`, quando o core gráfico está presente, renderiza uma página HTML embutida **via o pipeline** → rasteriza → blita pela ABI da 7.2 → present, provando **HTML→pixels→janela em ring-3** contra o compositor real (validado em QEMU — marker `[smoke] capygfx ready`; confirma também que ~1.33 MiB de `.bss` carregam e que o pipeline inteiro executa em ring-3 sem falha; o binário linka os 11 TUs do core **sem** `capylibc-net`, evitando a colisão de `capy_url_parse`). A orquestração com fetch real (HTTPS) + modo texto como fallback (critério 5) e a janela interativa no desktop (CapyUI) seguem depois.
 - **7.4 — decode de imagem inline (núcleo host-provado em `alpha.293`):** primeiro, **pré-requisito cross-repo** — `CapyBrowser 0.6.6` faz o nó IMAGE do display-list carregar o `src` resolvido (em `url_off`/`url_len`, os mesmos campos do LINK; aditivo, `CAPY_DL_VERSION` inalterado), pois o rasterizador só tem o display-list para descobrir a imagem. Depois, lado CapyOS: adapter `userland/bin/capybrowse/browser_image.{c,h}` para `capy-codec-image` v2 (injeta um bump allocator de arena `.bss` 512 KiB + inflater zlib `tinf` in-tree; fail-closed; o CapyOS nunca decoda por conta própria), e o rasterizador `browser_render_pixel.{c,h}` ganha um callback `resolve_image` + blit escalado — um nó IMAGE com `src` resolvido e pixels decodificados é blitado escalado à caixa do nó (`images_decoded`), com o placeholder bordado + label `alt` como fallback. Provado em host por `make test-browser-pipeline` (`19/19`: decode BMP→ARGB, PNG 2×2 via tinf→RGBW, bytes inválidos→fail-closed, rasteriza-com-imagem) + `make test`/`layout-audit`/`make all64` (clean) verdes; kernel byte-idêntico. A **prova de decode em ring-3** foi **CONCLUÍDA na sub-fatia 7.4.2 (`alpha.294`)**: o `capygfx`, quando o core de codecs também está presente, embute um `<img>` numa página, decoda um PNG 2×2 real **em ring-3** (CapyCodecs `capy-codec-image` v2 + `tinf`) e o blita no nó IMAGE do display-list (em vez do placeholder); `make smoke-x64-qemu-capygfx` passou em QEMU+OVMF (marker `[smoke] capygfx ready` gatado por `images_decoded>=1`, ~1.83 MiB de `.bss` mapeados/zerados em ring-3 pelo ELF loader). Fecha o decode de imagem inline da Etapa 7. (Era 7.3; reordenado para depois do pipeline, que é quem emite os nós IMAGE.)
-- **7.5 — HTTP cache, cookies por domínio, formulários simples (núcleo do cache host-provado em `alpha.295`):** primeiro componente — cache de respostas HTTP limitado (subconjunto do RFC 7234) CapyOS-side `src/net/services/http/http_cache.{c,h}` (irmão do `dns_cache`; cache/cookies são adapters do CapyOS, não do core desacoplado do CapyBrowser). Puro, determinístico, fail-closed, com **relógio injetado** e **store fornecido pelo chamador**; só GET; status cacheável; honra `Cache-Control: no-store`/`no-cache`; não cacheia respostas com `Vary`; frescor por `max-age`/`Expires`-`Date`; idade por RFC 7234 §4.2.3; validadores `ETag`/`Last-Modified` → revalidação condicional (`If-None-Match`/`If-Modified-Since`) + refresh em `304`; store LRU limitado; + parser IMF-fixdate. Host-provado por `run_http_cache_tests` (~30 checagens em 10 grupos) + `make all64` linka o módulo (dead code até o fetch path ligar). **`alpha.296`** acrescentou a camada de orquestração `http_cache_fetch` (fluxo RFC 7234 com transporte **injetado** por ponteiro de função: FRESH serve sem fetch, STALE revalida com condicionais + 304/200, MISS busca+armazena) + o armazenamento fiel de headers/`Location`, host-provado por `test_fetch_orchestration` (incl. a **2ª-visita-servida-do-cache-sem-refetch**). Os **cookies por domínio** foram **host-provados em `alpha.297`** — jar RFC 6265 subset `src/net/services/http/http_cookies.{c,h}` (parse Set-Cookie + Domain/Path/Max-Age/Expires/Secure/HttpOnly; rejeição cross-domain anti-injeção §5.3; default-path §5.1.4; delete por expiry; envio domain+path-match + Secure→https ordenado por path mais longo §5.4; evicção), mesmo padrão puro/relógio-injetado/jar-do-chamador do cache, provado por `run_http_cookies_tests` (~40 checagens). **`alpha.298`** compôs cache+cookies num `http_session` (`src/net/services/http/http_session.{c,h}`: anexa o header `Cookie` da request, roda o fluxo de cache, colhe `Set-Cookie` da resposta de rede), host-provado por `run_http_session_tests`. Com isso a **camada PURA de fetch-policy da 7.5 está completa** — cache, cookies, a sessão que os compõe, e os formulários (já prontos no core do CapyBrowser, `capy_form_submit`). Resta apenas o **binding de transporte real**: estender o `capy_http_get` do capylibc-net para aceitar headers de request (Cookie + If-None-Match) + um runtime de navegador multi-fetch/persistente que se beneficie do cache (o app de texto single-shot não), com um smoke QEMU de 2ª-visita-servida-do-cache — depois a 7.6 (streaming / limites de memória-tempo por página / endurecimento de certificado+mixed-content).
-- **7.6 — streaming render, limites de memória/tempo por página, endurecimento da política de certificado/mixed-content (política de fetch host-provada em `alpha.299`):** primeiro componente do endurecimento — `src/net/services/http/http_fetch_policy.{c,h}` (CapyOS-side): allow-list de scheme + navegação **HTTPS-first** (http→UPGRADE) + bloqueio de **mixed-content** (uma página https recusa sub-recurso http/file/javascript; nega por padrão), puro/determinístico/fail-closed/sem-estado, host-provado por `run_http_fetch_policy_tests`. É o gate que a busca de sub-recurso de rede (ex.: as imagens da 7.4 quando vierem da rede) e a navegação top-level aplicam antes de conectar. **`alpha.300`** acrescentou o store **HSTS** (`http_hsts.{c,h}`, RFC 6797: um `Strict-Transport-Security` recebido sobre conexão segura torna https **obrigatório** para o host/subdomínios até expirar; derrota SSL-stripping), que compõe com a política de fetch (HSTS torna o UPGRADE obrigatório). Restam: tracker de orçamento de memória/tempo por página, endurecimento adicional da política de certificado, e o streaming render — mais o binding de transporte que liga toda a suíte de políticas de fetch (cache/cookies/sessão/segurança/HSTS) ao runtime de um navegador multi-fetch.
+- **7.5 — HTTP cache, cookies por domínio, formulários simples (núcleo do cache host-provado em `alpha.295`):** primeiro componente — cache de respostas HTTP limitado (subconjunto do RFC 7234) CapyOS-side `src/net/services/http/http_cache.{c,h}` (irmão do `dns_cache`; cache/cookies são adapters do CapyOS, não do core desacoplado do CapyBrowser). Puro, determinístico, fail-closed, com **relógio injetado** e **store fornecido pelo chamador**; só GET; status cacheável; honra `Cache-Control: no-store`/`no-cache`; não cacheia respostas com `Vary`; frescor por `max-age`/`Expires`-`Date`; idade por RFC 7234 §4.2.3; validadores `ETag`/`Last-Modified` → revalidação condicional (`If-None-Match`/`If-Modified-Since`) + refresh em `304`; store LRU limitado; + parser IMF-fixdate. Host-provado por `run_http_cache_tests` (~30 checagens em 10 grupos) + `make all64` linka o módulo (dead code até o fetch path ligar). **`alpha.296`** acrescentou a camada de orquestração `http_cache_fetch` (fluxo RFC 7234 com transporte **injetado** por ponteiro de função: FRESH serve sem fetch, STALE revalida com condicionais + 304/200, MISS busca+armazena) + o armazenamento fiel de headers/`Location`, host-provado por `test_fetch_orchestration` (incl. a **2ª-visita-servida-do-cache-sem-refetch**). Os **cookies por domínio** foram **host-provados em `alpha.297`** — jar RFC 6265 subset `src/net/services/http/http_cookies.{c,h}` (parse Set-Cookie + Domain/Path/Max-Age/Expires/Secure/HttpOnly; rejeição cross-domain anti-injeção §5.3; default-path §5.1.4; delete por expiry; envio domain+path-match + Secure→https ordenado por path mais longo §5.4; evicção), mesmo padrão puro/relógio-injetado/jar-do-chamador do cache, provado por `run_http_cookies_tests` (~40 checagens). **`alpha.298`** compôs cache+cookies num `http_session` (`src/net/services/http/http_session.{c,h}`: anexa o header `Cookie` da request, roda o fluxo de cache, colhe `Set-Cookie` da resposta de rede), host-provado por `run_http_session_tests`. Com isso a **camada PURA de fetch-policy da 7.5 está completa** — cache, cookies, a sessão que os compõe, e os formulários (já prontos no core do CapyBrowser, `capy_form_submit`). Resta apenas o **binding de transporte real**: estender o `capy_http_get` do capylibc-net para aceitar headers de request (Cookie + If-None-Match) + um runtime de navegador multi-fetch/persistente que se beneficie do cache (o app de texto single-shot não), com um smoke QEMU de 2ª-visita-servida-do-cache — depois a 7.6 (streaming / limites de memória-tempo por página / endurecimento de certificado+mixed-content). **alpha.301:** binding de transporte ENTREGUE (capy_http_get_with_headers no capylibc-net, aditivo) + runtime multi-fetch persistente `browser_fetch` (http_session vivo sobre o transporte real): 2a-visita-servida-do-cache + cookies same-site host-provados (`tests/net/test_browser_fetch.c`), + prova de link ring-3 `capymultifetch-elf` (pilha inteira freestanding CC64). Falta o smoke de RUNTIME (boot hook + servidor cacheavel controlado + smoke-x64-{qemu,vmware}-browser-multifetch). **alpha.302:** smoke de RUNTIME do browser-multifetch PASSOU em QEMU real (smoke-marker-pattern completo: latch host-testado + boot hook + blob + smoke-x64-{qemu,vmware}-browser-multifetch) -- prova de que a 2a visita e servida do cache sem 2a chamada de rede, validada por kernel E servidor host independentemente. Gate VMware oficial definido, pendente do operador. **alpha.303:** desbloqueio arquitetural (capygfx agora linka capylibc-net via rename de capy_url_parse no core grafico, isolado de HOST_CFLAGS/browser_pipeline_tests) + fetch de imagem pela rede no navegador grafico via gate de mixed-content -- PROVADO EM QEMU (smoke-x64-qemu-capygfx-net-image) sem regressao no smoke alpha.294 (re-executado, continua passando) nem no build de producao (capyos64.bin byte-identico). Gates VMware oficiais definidos, pendentes do operador. **alpha.304 (Slice B, parcial):** primeiros passos p/ lancar capygfx como app real numa sessao de desktop JA RODANDO (nao mais so boot-exclusivo) -- kernel_spawn_capygfx_desktop (spawn nao-noreturn) + backend syscall_gfx instalavel sob demanda + blob fora do gate de smoke + comando de shell open-browser-graphical. PROVADO EM QEMU que o spawn e escalonado corretamente (espelha kernel_boot_run_two_busy_users). RESTAM (investigacao dedicada mapeou 5 subsistemas): integracao com o loop REAL desktop_runtime_start do CapyUI (esta prova usa um supervisor sintetico) e a ponte de eventos de mouse/teclado (achado critico: a fila do syscall_gfx so recebe eventos de ciclo de vida de janela hoje) -- a segunda exige mudancas no repo irmao CapyUI. Gates VMware oficiais definidos, pendentes do operador. **alpha.305 (Slice B, item 4):** ponte de eventos de input mouse/teclado para janelas ring-3 -- struct gui_window ganha gfx_owner_pid (aditivo); gfx_owned_redirect() no dispatcher do CapyUI re-empurra input na fila para janelas ring-3. Host-testado + regressao QEMU confirmada (ambos smokes do capygfx continuam passando). RESTAM: integracao com o loop real desktop_runtime_start (sem smoke fim-a-fim login+clique ainda) e a governanca cross-repo (bump de versao CapyUI + matriz de compatibilidade), deliberadamente deixados pendentes para o operador. **alpha.306:** correcao de corrida do `kernel_spawn_capygfx_desktop` (secao critica `process_create`→`scheduler_add` sob `cli()/sti()`), achada por travamento real em VMware ao rodar `open-browser-graphical` numa sessao logada. **alpha.307 (correcao do segundo travamento):** o freeze de `help`/`help-any` no shell grafico "com pacotes instalados" (registrado como problema separado nao investigado no alpha.306) foi **root-caused e corrigido** — `shell_paginate_content` (`src/shell/core/shell_main/output_files.c`) escrevia direto no framebuffer de boot via `vga_putc`/`vga_newline` (por tras do compositor → tela solida/"azul") e bloqueava em `tty_getc()` no prompt "-- mais --"; numa sessao grafica o teclado chega pelo dispatcher da GUI, nao pela fila do `tty_getc`, entao a leitura nunca retornava → congelamento. So disparava "com pacotes instalados" porque os comandos extras de app de desktop empurram a listagem do `help-any` acima do limiar do pager (20 linhas). Fix: quando um sink de saida redirecionado esta instalado (`g_shell_output_write != NULL`, o terminal grafico do CapyUI), a paginacao roteia o conteudo inteiro pelo sink (`shell_print`) e pula o pager bloqueante — o widget de terminal tem seu proprio scrollback. Protege tambem os outros chamadores do pager (`update_status`, `recovery_overview`). Validado por `make test` verde + `make all64 PROFILE=full CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1` limpo; reteste VMware pelo operador recomendado.
+- **7.6 — streaming render, limites de memória/tempo por página, endurecimento da política de certificado/mixed-content (política de fetch host-provada em `alpha.299`):** primeiro componente do endurecimento — `src/net/services/http/http_fetch_policy.{c,h}` (CapyOS-side): allow-list de scheme + navegação **HTTPS-first** (http→UPGRADE) + bloqueio de **mixed-content** (uma página https recusa sub-recurso http/file/javascript; nega por padrão), puro/determinístico/fail-closed/sem-estado, host-provado por `run_http_fetch_policy_tests`. É o gate que a busca de sub-recurso de rede (ex.: as imagens da 7.4 quando vierem da rede) e a navegação top-level aplicam antes de conectar. **`alpha.300`** acrescentou o store **HSTS** (`http_hsts.{c,h}`, RFC 6797: um `Strict-Transport-Security` recebido sobre conexão segura torna https **obrigatório** para o host/subdomínios até expirar; derrota SSL-stripping), que compõe com a política de fetch (HSTS torna o UPGRADE obrigatório). Restam: tracker de orçamento de memória/tempo por página, endurecimento adicional da política de certificado, e o streaming render — mais o binding de transporte que liga toda a suíte de políticas de fetch (cache/cookies/sessão/segurança/HSTS) ao runtime de um navegador multi-fetch. **alpha.301:** a politica de fetch + o HSTS agora estao VIVOS no runtime (`browser_fetch_plan`: HTTPS-first + HSTS obrigatorio com colheita de Strict-Transport-Security; `browser_fetch_subresource_allowed`: gate de mixed-content -- imagem http em pagina https bloqueada) + `page_budget` (limites de memoria/tempo por pagina, fail-closed) host-provados. Falta: streaming render progressivo na UI + endurecimento adicional de certificado + os gates de aceite VMware.
 
 ### Entregáveis
 
@@ -855,6 +855,220 @@ abrir.
 - `make smoke-x64-hyperv-input-storage-net` (novo).
 - `make smoke-x64-vmware-capylang-benchmark-regression` (novo).
 
-## 20. Próximo comando esperado
+## 20. Módulos — etapas e critérios de desenvolvimento por módulo
+
+Esta seção enriquece o plano com a **trilha de desenvolvimento de cada módulo**
+do workspace, sem violar a regra sequencial das Etapas 1-16 (§3). As Etapas
+governam o que o **CapyOS core** integra e quando; esta seção governa como cada
+**projeto desacoplado** evolui internamente até estar pronto para a integração
+por contrato. A fonte de verdade de versões e ABIs continua sendo
+[`../../reference/integration/compatibility-matrix.md`](../../reference/integration/compatibility-matrix.md)
+e o [`VERSION.yaml`](../../../VERSION.yaml).
+
+### 20.0 Critérios de desenvolvimento comuns (todos os módulos desacoplados)
+
+Estes gates valem para **CapyUI, CapyBrowser, CapyCodecs, CapyAgent, CapyLang e
+CapyBenchmark** e são pré-condição para qualquer promoção de módulo a integração
+oficial de Etapa:
+
+1. **Desacoplamento total** — `src/` do módulo nunca inclui headers do
+   kernel/runtime do CapyOS nem chama rede/TLS/FS/compositor/input/syscalls
+   diretamente; serviços de plataforma entram por **callbacks de host adapter
+   injetados**.
+2. **Fail-closed + determinístico** — mesma entrada `(bytes, config, limites)`
+   ⇒ mesma saída, mesma sequência de warnings e mesmo veredito; entrada
+   malformada vira diagnóstico tipado recuperável, nunca crash do host.
+3. **ABI aditiva dentro de uma major** — novos campos/códigos/tipos são
+   permitidos; renomear, reordenar ou remover semântica existente exige bump de
+   major explícito autorizado pela Etapa correspondente.
+4. **Ownership de memória injetado** — o módulo não aloca por APIs de plataforma
+   escondidas; toda memória é fornecida/limitada pelo chamador, com testes de
+   ownership e de reset-em-falha para cada entry point.
+5. **Limites declarados** — memória, tempo e tamanho de entrada documentados e
+   testados; defaults conservadores até benchmark justificar aumento.
+6. **Testabilidade fora do CapyOS** — runner host ou biblioteca com golden tests
+   sob `tests/`; bugs de segurança viram **fixtures de regressão permanentes**.
+7. **Gate de release do módulo** — `make validate` (warnings estritos, testes de
+   contrato, metadados de release, flags endurecidas) verde **e** `make package`
+   gera `<name>.bin` + `<name>.manifest` aceitos pelo parser `services/capypkg`.
+8. **Governança cross-repo** — qualquer mudança que afete um contrato/ABI ou o
+   comportamento consumido pelo CapyOS exige: bump de versão do módulo,
+   atualização do `docs/compatibility.md` do módulo **e** registro na
+   compatibility-matrix do CapyOS (workflow `bump-capyos-pin`), antes de contar
+   como progresso oficial de Etapa.
+
+A promoção de "host-provado" → "integrado" só ocorre por **adaptador CapyOS
+pequeno e versionado + gate externo aprovado** na Etapa em que o módulo é aceito
+(§5 da matriz de compatibilidade).
+
+### 20.1 CapyOS (core) — `0.8.0-alpha.307+20260701`
+
+**Papel:** base do sistema (boot, kernel, drivers, storage, rede/TLS,
+compositor, input, timers, sandbox, package install real, APIs nativas, gates de
+release). ABIs `capyos-base` v3 + `capyos-package-apply` v1.
+
+**Trilha de desenvolvimento:** governada integralmente pela sequência
+bloqueante de Etapas 1-16 (§3-§19). Etapas 1-6 concluídas; Etapa 7 em andamento.
+
+**Critérios de desenvolvimento específicos:**
+
+- Nenhuma dependência Linux no kernel base (compatibilidade Linux isolada em
+  CapyLX, Etapa 13).
+- Toda fatia é vertical e testada: código + host tests + `make layout-audit`
+  limpo + `make all64` verde + smoke QEMU quando houver caminho de runtime.
+- `make test` (agregado host) e `make release-check` verdes antes de tag.
+- Plataforma oficial de validação permanece `VMware + UEFI + E1000`; Hyper-V só
+  é promovido após gates dedicados (Etapa 16).
+- Seções críticas de mutação de estado global (tabela de processos, tabelas de
+  página, fila do scheduler) executadas fora do boot devem ser atômicas por
+  `cli()/sti()` ou syscall gate — invariante reforçada em `alpha.306`/`alpha.307`
+  após a corrida do `kernel_spawn_capygfx_desktop`.
+
+**Critérios de aceite:** os de cada Etapa (§4-§19).
+
+### 20.2 CapyUI — `2.22.6` (ABIs `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1)
+
+**Papel:** dono do modelo de widget retido portátil e da sessão de desktop
+(window manager + apps básicos). Publica `org.capyos.ui.widget-core` e
+`org.capyos.ui.desktop-session`.
+
+**Trilha de desenvolvimento:**
+
+- **Entregue:** widget model/layout/display-list (schema v7); trilha 2.x
+  completa (2.0-2.13) + estado dos advanced widgets (2.14-2.21) + multi-touch
+  gestures (2.22); desktop session + 5 apps básicos com `apps-basic-roundtrip`
+  smoke surface (Slice 6.6).
+- **Em andamento:** ponte de eventos de input para janelas ring-3
+  (`gfx_owned_redirect`, `gfx_owner_pid`) — suporta o navegador gráfico da
+  Etapa 7; falta integração com o loop real `desktop_runtime_start` em CI.
+- **Planejado (por contrato):** focus, text-edit, animation, theme-tokens,
+  accessibility, locale/RTL, theme-serialization, transforms, plugin-ABI.
+
+**Critérios de aceite do módulo:**
+
+- [ ] `capy-ui-widget` permanece frozen desde 1.0 (minors aditivos; breaking = major).
+- [ ] `make validate` verde (348+ contratos de widget) e `make package` gera os
+      dois módulos capypkg.
+- [ ] Nenhuma chamada direta a internals do compositor do CapyOS.
+- [ ] Mudança de dispatcher (ex.: input bridge ring-3) travada por teste de
+      regressão + bump de versão + matriz atualizada antes de virar contrato.
+
+### 20.3 CapyBrowser — `0.6.6` (ABI `capy-browser-core` v1)
+
+**Papel:** core HTML/CSS/layout/display-list e subset text-to-HTML, todo
+host-injected. Publica `org.capyos.browser.text`; o core gráfico (display-list)
+é consumido pelo backend de render do CapyOS na Etapa 7.
+
+**Trilha de desenvolvimento:**
+
+- **Entregue:** URL + HTML-to-text + links + modelo de erro/warning
+  determinístico; DOM M1, CSS M2, block layout M3a, display-list versionado
+  `capy_dl` M3b; nó IMAGE carrega `src` resolvido (aditivo, `CAPY_DL_VERSION`
+  inalterado).
+- **Em andamento (Etapa 7):** streaming/incremental parse; nós de display-list
+  adicionais; robustez de parser contra páginas hostis.
+- **Bloqueado até Etapa 12:** JavaScript (nunca executa script nas Etapas 6-7).
+
+**Critérios de aceite do módulo:**
+
+- [ ] HTTPS-first: nunca auto-degrada para HTTP nem segue redirect não-HTTPS.
+- [ ] Parser tolerante mas reproduzível byte a byte em HTML malformado.
+- [ ] Sem rede/TLS/cache/cookies/sandbox/janela/codec próprios (tudo via adapter
+      ou de outros módulos: `capy-codec-image` é do CapyCodecs).
+- [ ] Golden fixtures de host + `test-browser-pipeline` (CapyOS-side) verdes.
+
+### 20.4 CapyCodecs — `0.0.12` (ABI `capy-codec-image` v2)
+
+**Papel:** biblioteca portátil de cores de codec. Não vira subsistema de IO,
+render, áudio, sandbox ou package do CapyOS.
+
+**Trilha de desenvolvimento:**
+
+- **Entregue/curto prazo:** endurecer `capy-codec-image` (query de versão/feature
+  de ABI, enum de erro oficial, struct de limites explícita, política de canal
+  alpha documentada, testes de ownership de allocator e de reset-em-falha);
+  BMP/PNG/JPEG/QOI/ICO.
+- **Médio/longo prazo (ABIs separadas, roadmap):** `capy-codec-audio` (PCM +
+  streaming), `capy-codec-container` (packets/timestamps), `capy-codec-video`
+  (frames incrementais) — integração gated pelas Etapas 10 (áudio) e além.
+
+**Critérios de aceite do módulo:**
+
+- [ ] Callers existentes continuam compilando (evolução aditiva).
+- [ ] Todos os caminhos de falha resetam saídas válidas.
+- [ ] Nenhum decoder aloca por API de plataforma escondida.
+- [ ] Harness de validação executável (golden + fuzz) cobre cada contrato novo.
+
+### 20.5 CapyAgent — `0.0.10` (ABI `capy-agent-component-index` v1)
+
+**Papel:** dono do formato de pacote, component-index, resolver e signer Ed25519
+que produzem os artefatos consumidos pelo adapter in-tree `services/capypkg`.
+
+**Trilha de desenvolvimento:**
+
+- **Entregue:** descritor de componente (JSON), regras de validação tag/sha256,
+  matching de `required_abis`, planejamento dry-run ordenado por dependência,
+  mapeamento JSON → manifest line-oriented; **signer Ed25519 host-side**
+  publicado; verifier CapyOS-side registrado + KAT host-validado (fail-closed
+  até o trust anchor de produção).
+- **Pendente (Etapas 8-9):** KAT externo do signer; chave offline de release
+  pinada; agregador `build_modules_index.py` resolvendo índice **assinado e
+  endereçado por token de ABI** + guarda anti-drift no `version-audit` (§11).
+
+**Critérios de aceite do módulo:**
+
+- [ ] Índice/manifest/resolver host-testáveis fora do CapyOS; o core só aplica
+      plano validado.
+- [ ] Assinatura Ed25519 obrigatória no payload do adapter; repos `signed`
+      permanecem fail-closed sem trust anchor pinado.
+- [ ] Resolução escolhe a versão **mais nova assinada + compatível + known-good**,
+      nunca a mais nova cega.
+
+### 20.6 CapyLang — `0.1.12` (ABI `capy-lang-host` v0, roadmap-blocked)
+
+**Papel:** linguagem própria + VM bytecode; workspace Rust puro, desacoplado.
+Integração oficial só na **Etapa 15**.
+
+**Trilha de desenvolvimento:**
+
+- **Entregue (S1-S7):** lexer, parser + AST com spans, diagnostics estruturados,
+  container de bytecode v0 (header congelado + seções tipadas), opcode set v0 +
+  verificador de balanço de pilha, emitter AST→bytecode, VM stack-machine
+  determinística com budget e `HostAdapter`; pipeline `source → tokens → AST →
+  bytecode → execução` end-to-end.
+- **Em andamento:** assignment/compound-assign, `for` sobre ranges, bitwise/shift,
+  `Str + Str`, structs/enums (S6.3), métodos de array, CLI `capyc` (`check`/`repl`).
+- **Planejado:** módulos, FFI controlada, formatter, LSP; bindings gráficos
+  2D/input/timer sandboxed para os benchmarks Snake/Asteroids.
+
+**Critérios de aceite do módulo:**
+
+- [ ] Aditivo dentro de v0 (TokenKind/AST/opcode/error-code nunca renomeados).
+- [ ] VM nunca faz panic em entrada de usuário; artefatos e traces determinísticos.
+- [ ] `make rust-validate` (fmt + clippy `-D warnings` + tests + doctests) verde.
+- [ ] Sem kernel headers/syscalls; integração só por host ABI versionada na Etapa 15.
+
+### 20.7 CapyBenchmark — `0.0.11` (ABI `capy-benchmark-report` v1, roadmap-blocked)
+
+**Papel:** harness portátil de benchmark, modelo de report e lógica de baseline.
+Não possui relógios reais, instrumentação de scheduler nem orquestração de gate
+de release. Integração gated pelas **Etapas 15-16**.
+
+**Trilha de desenvolvimento:**
+
+- **Entregue/planejado:** modelo de report (workload, canal, baseline, métricas,
+  pass/fail), modelo de threshold por workload, metadados de replay (seed, frame
+  budget, trajetória de input), avaliação determinística pass/fail, query de
+  todas as violações (`capy_benchmark_failing_metrics`).
+- **Pendente (Etapas 15-16):** baseline regressiva dos benchmarks CapyLang
+  (Snake/Asteroids) para detectar regressão de render/input/scheduler/VM.
+
+**Critérios de aceite do módulo:**
+
+- [ ] Mesmos inputs ⇒ mesmo veredito (determinístico e portátil).
+- [ ] Não instrumenta relógio/scheduler reais; recebe métricas por injeção.
+- [ ] Baseline com limites de variação definidos; regressão falha explicitamente.
+
+## 21. Próximo comando esperado
 
 A Etapa 3 fechou formalmente em 2026-05-21 (alpha.253) após validação externa do gate `make smoke-x64-vmware-storage-resilience` em VMware oficial. A Etapa 4 abriu em sequência mas o scaffolding entregue em alpha.254 foi rolled back em **alpha.255** após descoberta de que a ABI real do sister `CapyUI` já estava além do contrato paralelo criado. A matriz agora pina `CapyUI` `2.22.0` / `capy-ui-widget` v2.22 (display-list schema v7), e a Fase A correta consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side em vez de inventar schema paralelo. A **Etapa 4 foi fechada na release `alpha.262+20260602`** após a Fase F validada externamente (`make smoke-x64-vmware-etapa-4`, 5 markers em ordem + regressões `usb-hid-keyboard`/`storage-resilience` + `release-check`). **Próxima ação: Etapa 5 (TLS userland real) — Slice 5.1**, a syscall de entropia userland (`SYS_GETRANDOM`) backed pela CSPRNG do kernel. Estado por fase da Etapa 4 em [`etapa-4-closure-tracker.md`](etapa-4-closure-tracker.md); plano da Etapa 5 em [`../../architecture/etapa-5-tls-userland-readiness.md`](../../architecture/etapa-5-tls-userland-readiness.md). Slices 3F-3J e sub-slices 3E.4.C/3E.5.B continuam como follow-ups não-bloqueantes da Etapa 3. Runbook completo da Etapa 4: `docs/operations/etapa-4-external-validation-playbook.md`.

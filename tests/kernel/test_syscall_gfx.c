@@ -69,10 +69,12 @@ static void fake_reset(void) {
   memset(g_surface, 0, sizeof(g_surface));
 }
 
-static int32_t fk_win_create(const char *title, uint32_t w, uint32_t h) {
+static int32_t fk_win_create(const char *title, uint32_t w, uint32_t h,
+                             uint32_t pid) {
   (void)title;
   (void)w;
   (void)h;
+  (void)pid;
   g_fake.create_calls++;
   if (g_fake.create_should_fail) return -1;
   g_fake.last_created = FAKE_BACKEND_ID_BASE + g_fake.create_calls;

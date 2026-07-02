@@ -24,7 +24,7 @@ CROSS64 ?= x86_64-elf
 TOOLCHAIN64 ?= host
 
 # Toolchain 64-bit
-# Caminho oficial suportado em Linux/WSL/macOS host: make all64 iso-uefi
+# Caminho oficial suportado em Linux/WSL host: make all64 iso-uefi
 # No WSL, alguns builds do x86_64-linux-gnu-ld.gold abortam no link do kernel.
 # O host toolchain (x86_64-linux-gnu-*) fica como padrao; use TOOLCHAIN64=elf
 # apenas quando quiser forcar a toolchain cruzada.
@@ -493,6 +493,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/kernel/capybrowse_text_smoke_io.o \
 	$(BUILD)/x86_64/kernel/capygfx_smoke.o \
 	$(BUILD)/x86_64/kernel/capygfx_smoke_io.o \
+	$(BUILD)/x86_64/kernel/capymultifetch_smoke.o \
+	$(BUILD)/x86_64/kernel/capymultifetch_smoke_io.o \
 	$(BUILD)/x86_64/kernel/apps_roundtrip_smoke.o \
 	$(BUILD)/x86_64/kernel/apps_roundtrip_smoke_io.o \
 	$(BUILD)/x86_64/kernel/spinlock.o \
@@ -931,16 +933,28 @@ endif
 # When the graphical core sibling is present, the 11 pure core TUs (DOM + CSS +
 # cascade + layout + display-list + their url/text deps) are compiled as ring-3
 # userland objects so a binary (capygfx) can drive the full pipeline via the
-# CapyOS adapter (browser_pipeline.c). Built into a DEDICATED object dir WITHOUT
-# the text core's `capy_url_parse` rename: a binary linking these must NOT also
-# link capylibc-net (the rename exists only so the text core can coexist with the
-# net stack in one binary). Never linked into the kernel. The pipeline cflags add
-# the url/ + text/ include paths the core TUs need on top of the display-list
-# include set (CAPYBROWSER_CORE_CFLAGS).
+# CapyOS adapter (browser_pipeline.c). Built into a DEDICATED object dir, into a
+# separate build tree from HOST_CFLAGS/browser_pipeline_tests (whose own
+# TEST_PIPELINE_INCLUDES do NOT include this rename, so the host pipeline test
+# is unaffected either way). Never linked into the kernel. The pipeline cflags
+# add the url/ + text/ include paths the core TUs need on top of the
+# display-list include set (CAPYBROWSER_CORE_CFLAGS), PLUS the same
+# `capy_url_parse` -> `capybrowse_core_url_parse` rename the text core uses
+# (CAPYBROWSER_TEXT_RENAME), applied here to ALL 6 graphical-core source dirs
+# uniformly (url/text/html/css/layout/displaylist) so their internal
+# cross-references to the core's OWN url-resolution function stay consistent.
+# Etapa 7 / Slice 7.5 (alpha.303): this is what lets a ring-3 binary link BOTH
+# this core AND capylibc-net (real, unrenamed `capy_url_parse`) in the same
+# ELF -- e.g. capygfx linking browser_fetch for network image fetch. Neither
+# browser_pipeline.c, browser_render_pixel.c nor capygfx/main.c reference
+# `capy_url_parse` directly (confirmed by grep), so the rename is a no-op for
+# them and only changes the graphical core's own exported symbol name.
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+CAPYBROWSER_GFX_RENAME := -Dcapy_url_parse=capybrowse_core_url_parse
 CAPYBROWSER_PIPELINE_CFLAGS := $(CAPYBROWSER_CORE_CFLAGS) \
                                -I$(CAPYBROWSER_DIR)/src/url \
-                               -I$(CAPYBROWSER_DIR)/src/text
+                               -I$(CAPYBROWSER_DIR)/src/text \
+                               $(CAPYBROWSER_GFX_RENAME)
 CAPYBROWSER_PIPELINE_OBJS := \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/url_parse.o \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/url_normalize.o \
@@ -1078,6 +1092,7 @@ CAPYLIBC_NET_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_url.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_tls.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_http.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_http_request.o \
 	$(CAPYLIBC_TLS_OBJS)
 
 CAPYLIBC_TLS_OBJS = \
@@ -1329,6 +1344,73 @@ CAPYOS64_OBJS += $(CAPYBROWSE_BLOB_OBJ)
 endif
 endif
 
+# ── User binary: capymultifetch (Etapa 7 / Slice 7.5, ring-3 multi-fetch) ──────
+# Ring-3 ELF proving the persistent multi-fetch runtime (browser_fetch.c) builds
+# and links FREESTANDING: capylibc + capylibc-net (Etapa 5 TLS) + the CapyOS
+# fetch-policy suite (http_cache/cookies/session/fetch_policy/hsts) compiled as
+# ring-3 objects + browser_fetch + page_budget. NO CapyBrowser core (uses
+# capylibc-net's capy_url_parse, no symbol rename). Always buildable (all sources
+# in-tree). Verify with `make capymultifetch-elf`; the kernel boot hook + a
+# `smoke-x64-*-browser-multifetch` against a cacheable controlled server are a
+# follow-up slice (kernel-side registration, like capybrowse_text_smoke).
+CAPYMULTIFETCH_ELF = $(CAPYLIBC_BUILD_DIR)/bin/capymultifetch/capymultifetch.elf
+# One rule per source dir feeding the shared object dir; make selects the rule
+# whose source exists for each (unique) stem. All freestanding CC64 +
+# -Iuserland/bin/capybrowse for the browser_fetch/page_budget headers.
+$(CAPYLIBC_BUILD_DIR)/capymultifetch/%.o: $(USERLAND_DIR)/bin/capymultifetch/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capymultifetch/%.o: $(USERLAND_DIR)/bin/capybrowse/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capymultifetch/%.o: src/net/services/http/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+CAPYMULTIFETCH_OBJS = \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/main.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/browser_fetch.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/page_budget.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_cache.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_cookies.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_session.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_fetch_policy.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_hsts.o \
+	$(CAPYLIBC_OBJS) \
+	$(CAPYLIBC_NET_OBJS) \
+	$(CAPYLIBC_STRING_OBJS)
+
+$(CAPYMULTIFETCH_ELF): $(CAPYMULTIFETCH_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYMULTIFETCH_OBJS)
+
+.PHONY: capymultifetch-elf
+capymultifetch-elf: $(CAPYMULTIFETCH_ELF)
+	@echo "[ok] user binary linked: $(CAPYMULTIFETCH_ELF)"
+
+# objcopy input MUST be `capymultifetch.elf` so the magic symbols come out as
+# `_binary_capymultifetch_elf_start/_end` (consumed by embedded_progs.c).
+CAPYMULTIFETCH_BLOB_OBJ = $(CAPYLIBC_BUILD_DIR)/bin/capymultifetch/capymultifetch_elf_blob.o
+
+$(CAPYMULTIFETCH_BLOB_OBJ): $(CAPYMULTIFETCH_ELF)
+	@mkdir -p '$(dir $@)'
+	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		'$(notdir $<)' '$(abspath $@)'
+
+.PHONY: capymultifetch-blob
+capymultifetch-blob: $(CAPYMULTIFETCH_BLOB_OBJ)
+	@echo "[ok] capymultifetch blob ready for kernel link: $(CAPYMULTIFETCH_BLOB_OBJ)"
+
+# Embed the capymultifetch blob into the kernel image only under the smoke
+# gate. The matching -DCAPYOS_MULTIFETCH_SMOKE (kernel TUs: embedded_progs.c
+# registration + user_init boot hook + kernel_main branch + process_exit
+# latch) is passed via EXTRA_CFLAGS64 by the smoke target. Default OFF =
+# unchanged image.
+ifdef CAPYOS_MULTIFETCH_SMOKE
+CAPYOS64_OBJS += $(CAPYMULTIFETCH_BLOB_OBJ)
+endif
+
 # ── User binary: capygfx (Etapa 7 / Slice 7.2.2, ring-3 graphical surface smoke) ──
 # Self-contained ring-3 ELF (capylibc only; NO CapyBrowser dependency) that
 # exercises the Slice 7.2 graphical syscalls (window/fill/blit/present/poll)
@@ -1343,9 +1425,12 @@ CAPYGFX_OBJS = \
 # renders a REAL embedded HTML page via the pipeline (adapter browser_pipeline.c
 # + the 11 core TUs + the 7.2 rasterizer); main.c is compiled with
 # -DCAPYOS_HAVE_CAPYBROWSER_CORE (from the pipeline cflags) + the core includes,
-# and the pipeline objects + freestanding <string.h> are linked. NO capylibc-net
-# here, so the core's `capy_url_parse` does not collide. Absent the core, capygfx
-# stays the self-contained pattern smoke (current behaviour).
+# and the pipeline objects + freestanding <string.h> are linked. Absent the
+# core, capygfx stays the self-contained pattern smoke (no CapyBrowser, no
+# capylibc-net). Etapa 7 / Slice 7.5 (alpha.303): when the core IS present, its
+# own `capy_url_parse` is compiled renamed (CAPYBROWSER_GFX_RENAME, see
+# CAPYBROWSER_PIPELINE_CFLAGS), so capylibc-net's real `capy_url_parse` no
+# longer collides and capygfx also links the multi-fetch runtime (below).
 CAPYGFX_EXTRA_CFLAGS :=
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
 CAPYGFX_EXTRA_CFLAGS := $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse
@@ -1362,6 +1447,23 @@ ifneq ($(strip $(CAPYCODECS_IMAGE_AVAILABLE)),)
 CAPYGFX_EXTRA_CFLAGS += $(CAPYCODECS_IMAGE_CFLAGS)
 CAPYGFX_OBJS += $(CAPYCODECS_IMAGE_GFX_OBJS)
 endif
+# Etapa 7 / Slice 7.5 (alpha.303): now that the graphical core's own
+# `capy_url_parse` is renamed (CAPYBROWSER_GFX_RENAME, above), capygfx can also
+# link capylibc-net (real, unrenamed `capy_url_parse`) + the multi-fetch
+# runtime, for network image/sub-resource fetch through the mixed-content gate.
+# Reuses the exact objects built for capymultifetch (same no-rename compile
+# rules: $(CAPYLIBC_BUILD_DIR)/capymultifetch/%.o), so nothing here needs a
+# dedicated object dir -- Make just links the same .o into both binaries.
+CAPYGFX_EXTRA_CFLAGS += -DCAPYOS_HAVE_CAPYGFX_NET
+CAPYGFX_OBJS += \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/browser_fetch.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/page_budget.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_cache.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_cookies.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_session.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_fetch_policy.o \
+	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_hsts.o \
+	$(CAPYLIBC_NET_OBJS)
 endif
 
 $(CAPYLIBC_BUILD_DIR)/bin/capygfx/%.o: $(USERLAND_DIR)/bin/capygfx/%.c
@@ -1396,7 +1498,14 @@ capygfx-blob: $(CAPYGFX_BLOB_OBJ)
 # user_init boot hook + kernel_main branch (compositor_init +
 # syscall_gfx_install_default_ops) + process_exit latch) is passed via
 # EXTRA_CFLAGS64 by the smoke target. Default OFF = unchanged.
-ifdef CAPYOS_GFX_SMOKE
+#
+# Etapa 7 / Slice 7.5 (alpha.304): CAPYOS_DESKTOP_GRAPHICAL_BROWSER embeds the
+# SAME blob for a completely different (non-boot-exclusive) purpose: launching
+# capygfx as an ordinary process from a shell command WHILE the normal
+# login->desktop flow runs untouched (kernel_spawn_capygfx_desktop, see
+# include/kernel/user_init.h). Either gate is sufficient; embedding the blob
+# twice is avoided by the single combined check below.
+ifneq (,$(CAPYOS_GFX_SMOKE)$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER))
 CAPYOS64_OBJS += $(CAPYGFX_BLOB_OBJ)
 endif
 
@@ -1449,7 +1558,7 @@ $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
 	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
 
 .PHONY: iso-uefi
-# Official Linux/WSL/macOS host path: make all64 iso-uefi
+# Official Linux/WSL host path: make all64 iso-uefi
 iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
@@ -1869,6 +1978,13 @@ run run-disk run-installer-iso iso disk-img disk-bootable run-disk-boot install-
 all32 iso-bios iso-bios-legacy bios legacy mbr: legacy-disabled
 # --- Host-side unit tests (gcc) ---
 HOST_CFLAGS ?= -std=c99 -Wall -Wextra -Iinclude -Isrc -Iuserland/include -Itools/host/include -Ithird_party/tinf -Ithird_party/bearssl/inc -Ithird_party/bearssl/src -DUNIT_TEST
+# Etapa 7 / Slice 7.5: the multi-fetch runtime browser_fetch.{c,h} is CapyOS-side
+# (net/http + capylibc-net only) and does NOT depend on the CapyBrowser sibling,
+# but lives under userland/bin/capybrowse, so its directory must ALWAYS be on the
+# host include path (the sibling-gated adds below would otherwise only set it when
+# the sibling is present, breaking CapyOS-only clones). capy_url_parse stays the
+# capylibc-net one in host builds (the sibling rename is never in HOST_CFLAGS).
+HOST_CFLAGS += -Iuserland/bin/capybrowse
 ifneq ($(strip $(CAPYUI_WIDGET_DIR)),)
 HOST_CFLAGS += -DCAPYOS_HAVE_CAPYUI_WIDGET -I$(CAPYUI_WIDGET_DIR)
 endif
@@ -2010,6 +2126,8 @@ TEST_SRCS   := \
                tests/net/test_http_session.c src/net/services/http/http_session.c \
                tests/net/test_http_fetch_policy.c src/net/services/http/http_fetch_policy.c \
                tests/net/test_http_hsts.c src/net/services/http/http_hsts.c \
+               tests/net/test_browser_fetch.c userland/bin/capybrowse/browser_fetch.c \
+                   userland/bin/capybrowse/page_budget.c \
                tests/net/test_net_dns.c src/net/services/dns.c \
                tests/net/test_net_dhcp_options.c src/net/core/dhcp_options.c \
                tests/net/test_net_icmp.c src/net/protocols/stack_icmp.c \
@@ -2037,6 +2155,7 @@ TEST_SRCS   := \
                    userland/lib/capylibc-net/capy_net_url.c \
                    userland/lib/capylibc-net/capy_net_tls.c \
                    userland/lib/capylibc-net/capy_net_http.c \
+                   userland/lib/capylibc-net/capy_net_http_request.c \
                tests/userland/test_capylibc_tls.c \
                tests/userland/test_capylibc_tls_trust.c \
                tests/userland/test_capylibc_tls_backend.c \
@@ -2107,6 +2226,7 @@ TEST_SRCS   := \
                tests/kernel/test_tls_handshake_smoke_gate.c src/kernel/tls_handshake_smoke.c tests/stubs/stub_tls_handshake_smoke_io.c \
                tests/kernel/test_capybrowse_text_smoke_gate.c src/kernel/capybrowse_text_smoke.c tests/stubs/stub_capybrowse_text_smoke_io.c \
                tests/kernel/test_capygfx_smoke_gate.c src/kernel/capygfx_smoke.c tests/stubs/stub_capygfx_smoke_io.c \
+               tests/kernel/test_capymultifetch_smoke_gate.c src/kernel/capymultifetch_smoke.c tests/stubs/stub_capymultifetch_smoke_io.c \
                tests/kernel/test_apps_roundtrip_smoke_gate.c src/kernel/apps_roundtrip_smoke.c tests/stubs/stub_apps_roundtrip_smoke_io.c \
                tests/kernel/test_syscall_msr.c \
                tests/kernel/test_fault_classify.c src/arch/x86_64/fault_classify.c \
@@ -2731,6 +2851,50 @@ smoke-x64-qemu-capybrowse-text:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capybrowse.py $(SMOKE_X64_QEMU_CAPYBROWSE_ARGS)
 
+# Etapa 7 / Slice 7.5 external validation gate — browser-multifetch.
+# Builds the real userland TLS path (CAPYOS_TLS_USERLAND_HANDSHAKE=1, the
+# default) and embeds + boots the capymultifetch ring-3 program
+# (CAPYOS_MULTIFETCH_SMOKE: blob in the image + kernel-side registration/boot
+# hook + process_exit latch). The program fetches a controlled cacheable URL
+# TWICE through the same persistent browser_fetch_ctx and exits 0 iff the 2nd
+# visit was served from the cache with no 2nd network transport call. The
+# kernel latch (process_exit, gated) emits the single COM1 marker
+# "[smoke] browser-multifetch ready" on that exit-0 — ring-3 stdout would land
+# on 0xE9 (not COM1), so the exit code is the authoritative VMware signal.
+# Requires a controlled, CACHEABLE (Cache-Control: max-age) HTTP/HTTPS server
+# reachable from the VM; point the endpoint via EXTRA_USERLAND_CFLAGS, e.g.:
+#   EXTRA_USERLAND_CFLAGS='-DCAPYMULTIFETCH_URL=\"https://lab/cacheable\"'
+.PHONY: smoke-x64-vmware-browser-multifetch
+smoke-x64-vmware-browser-multifetch:
+	@echo "Executando smoke test VMware+E1000 browser-multifetch..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full \
+		CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
+		CAPYOS_MULTIFETCH_SMOKE=1 \
+		EXTRA_CFLAGS64='-DCAPYOS_MULTIFETCH_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--marker "[net] DHCP: lease acquired." \
+		--marker "[smoke] browser-multifetch ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Local QEMU+OVMF mirror of smoke-x64-vmware-browser-multifetch (development
+# feedback only; VMware + UEFI + E1000 stays the official release-acceptance
+# gate). Hermetic: the smoke script serves a local CACHEABLE page on the QEMU
+# host and the kernel build hard-codes CAPYMULTIFETCH_URL at the SLIRP gateway
+# over plain HTTP (mirrors the capybrowse-text QEMU smoke; see
+# capymultifetch/main.c for why HTTPS-first is deliberately not exercised
+# here). No outbound network reachability required.
+.PHONY: smoke-x64-qemu-browser-multifetch
+smoke-x64-qemu-browser-multifetch:
+	@echo "Executando smoke test QEMU+E1000 browser-multifetch (dev feedback)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1 CAPYOS_MULTIFETCH_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_MULTIFETCH_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYMULTIFETCH_URL=\"http://10.0.2.2:18081/\"'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_browser_multifetch.py $(SMOKE_X64_QEMU_BROWSER_MULTIFETCH_ARGS)
+
 .PHONY: smoke-x64-qemu-apps-basic-roundtrip
 # Local QEMU+OVMF mirror of smoke-x64-vmware-apps-basic-roundtrip (dev
 # feedback / CI pre-flight; VMware + UEFI + E1000 stays the official
@@ -2777,6 +2941,73 @@ smoke-x64-vmware-browser-graphical:
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 7 / Slice 7.5 (alpha.303) external validation gate -- capygfx network
+# sub-resource fetch. Same image/marker as smoke-x64-vmware-browser-graphical
+# PLUS CAPYGFX_NET_IMAGE_SMOKE: the <img> resolver fetches its src for REAL
+# over the network (browser_fetch_get) through the mixed-content gate
+# (browser_fetch_subresource_allowed) before decoding, instead of an embedded
+# PNG. Requires a controlled, reachable image server; point the endpoint via
+# EXTRA_USERLAND_CFLAGS, e.g.:
+#   EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE -DCAPYGFX_IMAGE_URL=\"https://lab/logo.png\"'
+.PHONY: smoke-x64-vmware-capygfx-net-image
+smoke-x64-vmware-capygfx-net-image:
+	@echo "Executando smoke test VMware+E1000 capygfx-net-image..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
+
+# Local QEMU+OVMF mirror of smoke-x64-vmware-capygfx-net-image (development
+# feedback only; VMware + UEFI + E1000 stays the official release-acceptance
+# gate). Hermetic: the smoke script serves the SAME 2x2 PNG the alpha.294
+# embedded-image smoke uses, from a local server on the QEMU host, and the
+# kernel build hard-codes CAPYGFX_IMAGE_URL at the SLIRP gateway over plain
+# HTTP (mirrors capybrowse-text/browser-multifetch's QEMU smokes). No outbound
+# network reachability required.
+.PHONY: smoke-x64-qemu-capygfx-net-image
+smoke-x64-qemu-capygfx-net-image:
+	@echo "Executando smoke QEMU capygfx-net-image (dev feedback / CI pre-flight)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE -DCAPYGFX_IMAGE_URL=\"http://10.0.2.2:18082/logo.png\"'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py $(SMOKE_X64_QEMU_CAPYGFX_NET_IMAGE_ARGS)
+
+# Etapa 7 / Slice 7.5 (alpha.304) external validation gate -- capygfx
+# desktop-spawn mechanics. Proves kernel_spawn_capygfx_desktop (a NEW,
+# non-noreturn spawn meant to be called from a live desktop session, unlike
+# every other ring-3 spawn in this repo which is boot-exclusive) actually gets
+# scheduled: boots hello (pa) directly into ring 3, queues capygfx (pb) behind
+# it via the new spawn helper, and when pa exits the scheduler's cooperative
+# yield dispatches capygfx, which runs every graphical syscall to completion
+# and exits 0 -- reusing the `[smoke] capygfx ready` marker (see the doc
+# comment on kernel_boot_run_capygfx_desktop_spawn_smoke for exactly what this
+# does and does NOT prove: it is NOT yet the real CapyUI desktop_runtime_start
+# loop, which remains an untested integration point).
+.PHONY: smoke-x64-vmware-capygfx-desktop-spawn
+smoke-x64-vmware-capygfx-desktop-spawn:
+	@echo "Executando smoke test VMware+E1000 capygfx-desktop-spawn..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE=1 CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1 EXTRA_CFLAGS64='-DCAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE -DCAPYOS_DESKTOP_GRAPHICAL_BROWSER'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
+
+# Local QEMU+OVMF mirror of smoke-x64-vmware-capygfx-desktop-spawn (development
+# feedback only; VMware + UEFI + E1000 stays the official release-acceptance
+# gate). No networking, no local server needed -- pure boot + scheduler proof,
+# so the generic marker-wait script suffices (same one smoke-x64-qemu-capygfx
+# uses).
+.PHONY: smoke-x64-qemu-capygfx-desktop-spawn
+smoke-x64-qemu-capygfx-desktop-spawn:
+	@echo "Executando smoke QEMU capygfx-desktop-spawn (dev feedback / CI pre-flight)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE=1 CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1 EXTRA_CFLAGS64='-DCAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE -DCAPYOS_DESKTOP_GRAPHICAL_BROWSER'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] capygfx ready" --timeout 300 --log build/ci/smoke_x64_qemu_capygfx_desktop_spawn.log $(SMOKE_X64_QEMU_MARKER_ARGS)
 
 # Etapa 6 / Slice 6.6 external validation gate -- apps-basic-roundtrip.
 # The basic desktop apps are in-kernel functions (CapyUI desktop session),

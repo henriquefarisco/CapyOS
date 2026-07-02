@@ -4,9 +4,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$(uname -s)" in
-  Darwin)
-    exec bash "$ROOT/tools/scripts/install_deps_macos.sh" "$@"
-    ;;
   Linux)
     exec bash "$ROOT/tools/scripts/install_deps.sh" "$@"
     ;;

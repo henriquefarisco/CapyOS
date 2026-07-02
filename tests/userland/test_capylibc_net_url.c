@@ -356,6 +356,72 @@ static void test_http_build_get_rejects_relative_path(void) {
   else FAIL("relative path accepted");
 }
 
+/* === HTTP request builder with caller headers (Slice 7.5) ==== */
+
+static void test_http_build_get_ex_emits_headers_in_order(void) {
+  fake_reset();
+  TEST("http_build_get_ex emits caller headers after Accept, before Connection");
+  char buf[512];
+  struct capy_http_header hdrs[2] = {
+    { .name = "Cookie", .value = "sid=42" },
+    { .name = "If-None-Match", .value = "\"v1\"" },
+  };
+  int n = capy_http_build_get_request_ex("example.com", 443, "/", hdrs, 2,
+                                         buf, sizeof(buf));
+  const char *accept = (n > 0) ? strstr(buf, "Accept: */*\r\n") : NULL;
+  const char *cookie = (n > 0) ? strstr(buf, "Cookie: sid=42\r\n") : NULL;
+  const char *inm = (n > 0) ? strstr(buf, "If-None-Match: \"v1\"\r\n") : NULL;
+  const char *conn = (n > 0) ? strstr(buf, "Connection: close\r\n\r\n") : NULL;
+  if (n > 0 && accept && cookie && inm && conn &&
+      accept < cookie && cookie < inm && inm < conn) PASS();
+  else FAIL("caller headers not emitted in the expected order");
+}
+
+static void test_http_build_get_ex_rejects_reserved_header(void) {
+  fake_reset();
+  TEST("http_build_get_ex rejects caller-supplied Content-Length (framing)");
+  char buf[512];
+  struct capy_http_header h = { .name = "Content-Length", .value = "10" };
+  if (capy_http_build_get_request_ex("example.com", 80, "/", &h, 1,
+                                     buf, sizeof(buf)) == -1 &&
+      capy_net_last_error() == CAPY_NET_EPARSE) PASS();
+  else FAIL("reserved framing header accepted");
+}
+
+static void test_http_build_get_ex_rejects_crlf_in_value(void) {
+  fake_reset();
+  TEST("http_build_get_ex rejects CRLF injection in a header value");
+  char buf[512];
+  struct capy_http_header h = { .name = "Cookie", .value = "a\r\nEvil: x" };
+  if (capy_http_build_get_request_ex("example.com", 80, "/", &h, 1,
+                                     buf, sizeof(buf)) == -1 &&
+      capy_net_last_error() == CAPY_NET_EPARSE) PASS();
+  else FAIL("CRLF in header value accepted");
+}
+
+static void test_http_build_get_ex_rejects_bad_name(void) {
+  fake_reset();
+  TEST("http_build_get_ex rejects a non-token header name");
+  char buf[512];
+  struct capy_http_header h = { .name = "Bad Name", .value = "x" };
+  if (capy_http_build_get_request_ex("example.com", 80, "/", &h, 1,
+                                     buf, sizeof(buf)) == -1 &&
+      capy_net_last_error() == CAPY_NET_EPARSE) PASS();
+  else FAIL("non-token header name accepted");
+}
+
+static void test_http_build_get_ex_null_headers_matches_plain(void) {
+  fake_reset();
+  TEST("http_build_get_ex with no headers matches plain builder");
+  char a[512];
+  char b[512];
+  int na = capy_http_build_get_request("example.com", 80, "/", a, sizeof(a));
+  int nb = capy_http_build_get_request_ex("example.com", 80, "/", NULL, 0,
+                                          b, sizeof(b));
+  if (na > 0 && na == nb && memcmp(a, b, (size_t)na) == 0) PASS();
+  else FAIL("ex(NULL,0) diverged from the plain builder");
+}
+
 /* === HTTP status line parser ================================= */
 
 static void test_http_parse_status_200(void) {
@@ -628,6 +694,11 @@ void test_capylibc_net_url_cases(void) {
   test_http_build_get_rejects_backslash_path();
   test_http_build_get_rejects_percent_nul_path();
   test_http_build_get_rejects_relative_path();
+  test_http_build_get_ex_emits_headers_in_order();
+  test_http_build_get_ex_rejects_reserved_header();
+  test_http_build_get_ex_rejects_crlf_in_value();
+  test_http_build_get_ex_rejects_bad_name();
+  test_http_build_get_ex_null_headers_matches_plain();
   test_http_parse_status_200();
   test_http_parse_status_404();
   test_http_parse_status_rejects_bad_prefix();

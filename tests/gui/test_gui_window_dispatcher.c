@@ -19,6 +19,8 @@
  */
 #include "test_gui_window_dispatcher_internal.h"
 
+#include <string.h>
+
 int test_gui_window_dispatcher_runs = 0;
 int test_gui_window_dispatcher_passes = 0;
 
@@ -572,6 +574,108 @@ static void test_dispatch_mouse_capture_reset_events(void) {
   shutdown_fixture();
 }
 
+/* Etapa 7 / Slice 7.5 (alpha.305): a window created via the ring-3 graphical
+ * syscall ABI marks `gfx_owner_pid != 0` and never populates on_mouse/on_key
+ * (it has no kernel-side callback -- the owning process drains
+ * SYS_WINDOW_POLL_EVENT in ring 3 instead). gui_window_dispatch_event must
+ * redirect key/mouse events for such a window onto the gui_event queue
+ * (window_id set explicitly to the target) instead of falling through to the
+ * normal on_mouse/on_key dispatch, while every OTHER (non-owned) window keeps
+ * dispatching directly exactly as before -- the regression case at the end
+ * locks that in. */
+static void test_dispatch_gfx_owned_redirect(void) {
+  struct gui_window *win;
+  struct gui_event ev;
+
+  reset_fixture();
+  win = compositor_create_window("GFX", 10, 10, 80, 48);
+  if (!win) {
+    TEST("gfx-owned redirect: fixture creates window");
+    FAIL("create window");
+    shutdown_fixture();
+    return;
+  }
+  win->gfx_owner_pid = 42u; /* ring-3 owner; deliberately no on_mouse/on_key */
+  compositor_show_window(win->id);
+  gui_event_flush();
+
+  TEST("gfx-owned redirect: mouse-down is queued, not dispatched in-kernel");
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GUI_EVENT_MOUSE_DOWN;
+  ev.window_id = win->id;
+  ev.mouse.x = 15;
+  ev.mouse.y = 20;
+  ev.mouse.buttons = 1;
+  /* pending() is >=1, not necessarily exactly 1: compositor_focus_window
+   * (called for MOUSE_DOWN, same as the normal in-kernel dispatch path)
+   * pushes its own WINDOW_FOCUS lifecycle event, which lands in the SAME
+   * queue behind the redirected mouse event -- expected, not a bug. */
+  if (gui_window_dispatch_event(&ev) == 1 && mouse_calls == 0 &&
+      gui_event_pending() >= 1) PASS();
+  else FAIL("mouse-down redirect");
+
+  TEST("gfx-owned redirect: mouse-down still focuses the window");
+  {
+    struct gui_window *focused = compositor_focused_window();
+    if (focused && focused->id == win->id) PASS();
+    else FAIL("focus on mouse-down");
+  }
+
+  TEST("gfx-owned redirect: queued mouse event matches original payload");
+  {
+    /* The redirected mouse-down was pushed BEFORE compositor_focus_window
+     * ran, so it is first in FIFO order regardless of the trailing focus
+     * event. */
+    /* gui_event_poll follows the POSIX-errno-like convention (0 = success,
+     * -1 = empty), NOT the dispatcher's "1 = handled" convention. */
+    struct gui_event polled;
+    if (gui_event_poll(&polled) == 0 && polled.type == GUI_EVENT_MOUSE_DOWN &&
+        polled.window_id == win->id && polled.mouse.x == 15 &&
+        polled.mouse.y == 20 && polled.mouse.buttons == 1) PASS();
+    else FAIL("queued mouse payload");
+  }
+  gui_event_flush(); /* discard the trailing focus event before the next case */
+
+  TEST("gfx-owned redirect: key-down is queued, not dispatched in-kernel");
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GUI_EVENT_KEY_DOWN;
+  ev.window_id = win->id;
+  ev.key.keycode = 'Q';
+  ev.key.modifiers = 3;
+  if (gui_window_dispatch_event(&ev) == 1 && key_calls == 0 &&
+      gui_event_pending() == 1) PASS();
+  else FAIL("key-down redirect");
+
+  TEST("gfx-owned redirect: queued key event matches original payload");
+  {
+    struct gui_event polled;
+    if (gui_event_poll(&polled) == 0 && polled.type == GUI_EVENT_KEY_DOWN &&
+        polled.window_id == win->id && polled.key.keycode == 'Q' &&
+        polled.key.modifiers == 3) PASS();
+    else FAIL("queued key payload");
+  }
+  gui_event_flush();
+
+  TEST("gfx-owned redirect: non-owned window regresses to direct dispatch");
+  win->gfx_owner_pid = 0u;
+  win->on_mouse = test_gwd_on_mouse;
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GUI_EVENT_MOUSE_DOWN;
+  ev.window_id = win->id;
+  ev.mouse.x = 15; /* inside the window's frame (10,10)-(90,58) */
+  ev.mouse.y = 15;
+  ev.mouse.buttons = 1;
+  /* Not checking gui_event_pending() here: compositor_focus_window (called
+   * by dispatch_mouse_button too, on both the redirect and the normal path)
+   * may push its own focus event regardless of gfx_owner_pid -- an unrelated
+   * pre-existing side effect, not something this redirect changes. The
+   * meaningful regression check is that on_mouse is reached directly. */
+  if (gui_window_dispatch_event(&ev) == 1 && mouse_calls == 1) PASS();
+  else FAIL("non-owned dispatch regression");
+
+  shutdown_fixture();
+}
+
 int test_gui_window_dispatcher_run(void) {
   printf("[test_gui_window_dispatcher]\n");
   tests_run = 0;
@@ -582,6 +686,7 @@ int test_gui_window_dispatcher_run(void) {
   test_dispatch_mouse_events();
   test_dispatch_mouse_capture_events();
   test_dispatch_mouse_capture_reset_events();
+  test_dispatch_gfx_owned_redirect();
   test_gui_window_dispatcher_lifecycle_cases();
   printf("  -> %d/%d passed\n", tests_passed, tests_run);
   return tests_run - tests_passed;
