@@ -43,6 +43,15 @@ void scheduler_set_policy(enum scheduler_policy policy);
  * can keep its boot flow while also accepting cooperative scheduler_yield
  * calls from tasks that were already added to the run queue. */
 void scheduler_set_running(int running);
+/* Etapa 7 / Slice 7.5 (alpha.309): preempt guard. While held (counted),
+ * scheduler_tick defers IRQ-context zombie reaping and quantum-exhaustion
+ * preemption; sleeper wake-ups and tick accounting still run. Voluntary
+ * switches (task_yield/task_sleep) are unaffected. Used by the desktop
+ * runtime to make each frame an atomic scheduling unit so ring-3 gfx
+ * processes only mutate compositor state between frames. */
+void scheduler_preempt_disable(void);
+void scheduler_preempt_enable(void);
+int scheduler_preempt_disabled(void);
 void scheduler_stats_get(struct scheduler_stats *out);
 struct task *scheduler_pick_next(void);
 int scheduler_running(void);

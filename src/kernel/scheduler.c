@@ -15,6 +15,32 @@ static struct task *idle_task = NULL;
 static enum scheduler_policy current_policy = SCHED_POLICY_COOPERATIVE;
 static struct scheduler_stats stats;
 static int sched_running = 0;
+/* Etapa 7 / Slice 7.5 (alpha.309): preempt guard. While the count is
+ * non-zero, scheduler_tick still does its cheap bookkeeping (total_ticks,
+ * sleeper wake-ups) but DEFERS the two actions that hand shared kernel
+ * state to another execution context mid-operation: IRQ-context zombie
+ * reaping (task_kill -> process_destroy -> teardown observers, e.g. the
+ * gfx observer destroying compositor windows) and quantum-exhaustion
+ * preemption (context_switch out of the running task). The desktop
+ * runtime brackets each frame with this guard so the compositor/window
+ * table is never mutated by a ring-3 gfx process (or a reaper) while the
+ * frame walk is mid-flight -- the VMware field crash of alpha.308 ("solid
+ * wallpaper" hang when the graphical browser spawned into a live session)
+ * was exactly that interleaving. Voluntary switches (task_yield,
+ * task_sleep) are unaffected: the guarded task chooses its own safe
+ * points. Single-CPU: only the guarded task mutates the counter; the tick
+ * IRQ merely reads it (aligned u32 -> atomic on x86). */
+static volatile uint32_t preempt_disable_count = 0;
+
+void scheduler_preempt_disable(void) { preempt_disable_count++; }
+
+void scheduler_preempt_enable(void) {
+  if (preempt_disable_count > 0u) preempt_disable_count--;
+}
+
+int scheduler_preempt_disabled(void) {
+  return preempt_disable_count != 0u;
+}
 #ifdef CAPYOS_SCHEDULER_FAIRNESS_SMOKE
 static int fairness_smoke_helpers_started = 0;
 #endif
@@ -258,6 +284,12 @@ void scheduler_tick(void) {
       if (stats.sleeping_count > 0) stats.sleeping_count--;
     }
   }
+
+  /* Guard held: skip zombie reaping and preemption for this tick (see the
+   * preempt_disable_count doc above). Sleeper wake-ups already ran (pure
+   * state flips); reaping/preemption simply happen on a later tick once
+   * the guarded section ends. */
+  if (preempt_disable_count != 0u) return;
 
   {
     struct task *t = run_queue_head;

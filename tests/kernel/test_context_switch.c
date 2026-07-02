@@ -701,6 +701,80 @@ static void test_priority_equal_tasks_round_robin_by_queue_position(void) {
     scheduler_set_running(0);
 }
 
+/* Etapa 7 / Slice 7.5 (alpha.309): preempt guard. While the guard is held,
+ * scheduler_tick must keep its cheap bookkeeping (tick counter + sleeper
+ * wake-ups) but defer zombie reaping and quantum-exhaustion preemption --
+ * the desktop runtime holds the guard for the duration of each frame so a
+ * ring-3 gfx process can never observe (or mutate) compositor state
+ * mid-frame. Regression for the alpha.308 VMware field hang. */
+static void test_preempt_guard_defers_reap_and_switch(void) {
+    reset_world();
+    scheduler_init(SCHED_POLICY_PRIORITY);
+
+    struct task *a = task_create("a", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *b = task_create("b", noop_entry, (void *)0,
+                                 TASK_PRIORITY_NORMAL);
+    struct task *zombie = task_create("zombie", noop_entry, (void *)0,
+                                      TASK_PRIORITY_NORMAL);
+    struct task *sleeper = task_create("sleeper", noop_entry, (void *)0,
+                                       TASK_PRIORITY_NORMAL);
+    scheduler_add(a);
+    scheduler_add(b);
+    scheduler_add(zombie);
+    scheduler_add(sleeper);
+    zombie->state = TASK_STATE_ZOMBIE;
+    sleeper->state = TASK_STATE_SLEEPING;
+    sleeper->wake_tick = 1; /* wakes on the first guarded tick */
+    a->state = TASK_STATE_RUNNING;
+    task_set_current(a);
+    a->quantum_remaining = 1; /* one tick from exhaustion */
+
+    uint32_t switches_before = stub_context_switch_log_count();
+
+    scheduler_preempt_disable();
+    TEST("scheduler_preempt_disabled reports the held guard");
+    if (scheduler_preempt_disabled()) PASS();
+    else FAIL("guard not reported as held");
+
+    scheduler_tick();
+
+    TEST("guarded tick performs no context_switch on quantum exhaustion");
+    if (stub_context_switch_log_count() == switches_before) PASS();
+    else FAIL("guarded tick still preempted the running task");
+
+    TEST("guarded tick does not reap the zombie");
+    if (zombie->state == TASK_STATE_ZOMBIE) PASS();
+    else FAIL("guarded tick reaped the zombie");
+
+    TEST("guarded tick still wakes due sleepers");
+    if (sleeper->state == TASK_STATE_READY) PASS();
+    else FAIL("guarded tick failed to wake the sleeper");
+
+    scheduler_preempt_enable();
+    TEST("scheduler_preempt_enable releases the guard");
+    if (!scheduler_preempt_disabled()) PASS();
+    else FAIL("guard still held after enable");
+
+    /* Next unguarded tick resumes normal duties: zombie reaped and the
+     * exhausted quantum (frozen while guarded) now preempts. */
+    a->quantum_remaining = 1;
+    scheduler_tick();
+    TEST("post-guard tick reaps the zombie again");
+    if (zombie->state == TASK_STATE_UNUSED) PASS();
+    else FAIL("zombie survived the unguarded tick");
+    TEST("post-guard tick preempts on quantum exhaustion again");
+    if (stub_context_switch_log_count() == switches_before + 1u) PASS();
+    else FAIL("unguarded tick did not preempt");
+
+    TEST("scheduler_preempt_enable underflow stays clamped at zero");
+    scheduler_preempt_enable(); /* extra enable: must not wrap the counter */
+    if (!scheduler_preempt_disabled()) PASS();
+    else FAIL("counter wrapped/underflowed");
+
+    scheduler_set_running(0);
+}
+
 int test_context_switch_run(void) {
     printf("[test_context_switch]\n");
     tests_run = 0;
@@ -730,6 +804,7 @@ int test_context_switch_run(void) {
     test_cooperative_yield_round_robins_three_ready_tasks();
     test_cooperative_yield_skips_blocked_tasks();
     test_priority_equal_tasks_round_robin_by_queue_position();
+    test_preempt_guard_defers_reap_and_switch();
     printf("  -> %d/%d passed\n", tests_passed, tests_run);
     return tests_run - tests_passed;
 }
