@@ -1,0 +1,10 @@
+name: "CapyOS CodeQL config"
+
+# Vendored third-party dependencies are not CapyOS code and must not be
+# "fixed" in-tree. BearSSL (third_party/bearssl) ships a full TLS algorithm
+# suite that includes legacy primitives (DES/3DES-CBC) required for protocol
+# completeness; CodeQL's cpp/weak-cryptographic-algorithm flags those files
+# even though CapyOS never selects DES cipher suites. Exclude vendored code
+# from analysis so alerts reflect first-party CapyOS sources only.
+paths-ignore:
+  - third_party

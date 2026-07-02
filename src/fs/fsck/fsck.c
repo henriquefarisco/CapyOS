@@ -92,7 +92,7 @@ int fsck_check(struct block_device *dev, struct fsck_result *result) {
 
   /* Read inode bitmap from disk */
   uint32_t imap_blocks = (inode_bytes + dev->block_size - 1) / dev->block_size;
-  uint8_t *disk_imap = (uint8_t *)kmalloc(imap_blocks * dev->block_size);
+  uint8_t *disk_imap = (uint8_t *)kmalloc((size_t)imap_blocks * dev->block_size);
   if (disk_imap) {
     for (uint32_t i = 0; i < imap_blocks; i++)
       fsck_read_block(dev, imap_start + i, disk_imap + i * dev->block_size);
@@ -100,7 +100,7 @@ int fsck_check(struct block_device *dev, struct fsck_result *result) {
 
   /* Read block bitmap from disk */
   uint32_t bmap_blocks = (block_bytes + dev->block_size - 1) / dev->block_size;
-  uint8_t *disk_bmap = (uint8_t *)kmalloc(bmap_blocks * dev->block_size);
+  uint8_t *disk_bmap = (uint8_t *)kmalloc((size_t)bmap_blocks * dev->block_size);
   if (disk_bmap) {
     for (uint32_t i = 0; i < bmap_blocks; i++)
       fsck_read_block(dev, bmap_start + i, disk_bmap + i * dev->block_size);
