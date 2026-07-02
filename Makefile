@@ -124,6 +124,22 @@ ifeq ($(PROFILE),core-only)
   $(info [build] PROFILE=core-only: kernel ELF will NOT include desktop+window+apps)
 endif
 
+# Etapa 7 / Slice 7.5 (alpha.308): o navegador grafico (blob capygfx) passa a
+# ser PADRAO no perfil full. O campo alpha.307 mostrou que a variavel sozinha
+# so LINKAVA o blob -- o define C nunca chegava aos TUs do kernel (so os smoke
+# targets passavam EXTRA_CFLAGS64), entao `open-browser-graphical` respondia
+# "not built into this kernel" mesmo em builds do operador com a variavel
+# setada. O wiring correto vive aqui: a variavel liga o define do kernel
+# (embedded_progs + kernel_spawn_capygfx_desktop + comando de shell) e o blob
+# e linkado mais abaixo (CAPYOS64_OBJS). Para desabilitar explicitamente:
+# make ... CAPYOS_DESKTOP_GRAPHICAL_BROWSER= (vazio).
+ifneq ($(PROFILE),core-only)
+CAPYOS_DESKTOP_GRAPHICAL_BROWSER ?= 1
+endif
+ifneq (,$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER))
+CFLAGS64 += -DCAPYOS_DESKTOP_GRAPHICAL_BROWSER
+endif
+
 CAPYUI_WIDGET_DIR :=
 CAPYUI_DISPLAY_ADAPTER_OBJS :=
 ifneq ($(PROFILE),core-only)
@@ -1464,6 +1480,18 @@ CAPYGFX_OBJS += \
 	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_fetch_policy.o \
 	$(CAPYLIBC_BUILD_DIR)/capymultifetch/http_hsts.o \
 	$(CAPYLIBC_NET_OBJS)
+endif
+
+# Etapa 7 / Slice 7.5 (alpha.308): lancado de uma sessao de desktop viva
+# (menu iniciar / open-browser-graphical), o capygfx precisa FICAR ABERTO --
+# o loop interativo (poll ate WINDOW_CLOSE, com fail-safe de iteracoes) vira
+# padrao no blob de producao. Os smokes boot-exclusivos (CAPYOS_GFX_SMOKE /
+# CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE) ficam FORA: seus markers COM1
+# dependem do exit-0 imediato pos-present (alpha.290/294/303/304 inalterados).
+ifneq (,$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER))
+ifeq (,$(CAPYOS_GFX_SMOKE)$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE))
+CAPYGFX_EXTRA_CFLAGS += -DCAPYGFX_DESKTOP_INTERACTIVE
+endif
 endif
 
 $(CAPYLIBC_BUILD_DIR)/bin/capygfx/%.o: $(USERLAND_DIR)/bin/capygfx/%.c

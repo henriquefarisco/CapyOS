@@ -265,6 +265,22 @@ void terminal_set_color(struct terminal *term, uint32_t fg, uint32_t bg) {
   term->bg_color = bg;
 }
 
+/* Scrollback-aware view: with scroll_offset == N, the top N visible rows come
+ * from the tail of the scrollback ring and the remainder from the live cells.
+ * scroll_offset is already clamped to scrollback_lines by terminal_scroll_up,
+ * so `scrollback_lines - off + row` never underflows. */
+const struct terminal_cell *terminal_view_cell(const struct terminal *term,
+                                               uint32_t row, uint32_t col) {
+  uint32_t off;
+  if (!term || row >= term->rows || col >= term->cols) return 0;
+  off = term->scroll_offset;
+  if (off > term->scrollback_lines) off = term->scrollback_lines;
+  if (row < off) {
+    return &term->scrollback[term->scrollback_lines - off + row][col];
+  }
+  return &term->cells[row - off][col];
+}
+
 void terminal_paint(struct terminal *term) {
   if (!term || !term->window || !term->font) return;
 #if defined(CAPYOS_HAVE_CAPYUI_WIDGET)
@@ -280,7 +296,8 @@ void terminal_paint(struct terminal *term) {
       int32_t px = (int32_t)(c * gw);
       int32_t py = (int32_t)(r * gh);
 
-      struct terminal_cell *cell = &term->cells[r][c];
+      const struct terminal_cell *cell = terminal_view_cell(term, r, c);
+      if (!cell) continue;
 
       for (uint32_t y = 0; y < gh; y++) {
         int32_t dy = py + (int32_t)y;
@@ -313,6 +330,10 @@ void terminal_paint(struct terminal *term) {
 void terminal_handle_key(struct terminal *term, uint32_t keycode, char ch) {
   if (!term) return;
   (void)keycode;
+
+  /* Typing snaps the view back to the live screen (standard terminal
+   * behavior): otherwise the user edits a line they cannot see. */
+  if (ch != 0) term->scroll_offset = 0;
 
   if (ch == '\b') {
     if (term->input_pos > 0) {

@@ -18,4 +18,14 @@ struct session_context *kernel_desktop_shell_session(void);
 int kernel_desktop_shell_should_stop(void);
 int kernel_desktop_shell_should_logout(void);
 
+/* Etapa 7 / Slice 7.5: stable hook for the desktop launcher's "Navegador"
+ * entry. Spawns the ring-3 graphical browser (capygfx) alongside the running
+ * desktop session when the blob is embedded (CAPYOS_DESKTOP_GRAPHICAL_BROWSER,
+ * default in the full profile). Returns 0 on spawn success, -1 when the
+ * browser is unavailable in this kernel or the spawn failed -- the caller
+ * (CapyUI) surfaces the failure to the user; never fails silently. Defined
+ * unconditionally (all profiles) so the desktop code links against a single
+ * symbol regardless of build flags. */
+int kernel_desktop_open_browser_graphical(void);
+
 #endif /* GUI_DESKTOP_RUNTIME_H */

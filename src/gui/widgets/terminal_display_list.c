@@ -124,9 +124,9 @@ static int terminal_dl_emit_bg_run(struct capy_display_list *dl,
                                    uint32_t glyph_width,
                                    uint32_t glyph_height,
                                    uint32_t base_bg) {
-  uint32_t bg = term->cells[row][col].bg;
+  uint32_t bg = terminal_view_cell(term, row, col)->bg;
   uint32_t start = col;
-  while (col < term->cols && term->cells[row][col].bg == bg) col++;
+  while (col < term->cols && terminal_view_cell(term, row, col)->bg == bg) col++;
   if (bg == base_bg) return 0;
   return terminal_dl_emit_rect(dl,
                                (int32_t)(start * glyph_width),
@@ -146,10 +146,10 @@ static int terminal_dl_emit_text_run(struct capy_display_list *dl,
   uint32_t col = *col_io;
   uint32_t start = col;
   uint32_t len = 0u;
-  uint32_t fg = term->cells[row][col].fg;
-  while (col < term->cols && term->cells[row][col].ch != ' ' &&
-         term->cells[row][col].fg == fg) {
-    text[len++] = term->cells[row][col].ch;
+  uint32_t fg = terminal_view_cell(term, row, col)->fg;
+  while (col < term->cols && terminal_view_cell(term, row, col)->ch != ' ' &&
+         terminal_view_cell(term, row, col)->fg == fg) {
+    text[len++] = terminal_view_cell(term, row, col)->ch;
     col++;
   }
   *col_io = col;
@@ -183,13 +183,15 @@ static int terminal_emit_display_list(void *producer, struct capy_display_list *
     while (c < term->cols) {
       uint32_t start = c;
       if (terminal_dl_emit_bg_run(out, term, r, c, gw, gh, base_bg) != 0) return -1;
-      while (c < term->cols && term->cells[r][c].bg == term->cells[r][start].bg) c++;
+      while (c < term->cols &&
+             terminal_view_cell(term, r, c)->bg ==
+                 terminal_view_cell(term, r, start)->bg) c++;
     }
   }
   for (uint32_t r = 0u; r < term->rows; ++r) {
     uint32_t c = 0u;
     while (c < term->cols) {
-      if (term->cells[r][c].ch == ' ') {
+      if (terminal_view_cell(term, r, c)->ch == ' ') {
         c++;
         continue;
       }

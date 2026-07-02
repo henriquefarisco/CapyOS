@@ -20,9 +20,9 @@
 #include "drivers/input/keyboard_layout.h"
 #include "kernel/module_gate.h"
 #include "kernel/user_init.h"
+#include "gui/desktop_runtime.h"
 #ifndef CAPYOS_PROFILE_CORE_ONLY
 #include "gui/desktop.h"
-#include "gui/desktop_runtime.h"
 #include "apps/calculator.h"
 #include "apps/file_manager.h"
 #include "apps/text_editor.h"
@@ -378,6 +378,19 @@ static int cmd_desktop_unavailable(struct shell_context *ctx, int argc, char **a
   return -1;
 }
 #endif /* CAPYOS_PROFILE_CORE_ONLY */
+
+/* Etapa 7 / Slice 7.5: hook estavel do launcher (CapyUI "Navegador").
+ * Sempre definido, em qualquer perfil/flag, para o desktop linkar contra um
+ * simbolo unico; fora do full profile com blob embutido devolve -1 e o
+ * chamador mostra o erro ao usuario. */
+int kernel_desktop_open_browser_graphical(void) {
+#if !defined(CAPYOS_PROFILE_CORE_ONLY) && defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+  return kernel_spawn_capygfx_desktop() == KERNEL_SPAWN_OK ? 0 : -1;
+#else
+  return -1;
+#endif
+}
+
 /* `cmd_open_browser` erradicado na sessao 6 (2026-05-05). O
  * browser legado foi removido; o sucessor deve voltar como adaptador
  * versionado na etapa correta. */

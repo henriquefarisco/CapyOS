@@ -8,7 +8,7 @@
 
 #define TERM_MAX_COLS  200
 #define TERM_MAX_ROWS  60
-#define TERM_SCROLLBACK 64
+#define TERM_SCROLLBACK 128
 #define TERM_INPUT_BUF  256
 #define TERM_TAB_SIZE   8
 
@@ -60,6 +60,13 @@ void terminal_scroll_down(struct terminal *term, uint32_t lines);
 void terminal_set_cursor(struct terminal *term, uint32_t x, uint32_t y);
 void terminal_set_color(struct terminal *term, uint32_t fg, uint32_t bg);
 void terminal_paint(struct terminal *term);
+/* Scrollback-aware view accessor: resolves visible row `row` against the
+ * current scroll_offset -- rows scrolled in from history come from the
+ * scrollback ring, the remainder from the live cells. Both painters (raw
+ * framebuffer terminal_paint and the CapyUI display-list renderer) MUST go
+ * through this so mouse-wheel / PgUp scrolling actually shows history. */
+const struct terminal_cell *terminal_view_cell(const struct terminal *term,
+                                               uint32_t row, uint32_t col);
 void terminal_handle_key(struct terminal *term, uint32_t keycode, char ch);
 void terminal_handle_mouse_scroll(struct terminal *term, int delta);
 size_t terminal_read_line(struct terminal *term, char *buf, size_t maxlen);
