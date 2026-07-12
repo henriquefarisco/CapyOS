@@ -117,9 +117,9 @@ if [[ "$mode" == "linked" || "$mode" == "all" ]]; then
   nm_tool="$(command -v x86_64-linux-gnu-nm || command -v nm || true)"
   [[ -n "$nm_tool" ]] || fail "nm is required to verify the linked browser"
   symbols="$($nm_tool "$capygfx_elf")"
-  awk '{print $NF}' <<<"$symbols" | grep -Fxq "capy_page_render" || \
+  grep -Eq '[[:space:]]capy_page_render$' <<<"$symbols" || \
     fail "compiled capygfx does not contain CapyBrowser capy_page_render"
-  awk '{print $NF}' <<<"$symbols" | grep -Fxq "capy_image_decode_memory" || \
+  grep -Eq '[[:space:]]capy_image_decode_memory$' <<<"$symbols" || \
     fail "compiled capygfx does not contain CapyCodecs capy_image_decode_memory"
 
   if [[ -n "$CAPYAI_REF" ]]; then
@@ -130,9 +130,9 @@ if [[ "$mode" == "linked" || "$mode" == "all" ]]; then
     fi
     [[ -s "$capyos_elf" ]] || fail "compiled CapyOS kernel is missing or empty"
     kernel_symbols="$($nm_tool "$capyos_elf")"
-    awk '{print $NF}' <<<"$kernel_symbols" | grep -Fxq "capy_ai_predict" || \
+    grep -Eq '[[:space:]]capy_ai_predict$' <<<"$kernel_symbols" || \
       fail "compiled CapyOS does not contain the CapyAI native core"
-    awk '{print $NF}' <<<"$kernel_symbols" | grep -Fxq "_binary_capyai_model_start" || \
+    grep -Eq '[[:space:]]_binary_capyai_model_start$' <<<"$kernel_symbols" || \
       fail "compiled CapyOS does not contain the canonical CapyAI model"
   fi
 

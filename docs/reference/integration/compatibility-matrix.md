@@ -2,8 +2,8 @@
 
 **Status:** autoritativo desde 2026-05-19; **atualizacao tecnica em 2026-07-07 (CapyOS core `alpha.309+20260702`; releases `alpha.308`/`alpha.309` = fixes de campo do desktop grafico, e o trabalho in-tree `alpha.310`/`alpha.311` de hardening do navegador grafico — NXE em BSP+APs, page tables proprias do kernel, fix do poll de eventos, window-gone->CLOSE, task_sleep degrade, scroll — sao TODOS ABI-neutros: nenhum contrato de sibling muda, nenhum bump de sibling; bump de VERSION.yaml para alpha.310/311 pendente):** pins dos siblings alinhados ao estado local atual — CapyUI `2.23.1` (2.23.1: preempt guard no frame do desktop, fix da tela azul VMware; 2.23.0: launcher com registro de apps + Navegador + Lista completa, terminal com exit fechando janela + scroll; 2.22.7: input bridge Slice 7.5), CapyAgent `0.0.10`, CapyBrowser `0.6.6`, CapyCodecs `0.0.12`, CapyLang `0.1.12`, CapyBenchmark `0.0.11`; Etapa 7 ativa (browser web estatica). Release `alpha.307` sem mudanca de ABI (fix do pager do shell grafico + enriquecimento do plano mestre). Historico tecnico anterior: 2026-06-17 (CapyOS core `alpha.266` — Etapa 6 ativa, Slice 6.4 adapter CapyOS implementado + build-validado (gate externo `smoke-x64-vmware-capybrowse-text` pendente); CapyBrowser `0.6.1`; demais pacotes consolidados em alpha.266: CapyUI `2.22.1` / `capy-ui-widget` v2.22, CapyCodecs `0.0.8` / `capy-codec-image` v2, CapyLang `0.1.9`, CapyAgent `0.0.8`, CapyBenchmark `0.0.9`). **Atualizacao alpha.293 (2026-06-17):** Etapa 7 / Slice 7.4 (decode de imagem inline, nucleo host-provado); CapyBrowser `0.6.1` -> `0.6.6` (o no IMAGE do display-list passa a carregar o `src` resolvido; aditivo em `capy-browser-core` v1, `CAPY_DL_VERSION` inalterado); `capy-codec-image` v2 consumido pelo adapter de decode CapyOS-side (`browser_image`); demais pins inalterados. Ver addendum em [`compatibility-audit-2026-06-11.md`](compatibility-audit-2026-06-11.md).
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
-**Atualizacao alpha.312 (2026-07-12):** CapyOS
-`0.8.0-alpha.312+20260712`, CapyBrowser `0.6.7`, CapyUI `2.24.0` e
+**Atualizacao alpha.313 (2026-07-12):** CapyOS
+`0.8.0-alpha.313+20260712`, CapyBrowser `0.6.7`, CapyUI `2.24.0` e
 CapyAI `0.1.0` formam o conjunto pinado desta release. O navegador fecha o
 escopo estatico (sem JavaScript); o desktop integra o chat CapyAI assincrono e
 o indice agregado passa a ser publicado pelo CapyOS.
@@ -19,7 +19,7 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.312+20260712` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.8.0-alpha.313+20260712` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.0.10` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276), fail-closed ate o trust anchor de producao; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.10` | `0.0.10` |
 | `CapyBrowser` | `0.6.7` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.7` | `0.6.7` |
 | `CapyCodecs` | `0.0.12` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.12` (host-only) | `0.0.12` |

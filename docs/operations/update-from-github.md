@@ -72,19 +72,19 @@ da release, o operador gera e verifica o asset final:
 
 ```bash
 python3 tools/scripts/build_update_manifest.py \
-  --version 0.8.0-alpha.312+20260712 \
+  --version 0.8.0-alpha.313+20260712 \
   --channel stable --branch main \
   --source github:henriquefarisco/CapyOS \
   --published-at 2026-07-12 \
   --payload build/publish/capyos64.bin \
-  --payload-url https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.312+20260712/capyos64.bin \
+  --payload-url https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.313+20260712/capyos64.bin \
   --private-key /caminho/offline/update-ed25519.pem \
   --output build/publish/latest.ini
 
 python3 tools/scripts/verify_update_manifest.py \
   --manifest build/publish/latest.ini \
   --payload build/publish/capyos64.bin \
-  --expected-version 0.8.0-alpha.312+20260712 \
+  --expected-version 0.8.0-alpha.313+20260712 \
   --expected-channel stable --expected-branch main \
   --expected-source github:henriquefarisco/CapyOS
 ```

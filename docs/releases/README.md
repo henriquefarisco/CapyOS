@@ -4,12 +4,16 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.313+20260712.md`
+  - Follow-up do gate de publicação: elimina falso negativo do verificador de
+    símbolos e libera ISO, índice agregado e handoff offline assinado.
+
+## Historico recente
+
 - `capyos-0.8.0-alpha.312+20260712.md`
   - Browser grafico estatico interativo com toolbar, historico, CSS, imagens e
     navegacao real; correcoes de lifecycle/VM, Wizard transacional, CapyAI
     grafico, indice agregado e updater autenticado fail-closed.
-
-## Historico recente
 
 - `capyos-0.8.0-alpha.309+20260702.md`
   - Fix do preemption guard que eliminou a tela azul ao coexistir desktop e
