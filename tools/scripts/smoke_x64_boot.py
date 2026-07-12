@@ -86,7 +86,10 @@ def smoke_first_boot(
         session,
         "update-channel show",
         timeout=timeout,
-        expect="releases/latest/download/latest.ini",
+        # The 80-column guest console may wrap the final ".ini" onto the next
+        # row. Match the immutable route prefix while the unit tests continue
+        # to assert the complete URL stored by the update agent.
+        expect="releases/latest/download/latest",
     )
     run_open_write(
         session,
