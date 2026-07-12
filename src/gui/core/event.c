@@ -231,6 +231,38 @@ int gui_event_poll(struct gui_event *ev) {
   return 0;
 }
 
+int gui_event_poll_window(uint32_t window_id, struct gui_event *ev) {
+  uint32_t offset;
+  uint32_t found;
+  uint32_t current;
+
+  if (!ev || window_id == 0u || eq_count == 0u) return -1;
+
+  found = eq_tail;
+  for (offset = 0u; offset < eq_count; ++offset) {
+    if (event_queue[found].window_id == window_id) break;
+    found = (found + 1u) % GUI_EVENT_QUEUE_SIZE;
+  }
+  if (offset == eq_count) return -1;
+
+  *ev = event_queue[found];
+
+  /* Close the hole in-place.  Moving the suffix (rather than rebuilding the
+   * queue through gui_event_push) preserves FIFO order, diagnostics and the
+   * current high-watermark/drop counters, including across ring wrap-around. */
+  current = found;
+  while (offset + 1u < eq_count) {
+    uint32_t next = (current + 1u) % GUI_EVENT_QUEUE_SIZE;
+    event_queue[current] = event_queue[next];
+    current = next;
+    offset++;
+  }
+  eq_head = (eq_head + GUI_EVENT_QUEUE_SIZE - 1u) % GUI_EVENT_QUEUE_SIZE;
+  eq_count--;
+  if (eq_count == 0u) eq_head = eq_tail = 0u;
+  return 0;
+}
+
 uint32_t gui_event_poll_many(struct gui_event *out, uint32_t max) {
   uint32_t copied = 0;
   if (!out || max == 0) return 0;

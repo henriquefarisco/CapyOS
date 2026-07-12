@@ -37,6 +37,9 @@
 #ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
 #include "browser_pipeline.h"
 #include "browser_render_pixel.h"
+#if defined(CAPYGFX_DESKTOP_INTERACTIVE) && defined(CAPYOS_HAVE_CAPYGFX_NET)
+#include "browser_app.h"
+#endif
 #ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
 #include "browser_image.h"
 /* A real 2x2 RGB PNG (pixels red/green/blue/white) embedded so the resolver can
@@ -141,8 +144,13 @@ static const char g_html[] =
 #endif
 #endif
 
+#ifdef CAPYGFX_DESKTOP_INTERACTIVE
+#define CAPYGFX_W 640u
+#define CAPYGFX_H 480u
+#else
 #define CAPYGFX_W 320u
 #define CAPYGFX_H 240u
+#endif
 
 /* Etapa 7 / Slice 7.5 (alpha.304): OPT-IN interactive-desktop-launch mode. OFF
  * by default (never implied by CAPYOS_HAVE_CAPYGFX_NET or any other existing
@@ -152,18 +160,29 @@ static const char g_html[] =
  * instead of a boot-exclusive smoke), the app stays open, cooperatively
  * yielding between polls, until it observes a WINDOW_CLOSE event (the
  * title-bar X -- a compositor lifecycle event already pushed to
- * gui_event_poll in production, see src/gui/core/compositor.c) or a
- * generous iteration cap is hit (fail-safe: must never wedge the desktop's
- * cooperative scheduler forever). Mouse/keyboard are NOT yet bridged to this
- * event queue in production (only window lifecycle events are), so this loop
- * cannot yet react to clicks/typing -- see docs/releases for the tracked gap. */
+ * gui_event_poll in production, see src/gui/core/compositor.c). A finite
+ * iteration cap is opt-in for smokes/fault injection; production stays open
+ * until CLOSE. */
 #ifdef CAPYGFX_DESKTOP_INTERACTIVE
 #ifndef CAPYGFX_DESKTOP_POLL_MAX_ITERS
-#define CAPYGFX_DESKTOP_POLL_MAX_ITERS 12000u
+/* Production windows have no artificial lifetime. Smokes/fault-injection
+ * builds can override this with a finite iteration budget to prove that the
+ * fail-safe path itself works without making a healthy Browser close after a
+ * fixed number of minutes. */
+#define CAPYGFX_DESKTOP_POLL_MAX_ITERS 0u
 #endif
 #ifndef CAPYGFX_DESKTOP_POLL_SLEEP_TICKS
 #define CAPYGFX_DESKTOP_POLL_SLEEP_TICKS 5u
 #endif
+
+static int capygfx_poll_budget_remaining(unsigned int iterations) {
+#if CAPYGFX_DESKTOP_POLL_MAX_ITERS > 0u
+  return iterations < CAPYGFX_DESKTOP_POLL_MAX_ITERS;
+#else
+  (void)iterations;
+  return 1;
+#endif
+}
 #endif
 
 /* Composition buffer in .bss (zeroed by the loader): the app owns these pixels
@@ -207,10 +226,29 @@ static void compose(void) {
 int main(int rank) {
   int win;
   struct capy_gfx_event ev;
+#ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
+  /* alpha.311: hoisted out of the render block so the interactive loop can
+   * re-rasterize the SAME retained display list at a new scroll offset. */
+  const struct capy_dl *dl = 0;
+  struct capyos_browser_pixel_opts o;
+#ifdef CAPYGFX_DESKTOP_INTERACTIVE
+  int32_t scroll_y = 0;
+  int32_t max_scroll_y = 0;
+#endif
+#endif
   (void)rank;
 
-  win = capy_window_create("CapyGFX 7.2.2", CAPYGFX_W, CAPYGFX_H);
+  win = capy_window_create("CapyBrowser Static", CAPYGFX_W, CAPYGFX_H);
   if (win <= 0) fail("window_create");
+
+#if defined(CAPYGFX_DESKTOP_INTERACTIVE) && \
+    defined(CAPYOS_HAVE_CAPYBROWSER_CORE) && defined(CAPYOS_HAVE_CAPYGFX_NET)
+  if (capygfx_browser_run(win, g_fb, CAPYGFX_W, CAPYGFX_H) != 0)
+    fail("browser runtime");
+  cb_print("capygfx: browser window closed\n");
+  capy_exit(0);
+  return 0;
+#endif
 
   /* Clear to a dark background first (exercises SYS_SURFACE_FILL), then a small
    * accent rect (a second fill). */
@@ -224,9 +262,7 @@ int main(int rank) {
    * (exercises SYS_SURFACE_BLIT). */
 #ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
   {
-    const struct capy_dl *dl;
     struct capyos_browser_pipeline_stats ps;
-    struct capyos_browser_pixel_opts o;
     struct capyos_browser_pixel_stats rs;
     /* Drive HTML+CSS through the five decoupled core stages -> display list. */
     dl = capyos_browser_build_display_list(g_html, cb_strlen(g_html), "", 0u,
@@ -253,6 +289,13 @@ int main(int rank) {
     /* Prove the inline image actually decoded + drew in ring-3 (not placeholder). */
     if (rs.images_decoded < 1u) fail("image decode (ring-3)");
 #endif
+#ifdef CAPYGFX_DESKTOP_INTERACTIVE
+    /* alpha.311: max vertical scroll so the whole page is reachable in the
+     * 240px window (content_height is in layout cells). */
+    max_scroll_y = (int32_t)((int64_t)dl->content_height * (int64_t)o.cell_h) -
+                   (int32_t)CAPYGFX_H;
+    if (max_scroll_y < 0) max_scroll_y = 0;
+#endif
   }
 #else
   compose();
@@ -266,19 +309,65 @@ int main(int rank) {
   if (capy_window_poll_event((int)win, &ev) < 0) fail("window_poll_event");
 
 #ifdef CAPYGFX_DESKTOP_INTERACTIVE
-  /* Stay open: cooperatively yield + poll until WINDOW_CLOSE or the fail-safe
-   * iteration cap (see the doc comment near CAPYGFX_DESKTOP_POLL_MAX_ITERS). */
+  /* alpha.311: interactive session. Each pass DRAINS ALL pending events (so the
+   * title-bar X close is acted on promptly and scroll feels responsive), reacts
+   * to the mouse wheel by scrolling + re-rasterizing the retained display list,
+   * and exits on CAPY_GFX_EV_CLOSE or a poll error (the kernel also reports
+   * CLOSE once the compositor window is gone). Cooperatively yields + sleeps
+   * between passes; the kernel degrades the sleep to a plain yield when no timer
+   * tick can wake it (scheduler_sleep_current), so this never wedges -- which is
+   * exactly what previously left this loop sleeping forever without ever seeing
+   * the close. */
   {
-    unsigned iters;
-    for (iters = 0u; iters < CAPYGFX_DESKTOP_POLL_MAX_ITERS; ++iters) {
+    int running = 1;
+    unsigned int poll_iters = 0u;
+    while (running && capygfx_poll_budget_remaining(poll_iters)) {
       struct capy_gfx_event pev;
-      int pr = capy_window_poll_event((int)win, &pev);
-      if (pr > 0 && pev.kind == CAPY_GFX_EV_CLOSE) break;
-      capy_yield();
+      int pr;
+      int need_redraw = 0;
+      poll_iters++;
+      while ((pr = capy_window_poll_event((int)win, &pev)) > 0) {
+        if (pev.kind == CAPY_GFX_EV_CLOSE) {
+          running = 0;
+          break;
+        }
+#ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
+        if (pev.kind == CAPY_GFX_EV_SCROLL) {
+          /* Wheel delta in lines; 3 cells per notch. Clamp to the page. */
+          scroll_y -= pev.dy * ((int32_t)o.cell_h * 3);
+          if (scroll_y < 0) scroll_y = 0;
+          if (scroll_y > max_scroll_y) scroll_y = max_scroll_y;
+          need_redraw = 1;
+        }
+#endif
+      }
+      if (pr < 0) break; /* window/handle gone or error -> exit */
+#ifdef CAPYOS_HAVE_CAPYBROWSER_CORE
+      if (need_redraw) {
+        struct capyos_browser_pixel_stats rs2;
+        if (capyos_browser_render_pixels_scrolled(dl, g_fb, CAPYGFX_W, CAPYGFX_H,
+                                                  &o, 0, scroll_y, &rs2) == 0) {
+          capy_surface_blit((int)win, g_fb, CAPYGFX_W, CAPYGFX_H, 0u, 0u);
+          capy_window_present((int)win);
+        }
+      }
+#else
+      (void)need_redraw;
+#endif
+      if (!running) break;
+      /* SYS_SLEEP already performs the scheduling handoff. When the platform
+       * has no wake-capable tick it degrades to one cooperative yield; issuing
+       * an explicit yield immediately before it doubled the zero-tick spin and
+       * starved the desktop twice as fast. Fault-injection/smoke builds may
+       * configure the iteration budget above as an additional liveness fuse. */
       capy_sleep(CAPYGFX_DESKTOP_POLL_SLEEP_TICKS);
     }
+#if CAPYGFX_DESKTOP_POLL_MAX_ITERS > 0u
+    if (running)
+      cb_print("capygfx: poll fail-safe reached; exiting cleanly\n");
+#endif
   }
-  cb_print("capygfx: window closed (or poll cap reached)\n");
+  cb_print("capygfx: window closed\n");
 #else
   cb_print("capygfx: window+fill+blit+present+poll ok\n");
 #endif

@@ -94,6 +94,11 @@ struct process {
 
 void process_system_init(void);
 struct process *process_create(const char *name, uint32_t uid, uint32_t gid);
+/* Create a process explicitly detached from the current process tree.
+ * System launchers use this for independently reaped applications; regular
+ * process_create keeps its implicit-parent semantics for fork/job control. */
+struct process *process_create_root(const char *name, uint32_t uid,
+                                    uint32_t gid);
 struct process *process_fork(struct process *parent);
 int process_exec(struct process *proc, const char *path, const char **argv);
 
@@ -141,6 +146,9 @@ int process_kill(uint32_t pid, int signal);
  * and phase 6 (`fork`/`exec` failures). Behaviour:
  *
  *   - NULL or already-UNUSED process -> no-op (idempotent).
+ *   - If the process address space is still active in CR3, teardown is
+ *     deferred with no partial mutation; the caller/reaper may retry after a
+ *     context switch.
  *   - The main thread, if any, is killed via `task_kill` so a stale
  *     thread does not outlive its address space.
  *   - The address space is destroyed via `vmm_destroy_address_space`
@@ -170,9 +178,8 @@ void process_destroy(struct process *p);
  * sweep is O(PROCESS_MAX) and is safe to call as often as the tick
  * fires; it is also safe with no zombies present (returns 0).
  *
- * NOT safe to call from the dying process's own context (the caller
- * must already be off the to-be-destroyed slot's stack/AS); the
- * service-runner invocation satisfies this trivially. */
+ * Calling from the dying process's own context cannot reap it: the active-CR3
+ * guard leaves the slot intact for a later service-runner sweep. */
 size_t process_reap_orphans(void);
 int process_fd_alloc(struct process *proc);
 void process_fd_free(struct process *proc, int fd);

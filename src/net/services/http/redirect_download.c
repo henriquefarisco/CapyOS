@@ -136,16 +136,19 @@ out:
 int http_download(const char *url, uint8_t *buffer, size_t buffer_size,
                   size_t *out_len) {
   struct http_response resp;
+  g_http_last_status_code = 0;
+  if (out_len) *out_len = 0;
   if (http_get(url, &resp) != 0) return -1;
+  g_http_last_status_code = resp.status_code;
   if (resp.status_code != 200) {
     http_response_free(&resp);
-    return -1;
+    return http_fail(HTTP_ERR_STATUS);
   }
 
   size_t copy = resp.body_len;
   if (copy > buffer_size) {
     http_response_free(&resp);
-    return -1;
+    return http_fail(HTTP_ERR_DESTINATION_TOO_SMALL);
   }
   if (resp.body && copy > 0) http_memcpy(buffer, resp.body, copy);
   if (out_len) *out_len = copy;
@@ -174,6 +177,9 @@ void http_response_free(struct http_response *resp) {
     }
     resp->body_len = 0;
     resp->content_length = 0;
+    resp->content_length_present = 0;
+    resp->connection_close = 0;
+    resp->connection_keep_alive = 0;
     resp->header_count = 0;
     resp->chunked = 0;
     /* Clear the redirect target so a follow-up http_get on this

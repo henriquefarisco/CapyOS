@@ -3,6 +3,7 @@
 
 int http_init(void) {
   http_set_ok();
+  g_http_last_status_code = 0;
   return 0;
 }
 
@@ -150,6 +151,39 @@ int http_build_request(const struct http_request *req, char *buf, size_t buf_siz
   }
   buf[pos] = '\0';
   return (int)pos;
+}
+
+int http_request_wants_keepalive(const struct http_request *req) {
+  int wants_keepalive = 0;
+  if (!req) return 0;
+  for (uint32_t i = 0; i < req->header_count; i++) {
+    if (!http_streq_ci(req->headers[i].name, "Connection")) continue;
+    /* A close token always wins, including malformed duplicate headers. */
+    if (http_contains_ci(req->headers[i].value, "close")) return 0;
+    if (http_contains_ci(req->headers[i].value, "keep-alive")) {
+      wants_keepalive = 1;
+    }
+  }
+  return wants_keepalive;
+}
+
+int http_connection_should_pool(const struct http_request *req,
+                                const struct http_response *resp) {
+  int response_keepalive = 0;
+  if (!req || !resp || !http_request_wants_keepalive(req)) return 0;
+  if (resp->status_code < 200 || resp->status_code >= 400) return 0;
+  if (resp->connection_close) return 0;
+  response_keepalive = resp->connection_keep_alive;
+  for (uint32_t i = 0; i < resp->header_count; i++) {
+    if (!http_streq_ci(resp->headers[i].name, "Connection")) continue;
+    if (http_contains_ci(resp->headers[i].value, "close")) return 0;
+    if (http_contains_ci(resp->headers[i].value, "keep-alive")) {
+      response_keepalive = 1;
+    }
+  }
+  /* Pool conservatively: both peers must opt in explicitly.  In particular,
+   * the builder's default `Connection: close` can never enter the pool. */
+  return response_keepalive;
 }
 
 int http_parse_status_line(const char *line, int *status_code) {

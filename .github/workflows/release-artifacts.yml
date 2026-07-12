@@ -6,8 +6,12 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: "Existing CapyOS tag to build (v<version>)"
+        required: true
+        type: string
       publish_github_release:
-        description: "Publish artifact to GitHub Release"
+        description: "Create or update the draft GitHub Release"
         required: false
         default: "false"
         type: choice
@@ -30,16 +34,50 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
 
-      - name: Checkout CapyUI sibling
+      - name: Resolve and verify release tag
+        id: release
         shell: bash
         run: |
-          CAPYUI_REF=main
-          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
-            CAPYUI_REF=develop
+          VERSION="$(sed -n 's/^#define CAPYOS_VERSION_FULL[[:space:]]*"\([^"]*\)"/\1/p' include/core/version.h)"
+          if [ -z "$VERSION" ]; then
+            echo "Unable to resolve CAPYOS_VERSION_FULL"
+            exit 1
           fi
-          git clone --depth 1 --branch "$CAPYUI_REF" \
-            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.release_tag }}"
+          else
+            TAG="$GITHUB_REF_NAME"
+          fi
+          EXPECTED_TAG="v${VERSION}"
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "Tag/version mismatch: tag=$TAG version=$VERSION"
+            exit 1
+          fi
+          TAG_COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          HEAD_COMMIT="$(git rev-parse HEAD)"
+          if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ]; then
+            echo "Tag does not point to checked-out HEAD: tag=$TAG_COMMIT head=$HEAD_COMMIT"
+            exit 1
+          fi
+          BUILD_DATE="${VERSION##*+}"
+          if [[ "$BUILD_DATE" =~ ^[0-9]{8}$ ]]; then
+            PUBLISHED_AT="${BUILD_DATE:0:4}-${BUILD_DATE:4:2}-${BUILD_DATE:6:2}"
+          else
+            PUBLISHED_AT="$(git show -s --format=%cs HEAD)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "published_at=$PUBLISHED_AT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned release siblings
+        shell: bash
+        env:
+          CAPYAI_DEPLOY_KEY: ${{ secrets.CAPYAI_DEPLOY_KEY }}
+        run: bash tools/scripts/checkout_release_siblings.sh
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -60,6 +98,10 @@ jobs:
       - name: Verify dependencies
         run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
 
+      - name: Verify pinned graphical browser build plan
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh plan
+
       - name: Validate build and produce ISO
         run: |
           make test
@@ -68,6 +110,14 @@ jobs:
           make all64 TOOLCHAIN64=host
           make iso-uefi TOOLCHAIN64=host
           make verify-release-checksums TOOLCHAIN64=host
+
+      - name: Verify linked graphical browser siblings
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh linked
+
+      - name: Build aggregate module index
+        shell: bash
+        run: bash tools/scripts/build_release_modules.sh "${{ steps.release.outputs.tag }}"
 
       - name: Resolve ISO path
         id: iso
@@ -80,21 +130,71 @@ jobs:
           fi
           echo "iso_path=$ISO_PATH" >> "$GITHUB_OUTPUT"
 
-      - name: Upload ISO and checksums as workflow artifacts
+      - name: Verify update manifest signing contract
+        run: python3 tools/scripts/verify_update_manifest.py --self-test
+
+      - name: Prepare deterministic offline update-signing handoff
+        id: update
+        shell: bash
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          PUBLISHED_AT="${{ steps.release.outputs.published_at }}"
+          TAG="${{ steps.release.outputs.tag }}"
+          PAYLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/capyos64.bin"
+          mkdir -p build/update
+          python3 tools/scripts/build_update_manifest.py \
+            --unsigned \
+            --version "$VERSION" \
+            --channel stable \
+            --branch main \
+            --source "github:${GITHUB_REPOSITORY}" \
+            --published-at "$PUBLISHED_AT" \
+            --payload build/capyos64.bin \
+            --payload-url "$PAYLOAD_URL" \
+            --output build/update/latest.unsigned.ini \
+            --force
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "payload_url=$PAYLOAD_URL" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Offline update manifest handoff"
+            echo ""
+            echo "The artifact contains capyos64.bin, manifest.bin and latest.unsigned.ini."
+            echo "The private Ed25519 key is intentionally never available to this workflow."
+            echo "An offline operator must sign the exact payload with build_update_manifest.py,"
+            echo "verify latest.ini with verify_update_manifest.py, then upload latest.ini separately."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ISO and offline update inputs as workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: capyos-iso-${{ github.run_id }}
           path: |
             ${{ steps.iso.outputs.iso_path }}
+            build/capyos64.bin
+            build/manifest.bin
             build/release-artifacts.sha256
             build/CapyOS-Installer-UEFI.last-built.txt
+            build/update/latest.unsigned.ini
+            build/capypkg/modules-index.txt
+            build/capypkg/org.capyos.ai.assistant-*.bin
+            build/capypkg/modules.sha256
           if-no-files-found: error
 
       - name: Publish GitHub Release assets
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
+          tag_name: ${{ steps.release.outputs.tag }}
           files: |
             ${{ steps.iso.outputs.iso_path }}
+            build/capyos64.bin
+            build/manifest.bin
             build/release-artifacts.sha256
+            build/capypkg/modules-index.txt
+            build/capypkg/org.capyos.ai.assistant-*.bin
+            build/capypkg/modules.sha256
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          draft: true
+          prerelease: false
+          make_latest: false

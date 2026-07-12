@@ -34,6 +34,58 @@ static void test_install_accepts_payload_larger_than_one_mib(void) {
            "large payload package must be tracked as installed");
 }
 
+static void test_install_db_failure_rolls_back_and_retry_reinstalls(void) {
+    static char idx[1024];
+    char db_text[2048];
+    char hex[65];
+    size_t db_len = 0u;
+    int rc;
+
+    reset_state(1);
+    compute_sha256_hex((const uint8_t *)CAPYPKG_TEST_PAYLOAD,
+                       strlen(CAPYPKG_TEST_PAYLOAD), hex);
+    snprintf(idx, sizeof(idx),
+             "name=retry.commit\nversion=1.0.0\n"
+             "payload_url=https://example.com/retry-commit.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/retry.commit\n---\n",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "commit-retry manifest must populate catalog");
+    g_payload_bytes = (const uint8_t *)CAPYPKG_TEST_PAYLOAD;
+    g_payload_len = strlen(CAPYPKG_TEST_PAYLOAD);
+    g_payload_rc = 0;
+
+    g_text_write_fail_path = CAPYPKG_DB_FILE;
+    g_text_write_fail_remaining = 1;
+    rc = capypkg_install("retry.commit");
+    EXPECT(rc == CAPYPKG_ERR_STORAGE,
+           "a failed installed-db write must fail the install");
+    EXPECT(capypkg_installed_count() == 0u,
+           "failed installed-db write must roll back the in-memory entry");
+    EXPECT(fs_find("/var/capypkg/retry.commit/installed") == NULL,
+           "failed installed-db write must remove the activation marker");
+    EXPECT(g_payload_fetch_calls == 1,
+           "the failed commit must have performed one real payload fetch");
+
+    rc = capypkg_install("retry.commit");
+    EXPECT(rc == CAPYPKG_OK,
+           "retry after a failed installed-db write must really reinstall");
+    EXPECT(capypkg_installed_count() == 1u,
+           "successful retry must populate the installed table once");
+    EXPECT(fs_find("/var/capypkg/retry.commit/installed") != NULL,
+           "successful retry must recreate the activation marker");
+    EXPECT(g_payload_fetch_calls == 2,
+           "retry must fetch again instead of returning ALREADY");
+    EXPECT(fs_read(CAPYPKG_DB_FILE, db_text, sizeof(db_text), &db_len) == 0 &&
+               db_len > 0u && strstr(db_text, "name=retry.commit") != NULL,
+           "successful retry must persist the installed package in db.idx");
+}
+
 static void test_install_fail_closed_without_verifier(void) {
     /* No verifier plugged in. Repo default requires signature. */
     reset_state(0);

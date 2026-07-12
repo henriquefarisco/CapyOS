@@ -694,6 +694,31 @@ static void test_destroy_events(void) {
   shutdown_fixture();
 }
 
+/* Regression: compositor_create_window must reset capture_mouse on a reused
+ * slot. Slots are recycled (first free id==0), and compositor_destroy_window
+ * does NOT clear capture_mouse; only reset_window_slot did. A window reused
+ * from an app that captured the mouse (e.g. file manager sets capture_mouse=1)
+ * would otherwise keep capturing input. */
+static void test_create_resets_capture_mouse_on_slot_reuse(void) {
+  struct gui_window *a;
+  struct gui_window *b;
+  reset_fixture();
+  a = compositor_create_window("A", 10, 30, 64, 48);
+  if (!a) {
+    TEST("capture_mouse reuse: fixture creates window");
+    FAIL("create A");
+    shutdown_fixture();
+    return;
+  }
+  a->capture_mouse = 1; /* an app captured the pointer */
+  compositor_destroy_window(a->id);
+  b = compositor_create_window("B", 20, 40, 64, 48); /* reuses A's slot */
+  TEST("compositor_create_window resets capture_mouse on a reused slot");
+  if (b && b == a && b->capture_mouse == 0) PASS();
+  else FAIL("stale capture_mouse leaked into the reused window slot");
+  shutdown_fixture();
+}
+
 int test_compositor_events_run(void) {
   printf("[test_compositor_events]\n");
   tests_run = 0;
@@ -713,6 +738,7 @@ int test_compositor_events_run(void) {
   test_compositor_cursor_erase_only_on_overlap();
   test_visibility_blur_events();
   test_destroy_events();
+  test_create_resets_capture_mouse_on_slot_reuse();
   printf("  -> %d/%d passed\n", tests_passed, tests_run);
   return tests_run - tests_passed;
 }

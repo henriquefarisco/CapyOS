@@ -107,8 +107,23 @@ struct vmm_address_space *vmm_create_address_space(void);
 struct vmm_address_space *vmm_clone_address_space(
     const struct vmm_address_space *src);
 void vmm_destroy_address_space(struct vmm_address_space *as);
+/* Returns non-zero when `as` is the page-table root currently loaded in CR3.
+ * Destruction of an active address space is forbidden: callers must first
+ * schedule/switch to another AS and retry.  This is also used by the process
+ * reaper to defer a zombie rather than free live page tables. */
+int vmm_address_space_is_active(const struct vmm_address_space *as);
 struct vmm_address_space *vmm_kernel_address_space(void);
 void vmm_switch_address_space(struct vmm_address_space *as);
+
+/* alpha.311: run a kernel operation on the kernel's OWN page tables regardless
+ * of which address space is active, then restore. Used by elf_load so its
+ * identity-map segment writes ((void*)phys) always target the kernel's RW
+ * tables. `vmm_enter_kernel_tables` returns the previous CR3; pass it back to
+ * `vmm_leave_kernel_tables`. `vmm_kernel_pml4_phys` returns the kernel PML4
+ * physical address (for diagnostics). No-ops under UNIT_TEST / non-x86. */
+uint64_t vmm_enter_kernel_tables(void);
+void vmm_leave_kernel_tables(uint64_t prev_cr3);
+uint64_t vmm_kernel_pml4_phys(void);
 int vmm_map_page(struct vmm_address_space *as, uint64_t virt, uint64_t phys,
                  uint64_t flags);
 int vmm_unmap_page(struct vmm_address_space *as, uint64_t virt);
@@ -118,6 +133,18 @@ int vmm_unmap_range(struct vmm_address_space *as, uint64_t virt, size_t count);
 uint64_t vmm_virt_to_phys(struct vmm_address_space *as, uint64_t virt);
 int vmm_handle_page_fault(uint64_t fault_addr, uint64_t error_code);
 void vmm_stats_get(struct vmm_stats *out);
+
+/* Query whether the kernel's identity mapping of physical frame `phys` is
+ * PRESENT and WRITABLE. The kernel adopts the FIRMWARE's page tables at boot
+ * (vmm_init: kernel_as.pml4 = read_cr3()), so identity-map permissions are the
+ * firmware's. VMware's UEFI maps firmware-reserved low RAM (0x400000+)
+ * READ-ONLY there. Those frames are NOT general-purpose RAM: an earlier fix
+ * that force-flipped them writable let elf_load write into them, corrupting
+ * firmware state and crashing the host VMM. So the firmware read-only mapping
+ * is authoritative -- the PMM reserves (never hands out) any frame this
+ * reports non-writable. Returns 1 if usable (present + writable), 0 otherwise.
+ * Returns 1 (no-op) under UNIT_TEST / non-x86. */
+int vmm_identity_is_writable(uint64_t phys);
 
 /* Phase 7b: anonymous-region registry API.
  *

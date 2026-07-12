@@ -114,14 +114,6 @@ int http_request(const struct http_request *req, struct http_response *resp) {
             goto cleanup;
           }
           http_store_headers(recv_buf, header_end_offset, resp);
-          resp->content_length = 0;
-          for (uint32_t hi = 0; hi < resp->header_count; hi++) {
-            if (http_streq_ci(resp->headers[hi].name, "Content-Length")) {
-              resp->content_length =
-                  http_parse_content_length(resp->headers[hi].value);
-              break;
-            }
-          }
           break;
         }
       }
@@ -234,19 +226,7 @@ cleanup:
     kfree(recv_buf);
   }
   if (result == 0 && transport.socket_fd >= 0) {
-    const char *conn_hdr = http_find_header(resp, "Connection");
-    int do_keepalive = (conn_hdr && http_contains_ci(conn_hdr, "keep-alive"));
-    if (!conn_hdr && resp->status_code >= 200 && resp->status_code < 400) {
-      int close_explicit = 0;
-      for (uint32_t hi = 0; hi < resp->header_count; hi++) {
-        if (http_streq_ci(resp->headers[hi].name, "Connection") &&
-            http_contains_ci(resp->headers[hi].value, "close")) {
-          close_explicit = 1; break;
-        }
-      }
-      if (!close_explicit) do_keepalive = 1;
-    }
-    if (do_keepalive) {
+    if (http_connection_should_pool(req, resp)) {
       http_pool_store(req->host, req->port, req->use_tls,
                       transport.socket_fd, transport.tls);
       transport.socket_fd = -1;

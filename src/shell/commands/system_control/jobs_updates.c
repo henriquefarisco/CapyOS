@@ -276,9 +276,9 @@ int cmd_update_prepare(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-prepare\nBusca manifesto remoto, baixa/verifica payload, prepara staging e arma a ativacao sem aplicar o boot slot.\n",
-        "Usage: update-prepare\nFetches the remote manifest, downloads/verifies payload, prepares staging and arms activation without applying the boot slot.\n",
-        "Uso: update-prepare\nDescarga el manifiesto remoto, descarga/verifica el payload, prepara staging y arma la activacion sin aplicar el boot slot.\n"));
+        "Uso: update-prepare\nIndisponivel ate existir escrita persistente de boot slot; use update-fetch, update-download-payload e update-prepare-dry-run para download verificado.\n",
+        "Usage: update-prepare\nUnavailable until persistent boot-slot writes exist; use update-fetch, update-download-payload and update-prepare-dry-run for verified downloads.\n",
+        "Uso: update-prepare\nNo disponible hasta existir escritura persistente de boot slot; use update-fetch, update-download-payload y update-prepare-dry-run para descargas verificadas.\n"));
     return 0;
   }
   if (argc != 1) {
@@ -449,9 +449,9 @@ int cmd_update_stage(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-stage\nCopia o manifesto cacheado mais recente para a area persistente de staging em /system/update/staged/.\n",
-        "Usage: update-stage\nCopies the newest cached manifest into the persistent staging area under /system/update/staged/.\n",
-        "Uso: update-stage\nCopia el manifiesto cacheado mas reciente al area persistente de staging en /system/update/staged/.\n"));
+        "Uso: update-stage\nIndisponivel ate existir staging persistente e atomico do boot slot.\n",
+        "Usage: update-stage\nUnavailable until persistent atomic boot-slot staging exists.\n",
+        "Uso: update-stage\nNo disponible hasta existir staging persistente y atomico del boot slot.\n"));
     return 0;
   }
 
@@ -491,9 +491,9 @@ int cmd_update_apply(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-apply [payload_sha256]\nAplica o staged update usando o cache verificado; se informado, usa o SHA-256 manual como fallback explicito.\n",
-        "Usage: update-apply [payload_sha256]\nApplies the staged update using the verified cache; if provided, uses the manual SHA-256 as an explicit fallback.\n",
-        "Uso: update-apply [payload_sha256]\nAplica el staged update usando el cache verificado; si se informa, usa el SHA-256 manual como fallback explicito.\n"));
+        "Uso: update-apply [payload_sha256]\nIndisponivel ate existir escrita persistente, verificacao e rollback real do boot slot.\n",
+        "Usage: update-apply [payload_sha256]\nUnavailable until persistent boot-slot writing, verification and real rollback exist.\n",
+        "Uso: update-apply [payload_sha256]\nNo disponible hasta existir escritura persistente, verificacion y rollback real del boot slot.\n"));
     return 0;
   }
   if (argc != 1 && argc != 2) {

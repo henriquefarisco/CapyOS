@@ -27,6 +27,7 @@
  *
  *   - org.capyos.ui.widget-core       (CapyUI widget primitives)
  *   - org.capyos.ui.desktop-session   (CapyUI desktop + window mgr + apps)
+ *   - org.capyos.ai.assistant         (CapyAI assistant model package)
  *
  * The functions are deliberately scalar booleans (1/0) with NO
  * out-of-band error reporting because callers must fail closed
@@ -42,6 +43,11 @@ int kernel_module_desktop_session_available(void);
  * desktop-session module depends on this; checking it separately
  * is mostly useful for diagnostics. */
 int kernel_module_widget_core_available(void);
+
+/* Return 1 when the CapyAI assistant model package is staged. The
+ * `capyai` command itself ships built-in (a default model); this gate
+ * lets a future capypkg-delivered model activate/override it. */
+int kernel_module_ai_assistant_available(void);
 
 /* Return 1 when the named module is staged (its `installed` marker
  * file exists under /var/capypkg/<name>/installed). Use the public

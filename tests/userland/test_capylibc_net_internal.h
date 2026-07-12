@@ -92,6 +92,7 @@ int capy_net_internal_https_fail_closed(const struct capy_url_parts *url);
  * the local socket/DNS tests. */
 void test_capylibc_net_url_cases(void);
 void test_capylibc_net_http_cases(void);
+void test_capylibc_net_chunked_cases(void);
 
 /* Macro alias preserving the original counter names so test bodies
  * stay verbatim across files. */

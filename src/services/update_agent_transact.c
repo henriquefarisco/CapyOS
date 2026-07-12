@@ -2,20 +2,21 @@
  * Update agent — transactional integration with the boot slot system.
  *
  * Responsibilities of this translation unit:
- *  - update_agent_apply_boot_slot           (legacy applier)
- *  - update_agent_apply_boot_slot_verified  (M6.4 payload sha256 gate)
+ *  - update_agent_apply_boot_slot           (explicit unsupported capability)
+ *  - update_agent_apply_boot_slot_verified  (sha256 gate, then unsupported)
  *  - update_agent_staged_requires_payload_verification
  *  - update_agent_confirm_health
  *  - update_agent_check_rollback
  *
  * The catalog/manifest parsing, repository configuration, IO and the
- * stage/import/poll machinery live in src/services/update_agent.c. The
- * two TUs share the runtime status struct and the small string helper
+ * stage/import/poll machinery live in the update_agent sibling TUs. They
+ * share the runtime status struct and the small string helper
  * through src/services/internal/update_agent_internal.h.
  *
  * Splitting the agent in two keeps each TU well below the monolith
  * threshold without forcing the rest of the codebase to know about the
- * split: the public API in include/services/update_agent.h is unchanged.
+ * split. No function in this file reports a RAM-only boot_slot mutation as a
+ * successful persistent system update.
  */
 #include "internal/update_agent_internal.h"
 
@@ -31,7 +32,7 @@ int update_agent_poll(void);
 int update_agent_clear_stage(void);
 int update_agent_set_pending_activation(int enabled);
 void update_agent_init(const char *current_version);
-static int update_agent_apply_boot_slot_current_status(void);
+static int update_agent_apply_unsupported(void);
 
 /* ---- M6.4 payload sha256 verification helpers ----------------------- */
 
@@ -122,16 +123,7 @@ int update_agent_apply_boot_slot_verified(const char *actual_sha256_hex) {
         return -31;
     }
 
-    int apply_rc = update_agent_apply_boot_slot_current_status();
-    if (apply_rc == 0) {
-        update_agent_g_status.last_result = 0;
-        update_agent_local_copy(update_agent_g_status.summary,
-                                sizeof(update_agent_g_status.summary),
-                                "verified staged update applied to boot slot");
-    }
-    klog(KLOG_INFO,
-         "[audit] [update] payload-sha256 match -> applying staged update");
-    return apply_rc;
+    return update_agent_apply_unsupported();
 }
 
 int update_agent_apply_cached_payload(void) {
@@ -152,51 +144,20 @@ int update_agent_apply_cached_payload(void) {
 
 /* ---- Boot-slot lifecycle ------------------------------------------- */
 
-static int update_agent_apply_boot_slot_current_status(void) {
-    struct boot_slot s0;
-    uint32_t next_slot;
-
-    if (!update_agent_g_status.stage_ready ||
-        !update_agent_g_status.pending_activation) {
-        return -2;
-    }
-    if (!update_agent_g_status.staged_version[0]) {
-        return -3;
-    }
-
-    /* Pick the slot that is NOT currently ACTIVE. */
-    if (boot_slot_get(0, &s0) == 0 && s0.state == BOOT_SLOT_ACTIVE) {
-        next_slot = 1u;
-    } else {
-        next_slot = 0u;
-    }
-
-    if (boot_slot_stage(next_slot, update_agent_g_status.staged_version, 0u) != 0) {
-        klog(KLOG_ERROR, "[update] Failed to stage boot slot for activation.");
-        return -4;
-    }
-    if (boot_slot_activate(next_slot) != 0) {
-        klog(KLOG_ERROR, "[update] Failed to activate boot slot.");
-        return -5;
-    }
-
-    klog(KLOG_INFO, "[update] Boot slot armed for transactional update.");
-    return 0;
+static int update_agent_apply_unsupported(void) {
+    update_agent_g_status.last_result = UPDATE_AGENT_ERR_UNSUPPORTED;
+    update_agent_local_copy(
+        update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
+        "persistent update apply unsupported; verified download only");
+    klog(KLOG_WARN,
+         "[audit] [update] apply refused: persistent boot-slot writer unavailable");
+    return UPDATE_AGENT_ERR_UNSUPPORTED;
 }
 
 int update_agent_apply_boot_slot(void) {
     int poll_rc = update_agent_poll();
     if (poll_rc < 0) return poll_rc;
-    if (update_agent_g_status.staged_payload_sha256[0]) {
-        update_agent_g_status.last_result = -33;
-        update_agent_local_copy(update_agent_g_status.summary,
-                                sizeof(update_agent_g_status.summary),
-                                "verified apply required for hashed staged update");
-        klog(KLOG_WARN,
-             "[audit] [update] direct apply refused; payload-sha256 requires verifier");
-        return -33;
-    }
-    return update_agent_apply_boot_slot_current_status();
+    return update_agent_apply_unsupported();
 }
 
 int update_agent_confirm_health(void) {

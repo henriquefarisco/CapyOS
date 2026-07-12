@@ -44,6 +44,11 @@
 
 #include "kernel/process.h"
 #include "kernel/pipe.h"
+#include "memory/vmm.h"
+
+extern void stub_vmm_set_active_address_space(
+    const struct vmm_address_space *as);
+extern void process_set_current(struct process *p);
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -52,6 +57,7 @@ static int tests_passed = 0;
 #define FAIL(msg)  printf("FAIL: %s\n", msg)
 
 static void reset_world(void) {
+    stub_vmm_set_active_address_space(NULL);
     process_system_init();
     pipe_system_init();
 }
@@ -247,6 +253,36 @@ static void test_fork_links_child(void) {
     TEST("fork: parent has exactly one child in its list");
     if (count_chain(parent->children) == 1) PASS();
     else FAIL("children count mismatch");
+
+    TEST("fork: child task binds both CR3 fields to cloned address space");
+    if (child->address_space && child->main_thread &&
+        child->address_space->pml4_phys != 0u &&
+        child->main_thread->cr3 == child->address_space->pml4_phys &&
+        child->main_thread->context.cr3 == child->address_space->pml4_phys) {
+        PASS();
+    } else {
+        FAIL("fork child retained kernel/implicit CR3");
+    }
+}
+
+static void test_create_root_ignores_current_process(void) {
+    reset_world();
+    struct process *parent = process_create("current", 100, 200);
+    if (!parent) { TEST("setup current process"); FAIL("create"); return; }
+    process_set_current(parent);
+
+    struct process *child = process_create("implicit-child", 1, 2);
+    struct process *root = process_create_root("system-app", 3, 4);
+
+    TEST("process_create keeps implicit current-process parent");
+    if (child && child->parent == parent && child->ppid == parent->pid) PASS();
+    else FAIL("regular create lost implicit parent");
+
+    TEST("process_create_root is detached despite current process");
+    if (root && root->parent == NULL && root->ppid == 0u) PASS();
+    else FAIL("system app inherited accidental parent");
+
+    process_set_current(NULL);
 }
 
 static void test_fork_lifo_ordering(void) {
@@ -573,6 +609,71 @@ static void test_reap_orphans_idempotent(void) {
     else FAIL("expected 0 from second sweep");
 }
 
+static void test_vmm_destroy_defers_active_address_space(void) {
+    reset_world();
+    struct vmm_address_space *as = vmm_create_address_space();
+    if (!as) { TEST("setup standalone AS"); FAIL("create"); return; }
+    uint32_t refcount = as->refcount;
+    stub_vmm_set_active_address_space(as);
+
+    vmm_destroy_address_space(as);
+
+    TEST("vmm_destroy preserves active CR3 address space and refcount");
+    if (as->refcount == refcount && vmm_address_space_is_active(as)) PASS();
+    else FAIL("active address space was mutated/freed");
+
+    stub_vmm_set_active_address_space(NULL);
+    vmm_destroy_address_space(as);
+}
+
+static void test_real_vmm_guards_active_before_refcount_drop(void) {
+    char source[65536];
+    FILE *f = fopen("src/memory/vmm.c", "rb");
+    if (!f) f = fopen("../../src/memory/vmm.c", "rb");
+
+    TEST("real VMM source is available for active-CR3 contract check");
+    if (!f) { FAIL("cannot open src/memory/vmm.c"); return; }
+    size_t n = fread(source, 1, sizeof(source) - 1u, f);
+    fclose(f);
+    source[n] = '\0';
+    PASS();
+
+    const char *destroy = strstr(source,
+        "void vmm_destroy_address_space(struct vmm_address_space *as)");
+    const char *guard = destroy ? strstr(destroy,
+        "if (vmm_address_space_is_active(as)) return;") : NULL;
+    const char *refdrop = destroy ? strstr(destroy, "as->refcount--;") : NULL;
+
+    TEST("real vmm_destroy checks active CR3 before ownership mutation");
+    if (destroy && guard && refdrop && guard < refdrop) PASS();
+    else FAIL("active-CR3 guard missing or placed after refcount decrement");
+}
+
+static void test_reaper_defers_then_retries_active_address_space(void) {
+    reset_world();
+    struct process *p = process_create_root("active-zombie", 0, 0);
+    if (!p) { TEST("setup active zombie"); FAIL("create"); return; }
+    p->state = PROC_STATE_ZOMBIE;
+    struct vmm_address_space *as = p->address_space;
+    struct task *thread = p->main_thread;
+    stub_vmm_set_active_address_space(as);
+
+    size_t first = process_reap_orphans();
+
+    TEST("orphan reaper defers zombie whose address space is active");
+    if (first == 0u && p->state == PROC_STATE_ZOMBIE &&
+        p->address_space == as && p->main_thread == thread) PASS();
+    else FAIL("active zombie was partially or fully torn down");
+
+    stub_vmm_set_active_address_space(NULL);
+    size_t second = process_reap_orphans();
+
+    TEST("orphan reaper retries deferred zombie after CR3 changes");
+    if (second == 1u && p->state == PROC_STATE_UNUSED &&
+        p->address_space == NULL) PASS();
+    else FAIL("deferred zombie was not reclaimed on retry");
+}
+
 /* ---- Etapa 2 audit (2026-05-02): FD release on kill ----------- */
 
 /* When a process is killed (PROC_STATE_ZOMBIE), every FD it owned
@@ -744,6 +845,7 @@ int test_process_destroy_run(void) {
 
     /* Phase 6.5 process-tree linkage. */
     test_fork_links_child();
+    test_create_root_ignores_current_process();
     test_fork_lifo_ordering();
     test_destroy_unlinks_from_parent();
     test_destroy_orphans_children();
@@ -759,6 +861,9 @@ int test_process_destroy_run(void) {
     test_reap_orphans_skips_parented_zombies();
     test_reap_orphans_destroys_orphan_zombies();
     test_reap_orphans_idempotent();
+    test_vmm_destroy_defers_active_address_space();
+    test_real_vmm_guards_active_before_refcount_drop();
+    test_reaper_defers_then_retries_active_address_space();
 
     /* Etapa 2 audit (2026-05-02): FD release contract on kill. */
     test_kill_releases_pipe_write_fd_on_zombie();

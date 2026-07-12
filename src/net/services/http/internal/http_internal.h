@@ -26,7 +26,9 @@ enum http_error {
   HTTP_ERR_RESPONSE_PARSE,
   HTTP_ERR_NO_MEMORY,
   HTTP_ERR_REDIRECT_LIMIT,
-  HTTP_ERR_BAD_REDIRECT
+  HTTP_ERR_BAD_REDIRECT,
+  HTTP_ERR_STATUS,
+  HTTP_ERR_DESTINATION_TOO_SMALL
 };
 
 #define HTTP_POOL_MAX 4
@@ -47,6 +49,7 @@ struct http_pool_entry {
 };
 
 extern int g_http_last_error;
+extern int g_http_last_status_code;
 
 /* Download progress observer (see net/http.h). Single global slot: the
  * network stack handles one request at a time. Installed/cleared by
@@ -169,6 +172,9 @@ char *http_grow_recv_buffer(char *buf, size_t current_capacity,
                             size_t min_capacity, size_t *new_capacity_out);
 
 int http_build_request(const struct http_request *req, char *buf, size_t buf_size);
+int http_request_wants_keepalive(const struct http_request *req);
+int http_connection_should_pool(const struct http_request *req,
+                                const struct http_response *resp);
 int http_parse_status_line(const char *line, int *status_code);
 size_t http_parse_content_length(const char *value);
 

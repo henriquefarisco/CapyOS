@@ -196,10 +196,10 @@ static const char *dl_slice(const struct capy_dl *dl, size_t off, size_t len) {
 
 /* ---- public entry -------------------------------------------------------- */
 
-int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
-                                 uint32_t out_w, uint32_t out_h,
-                                 const struct capyos_browser_pixel_opts *opts,
-                                 struct capyos_browser_pixel_stats *stats) {
+int capyos_browser_render_pixels_scrolled(
+    const struct capy_dl *dl, uint32_t *out, uint32_t out_w, uint32_t out_h,
+    const struct capyos_browser_pixel_opts *opts, int32_t scroll_x_arg,
+    int32_t scroll_y_arg, struct capyos_browser_pixel_stats *stats) {
   struct capyos_browser_pixel_stats sink;
   uint32_t cw, ch, bg, fg, link;
   capyos_browser_image_resolver resolve_image = (opts) ? opts->resolve_image : 0;
@@ -239,14 +239,22 @@ int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
     if (link == 0u) link = CAPYOS_BROWSER_PX_LINK;
   }
 
+  /* alpha.311: pixel scroll offset. Subtracted from every node's position so a
+   * viewer can scroll a page larger than the surface; all draw primitives clip
+   * safely for negative / out-of-range coordinates. 0,0 == the original,
+   * unscrolled render. */
+  {
+  int64_t scroll_x = (int64_t)scroll_x_arg;
+  int64_t scroll_y = (int64_t)scroll_y_arg;
+
   /* Page background. */
   px_fill(out, out_w, out_h, 0, 0, (int64_t)out_w, (int64_t)out_h, bg,
           &clipped_ignore);
 
   for (n = 0u; n < dl->node_count; ++n) {
     const struct capy_dl_node *nd = &dl->nodes[n];
-    int64_t px = (int64_t)nd->x * (int64_t)cw;
-    int64_t py = (int64_t)nd->y * (int64_t)ch;
+    int64_t px = (int64_t)nd->x * (int64_t)cw - scroll_x;
+    int64_t py = (int64_t)nd->y * (int64_t)ch - scroll_y;
 
     switch (nd->kind) {
     case CAPY_DL_RECT: {
@@ -333,7 +341,19 @@ int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
       break;
     }
   }
+  } /* scroll-offset block (alpha.311) */
 
   if (dl->truncated) stats->truncated = 1;
   return 0;
+}
+
+/* Original entry point: unscrolled render (0,0 offset). Kept so existing
+ * callers (host tests, boot smoke) and the struct ABI are byte-for-byte
+ * unchanged. */
+int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
+                                 uint32_t out_w, uint32_t out_h,
+                                 const struct capyos_browser_pixel_opts *opts,
+                                 struct capyos_browser_pixel_stats *stats) {
+  return capyos_browser_render_pixels_scrolled(dl, out, out_w, out_h, opts, 0, 0,
+                                               stats);
 }

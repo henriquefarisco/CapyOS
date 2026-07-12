@@ -15,6 +15,8 @@
  */
 #include "browser_pipeline.h"
 #include "browser_render_pixel.h"
+#include "browser_resources.h"
+#include "page_render.h"
 #ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
 #include "browser_image.h" /* Slice 7.4: image decode adapter (CapyCodecs) */
 #endif
@@ -110,6 +112,7 @@ static int test_resolve_image(void *ctx, const char *src, size_t src_len,
 #endif /* CAPYOS_HAVE_CAPYCODECS_IMAGE */
 
 int run_browser_pipeline_tests(void) {
+  static struct capy_page resource_page;
   struct capyos_browser_pipeline_stats st;
   const struct capy_dl *dl;
   const char *html =
@@ -164,8 +167,38 @@ int run_browser_pipeline_tests(void) {
       "p { color: #ff0000; }", strlen("p { color: #ff0000; }"), NULL, 40, &st);
   CHECK(dl != NULL && st.stage_failed == 0, "pipeline with author CSS ok");
 
+  /* 5. Resource discovery is bounded, resolves linked CSS and preserves raw
+   * inline style bytes for the runtime's second render pass. */
+  {
+    static const char resource_html[] =
+        "<html><head><style>p { color: #123456; }</style>"
+        "<link rel=\"preload stylesheet\" href=\"/site.css\">"
+        "<link rel=\"stylesheet\" href=\"https://cdn.example/x.css\">"
+        "</head><body><p>x</p></body></html>";
+    struct browser_resources resources;
+    CHECK(capy_page_render(resource_html, sizeof(resource_html) - 1u, NULL, 0u,
+                           "https://capy.example/docs/", 40,
+                           &resource_page) == CAPY_PAGE_OK,
+          "resource-discovery first pass renders");
+    CHECK(browser_resources_discover(&resource_page.dom,
+                                     "https://capy.example/docs/",
+                                     &resources) == 0,
+          "resource discovery succeeds");
+    CHECK(resources.inline_css_len > 0u &&
+              memcmp(resources.inline_css, "p { color: #123456; }", 21u) == 0,
+          "inline style bytes preserved");
+    CHECK(resources.stylesheet_count == 2u,
+          "two linked stylesheets discovered");
+    CHECK(strcmp(resources.stylesheet_urls[0],
+                 "https://capy.example/site.css") == 0,
+          "relative stylesheet resolves against document URL");
+    CHECK(strcmp(resources.stylesheet_urls[1],
+                 "https://cdn.example/x.css") == 0,
+          "absolute stylesheet remains normalized");
+  }
+
 #ifdef CAPYOS_HAVE_CAPYCODECS_IMAGE
-  /* 5. Image decode adapter (CapyCodecs): BMP (no inflater) + PNG (via tinf). */
+  /* 6. Image decode adapter (CapyCodecs): BMP (no inflater) + PNG (via tinf). */
   {
     struct capyos_image img;
     CHECK(capyos_image_decode(test_bmp_1x1, sizeof(test_bmp_1x1), &img) == 0 &&
@@ -185,7 +218,7 @@ int run_browser_pipeline_tests(void) {
           "unrecognized bytes -> decode fail-closed");
   }
 
-  /* 6. Rasterize a page with <img>: the resolver decodes -> the image is drawn
+  /* 7. Rasterize a page with <img>: the resolver decodes -> the image is drawn
    *    (images_decoded), not a placeholder. */
   {
     struct capyos_browser_pixel_opts o;

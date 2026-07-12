@@ -32,10 +32,10 @@
  * (<=HTTP_MAX_PATH). */
 #define BROWSER_FETCH_URL_MAX (HTTP_MAX_HOST + HTTP_MAX_PATH + 16u)
 
-/* Per-fetch response body scratch the real transport writes into and that the
- * cache copies from. Matched to the cache's per-entry body cap so any body the
- * cache is willing to store also fits the fetch buffer. */
-#define BROWSER_FETCH_BODY_MAX HTTP_CACHE_BODY_MAX
+/* Per-fetch response body scratch. Static pages may be larger than one cache
+ * entry: they remain renderable up to this bound while the cache independently
+ * declines to store bodies above HTTP_CACHE_BODY_MAX. */
+#define BROWSER_FETCH_BODY_MAX (256u * 1024u)
 
 struct browser_fetch_ctx {
   struct http_session session;        /* persistent cache + cookie jar */
@@ -90,6 +90,13 @@ int browser_fetch_get_with_transport(struct browser_fetch_ctx *ctx,
                                       struct http_response *resp, long now,
                                       http_cache_fetch_fn fetch, void *fctx);
 
+/* Reload `url` by invalidating only its exact cache entry before going through
+ * the normal session fetch flow. Cookies, HSTS state, statistics, and every
+ * other cached URL remain intact. The injected form is host-testable. */
+int browser_fetch_get_reload_with_transport(
+    struct browser_fetch_ctx *ctx, const char *url,
+    struct http_response *resp, long now, http_cache_fetch_fn fetch, void *fctx);
+
 /* Same, but drives the REAL ring-3 transport (capy_http_get_with_headers over
  * the Etapa 5 TLS/socket path). The request's cache/cookie headers (Cookie,
  * If-None-Match, If-Modified-Since) are forwarded to the wire; the response
@@ -97,5 +104,9 @@ int browser_fetch_get_with_transport(struct browser_fetch_ctx *ctx,
  * exercised by the ring-3 multi-fetch smoke. */
 int browser_fetch_get(struct browser_fetch_ctx *ctx, const char *url,
                       struct http_response *resp, long now);
+
+/* Exact-cache-entry reload over the real ring-3 transport. */
+int browser_fetch_get_reload(struct browser_fetch_ctx *ctx, const char *url,
+                             struct http_response *resp, long now);
 
 #endif /* CAPYOS_BROWSER_FETCH_H */

@@ -265,6 +265,18 @@ void syscall_gfx_release_owner(uint32_t pid) {
   }
 }
 
+int syscall_gfx_focus_owner(uint32_t pid) {
+  size_t i;
+  if (pid == 0u) return 0;
+  for (i = 0u; i < GFX_MAX_HANDLES; ++i) {
+    if (!g_handles[i].in_use || g_handles[i].owner_pid != pid) continue;
+    if (g_ops != NULL && g_ops->win_focus != NULL)
+      g_ops->win_focus(g_handles[i].backend_id);
+    return 1;
+  }
+  return 0;
+}
+
 void syscall_gfx_register_handlers(void) {
   syscall_register(SYS_WINDOW_CREATE, sys_window_create);
   syscall_register(SYS_SURFACE_FILL, sys_surface_fill);

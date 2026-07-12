@@ -86,7 +86,7 @@ def smoke_first_boot(
         session,
         "update-channel show",
         timeout=timeout,
-        expect="refs/tags/v0.8.0",
+        expect="releases/latest/download/latest.ini",
     )
     run_open_write(
         session,

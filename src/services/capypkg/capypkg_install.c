@@ -368,6 +368,121 @@ static int write_installed_marker(const struct capypkg_entry *entry,
                : CAPYPKG_ERR_STORAGE;
 }
 
+/* Snapshot the small commit surface that changes after payload verification.
+ * Payload bytes may remain staged after a failed commit, but without a marker
+ * or installed-table entry they are inert and the next install overwrites
+ * them. Existing-package updates additionally retain the previous marker so a
+ * failed DB write can restore the old activation state. */
+struct capypkg_install_commit_snapshot {
+    uint32_t installed_count;
+    uint32_t installed_index;
+    uint8_t had_installed_entry;
+    uint8_t had_marker;
+    struct capypkg_entry installed_entry;
+    char marker_path[CAPYPKG_PATH_MAX];
+    uint8_t marker[256];
+    size_t marker_len;
+};
+
+static void capture_install_commit_snapshot(
+        const struct capypkg_entry *entry,
+        struct capypkg_install_commit_snapshot *snapshot) {
+    struct capypkg_entry *installed;
+    if (!entry || !snapshot) return;
+    capypkg_local_zero(snapshot, sizeof(*snapshot));
+    snapshot->installed_count = g_capypkg.installed_count;
+    installed = capypkg_find_installed(entry->name);
+    if (installed) {
+        snapshot->had_installed_entry = 1u;
+        snapshot->installed_index = (uint32_t)(installed - g_capypkg.installed);
+        snapshot->installed_entry = *installed;
+    }
+    if (build_installed_marker_target(entry, snapshot->marker_path,
+                                      sizeof(snapshot->marker_path)) != 0) {
+        snapshot->marker_path[0] = '\0';
+        return;
+    }
+    if (snapshot->had_installed_entry && g_capypkg_reader &&
+        g_capypkg_reader(snapshot->marker_path, (char *)snapshot->marker,
+                         sizeof(snapshot->marker), &snapshot->marker_len) == 0 &&
+        snapshot->marker_len > 0u) {
+        snapshot->had_marker = 1u;
+    }
+}
+
+static void rollback_install_commit(
+        const struct capypkg_install_commit_snapshot *snapshot) {
+    if (!snapshot) return;
+    if (snapshot->had_installed_entry &&
+        snapshot->installed_index < CAPYPKG_MAX_INSTALLED) {
+        g_capypkg.installed[snapshot->installed_index] =
+            snapshot->installed_entry;
+        g_capypkg.installed_count = snapshot->installed_count;
+    } else {
+        while (g_capypkg.installed_count > snapshot->installed_count) {
+            (void)remove_installed_at(g_capypkg.installed_count - 1u);
+        }
+    }
+
+    if (snapshot->marker_path[0]) {
+        if (snapshot->had_marker && g_capypkg_bytes_writer) {
+            (void)g_capypkg_bytes_writer(snapshot->marker_path,
+                                         snapshot->marker,
+                                         snapshot->marker_len);
+        } else if (g_capypkg_remover) {
+            (void)g_capypkg_remover(snapshot->marker_path);
+        }
+    }
+}
+
+/* Run after dependency recursion and payload I/O have completed. Keeping the
+ * snapshot in this non-recursive helper avoids both a shared rollback scratch
+ * buffer and one large struct per dependency frame. Payload bytes are already
+ * verified and staged; this function commits only activation metadata. */
+static int commit_install_metadata(struct capypkg_entry *entry,
+                                   size_t payload_len) {
+    struct capypkg_install_commit_snapshot snapshot;
+    int rc;
+
+    capture_install_commit_snapshot(entry, &snapshot);
+    entry->state = CAPYPKG_STATE_STAGED;
+    rc = write_installed_marker(entry, payload_len);
+    if (rc != CAPYPKG_OK) {
+        rollback_install_commit(&snapshot);
+        entry->state = CAPYPKG_STATE_BROKEN;
+        klog(KLOG_WARN,
+             "[audit] [capypkg] installed marker write failed; install aborted");
+        return rc;
+    }
+
+    rc = append_or_replace_installed(entry);
+    if (rc != CAPYPKG_OK) {
+        rollback_install_commit(&snapshot);
+        entry->state = CAPYPKG_STATE_BROKEN;
+        klog(KLOG_WARN,
+             "[audit] [capypkg] installed-table quota exhausted; install aborted");
+        return rc;
+    }
+
+    entry->state = CAPYPKG_STATE_INSTALLED;
+    rc = capypkg_db_save();
+    if (rc == CAPYPKG_ERR_NOT_READY) {
+        rc = CAPYPKG_OK;
+    }
+    if (rc != CAPYPKG_OK) {
+        /* Do not leave a memory-only installed entry: the immediate retry
+         * would otherwise return ALREADY, write bootstrap.done and mask the
+         * persistence failure. Restore both the table and activation marker,
+         * then best-effort rewrite the previous DB snapshot. */
+        rollback_install_commit(&snapshot);
+        (void)capypkg_db_save();
+        entry->state = CAPYPKG_STATE_BROKEN;
+        klog(KLOG_WARN,
+             "[audit] [capypkg] db persistence failed; install rolled back");
+    }
+    return rc;
+}
+
 /* Build the staging path under CAPYPKG_DIR_UPDATES for the freshly
  * fetched payload. The directory is bounded by capypkg_manifest's
  * `path_is_under()` whitelist (CAPYPKG_DIR_VAR), so this path
@@ -606,48 +721,12 @@ int capypkg_install(const char *name) {
         cleanup_payload_staging(avail);
     }
 
-    avail->state = CAPYPKG_STATE_STAGED;
-    rc = write_installed_marker(avail, payload_len);
+    rc = commit_install_metadata(avail, payload_len);
     if (rc != CAPYPKG_OK) {
-        avail->state = CAPYPKG_STATE_BROKEN;
-        klog(KLOG_WARN,
-             "[audit] [capypkg] installed marker write failed; install aborted");
 #if !defined(UNIT_TEST)
         kfree(payload_buffer);
 #endif
         return rc;
-    }
-
-    int append_rc = append_or_replace_installed(avail);
-    if (append_rc != CAPYPKG_OK) {
-        /* Payload is on disk but the installed table is full. The
-         * file is harmless without a db entry pointing at it; a
-         * future transactional path will roll back the write. */
-        avail->state = CAPYPKG_STATE_BROKEN;
-        klog(KLOG_WARN,
-             "[audit] [capypkg] installed-table quota exhausted; install aborted");
-#if !defined(UNIT_TEST)
-        kfree(payload_buffer);
-#endif
-        return append_rc;
-    }
-    avail->state = CAPYPKG_STATE_INSTALLED;
-    int save_rc = capypkg_db_save();
-    if (save_rc == CAPYPKG_ERR_NOT_READY) {
-        save_rc = CAPYPKG_OK;
-    }
-    if (save_rc != CAPYPKG_OK) {
-        /* Memory-resident install succeeded (file written, table
-         * updated), but the db file did not persist. On next boot
-         * the install is lost. The success klog is intentionally
-         * NOT emitted in this branch so an audit reader can tell
-         * the difference between persisted and transient installs. */
-        klog(KLOG_WARN,
-             "[audit] [capypkg] package installed but db persistence failed");
-#if !defined(UNIT_TEST)
-        kfree(payload_buffer);
-#endif
-        return save_rc;
     }
     klog(KLOG_INFO,
          "[audit] [capypkg] payload-sha256 verified; package installed");
@@ -655,7 +734,7 @@ int capypkg_install(const char *name) {
 #if !defined(UNIT_TEST)
     kfree(payload_buffer);
 #endif
-    return save_rc;
+    return CAPYPKG_OK;
 }
 
 int capypkg_remove(const char *name) {

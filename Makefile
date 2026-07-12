@@ -76,7 +76,7 @@ endif
 # stale objects compiled without the new flag.
 CFLAGS64  += $(EXTRA_CFLAGS64)
 DEPFLAGS64 := -MMD -MP
-LDFLAGS64 := -nostdlib
+LDFLAGS64 := -nostdlib -z noexecstack
 
 # ── alpha.241 modular build profile ─────────────────────────────────────────
 # PROFILE selects which subsystems are linked into the kernel ELF:
@@ -157,13 +157,56 @@ ifneq ($(PROFILE),core-only)
   endif
 endif
 
+# ── CapyAI assistant core (capy-ai-core ABI) ───────────────────────────────
+# When the ../CapyAI sibling is present, compile its portable freestanding
+# inference core (src/core/*.c) INTO THE KERNEL ELF and enable the `capyai`
+# shell command + executor adapter (src/services/capyai). Absent sibling ->
+# capyai_command.c compiles to a stub. Same decoupling discipline as the
+# CapyUI widget / capy-browser-core sibling detection: headers reached via -I,
+# never copied into src/; the trained model is a future capypkg override of the
+# built-in default (module org.capyos.ai.assistant).
+CAPYAI_DIR ?= ../CapyAI
+CAPYAI_OBJS :=
+ifneq ($(strip $(CAPYAI_DIR)),)
+  ifneq ($(wildcard $(CAPYAI_DIR)/src/core/capy_ai_core.h),)
+    CFLAGS64 += -DCAPYOS_HAVE_CAPYAI -I$(CAPYAI_DIR)/src/core
+    CAPYAI_OBJS := \
+        $(BUILD)/x86_64/capyai-core/capy_ai_tokenize.o \
+        $(BUILD)/x86_64/capyai-core/capy_ai_predict.o \
+        $(BUILD)/x86_64/capyai-core/capy_ai_slots.o \
+        $(BUILD)/x86_64/services/capyai/capyai_plan.o \
+        $(BUILD)/x86_64/services/capyai/capyai_execute.o \
+        $(BUILD)/x86_64/services/capyai/capyai_summary.o \
+        $(BUILD)/x86_64/services/capyai/capyai_async.o
+    $(info [build] CapyAI core detected at $(CAPYAI_DIR)/src/core (capyai enabled))
+    # When the CapyAI repo has a trained CapyOS model artifact, embed it (objcopy
+    # -> .rodata blob) so the kernel uses the real trained model instead of the
+    # built-in hand-authored default. Absent -> the built-in default is used.
+    CAPYAI_MODEL_SRC := $(CAPYAI_DIR)/capyai/data/model-capyos.capyaicore
+    ifneq ($(wildcard $(CAPYAI_MODEL_SRC)),)
+      CFLAGS64 += -DCAPYOS_CAPYAI_EMBED_MODEL
+      CAPYAI_OBJS += $(BUILD)/x86_64/capyai/capyai_model_blob.o
+      $(info [build] CapyAI trained model detected; embedding $(CAPYAI_MODEL_SRC))
+    else
+      $(info [build] CapyAI trained model absent; capyai uses the built-in default)
+    endif
+  else
+    $(info [build] CapyAI present but core (src/core/capy_ai_core.h) absent; capyai stub only)
+  endif
+else
+  $(info [build] CapyAI sibling not set; capyai stub only)
+endif
+
 # Toolchain EFI (gnu-efi)
 EFI_PREFIX ?= $(shell if [ -f /usr/include/efi/efi.h ]; then printf /usr; elif command -v brew >/dev/null 2>&1; then brew --prefix gnu-efi 2>/dev/null; elif [ -d /opt/homebrew/opt/gnu-efi ]; then printf /opt/homebrew/opt/gnu-efi; elif [ -d /usr/local/opt/gnu-efi ]; then printf /usr/local/opt/gnu-efi; elif [ -d /opt/brew-master/opt/gnu-efi ]; then printf /opt/brew-master/opt/gnu-efi; fi)
 EFI_INCLUDE_DIR := $(EFI_PREFIX)/include/efi
 EFI_LIB_DIR := $(EFI_PREFIX)/lib
-EFI_CC ?= $(CC64)
-EFI_LD ?= $(LD64)
-EFI_OBJCOPY ?= $(OBJCOPY64)
+# The gnu-efi loader is a host ABI artifact, not freestanding kernel code.
+# Keep it independent from TOOLCHAIN64=elf: x86_64-elf has no host libc
+# headers and cannot compile gnu-efi from a clean tree.
+EFI_CC ?= $(HOST_CC)
+EFI_LD ?= x86_64-linux-gnu-ld
+EFI_OBJCOPY ?= x86_64-linux-gnu-objcopy
 EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
 EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L$(EFI_LIB_DIR) -T $(EFI_LIB_DIR)/elf_x86_64_efi.lds
 EFI_LIBS := $(EFI_LIB_DIR)/crt0-efi-x86_64.o -lefi -lgnuefi
@@ -341,6 +384,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/capypkg/capypkg_persist.o \
 	$(BUILD)/x86_64/services/capypkg_local_bundle.o \
 	$(BUILD)/x86_64/services/capypkg_bootstrap.o \
+	$(BUILD)/x86_64/services/capypkg_network.o \
 	$(BUILD)/x86_64/services/install_profile.o \
 	$(BUILD)/x86_64/auth/user.o \
 	$(BUILD)/x86_64/auth/user_helpers.o \
@@ -626,6 +670,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/memory/pmm.o \
 	$(BUILD)/x86_64/memory/pmm_refcount.o \
 	$(BUILD)/x86_64/memory/vmm.o \
+	$(BUILD)/x86_64/memory/vmm_active.o \
 	$(BUILD)/x86_64/memory/vmm_cow.o \
 	$(BUILD)/x86_64/memory/vmm_regions.o \
 	$(BUILD)/x86_64/fs/journal/journal.o \
@@ -695,6 +740,8 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/drivers/serial/serial_com1.o \
 	$(BUILD)/x86_64/security/sha512.o \
 	$(BUILD)/x86_64/shell/commands/extended.o \
+	$(BUILD)/x86_64/shell/commands/capyai_command.o \
+	$(CAPYAI_OBJS) \
 	$(DESKTOP_OBJS) \
 	$(WINDOW_OBJS) \
 	$(APPS_OBJS)
@@ -703,7 +750,7 @@ CAPYPKG_LOCAL_BUNDLE_H := $(BUILD_GEN)/capypkg_local_bundle_data.h
 CAPYPKG_LOCAL_INDEX := $(BUILD)/capypkg/local/modules-index.txt
 CAPYPKG_LOCAL_BUNDLE_STAMP := $(BUILD)/capypkg/local/.bundle.stamp
 LOCAL_MODULES_WORKSPACE ?= ..
-LOCAL_MODULES_REPOS ?= CapyAgent CapyBrowser CapyCodecs CapyUI CapyLang CapyBenchmark
+LOCAL_MODULES_REPOS ?= CapyAgent CapyAI CapyBrowser CapyCodecs CapyUI CapyLang CapyBenchmark
 ifeq ($(CAPYOS_LOCAL_MODULES),1)
 CAPYOS64_OBJS += $(BUILD)/x86_64/generated/capypkg_local_bundle_data.o
 endif
@@ -743,6 +790,7 @@ APPS_OBJS := \
 	$(BUILD)/x86_64/capyui-apps/file_manager_dnd.o \
 	$(BUILD)/x86_64/capyui-apps/text_editor.o \
 	$(BUILD)/x86_64/capyui-apps/task_manager.o \
+	$(BUILD)/x86_64/capyui-apps/capyai_chat.o \
 	$(BUILD)/x86_64/capyui-apps/settings.o \
 	$(BUILD)/x86_64/capyui-apps/settings_view.o \
 	$(BUILD)/x86_64/capyui-apps/settings_actions.o
@@ -810,6 +858,23 @@ $(BUILD)/x86_64/capyui-apps/%.o: $(APPS_SRC_ROOT)/%.c | $(BUILD) $(BUILD_GEN)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) -I$(APPS_SRC_ROOT)/internal $(DEPFLAGS64) -c $< -o $@
 
+# CapyAI core TUs compiled for the KERNEL (freestanding). CFLAGS64 carries the
+# sibling -I + -DCAPYOS_HAVE_CAPYAI set when the core was detected above.
+$(BUILD)/x86_64/capyai-core/%.o: $(CAPYAI_DIR)/src/core/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
+
+# Embed the trained CapyOS model artifact as a .rodata blob (objcopy). The input
+# is copied to a file literally named `capyai_model` so the symbols are
+# `_binary_capyai_model_start/_end` regardless of the source filename.
+$(BUILD)/x86_64/capyai/capyai_model_blob.o: $(CAPYAI_MODEL_SRC)
+	@mkdir -p $(BUILD)/x86_64/capyai
+	cp '$<' $(BUILD)/x86_64/capyai/capyai_model
+	cd $(BUILD)/x86_64/capyai && $(OBJCOPY64) -I binary -O elf64-x86-64 \
+		-B i386:x86-64 \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		capyai_model '$(abspath $(BUILD)/x86_64/capyai/capyai_model_blob.o)'
+
 $(BUILD)/x86_64/%.o: $(SRC_DIR)/%.S | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
@@ -828,6 +893,7 @@ USERLAND_DIR = userland
 # the artifacts elsewhere, e.g.
 #   make capylibc CAPYLIBC_BUILD_DIR=/tmp/capyos_capylibc
 CAPYLIBC_BUILD_DIR ?= $(BUILD)/userland
+BEARSSL_USERLAND_OBJS := $(patsubst $(BEARSSL_DIR)/%.c,$(CAPYLIBC_BUILD_DIR)/third_party/bearssl/%.o,$(BEARSSL_SRCS))
 
 # User-space C flags: drop -mno-red-zone (user code can use the red
 # zone; SYSCALL itself does not clobber it) and add the userland
@@ -940,7 +1006,8 @@ ifneq ($(strip $(CAPYBROWSER_DIR)),)
                                -I$(CAPYBROWSER_DIR)/src/displaylist \
                                -I$(CAPYBROWSER_DIR)/src/css \
                                -I$(CAPYBROWSER_DIR)/src/html \
-                               -I$(CAPYBROWSER_DIR)/src/layout
+                               -I$(CAPYBROWSER_DIR)/src/layout \
+                               -I$(CAPYBROWSER_DIR)/src/page
     $(info [build] CapyBrowser graphical core (display list) detected; browser_render enabled)
   endif
 endif
@@ -982,7 +1049,8 @@ CAPYBROWSER_PIPELINE_OBJS := \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/css_parse.o \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/cascade.o \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/layout.o \
-	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/display_list.o
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/display_list.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/page_render.o
 
 # One rule per sibling source dir feeding the shared output dir; Make selects the
 # rule whose source exists for each (unique) stem.
@@ -1004,6 +1072,9 @@ $(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/layout/%.c
 $(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/displaylist/%.c
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/%.o: $(CAPYBROWSER_DIR)/src/page/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 
 # CapyOS-side pipeline adapter + pixel rasterizer + shared console font, built as
 # ring-3 objects with the pipeline cflags (for the capygfx graphical render path).
@@ -1011,6 +1082,12 @@ $(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_pipeline.o: $(USERLAND_DIR)/bin/ca
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
 $(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_render_pixel.o: $(USERLAND_DIR)/bin/capybrowse/browser_render_pixel.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_resources.o: $(USERLAND_DIR)/bin/capybrowse/browser_resources.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_navigation.o: $(USERLAND_DIR)/bin/capybrowse/browser_navigation.c
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(EXTRA_USERLAND_CFLAGS) $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse $(DEPFLAGS64) -c $< -o $@
 $(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/font8x8_data.o: src/gui/core/font8x8_data.c
@@ -1108,6 +1185,7 @@ CAPYLIBC_NET_OBJS = \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_url.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_tls.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_http.o \
+	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_http_chunked.o \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-net/capy_net_http_request.o \
 	$(CAPYLIBC_TLS_OBJS)
 
@@ -1129,19 +1207,25 @@ CAPYLIBC_TLS_OBJS = \
 # `make ... CAPYOS_TLS_USERLAND_HANDSHAKE=0` to restore the legacy fail-closed
 # userland TLS (e.g. for size-constrained or diagnostic builds). Only affects
 # the ring-3 USERLAND_CFLAGS build; HOST_CFLAGS unit tests are unchanged.
-# Reuses the kernel-built $(BEARSSL_OBJS) (same CC64 / -mcmodel=small) and
-# compiles the in-tree trust anchors (src/security/tls_trust_anchors.c) as a
-# userland object. br_prng_seeder_system is provided by capy_tls_backend.c.
+# BearSSL has a dedicated userland object set. Reusing $(BEARSSL_OBJS) would
+# leak kernel-only flags (notably stack-canary references) into ring-3 static
+# binaries and break the freestanding link. The separate objects consistently
+# inherit USERLAND_CFLAGS, including the no-FPU/SSE contract. The in-tree trust
+# anchors are compiled as userland too; br_prng_seeder_system is provided by
+# capy_tls_backend.c.
 CAPYOS_TLS_USERLAND_HANDSHAKE ?= 1
 ifneq ($(CAPYOS_TLS_USERLAND_HANDSHAKE),0)
 USERLAND_CFLAGS += -DCAPYOS_TLS_USERLAND_HANDSHAKE
 CAPYLIBC_TLS_OBJS += \
 	$(CAPYLIBC_BUILD_DIR)/lib/capylibc-tls/capy_tls_handshake.o \
 	$(CAPYLIBC_BUILD_DIR)/security/tls_trust_anchors.o \
-	$(BEARSSL_OBJS)
+	$(BEARSSL_USERLAND_OBJS)
 $(CAPYLIBC_BUILD_DIR)/security/%.o: src/security/%.c
 	@mkdir -p $(dir $@)
 	$(CC64) $(USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
+$(CAPYLIBC_BUILD_DIR)/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC64) $(USERLAND_CFLAGS) -I$(BEARSSL_DIR)/src $(DEPFLAGS64) -c $< -o $@
 endif
 
 .PHONY: capylibc capylibc-net capylibc-tls
@@ -1150,6 +1234,58 @@ capylibc: $(CAPYLIBC_OBJS)
 
 capylibc-net: $(CAPYLIBC_NET_OBJS)
 	@echo "[ok] capylibc-net objects assembled: $(CAPYLIBC_NET_OBJS)"
+
+# Fast host gate for the userland network facade. It deliberately uses a tiny
+# TLS fail-closed stub; the full `make test` gate still covers real capylibc-tls.
+TEST_CAPYLIBC_NET_BIN := $(BUILD)/tests/test_capylibc_net_focused
+TEST_CAPYLIBC_NET_SRCS := \
+	tests/userland/test_capylibc_net_focused_main.c \
+	tests/userland/test_capylibc_net.c \
+	tests/userland/test_capylibc_net_url.c \
+	tests/userland/test_capylibc_net_http.c \
+	tests/userland/test_capylibc_net_chunked.c \
+	userland/lib/capylibc-net/capy_net_endian.c \
+	userland/lib/capylibc-net/capy_net_inet.c \
+	userland/lib/capylibc-net/capy_net_tcp.c \
+	userland/lib/capylibc-net/capy_net_error.c \
+	userland/lib/capylibc-net/capy_net_resolve.c \
+	userland/lib/capylibc-net/capy_net_url.c \
+	userland/lib/capylibc-net/capy_net_tls.c \
+	userland/lib/capylibc-net/capy_net_http.c \
+	userland/lib/capylibc-net/capy_net_http_chunked.c \
+	userland/lib/capylibc-net/capy_net_http_request.c
+
+$(TEST_CAPYLIBC_NET_BIN): $(TEST_CAPYLIBC_NET_SRCS) | $(BUILD)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests/userland -Iuserland/lib/capylibc-net \
+		-o $@ $(TEST_CAPYLIBC_NET_SRCS)
+
+.PHONY: test-capylibc-net
+test-capylibc-net: $(TEST_CAPYLIBC_NET_BIN)
+	$(TEST_CAPYLIBC_NET_BIN)
+
+TEST_BROWSER_FETCH_BIN := $(BUILD)/tests/test_browser_fetch_focused
+TEST_BROWSER_FETCH_SRCS := \
+	tests/net/test_browser_fetch_focused_main.c \
+	tests/net/test_browser_fetch.c \
+	userland/bin/capybrowse/browser_fetch.c \
+	userland/bin/capybrowse/page_budget.c \
+	src/net/services/http/http_cache.c \
+	src/net/services/http/http_cookies.c \
+	src/net/services/http/http_session.c \
+	src/net/services/http/http_fetch_policy.c \
+	src/net/services/http/http_hsts.c \
+	userland/lib/capylibc-net/capy_net_url.c \
+	userland/lib/capylibc-net/capy_net_error.c
+
+$(TEST_BROWSER_FETCH_BIN): $(TEST_BROWSER_FETCH_SRCS) | $(BUILD)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -Iuserland/bin/capybrowse \
+		-o $@ $(TEST_BROWSER_FETCH_SRCS)
+
+.PHONY: test-browser-fetch
+test-browser-fetch: $(TEST_BROWSER_FETCH_BIN)
+	$(TEST_BROWSER_FETCH_BIN)
 
 capylibc-tls: $(CAPYLIBC_TLS_OBJS)
 	@echo "[ok] capylibc-tls objects assembled: $(CAPYLIBC_TLS_OBJS)"
@@ -1190,6 +1326,8 @@ $(HELLO_BLOB_OBJ): $(HELLO_ELF)
 	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
 		-B i386:x86-64 \
 		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		--add-section .note.GNU-stack=/dev/null \
+		--set-section-flags .note.GNU-stack=noload,readonly \
 		'$(notdir $<)' '$(abspath $@)'
 
 .PHONY: hello-blob
@@ -1451,9 +1589,13 @@ CAPYGFX_EXTRA_CFLAGS :=
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
 CAPYGFX_EXTRA_CFLAGS := $(CAPYBROWSER_PIPELINE_CFLAGS) -Iuserland/bin/capybrowse
 CAPYGFX_OBJS += \
+	$(CAPYLIBC_BUILD_DIR)/bin/capygfx/browser_app.o \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_pipeline.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_navigation.o \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_render_pixel.o \
+	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/browser_resources.o \
 	$(CAPYLIBC_BUILD_DIR)/capybrowser-gfx/font8x8_data.o \
+	$(CAPYLIBC_BUILD_DIR)/bin/capygfx/toolbar.o \
 	$(CAPYLIBC_STRING_OBJS) \
 	$(CAPYBROWSER_PIPELINE_OBJS)
 # Slice 7.4b: when CapyCodecs is also present, link the decode adapter + codecs +
@@ -1489,7 +1631,7 @@ endif
 # CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE) ficam FORA: seus markers COM1
 # dependem do exit-0 imediato pos-present (alpha.290/294/303/304 inalterados).
 ifneq (,$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER))
-ifeq (,$(CAPYOS_GFX_SMOKE)$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE))
+ifeq (,$(CAPYOS_GFX_SMOKE)$(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE)$(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE))
 CAPYGFX_EXTRA_CFLAGS += -DCAPYGFX_DESKTOP_INTERACTIVE
 endif
 endif
@@ -1500,7 +1642,7 @@ $(CAPYLIBC_BUILD_DIR)/bin/capygfx/%.o: $(USERLAND_DIR)/bin/capygfx/%.c
 
 $(CAPYGFX_ELF): $(CAPYGFX_OBJS)
 	@mkdir -p $(dir $@)
-	$(LD64) -nostdlib -static -e _start -o $@ $(CAPYGFX_OBJS)
+	$(LD64) -nostdlib -static -z noexecstack -e _start -o $@ $(CAPYGFX_OBJS)
 
 .PHONY: capygfx-elf
 capygfx-elf: $(CAPYGFX_ELF)
@@ -1515,6 +1657,8 @@ $(CAPYGFX_BLOB_OBJ): $(CAPYGFX_ELF)
 	cd '$(dir $<)' && $(OBJCOPY64) -I binary -O elf64-x86-64 \
 		-B i386:x86-64 \
 		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		--add-section .note.GNU-stack=/dev/null \
+		--set-section-flags .note.GNU-stack=noload,readonly \
 		'$(notdir $<)' '$(abspath $@)'
 
 .PHONY: capygfx-blob
@@ -2134,6 +2278,7 @@ TEST_SRCS   := \
                \
                tests/gui/test_gui_event.c tests/gui/test_gui_event_helpers.c src/gui/core/event.c \
                tests/gui/test_compositor_events.c src/gui/core/compositor.c src/gui/core/compositor_damage.c src/gui/core/compositor_theme.c src/gui/core/compositor_render.c \
+               tests/gui/test_syscall_gfx_backend.c src/kernel/syscall_gfx_init.c \
                tests/gui/test_compositor_smoke_gate.c src/gui/core/compositor_smoke.c tests/stubs/stub_compositor_smoke_io.c \
                tests/gui/test_widget_damage.c src/gui/widgets/widget.c \
                tests/gui/test_overlay_damage.c src/gui/widgets/context_menu.c src/gui/widgets/inline_prompt.c src/lang/app_language.c \
@@ -2148,6 +2293,7 @@ TEST_SRCS   := \
                \
                tests/net/test_http_encoding.c src/net/services/http_encoding.c \
                tests/net/test_http_url.c src/net/services/http/url_request_builder.c \
+                   src/net/services/http/prelude_headers_encoding.c \
                tests/net/test_http_chunked.c src/net/services/http/http_chunked.c \
                tests/net/test_http_cache.c src/net/services/http/http_cache.c \
                tests/net/test_http_cookies.c src/net/services/http/http_cookies.c \
@@ -2172,18 +2318,20 @@ TEST_SRCS   := \
                tests/userland/test_capybrowse_view.c \
                tests/userland/test_browser_render.c \
                tests/userland/test_browser_render_pixel.c \
-               tests/userland/test_capylibc_net.c \
-               tests/userland/test_capylibc_net_url.c \
-               tests/userland/test_capylibc_net_http.c \
+                tests/userland/test_capylibc_net.c \
+                tests/userland/test_capylibc_net_url.c \
+                tests/userland/test_capylibc_net_http.c \
+                tests/userland/test_capylibc_net_chunked.c \
                    userland/lib/capylibc-net/capy_net_endian.c \
                    userland/lib/capylibc-net/capy_net_inet.c \
                    userland/lib/capylibc-net/capy_net_tcp.c \
                    userland/lib/capylibc-net/capy_net_error.c \
                    userland/lib/capylibc-net/capy_net_resolve.c \
                    userland/lib/capylibc-net/capy_net_url.c \
-                   userland/lib/capylibc-net/capy_net_tls.c \
-                   userland/lib/capylibc-net/capy_net_http.c \
-                   userland/lib/capylibc-net/capy_net_http_request.c \
+                    userland/lib/capylibc-net/capy_net_tls.c \
+                    userland/lib/capylibc-net/capy_net_http.c \
+                    userland/lib/capylibc-net/capy_net_http_chunked.c \
+                    userland/lib/capylibc-net/capy_net_http_request.c \
                tests/userland/test_capylibc_tls.c \
                tests/userland/test_capylibc_tls_trust.c \
                tests/userland/test_capylibc_tls_backend.c \
@@ -2249,6 +2397,7 @@ TEST_SRCS   := \
                tests/kernel/test_process_destroy.c \
                tests/kernel/test_vmm_anon_regions.c \
                tests/kernel/test_context_switch.c src/kernel/scheduler.c \
+               tests/kernel/test_task_sleep.c \
                tests/kernel/test_scheduler_smoke_gate.c src/kernel/scheduler_smoke.c tests/stubs/stub_scheduler_smoke_io.c \
                tests/kernel/test_thread_crash_smoke_gate.c src/kernel/thread_crash_smoke.c tests/stubs/stub_thread_crash_smoke_io.c \
                tests/kernel/test_tls_handshake_smoke_gate.c src/kernel/tls_handshake_smoke.c tests/stubs/stub_tls_handshake_smoke_io.c \
@@ -2353,7 +2502,7 @@ TEST_SRCS   := \
                tests/services/test_work_queue.c src/core/work_queue.c \
                tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
                tests/services/test_update_transact.c src/services/update_agent_transact.c \
-               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c src/services/capypkg/capypkg_persist.c src/services/capypkg/capypkg_signature.c \
+               tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c src/services/capypkg/capypkg_persist.c src/services/capypkg/capypkg_signature.c src/services/capypkg_network.c \
                tests/services/test_capypkg_local_bundle.c src/services/capypkg_local_bundle.c \
                tests/services/test_install_profile.c src/services/install_profile.c \
                \
@@ -2410,11 +2559,56 @@ $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ disk
 
-test: $(TEST_BIN)
+test: $(TEST_BIN) test-capyai test-browser-shell
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
 	@$(MAKE) --no-print-directory test-browser-pipeline
+endif
+
+TEST_CAPYAI_BIN := $(BUILD)/tests/test_capyai_standalone
+TEST_CAPYAI_GUI_BIN := $(BUILD)/tests/test_capyai_command_gui
+TEST_CAPYAI_ASYNC_BIN := $(BUILD)/tests/test_capyai_async
+TEST_WORKER_POOL_BIN := $(BUILD)/tests/test_worker_pool
+
+.PHONY: test-capyai
+ifneq ($(wildcard $(CAPYAI_DIR)/src/core/capy_ai_core.h),)
+test-capyai: $(TEST_CAPYAI_BIN) $(TEST_CAPYAI_GUI_BIN) \
+		$(TEST_CAPYAI_ASYNC_BIN) $(TEST_WORKER_POOL_BIN)
+	@echo "Executando regressao focada CapyAI..."
+	$(TEST_CAPYAI_BIN)
+	$(TEST_CAPYAI_GUI_BIN)
+	$(TEST_CAPYAI_ASYNC_BIN)
+	$(TEST_WORKER_POOL_BIN)
+
+$(TEST_CAPYAI_BIN): tests/services/test_capyai_standalone.c \
+		src/services/capyai/capyai_plan.c \
+		src/services/capyai/capyai_execute.c \
+		src/services/capyai/capyai_summary.c \
+		$(CAPYAI_DIR)/src/core/capy_ai_tokenize.c \
+		$(CAPYAI_DIR)/src/core/capy_ai_predict.c \
+		$(CAPYAI_DIR)/src/core/capy_ai_slots.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -I$(CAPYAI_DIR)/src/core -o $@ $^
+
+$(TEST_CAPYAI_GUI_BIN): tests/services/test_capyai_command_gui.c \
+		src/shell/commands/capyai_command.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -DCAPYOS_HAVE_CAPYAI \
+		-I$(CAPYAI_DIR)/src/core -o $@ $^
+
+$(TEST_CAPYAI_ASYNC_BIN): tests/services/test_capyai_async.c \
+		src/services/capyai/capyai_async.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -I$(CAPYAI_DIR)/src/core -o $@ $^
+
+$(TEST_WORKER_POOL_BIN): tests/kernel/test_worker_pool.c \
+		src/kernel/worker.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^
+else
+test-capyai:
+	@echo "[skip] CapyAI sibling core ausente"
 endif
 
 .PHONY: security-selftest
@@ -2424,6 +2618,11 @@ endif
 security-selftest: $(TEST_BIN)
 	@echo "Executando regressao focada de seguranca..."
 	$(TEST_BIN) security
+
+.PHONY: gfx-lifecycle-selftest
+gfx-lifecycle-selftest: $(TEST_BIN)
+	@echo "Executando regressao focada do lifecycle grafico..."
+	$(TEST_BIN) gfx-lifecycle
 
 # Quick iteration target: builds and runs ONLY the capypkg unit tests
 # against the in-tree adapter sources, without dragging in the full
@@ -2436,9 +2635,17 @@ TEST_CAPYPKG_SRCS := \
 	src/services/capypkg/capypkg_repo.c \
 	src/services/capypkg/capypkg_install.c \
 	src/services/capypkg/capypkg_persist.c \
+	src/services/capypkg/capypkg_signature.c \
 	src/services/capypkg_bootstrap.c \
+	src/services/capypkg_network.c \
 	src/services/install_profile.c \
+	src/security/ed25519.c \
+	src/security/ed25519_group.c \
+	src/security/ed25519_encode.c \
+	src/security/ed25519_scalar.c \
+	src/security/fe25519.c \
 	src/security/sha256.c \
+	src/security/sha512.c \
 	src/kernel/log/klog.c
 TEST_CAPYPKG_MAIN := $(BUILD)/tests/capypkg_main.c
 
@@ -2452,6 +2659,24 @@ $(TEST_CAPYPKG_BIN): $(TEST_CAPYPKG_SRCS) | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	@printf '#include <stdint.h>\nuint64_t pit_ticks(void){static uint64_t t=0;return ++t;}\nint run_capypkg_tests(void);\nint main(void){return run_capypkg_tests();}\n' > $(TEST_CAPYPKG_MAIN)
 	$(HOST_CC) $(HOST_CFLAGS) -DCAPYPKG_BOOTSTRAP_TESTS -o $@ $(TEST_CAPYPKG_SRCS) $(TEST_CAPYPKG_MAIN)
+
+# Quick HTTP lifetime/header-parser regression target. This keeps the Wizard's
+# stale-connection fix testable without rebuilding the full host aggregate.
+TEST_HTTP_URL_BIN := $(BUILD)/tests/http_url_tests
+TEST_HTTP_URL_SRCS := \
+	tests/net/test_http_url.c \
+	tests/stubs/stub_kmem.c \
+	src/net/services/http/url_request_builder.c \
+	src/net/services/http/prelude_headers_encoding.c
+
+.PHONY: test-http-url
+test-http-url: $(TEST_HTTP_URL_BIN)
+	@echo "Executando regressao focada HTTP URL/lifetime..."
+	$(TEST_HTTP_URL_BIN)
+
+$(TEST_HTTP_URL_BIN): $(TEST_HTTP_URL_SRCS) | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -DCAPY_HTTP_URL_STANDALONE -o $@ $(TEST_HTTP_URL_SRCS)
 
 # Etapa 7 / Slice 7.3: focused host test for the CapyOS-side driver of the
 # capy-browser-core static-render pipeline (HTML -> DOM -> CSS -> cascade ->
@@ -2468,6 +2693,7 @@ TEST_PIPELINE_SRCS := \
 	tests/userland/test_browser_pipeline.c \
 	userland/bin/capybrowse/browser_pipeline.c \
 	userland/bin/capybrowse/browser_render_pixel.c \
+	userland/bin/capybrowse/browser_resources.c \
 	src/gui/core/font8x8_data.c \
 	$(CAPYBROWSER_DIR)/src/url/url_parse.c \
 	$(CAPYBROWSER_DIR)/src/url/url_normalize.c \
@@ -2479,12 +2705,14 @@ TEST_PIPELINE_SRCS := \
 	$(CAPYBROWSER_DIR)/src/css/css_parse.c \
 	$(CAPYBROWSER_DIR)/src/css/cascade.c \
 	$(CAPYBROWSER_DIR)/src/layout/layout.c \
-	$(CAPYBROWSER_DIR)/src/displaylist/display_list.c
+	$(CAPYBROWSER_DIR)/src/displaylist/display_list.c \
+	$(CAPYBROWSER_DIR)/src/page/page_render.c
 TEST_PIPELINE_MAIN := $(BUILD)/tests/browser_pipeline_main.c
 TEST_PIPELINE_INCLUDES := \
 	-I$(CAPYBROWSER_DIR)/src/url -I$(CAPYBROWSER_DIR)/src/text \
 	-I$(CAPYBROWSER_DIR)/src/html -I$(CAPYBROWSER_DIR)/src/css \
 	-I$(CAPYBROWSER_DIR)/src/layout -I$(CAPYBROWSER_DIR)/src/displaylist \
+	-I$(CAPYBROWSER_DIR)/src/page \
 	-Iuserland/bin/capybrowse
 # Slice 7.4: when CapyCodecs is present, also link the image decode adapter +
 # the codec TUs + tinf, and define CAPYOS_HAVE_CAPYCODECS_IMAGE so the test's
@@ -2505,6 +2733,47 @@ $(TEST_PIPELINE_BIN): $(TEST_PIPELINE_SRCS) | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	@printf '#include <stdint.h>\nint run_browser_pipeline_tests(void);\nint main(void){return run_browser_pipeline_tests();}\n' > $(TEST_PIPELINE_MAIN)
 	$(HOST_CC) $(HOST_CFLAGS) $(TEST_PIPELINE_INCLUDES) -o $@ $(TEST_PIPELINE_SRCS) $(TEST_PIPELINE_MAIN)
+endif
+
+# Etapa 7: pure browser-shell state machines. Navigation is independent of the
+# sibling core; toolbar/link hit-testing is compiled when display_list.h exists.
+TEST_BROWSER_NAVIGATION_BIN := $(BUILD)/tests/browser_navigation_tests
+TEST_BROWSER_NAVIGATION_SRCS := \
+	tests/net/test_browser_navigation.c \
+	userland/bin/capybrowse/browser_navigation.c
+
+.PHONY: test-browser-navigation
+test-browser-navigation: $(TEST_BROWSER_NAVIGATION_BIN)
+	@echo "Executando testes do controlador de navegacao..."
+	$(TEST_BROWSER_NAVIGATION_BIN)
+
+$(TEST_BROWSER_NAVIGATION_BIN): $(TEST_BROWSER_NAVIGATION_SRCS) | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -Iuserland/bin/capybrowse -o $@ $(TEST_BROWSER_NAVIGATION_SRCS)
+
+.PHONY: test-browser-shell
+test-browser-shell: test-browser-navigation
+
+ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
+TEST_CAPYGFX_TOOLBAR_BIN := $(BUILD)/tests/capygfx_toolbar_tests
+TEST_CAPYGFX_TOOLBAR_SRCS := \
+	tests/userland/test_capygfx_toolbar.c \
+	userland/bin/capygfx/toolbar.c \
+	userland/bin/capybrowse/browser_navigation.c \
+	src/gui/core/font8x8_data.c
+
+.PHONY: test-capygfx-toolbar
+test-capygfx-toolbar: $(TEST_CAPYGFX_TOOLBAR_BIN)
+	@echo "Executando testes da toolbar grafica..."
+	$(TEST_CAPYGFX_TOOLBAR_BIN)
+
+$(TEST_CAPYGFX_TOOLBAR_BIN): $(TEST_CAPYGFX_TOOLBAR_SRCS) | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) $(CAPYBROWSER_CORE_CFLAGS) \
+		-Iuserland/bin/capybrowse -Iuserland/bin/capygfx \
+		-o $@ $(TEST_CAPYGFX_TOOLBAR_SRCS)
+
+test-browser-shell: test-capygfx-toolbar
 endif
 
 .PHONY: modules-index
@@ -3003,6 +3272,22 @@ smoke-x64-qemu-capygfx-net-image:
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py $(SMOKE_X64_QEMU_CAPYGFX_NET_IMAGE_ARGS)
 
+# Full static-browser acceptance: controlled top-level 302 -> chunked HTML,
+# linked CSS, PNG decode, link navigation, Back/Forward and forced Reload. The
+# app runs the same retained toolbar/runtime used by the desktop, then exits so
+# CAPYOS_GFX_SMOKE can latch the normal ring-3 completion marker as well.
+.PHONY: smoke-x64-qemu-capygfx-static-site
+smoke-x64-qemu-capygfx-static-site:
+	@echo "Executando smoke QEMU do browser grafico estatico completo..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 \
+		EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
+		EXTRA_USERLAND_CFLAGS='-DCAPYGFX_DESKTOP_INTERACTIVE -DCAPYGFX_SITE_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py --site \
+		$(SMOKE_X64_QEMU_CAPYGFX_STATIC_SITE_ARGS)
+
 # Etapa 7 / Slice 7.5 (alpha.304) external validation gate -- capygfx
 # desktop-spawn mechanics. Proves kernel_spawn_capygfx_desktop (a NEW,
 # non-noreturn spawn meant to be called from a live desktop session, unlike
@@ -3036,6 +3321,46 @@ smoke-x64-qemu-capygfx-desktop-spawn:
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] capygfx ready" --timeout 300 --log build/ci/smoke_x64_qemu_capygfx_desktop_spawn.log $(SMOKE_X64_QEMU_MARKER_ARGS)
+
+# End-to-end lifecycle regression for the VMware open/close/reopen freeze.
+# Unlike elfload-respawn, this gate crosses ring 0 -> ring 3 -> ring 0 through
+# context_switch on every round, then verifies that process/task/PMM counts
+# return exactly to baseline before spawning again.
+.PHONY: smoke-x64-vmware-capygfx-lifecycle
+smoke-x64-vmware-capygfx-lifecycle:
+	@echo "Executando smoke VMware capygfx lifecycle (spawn/switch/reap/respawn)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_CAPYGFX_LIFECYCLE_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_CAPYGFX_LIFECYCLE_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	@if [ -n "$(SMOKE_X64_VMWARE_VMX)" ]; then \
+		if [ -z "$(SMOKE_X64_VMWARE_SERIAL_LOG)" ]; then \
+			echo "[err] informe SMOKE_X64_VMWARE_SERIAL_LOG com SMOKE_X64_VMWARE_VMX"; exit 2; \
+		fi; \
+		python3 tools/scripts/smoke_x64_vmware.py \
+			--marker "[smoke] capygfx-lifecycle ok" \
+			--vmx "$(SMOKE_X64_VMWARE_VMX)" \
+			--serial-log "$(SMOKE_X64_VMWARE_SERIAL_LOG)" \
+			--timeout "$(or $(SMOKE_X64_VMWARE_TIMEOUT),300)"; \
+	else \
+		python3 tools/scripts/smoke_x64_vmware.py \
+			--marker "[smoke] capygfx-lifecycle ok" \
+			$(SMOKE_X64_VMWARE_ARGS); \
+	fi
+
+.PHONY: smoke-x64-qemu-capygfx-lifecycle
+smoke-x64-qemu-capygfx-lifecycle:
+	@echo "Executando smoke QEMU capygfx lifecycle (spawn/switch/reap/respawn)..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_CAPYGFX_LIFECYCLE_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_CAPYGFX_LIFECYCLE_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_marker.py \
+		--marker "[smoke] capygfx-lifecycle ok" \
+		--fail-marker "[smoke] capygfx-lifecycle FAIL" \
+		--timeout 300 \
+		--log build/ci/smoke_x64_qemu_capygfx_lifecycle.log \
+		$(SMOKE_X64_QEMU_MARKER_ARGS)
 
 # Etapa 6 / Slice 6.6 external validation gate -- apps-basic-roundtrip.
 # The basic desktop apps are in-kernel functions (CapyUI desktop session),
@@ -3114,6 +3439,38 @@ smoke-x64-hello-user:
 	$(MAKE) iso-uefi
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_hello_user.py $(SMOKE_X64_HELLO_USER_ARGS)
+
+# CapyAI assistant pipeline smoke: boots with -DCAPYOS_SMOKE_CAPYAI so the
+# kernel runs capyai_selftest_run() (capy-ai-core inference + risk gates +
+# PT-BR summary) and emits [capyai-smoke] markers to the debug console, then
+# halts. `make clean` is forced because per-source .d files do not track
+# preprocessor macros (same rationale as smoke-x64-hello-user).
+smoke-x64-capyai:
+	@echo "Executando smoke test x64 (capyai assistant pipeline)..."
+	$(MAKE) clean
+	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_SMOKE_CAPYAI'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_capyai.py $(SMOKE_X64_CAPYAI_ARGS)
+
+# Real GUI + scheduler regression for the CapyAI freeze. The build-only probe
+# enters desktop_runtime_start, submits through the persistent one-slot worker,
+# requires at least three compositor frames while that worker is in flight,
+# then closes/reopens the chat four times before emitting the COM1 marker.
+.PHONY: smoke-x64-qemu-capyai-gui-async
+smoke-x64-qemu-capyai-gui-async:
+	@echo "Executando smoke QEMU CapyAI GUI assincrono..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full \
+		EXTRA_CFLAGS64='-DCAPYOS_CAPYAI_GUI_ASYNC_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_marker.py \
+		--marker "[smoke] capyai-gui-async ready" \
+		--fail-marker "[smoke] capyai-gui-async FAIL" \
+		--timeout 300 \
+		--log build/ci/smoke_x64_qemu_capyai_gui_async.log \
+		$(SMOKE_X64_QEMU_MARKER_ARGS)
 
 # M4 phase 5f: end-to-end smoke for phase 4's fault-kill path.
 # Builds `hello` with `-DCAPYOS_HELLO_FAULT` so the user binary
@@ -3373,7 +3730,7 @@ smoke-x64-iso: all64 iso-uefi manifest64
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyUI/releases/download/v2.13.0/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.312+20260712/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
@@ -3405,6 +3762,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-capyai smoke-x64-qemu-capyai-gui-async smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)

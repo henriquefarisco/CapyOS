@@ -1,7 +1,19 @@
 #include "memory/pmm.h"
+#include "memory/vmm.h"
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+#include "drivers/serial/serial_com1.h"
+#endif
 #include <stddef.h>
+#include <stdint.h>
 
 #define PMM_BITMAP_SIZE (64 * 1024 / 8)
+
+/* alpha.310: how many firmware read-only frames pmm_reserve_firmware_readonly
+ * dropped, and the first one. Reported on COM1 later (pmm_report_firmware_
+ * readonly), after com1_init -- the scan itself runs in pmm_init, before the
+ * serial console is up. */
+static uint64_t g_pmm_fw_ro_reserved = 0;
+static uint64_t g_pmm_fw_ro_first = 0;
 
 static uint8_t pmm_bitmap[PMM_BITMAP_SIZE];
 static uint64_t pmm_total_pages = 0;
@@ -27,6 +39,56 @@ static inline int bitmap_test(uint64_t page) {
   uint8_t bit = (uint8_t)(1 << (page % 8));
   if (idx >= PMM_BITMAP_SIZE) return 1;
   return (pmm_bitmap[idx] & bit) ? 1 : 0;
+}
+
+/* alpha.310: reserve frames the firmware maps READ-ONLY in the kernel identity
+ * map. The kernel adopts the firmware page tables (vmm_init), and VMware's
+ * UEFI maps firmware-reserved low RAM (observed at 0x400000+) read-only there
+ * while the memory map still reported it usable. Those frames are NOT
+ * general-purpose RAM: the earlier "force it writable" attempt let elf_load
+ * write into them and CRASHED THE HOST VMM. The firmware read-only mapping is
+ * authoritative, so treat such frames as reserved and never hand them out.
+ * One pass over the free bitmap after the fixed reserves; the PMM caps
+ * pmm_total_pages at the bitmap size so this is bounded. No-op on QEMU/OVMF
+ * (maps RAM RW) and under UNIT_TEST (vmm_identity_is_writable returns 1). */
+static void pmm_reserve_firmware_readonly(void) {
+  for (uint64_t i = 0; i < pmm_total_pages; i++) {
+    if (bitmap_test(i)) continue; /* already used or reserved */
+    if (!vmm_identity_is_writable(i * PMM_PAGE_SIZE)) {
+      bitmap_set(i);
+      if (pmm_free_count > 0) pmm_free_count--;
+      pmm_reserved_pages++;
+      if (g_pmm_fw_ro_reserved == 0) g_pmm_fw_ro_first = i * PMM_PAGE_SIZE;
+      g_pmm_fw_ro_reserved++;
+    }
+  }
+}
+
+/* alpha.310: report the firmware read-only reservation on COM1. Called from
+ * kernel_main AFTER com1_init (the scan runs in pmm_init, before the serial
+ * console). Confirms on a VMware run that the fix engaged and how much RAM the
+ * firmware had mapped read-only. No output on QEMU/OVMF (nothing reserved) or
+ * under UNIT_TEST. */
+void pmm_report_firmware_readonly(void) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  if (g_pmm_fw_ro_reserved == 0) return;
+  {
+    static const char hex[] = "0123456789ABCDEF";
+    char buf[19];
+    int i;
+    com1_puts("[pmm] reserved firmware read-only RAM frames: count=");
+    for (i = 0; i < 16; i++)
+      buf[i] = hex[(g_pmm_fw_ro_reserved >> ((15 - i) * 4)) & 0xFu];
+    buf[16] = '\0';
+    com1_puts(buf);
+    com1_puts(" first_phys=0x");
+    for (i = 0; i < 16; i++)
+      buf[i] = hex[(g_pmm_fw_ro_first >> ((15 - i) * 4)) & 0xFu];
+    buf[16] = '\0';
+    com1_puts(buf);
+    com1_puts("\n");
+  }
+#endif
 }
 
 void pmm_init(const struct pmm_region *regions, size_t count) {
@@ -64,6 +126,11 @@ void pmm_init(const struct pmm_region *regions, size_t count) {
 
   pmm_reserve_range(0, PMM_PAGE_SIZE);
   pmm_reserve_range(PMM_PAGE_SIZE, PMM_PAGE_SIZE * 256);
+
+  /* alpha.310: drop any usable-reported frame the firmware actually maps
+   * read-only (VMware firmware-reserved low RAM). Must run last, after the
+   * free frames and fixed reserves are set. */
+  pmm_reserve_firmware_readonly();
 }
 
 uint64_t pmm_alloc_page(void) {

@@ -1,6 +1,5 @@
 /* system_settings.c: settings load/save, config file I/O, update catalog. */
 #include "internal/config_internal.h"
-#include "core/version.h"
 
 /* ---- validate_theme (forward) ---- */
 static const char *validate_theme(const char *input) {
@@ -107,62 +106,25 @@ static int system_update_ensure_file(const char *path) {
   return 0;
 }
 
-static int system_update_version_core_ref(const char *version, char *out,
-                                          size_t out_size) {
-  const char *p = version;
-  size_t dots = 0u;
-  size_t written = 0u;
-
-  if (!out || out_size == 0u) {
-    return -1;
-  }
-  out[0] = '\0';
-  if (!p || !p[0]) {
-    return -1;
-  }
-  if (*p == 'v' || *p == 'V') {
-    ++p;
-  }
-  config_buffer_append(out, out_size, "refs/tags/v");
-  written = cstring_length(out);
-  while (*p && *p != '-' && *p != '+' && written + 1u < out_size) {
-    char next[2];
-    if (!((*p >= '0' && *p <= '9') || *p == '.')) {
-      break;
-    }
-    if (*p == '.') {
-      ++dots;
-    }
-    next[0] = *p++;
-    next[1] = '\0';
-    config_buffer_append(out, out_size, next);
-    written = cstring_length(out);
-  }
-  return dots == 2u ? 0 : -1;
-}
-
 static void system_update_remote_manifest_url(const char *channel, char *out,
                                               size_t out_size) {
   if (!out || out_size == 0) {
     return;
   }
   out[0] = '\0';
-  config_buffer_append(out, out_size,
-                       "https://raw.githubusercontent.com/henriquefarisco/"
-                       "CapyOS/");
   if (strings_equal(system_update_channel_or_default(channel), "develop")) {
+    config_buffer_append(out, out_size,
+                         "https://raw.githubusercontent.com/henriquefarisco/"
+                         "CapyOS/");
     config_buffer_append(out, out_size, "refs/heads/");
     config_buffer_append(out, out_size,
                          system_update_branch_for_channel(channel));
+    config_buffer_append(out, out_size, "/system/update/latest.ini");
   } else {
-    char stable_ref[32];
-    if (system_update_version_core_ref(CAPYOS_VERSION_EXTENDED, stable_ref,
-                                       sizeof(stable_ref)) != 0) {
-      cstring_copy(stable_ref, sizeof(stable_ref), "refs/heads/main");
-    }
-    config_buffer_append(out, out_size, stable_ref);
+    config_buffer_append(out, out_size,
+                         "https://github.com/henriquefarisco/CapyOS/"
+                         "releases/latest/download/latest.ini");
   }
-  config_buffer_append(out, out_size, "/system/update/latest.ini");
 }
 
 /* ---- update catalog ---- */

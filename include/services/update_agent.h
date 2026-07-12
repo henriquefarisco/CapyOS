@@ -19,6 +19,10 @@
 #define UPDATE_AGENT_ED25519_SIGNATURE_HEX_LEN 128u
 #define UPDATE_AGENT_ED25519_SIGNATURE_HEX_MAX \
   (UPDATE_AGENT_ED25519_SIGNATURE_HEX_LEN + 1u)
+/* Persistent boot-slot writes and rollback metadata are not implemented yet.
+ * Mutating prepare/stage/arm/apply entry points fail with this stable code
+ * instead of reporting a RAM-only boot-slot transition as a real update. */
+#define UPDATE_AGENT_ERR_UNSUPPORTED (-60)
 
 struct update_prepare_explain {
   uint8_t poll_ready;
@@ -105,7 +109,8 @@ int update_agent_clear_stage(void);
 int update_agent_set_pending_activation(int enabled);
 void update_agent_status_get(struct system_update_status *out);
 
-/* Transactional update integration with the boot slot system. */
+/* Persistent boot-slot application is intentionally unavailable until the
+ * updater can write and verify an inactive on-disk slot atomically. */
 int update_agent_apply_boot_slot(void);
 int update_agent_confirm_health(void);
 int update_agent_check_rollback(void);
@@ -115,7 +120,7 @@ int update_agent_check_rollback(void);
  * `payload_sha256=` field.
  *
  * Returns:
- *   0          on success (slot staged + activated)
+ *  -60         persistent boot-slot application is not implemented
  *  -30         staged digest missing, or caller passed NULL/empty
  *  -31         payload digest mismatch (refused; logged as [audit] [update])
  *  -32         payload digest declared but invalid length (must be 64 hex)

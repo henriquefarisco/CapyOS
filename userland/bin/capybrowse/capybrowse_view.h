@@ -48,7 +48,8 @@ size_t capybrowse_format_status_notice(int status_code, const char *lang,
  * Decide whether a response body with this Content-Type can be shown as text.
  * The HTML-to-text core only makes sense for textual content; feeding it binary
  * bytes (images, fonts, downloads, ...) just yields garbage. Returns 1 for
- * text/* and for html/xml/json families (case-insensitive substring), and for a
+ * text media types and html/xml/json families (case-insensitive substring),
+ * and for a
  * NULL/empty Content-Type (absent header -> stay tolerant, as servers often
  * omit it and the core copes). Returns 0 for anything else (binary). Pure.
  */

@@ -176,8 +176,9 @@ static int test_apply_boot_slot_requires_stage(void) {
     int fails = 0;
     setup();
     /* No staged update — should fail */
-    fails += expect_true(update_agent_apply_boot_slot() < 0,
-                         "apply_boot_slot should fail when nothing staged");
+    fails += expect_true(
+        update_agent_apply_boot_slot() == UPDATE_AGENT_ERR_UNSUPPORTED,
+        "apply_boot_slot must report unavailable persistent application");
     return fails;
 }
 
@@ -187,27 +188,32 @@ static int test_direct_apply_refuses_hashed_stage(void) {
     arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
 
     fails += expect_true(update_agent_poll() >= 0, "poll should succeed");
-    fails += expect_true(update_agent_apply_boot_slot() == -33,
-                         "direct apply should refuse hashed staged updates");
+    fails += expect_true(
+        update_agent_apply_boot_slot() == UPDATE_AGENT_ERR_UNSUPPORTED,
+        "direct apply should report unavailable persistent application");
     return fails;
 }
 
 static int test_apply_verified_success(void) {
     int fails = 0;
-    struct boot_slot active;
+    struct system_update_status status;
     setup();
     arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
 
     fails += expect_true(update_agent_poll() >= 0, "poll should succeed");
-    fails += expect_true(update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
-                         "verified apply should succeed with matching digest");
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) ==
+            UPDATE_AGENT_ERR_UNSUPPORTED,
+        "matching digest must not turn RAM metadata into a fake update");
 
-    fails += expect_true(boot_slot_needs_rollback() != 0,
-                         "rollback should be pending after activation");
-    fails += expect_true(boot_slot_get_active(&active) == 0,
-                         "get_active should succeed");
-    fails += expect_true(strcmp(active.version, "2.0.0") == 0,
-                         "active slot should have new version 2.0.0");
+    fails += expect_true(boot_slot_needs_rollback() == 0,
+                         "unsupported apply must not mutate boot slots");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "unsupported apply result mismatch");
+    fails += expect_true(strcmp(status.summary,
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "unsupported apply summary mismatch");
 
     return fails;
 }
@@ -216,11 +222,10 @@ static int test_confirm_health_clears_rollback(void) {
     int fails = 0;
     struct system_update_status status;
     setup();
-    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
-
-    fails += expect_true(update_agent_poll() >= 0, "poll");
-    fails += expect_true(update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
-                         "verified apply");
+    fails += expect_true(boot_slot_stage(1u, "2.0.0", 0u) == 0,
+                         "stage synthetic slot for health test");
+    fails += expect_true(boot_slot_activate(1u) == 0,
+                         "activate synthetic slot for health test");
     fails += expect_true(boot_slot_needs_rollback() != 0, "rollback pending before confirm");
 
     fails += expect_true(update_agent_confirm_health() == 0,
@@ -315,14 +320,15 @@ static int test_apply_verified_matching_digest(void) {
         "manifest with payload_sha256 reports verification required");
 
     fails += expect_true(
-        update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) == 0,
-        "verified apply with matching digest succeeds");
+        update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) ==
+            UPDATE_AGENT_ERR_UNSUPPORTED,
+        "verified apply with matching digest remains unsupported");
     update_agent_status_get(&status);
-    fails += expect_true(status.last_result == 0,
-                         "verified apply success should expose last_result zero");
+    fails += expect_true(status.last_result == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "verified apply should expose unsupported result");
     fails += expect_true(strcmp(status.summary,
-                                "verified staged update applied to boot slot") == 0,
-                         "verified apply success summary mismatch");
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "verified apply unsupported summary mismatch");
 
     /* Case-insensitive comparison: same digest with upper-case hex must also
      * match so manifests in either case are accepted. */
@@ -331,8 +337,9 @@ static int test_apply_verified_matching_digest(void) {
     fails += expect_true(
         update_agent_apply_boot_slot_verified(
             "ABCDEF0123456789ABCDEF0123456789"
-            "ABCDEF0123456789ABCDEF0123456789") == 0,
-        "verified apply is case-insensitive on hex digest");
+            "ABCDEF0123456789ABCDEF0123456789") ==
+            UPDATE_AGENT_ERR_UNSUPPORTED,
+        "uppercase matching digest still reaches unsupported capability gate");
     return fails;
 }
 
@@ -399,14 +406,15 @@ static int test_apply_cached_payload_matching_digest(void) {
     arm_staged_update_with_sha256_cache("2.0.0", UA_GOOD_SHA256,
                                         UA_GOOD_SHA256);
 
-    fails += expect_true(update_agent_apply_cached_payload() == 0,
-                         "cached payload apply with matching digest succeeds");
+    fails += expect_true(
+        update_agent_apply_cached_payload() == UPDATE_AGENT_ERR_UNSUPPORTED,
+        "cached payload apply with matching digest remains unsupported");
     update_agent_status_get(&status);
-    fails += expect_true(status.last_result == 0,
-                         "cached apply success should expose last_result zero");
+    fails += expect_true(status.last_result == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "cached apply should expose unsupported result");
     fails += expect_true(strcmp(status.summary,
-                                "verified staged update applied to boot slot") == 0,
-                         "cached apply success summary mismatch");
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "cached apply unsupported summary mismatch");
     return fails;
 }
 

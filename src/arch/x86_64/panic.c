@@ -66,6 +66,52 @@ static void panic_fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
   }
 }
 
+/* On-screen panic text so the fault is diagnosable WITHOUT a serial port
+ * (the VMware acceptance VM has none). Uses the shared 8x8 console font
+ * (font8x8_basic, MSB = leftmost column) scaled 2x. All writes go through the
+ * bounds-checked panic_fb_fill_rect, so this is safe in the fault path. */
+extern const uint8_t font8x8_basic[128][8];
+
+#define PANIC_GLYPH_SCALE 2u
+#define PANIC_GLYPH_ADVANCE (8u * PANIC_GLYPH_SCALE)
+
+static void panic_fb_glyph(uint32_t x, uint32_t y, char c, uint32_t color) {
+  const uint8_t *g;
+  uint32_t row, col;
+  if (!g_panic_fb) return;
+  if ((unsigned char)c >= 128u) c = '?';
+  g = font8x8_basic[(unsigned char)c];
+  for (row = 0u; row < 8u; row++) {
+    for (col = 0u; col < 8u; col++) {
+      if (g[row] & (uint8_t)(0x80u >> col)) {
+        panic_fb_fill_rect(x + col * PANIC_GLYPH_SCALE,
+                           y + row * PANIC_GLYPH_SCALE, PANIC_GLYPH_SCALE,
+                           PANIC_GLYPH_SCALE, color);
+      }
+    }
+  }
+}
+
+static uint32_t panic_fb_str(uint32_t x, uint32_t y, const char *s,
+                             uint32_t color) {
+  while (s && *s) {
+    panic_fb_glyph(x, y, *s++, color);
+    x += PANIC_GLYPH_ADVANCE;
+  }
+  return x;
+}
+
+static void panic_fb_labeled_hex(uint32_t x, uint32_t y, const char *label,
+                                 uint64_t v, uint32_t color) {
+  x = panic_fb_str(x, y, label, color);
+  x = panic_fb_str(x, y, "0x", color);
+  for (int i = 60; i >= 0; i -= 4) {
+    uint8_t nib = (uint8_t)((v >> i) & 0xF);
+    panic_fb_glyph(x, y, (char)(nib < 10 ? '0' + nib : 'A' + nib - 10), color);
+    x += PANIC_GLYPH_ADVANCE;
+  }
+}
+
 void panic_dump_to_serial(const struct panic_regs *regs) {
   panic_serial_str("\r\n=== CapyOS PANIC ===\r\n");
   if (regs) {
@@ -123,7 +169,28 @@ void panic_with_regs(const char *message, const struct panic_regs *regs) {
   panic_dump_to_serial(regs);
 
   if (g_panic_fb) {
+    const uint32_t white = 0x00FFFFFFu;
+    const uint32_t yellow = 0x00FFDD44u;
+    uint32_t x = 24u;
+    uint32_t y = 24u;
+    uint32_t lh = PANIC_GLYPH_ADVANCE + 6u;
     panic_fb_fill_rect(0, 0, g_panic_fb_width, g_panic_fb_height, 0x000044AA);
+    panic_fb_str(x, y, "CapyOS KERNEL PANIC", yellow);
+    y += lh * 2u;
+    panic_fb_str(x, y, message ? message : "(no message)", white);
+    y += lh * 2u;
+    if (regs) {
+      if (regs->vector < 32u) {
+        panic_fb_str(x, y, exception_names[regs->vector], white);
+        y += lh;
+      }
+      panic_fb_labeled_hex(x, y, "VEC=", regs->vector, white); y += lh;
+      panic_fb_labeled_hex(x, y, "ERR=", regs->error_code, white); y += lh;
+      panic_fb_labeled_hex(x, y, "RIP=", regs->rip, white); y += lh;
+      panic_fb_labeled_hex(x, y, "CR2=", regs->cr2, white); y += lh;
+      panic_fb_labeled_hex(x, y, "RSP=", regs->rsp, white); y += lh;
+      panic_fb_labeled_hex(x, y, "CR3=", regs->cr3, white); y += lh;
+    }
   }
 
   for (;;) __asm__ volatile("hlt");

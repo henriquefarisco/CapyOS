@@ -62,6 +62,10 @@ struct syscall_gfx_ops {
   /* Pop one pending event for the window into *out. Returns 1 if an event was
    * written, 0 if none pending, -1 on an unknown id. */
   int (*poll_event)(int32_t backend_id, struct capy_gfx_event *out);
+  /* Raise/focus an existing backend window. Optional for headless/fake
+   * backends; production uses it to coalesce repeated launcher requests into
+   * one process/window rather than allocating another graphical process. */
+  void (*win_focus)(int32_t backend_id);
 };
 
 /* Install a vtable. Passing NULL clears the registration AND resets all handle
@@ -83,6 +87,12 @@ void syscall_gfx_install_default_ops(void);
  * from the process teardown path (process_exit / process_destroy) so a dying
  * app cannot leak compositor windows or leave a handle owned by a reused pid. */
 void syscall_gfx_release_owner(uint32_t pid);
+
+/* Focus the first live graphical window owned by `pid`. Returns 1 when an
+ * owned handle exists (the optional backend focus hook is invoked when
+ * available), otherwise 0. This is intentionally owner-based: launchers know
+ * the process they want to reuse but must not learn/guess its opaque handle. */
+int syscall_gfx_focus_owner(uint32_t pid);
 
 /* Drop all handle state without touching the backend (test reset helper). */
 void syscall_gfx_reset(void);

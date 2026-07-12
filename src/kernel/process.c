@@ -111,19 +111,16 @@ void process_system_init(void) {
   current_proc = NULL;
 }
 
-struct process *process_create(const char *name, uint32_t uid, uint32_t gid) {
-  /* 2026-05-02: resolve the implicit parent via process_current()
-   * (now dynamic) instead of reading the never-updated `current_proc`
-   * directly. Pre-fix every spawn ended up with ppid=0 because
-   * `current_proc` stayed NULL forever; now ppid mirrors the actual
-   * task that called process_create. */
-  struct process *implicit_parent = process_current();
+static struct process *process_create_with_parent(const char *name,
+                                                  uint32_t uid,
+                                                  uint32_t gid,
+                                                  struct process *parent) {
   for (int i = 0; i < PROCESS_MAX; i++) {
     if (proc_table[i].state == PROC_STATE_UNUSED) {
       struct process *p = &proc_table[i];
       proc_memset(p, 0, sizeof(*p));
       p->pid = next_proc_pid++;
-      p->ppid = implicit_parent ? implicit_parent->pid : 0;
+      p->ppid = parent ? parent->pid : 0;
       proc_strcpy(p->name, name ? name : "unnamed", PROCESS_NAME_MAX);
       p->state = PROC_STATE_EMBRYO;
       p->uid = uid;
@@ -141,15 +138,28 @@ struct process *process_create(const char *name, uint32_t uid, uint32_t gid) {
         p->state = PROC_STATE_UNUSED;
         return NULL;
       }
-      /* Phase 6.5: link into the implicit parent (`process_current()`).
+      /* Phase 6.5: link into the caller-selected parent.
        * `proc_memset` already zeroed `parent`/`children`/`next_sibling`
        * a few lines above, so the helper's detached-input invariant
        * is satisfied. */
-      process_link_child(p, implicit_parent);
+      process_link_child(p, parent);
       return p;
     }
   }
   return NULL;
+}
+
+struct process *process_create(const char *name, uint32_t uid, uint32_t gid) {
+  /* Regular process creation inherits the dynamic current process. */
+  return process_create_with_parent(name, uid, gid, process_current());
+}
+
+struct process *process_create_root(const char *name, uint32_t uid,
+                                    uint32_t gid) {
+  /* System applications have an explicit root lifecycle: they are never
+   * accidentally parented to whichever user process happened to be current
+   * when a launcher callback ran, so process_reap_orphans owns their cleanup. */
+  return process_create_with_parent(name, uid, gid, NULL);
 }
 
 struct process *process_fork(struct process *parent) {
@@ -183,6 +193,14 @@ struct process *process_fork(struct process *parent) {
       vmm_destroy_address_space(child->address_space);
     }
     child->address_space = cloned;
+    /* task_create seeds a kernel CR3.  A forked user task must explicitly
+     * replace both metadata copies with its cloned PML4 before scheduler_add;
+     * relying on the previously-active parent CR3 is exactly the implicit-AS
+     * bug that kernel tasks no longer permit. */
+    if (child->main_thread) {
+      child->main_thread->cr3 = cloned->pml4_phys;
+      child->main_thread->context.cr3 = cloned->pml4_phys;
+    }
   }
 
   child->brk = parent->brk;
@@ -351,13 +369,26 @@ int process_wait(uint32_t pid, int *status) {
     task_yield();
   }
   if (status) *status = child->exit_code;
-  process_destroy(child);
+  /* Usually one call is enough.  If a stale/remote CPU still has the child's
+   * CR3 active, process_destroy performs no partial teardown; yield and retry
+   * until the address space is no longer live. */
+  while (child->state != PROC_STATE_UNUSED) {
+    process_destroy(child);
+    if (child->state != PROC_STATE_UNUSED) task_yield();
+  }
   return 0;
 }
 
 void process_destroy(struct process *p) {
   if (!p) return;
   if (p->state == PROC_STATE_UNUSED) return;
+
+  /* Teardown is retryable.  Never detach the process tree, kill the task or
+   * clear p->address_space while that PML4 is active: doing so would make a
+   * later orphan-reaper pass unable to recover the resource. */
+  if (p->address_space && vmm_address_space_is_active(p->address_space)) {
+    return;
+  }
 
   /* Phase 6.5: detach from the process tree BEFORE tearing down the
    * payload (address space, FDs, main thread). A future SMP walker
@@ -541,7 +572,8 @@ size_t process_reap_orphans(void) {
     struct process *p = &proc_table[i];
     if (p->state == PROC_STATE_ZOMBIE && p->parent == NULL) {
       process_destroy(p);
-      reaped++;
+      /* process_destroy deliberately defers an AS that is still in CR3. */
+      if (p->state == PROC_STATE_UNUSED) reaped++;
     }
   }
   return reaped;

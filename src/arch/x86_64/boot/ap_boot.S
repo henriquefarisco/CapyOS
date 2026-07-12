@@ -49,10 +49,12 @@ ap_pm32:
     mov eax, [0x8FF0]
     mov cr3, eax
 
-    # Enable long mode via EFER MSR
+    # Enable long mode and NX on every AP before paging. The BSP already gates
+    # boot on CPU NX support; keeping EFER.NXE consistent prevents page-table
+    # NX bits from becoming reserved-bit faults when a secondary CPU starts.
     mov ecx, 0xC0000080      # IA32_EFER
     rdmsr
-    or eax, (1 << 8)         # LME
+    or eax, (1 << 8) | (1 << 11)  # LME | NXE
     wrmsr
 
     # Enable paging

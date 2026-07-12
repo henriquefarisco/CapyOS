@@ -111,6 +111,7 @@ int test_process_destroy_run(void);
 int test_vmm_anon_regions_run(void);
 int test_service_runner_run(void);
 int test_context_switch_run(void);
+int test_task_sleep_run(void);
 int test_syscall_msr_run(void);
 int test_fault_classify_run(void);
 int test_pmm_refcount_run(void);
@@ -230,6 +231,7 @@ int run_buffer_cache_pacing_tests(void);
 int test_syscall_pipe_priority_run(void);
 int test_syscall_net_run(void);
 int test_syscall_gfx_run(void);
+int test_syscall_gfx_backend_run(void);
 int test_capylibc_string_run(void);
 int test_capybrowse_view_run(void);
 int test_browser_render_run(void);
@@ -275,6 +277,23 @@ int main(int argc, char **argv) {
         failures += run_net_arp_tests();
         failures += run_elf_bounds_tests();
         printf("\n[security-selftest] %s (%d falha%s)\n",
+               failures == 0 ? "OK" : "FALHOU", failures,
+               failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
+    /* Fast feedback for the graphical Browser lifecycle contract. The QEMU
+     * smoke covers the real ring transition; this group keeps queue routing,
+     * handle ownership/focus, process reap, context and sleep regressions
+     * runnable without executing the unrelated full unit catalog. */
+    if (argc > 1 && tr_arg_eq(argv[1], "gfx-lifecycle")) {
+        failures += test_gui_event_run();
+        failures += test_syscall_gfx_run();
+        failures += test_syscall_gfx_backend_run();
+        failures += test_process_destroy_run();
+        failures += test_context_switch_run();
+        failures += test_task_sleep_run();
+        printf("\n[gfx-lifecycle-selftest] %s (%d falha%s)\n",
                failures == 0 ? "OK" : "FALHOU", failures,
                failures == 1 ? "" : "s");
         return failures == 0 ? 0 : 1;
@@ -391,6 +410,7 @@ int main(int argc, char **argv) {
     failures += test_vmm_anon_regions_run();
     failures += test_service_runner_run();
     failures += test_context_switch_run();
+    failures += test_task_sleep_run();
     failures += test_syscall_msr_run();
     failures += test_fault_classify_run();
     failures += test_pmm_refcount_run();
@@ -510,6 +530,7 @@ int main(int argc, char **argv) {
     failures += test_syscall_pipe_priority_run();
     failures += test_syscall_net_run();
     failures += test_syscall_gfx_run();
+    failures += test_syscall_gfx_backend_run();
     failures += test_capylibc_string_run();
     failures += test_capybrowse_view_run();
     failures += test_browser_render_run();

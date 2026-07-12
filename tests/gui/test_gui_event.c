@@ -158,6 +158,82 @@ static void test_poll_many(void) {
   else FAIL("poll many wrap");
 }
 
+static void test_poll_window_preserves_foreign_fifo(void) {
+  struct gui_event a = make_event(10);
+  struct gui_event b = make_event(20);
+  struct gui_event c = make_event(10);
+  struct gui_event d = make_event(30);
+  struct gui_event out;
+
+  gui_event_init();
+  gui_event_push(&a);
+  gui_event_push(&b);
+  gui_event_push(&c);
+  gui_event_push(&d);
+
+  TEST("gui_event_poll_window: removes oldest matching target only");
+  if (gui_event_poll_window(20u, &out) == 0 && out.window_id == 20u &&
+      gui_event_pending() == 3)
+    PASS();
+  else
+    FAIL("targeted poll did not remove expected event");
+
+  TEST("gui_event_poll_window: preserves foreign FIFO order");
+  if (gui_event_poll(&out) == 0 && out.window_id == 10u &&
+      gui_event_poll(&out) == 0 && out.window_id == 10u &&
+      gui_event_poll(&out) == 0 && out.window_id == 30u &&
+      gui_event_pending() == 0)
+    PASS();
+  else
+    FAIL("foreign events were consumed or reordered");
+
+  gui_event_init();
+  gui_event_push(&a);
+  TEST("gui_event_poll_window: rejects global/unknown targets non-destructively");
+  if (gui_event_poll_window(0u, &out) == -1 &&
+      gui_event_poll_window(99u, &out) == -1 && gui_event_pending() == 1 &&
+      gui_event_poll(&out) == 0 && out.window_id == 10u)
+    PASS();
+  else
+    FAIL("invalid targeted poll changed the queue");
+}
+
+static void test_poll_window_wraparound(void) {
+  struct gui_event out;
+  uint32_t i;
+
+  gui_event_init();
+  for (i = 0u; i < GUI_EVENT_QUEUE_SIZE; ++i) {
+    struct gui_event item = make_event(1000u + i);
+    gui_event_push(&item);
+  }
+  for (i = 0u; i < GUI_EVENT_QUEUE_SIZE - 3u; ++i)
+    gui_event_poll(&out);
+  {
+    struct gui_event a = make_event(41u);
+    struct gui_event b = make_event(42u);
+    struct gui_event c = make_event(43u);
+    gui_event_push(&a);
+    gui_event_push(&b);
+    gui_event_push(&c);
+  }
+
+  TEST("gui_event_poll_window: preserves ring order across wrap-around");
+  if (gui_event_poll_window(42u, &out) == 0 && out.window_id == 42u &&
+      gui_event_poll(&out) == 0 &&
+      out.window_id == 1000u + GUI_EVENT_QUEUE_SIZE - 3u &&
+      gui_event_poll(&out) == 0 &&
+      out.window_id == 1000u + GUI_EVENT_QUEUE_SIZE - 2u &&
+      gui_event_poll(&out) == 0 &&
+      out.window_id == 1000u + GUI_EVENT_QUEUE_SIZE - 1u &&
+      gui_event_poll(&out) == 0 && out.window_id == 41u &&
+      gui_event_poll(&out) == 0 && out.window_id == 43u &&
+      gui_event_pending() == 0)
+    PASS();
+  else
+    FAIL("targeted wrap-around removal corrupted FIFO");
+}
+
 static void test_peek_many(void) {
   struct gui_event a = make_event(10);
   struct gui_event b = make_event(11);
@@ -355,6 +431,8 @@ int test_gui_event_run(void) {
   test_init_and_null();
   test_fifo_peek_and_flush();
   test_poll_many();
+  test_poll_window_preserves_foreign_fifo();
+  test_poll_window_wraparound();
   test_peek_many();
   test_dispatch();
   test_ready();

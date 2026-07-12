@@ -40,6 +40,7 @@ static int g_passes;
 
 static struct capy_dl g_dl;
 static uint32_t g_px[PW * PH];
+static uint32_t g_px2[PW * PH]; /* second surface for scroll-equivalence */
 
 static void dl_reset(void) {
   memset(&g_dl, 0, sizeof(g_dl));
@@ -186,6 +187,73 @@ int test_browser_render_pixel_run(void) {
   dl_rect(0, 0, 1, 1, "blue");
   rc = capyos_browser_render_pixels(&g_dl, g_px, PW, PH, NULL, &st);
   CHECK(rc == 0 && g_px[0] == 0xFF0000FFu, "named color 'blue' with default opts");
+
+  /* ---- alpha.311 scroll offset (capyos_browser_render_pixels_scrolled) ---- *
+   * The interactive capygfx viewer scrolls a page taller than its window by
+   * passing a pixel offset that is subtracted from every node's position. */
+
+  /* 10. (0,0) offset is byte-for-byte identical to the unscrolled entry
+   *     point -- the documented ABI guarantee that keeps old callers stable. */
+  dl_reset();
+  dl_rect(0, 0, 2, 2, "#00FF00");
+  dl_text(0, 2, "Ab", NULL);
+  dl_link(0, 3, 2, 1, "https://example.com/");
+  capyos_browser_render_pixels(&g_dl, g_px, PW, PH, &o, &st);
+  capyos_browser_render_pixels_scrolled(&g_dl, g_px2, PW, PH, &o, 0, 0, &st);
+  CHECK(memcmp(g_px, g_px2, sizeof(g_px)) == 0,
+        "scroll (0,0) == unscrolled render, byte for byte");
+
+  /* 11. Positive scroll_y shifts content up by whole pixels: a cell at row 2
+   *     (pixel row 16) scrolled up by 16 lands at pixel row 0. */
+  dl_reset();
+  dl_rect(0, 2, 1, 1, "#00FF00"); /* unscrolled box occupies rows [16,24) */
+  capyos_browser_render_pixels_scrolled(&g_dl, g_px, PW, PH, &o, 0, 16, &st);
+  CHECK(g_px[0 * PW + 0] == 0xFF00FF00u,
+        "scroll_y=16 brings cell row 2 up to pixel row 0");
+  CHECK(g_px[16 * PW + 0] == 0xFFFFFFFFu, "the row vacated by the scroll is bg");
+
+  /* 12. Positive scroll_x shifts content left: a cell at col 2 (pixel col 16)
+   *     scrolled left by 16 lands at pixel col 0. */
+  dl_reset();
+  dl_rect(2, 0, 1, 1, "#00FF00");
+  capyos_browser_render_pixels_scrolled(&g_dl, g_px, PW, PH, &o, 16, 0, &st);
+  CHECK(g_px[0 * PW + 0] == 0xFF00FF00u,
+        "scroll_x=16 brings cell col 2 left to pixel col 0");
+  CHECK(g_px[0 * PW + 16] == 0xFFFFFFFFu, "the col vacated by the scroll is bg");
+
+  /* 13. Scrolling everything off the top leaves the pure background -- every
+   *     draw primitive clips safely, so no out-of-bounds write occurs. */
+  dl_reset();
+  dl_rect(0, 0, 8, 4, "#00FF00"); /* fills the whole 64x32 surface unscrolled */
+  rc = capyos_browser_render_pixels_scrolled(&g_dl, g_px, PW, PH, &o, 0, 100000,
+                                             &st);
+  CHECK(rc == 0, "huge positive scroll still returns 0");
+  CHECK(g_px[0] == 0xFFFFFFFFu && g_px[PW * PH - 1u] == 0xFFFFFFFFu,
+        "content scrolled fully off-screen -> pure background");
+
+  /* 14. Negative scroll (content pushed off the bottom/right) is clip-safe. */
+  dl_reset();
+  dl_rect(0, 0, 1, 1, "#00FF00");
+  rc = capyos_browser_render_pixels_scrolled(&g_dl, g_px, PW, PH, &o, -100000,
+                                             -100000, &st);
+  CHECK(rc == 0 && g_px[0] == 0xFFFFFFFFu,
+        "large negative scroll clips safely to background");
+
+  /* 15. Fail-closed still holds WITH a non-zero offset: a version mismatch
+   *     leaves the surface untouched and returns -1. */
+  dl_reset();
+  dl_rect(0, 0, 1, 1, "#00FF00");
+  g_dl.version = 999; /* not CAPY_DL_VERSION */
+  g_px[0] = 0xDEADBEEFu;
+  rc = capyos_browser_render_pixels_scrolled(&g_dl, g_px, PW, PH, &o, 5, 5, &st);
+  CHECK(rc == -1 && st.truncated == 1 && g_px[0] == 0xDEADBEEFu,
+        "scrolled render is fail-closed on version mismatch");
+
+  /* 16. NULL surface with an offset -> -1 (the offset math never dereferences
+   *     the surface before the NULL check). */
+  dl_reset();
+  rc = capyos_browser_render_pixels_scrolled(&g_dl, NULL, PW, PH, &o, 9, 9, &st);
+  CHECK(rc == -1, "scrolled render with NULL out -> -1");
 
   printf("  %d/%d checks passed\n", g_passes, g_runs);
   return g_passes == g_runs ? 0 : 1;

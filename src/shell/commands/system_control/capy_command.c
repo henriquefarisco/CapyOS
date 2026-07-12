@@ -27,6 +27,7 @@
 #include "internal/system_control_internal.h"
 
 #include "core/system_init.h"
+#include "services/capypkg_runtime.h"
 
 static int capy_streq(const char *a, const char *b) {
     if (!a || !b) return 0;
@@ -111,9 +112,12 @@ static int capy_wizard_rerun(struct shell_context *ctx, int modules_only) {
 
     if (modules_only) {
         /* Drive only capypkg_bootstrap_run with force=1; the user
-         * already provided a profile.ini we trust. */
+         * already provided a profile.ini we trust. Do not rely on the
+         * background service having reached its first poll: BASIC/network
+         * targets may leave capypkg unbound when this command is entered. */
         int installed = 0;
         int failed = 0;
+        kernel_capypkg_bind_runtime_adapters();
         previous_session = session_active();
         session_set_active(NULL);
         rc = capypkg_bootstrap_run(1, &installed, &failed);

@@ -123,22 +123,47 @@ static void gfx_backend_win_present(int32_t backend_id) {
   compositor_invalidate((uint32_t)backend_id);
 }
 
+static void gfx_backend_win_focus(int32_t backend_id) {
+  struct gui_window *win;
+  if (backend_id <= 0) return;
+  win = compositor_get_window((uint32_t)backend_id);
+  if (!win) return;
+  /* A taskbar-style relaunch restores a minimized/hidden browser and raises
+   * it, matching the user's expectation that clicking Browser again focuses
+   * the existing instance. */
+  compositor_show_window(win->id);
+  compositor_focus_window(win->id);
+}
+
 static int gfx_backend_poll_event(int32_t backend_id,
                                   struct capy_gfx_event *out) {
   struct gui_event ev;
   struct gui_window *win;
   int32_t lx, ly;
   if (!out) return -1;
-  if (gui_event_poll(&ev) != 1) return 0; /* queue empty */
 
-  /* Deliver only events for this window; global pointer events (window_id 0)
-   * are localized against this window's frame. Anything else is dropped (not
-   * this app's business). */
-  if (ev.window_id != 0u && ev.window_id != (uint32_t)backend_id) return 0;
-
+  /* alpha.311 robust close: if the compositor window no longer exists (it was
+   * destroyed -- e.g. the desktop's title-bar X handler called
+   * compositor_destroy_window), report CLOSE so the ring-3 owner exits and its
+   * handle is released, INDEPENDENT of whether the queued WINDOW_CLOSE event is
+   * still in the shared queue. Once the window is gone every poll returns CLOSE
+   * until the owner exits. This is a belt-and-suspenders guarantee on top of
+   * the queued CLOSE event. */
   win = compositor_get_window((uint32_t)backend_id);
-  lx = ev.mouse.x - (win ? win->frame.x : 0);
-  ly = ev.mouse.y - (win ? win->frame.y : 0);
+  if (!win) {
+    out->kind = CAPY_GFX_EV_CLOSE;
+    return 1;
+  }
+
+  /* Ownership-aware dequeue: raw/global events stay available for the desktop
+   * dispatcher and events for other windows retain FIFO order. The dispatcher
+   * resolves input aimed at a ring-3 window to that concrete window id before
+   * re-queueing it, so this backend must consume exact matches only. */
+  if (gui_event_poll_window((uint32_t)backend_id, &ev) != 0)
+    return 0; /* no event for this owner */
+
+  lx = ev.mouse.x - win->frame.x;
+  ly = ev.mouse.y - win->frame.y;
 
   switch (ev.type) {
   case GUI_EVENT_KEY_DOWN:
@@ -192,10 +217,14 @@ static int gfx_backend_poll_event(int32_t backend_id,
 }
 
 static const struct syscall_gfx_ops g_compositor_gfx_ops = {
-    gfx_backend_win_create,   gfx_backend_win_destroy,
-    gfx_backend_surface_info, gfx_backend_surface_fill,
-    gfx_backend_surface_blit, gfx_backend_win_present,
-    gfx_backend_poll_event,
+    .win_create = gfx_backend_win_create,
+    .win_destroy = gfx_backend_win_destroy,
+    .surface_info = gfx_backend_surface_info,
+    .surface_fill = gfx_backend_surface_fill,
+    .surface_blit = gfx_backend_surface_blit,
+    .win_present = gfx_backend_win_present,
+    .poll_event = gfx_backend_poll_event,
+    .win_focus = gfx_backend_win_focus,
 };
 
 void syscall_gfx_install_default_ops(void) {

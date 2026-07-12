@@ -111,4 +111,9 @@ int shell_handle_help(int argc, char **argv, const char *usage, const char *deta
 
 const struct shell_command_set *shell_command_sets(size_t *count);
 
+/* Look up a registered command by name across all command sets (NULL if
+ * none). Exposed so commands that dispatch other commands (e.g. `capyai`)
+ * can reuse the canonical runner instead of re-implementing lookup. */
+const struct shell_command *shell_find_command(const char *name);
+
 #endif

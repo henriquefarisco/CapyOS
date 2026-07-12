@@ -41,6 +41,8 @@ struct fake_file {
 
 #define FAKE_FS_CAP 48
 static struct fake_file g_fs[FAKE_FS_CAP];
+static const char *g_text_write_fail_path;
+static int g_text_write_fail_remaining;
 
 static struct fake_file *fs_find(const char *path) {
     size_t i = 0u;
@@ -120,6 +122,11 @@ static int fs_read(const char *path, char *buffer, size_t buffer_size,
 static int fs_write_text(const char *path, const char *text) {
     struct fake_file *f = fs_find(path);
     if (!path || !text) return -1;
+    if (g_text_write_fail_path && g_text_write_fail_remaining > 0 &&
+        strcmp(path, g_text_write_fail_path) == 0) {
+        --g_text_write_fail_remaining;
+        return -1;
+    }
     if (!fs_parent_dir_exists(path)) return -1;
     if (f && f->is_dir) return -1;
     if (!f) f = fs_alloc(path);
@@ -319,6 +326,8 @@ static void bind_runtime_adapters(int with_verifier) {
 
 static void reset_state(int with_verifier) {
     fs_reset();
+    g_text_write_fail_path = NULL;
+    g_text_write_fail_remaining = 0;
     g_index_text = NULL;
     g_index_rc = -1;
     g_payload_bytes = NULL;

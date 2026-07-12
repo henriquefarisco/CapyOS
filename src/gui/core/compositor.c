@@ -374,6 +374,13 @@ struct gui_window *compositor_create_window(const char *title, int32_t x,
        * owner must not leak onto the next (possibly in-kernel-app) window
        * created in the same slot. */
       win->gfx_owner_pid = 0u;
+      /* Slots are reused (this loop finds the first free id==0 slot), so
+       * every field that a previous owner could have set nonzero must be
+       * reset here or it leaks onto the next window in the same slot.
+       * reset_window_slot() zeroes capture_mouse; create must match it or a
+       * window reused from an app that captured the mouse (e.g. file manager)
+       * would keep capturing input. */
+      win->capture_mouse = 0;
       comp_stats.window_count++;
       return win;
     }

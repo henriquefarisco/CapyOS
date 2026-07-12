@@ -99,6 +99,12 @@ long http_cache_entry_age(const struct http_cache_entry *e, long now);
 int http_cache_store(struct http_cache *c, const struct http_request *req,
                      const struct http_response *resp, long now);
 
+/* Invalidate only the entry whose canonical cache key matches `req`. Other
+ * entries and all cache statistics remain untouched. Returns 1 when an entry
+ * was invalidated, 0 on a NULL argument or miss. */
+int http_cache_invalidate(struct http_cache *c,
+                          const struct http_request *req);
+
 /* Look up `req` at `now`: sets *out to the matching entry and returns FRESH or
  * STALE on a hit, or MISS otherwise. Updates stats + LRU on a hit. */
 enum http_cache_status http_cache_lookup(struct http_cache *c,

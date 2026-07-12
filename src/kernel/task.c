@@ -2,6 +2,7 @@
 #include "kernel/task.h"
 #include "kernel/scheduler.h"
 #include "memory/kmem.h"
+#include "memory/vmm.h"
 #include <stddef.h>
 
 static struct task task_table[TASK_MAX_COUNT];
@@ -85,11 +86,30 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
 
   t->user_stack = NULL;
   t->user_stack_size = 0;
-  t->cr3 = 0;
+
+  /* Every task starts as a kernel task.  User-process loaders replace this
+   * value with their process PML4 before the task is made runnable in ring 3.
+   *
+   * A zero CR3 used to mean "leave whatever address space happens to be
+   * active" in context_switch.  After a ring-3 app yielded, a kernel worker
+   * could therefore run on the app's tables and the orphan reaper could free
+   * the very PML4 still loaded in CR3.  Bind both copies explicitly to the
+   * kernel PML4.  During the pre-VMM bootstrap the getter may return zero;
+   * production creates scheduled tasks only after vmm_init, while host tests
+   * provide a deterministic stub value. */
+  uint64_t kernel_cr3 = vmm_kernel_pml4_phys();
+  t->cr3 = kernel_cr3;
 
   uint64_t stack_top = (uint64_t)(t->kernel_stack + t->kernel_stack_size);
   stack_top &= ~0xFULL;
 
+  /* context_switch enters task_entry_trampoline with IRETQ rather than CALL.
+   * Reserve one padding word so that trampoline RSP is 16-byte aligned; its
+   * subsequent `call *entry` then gives the C worker the SysV-required
+   * RSP%16==8 on function entry. Without this word, large struct copies in a
+   * worker use aligned MOVAPS against an 8-byte-misaligned stack and #GP. */
+  stack_top -= sizeof(uint64_t);
+  *(uint64_t *)stack_top = 0;
   stack_top -= sizeof(uint64_t);
   *(uint64_t *)stack_top = (uint64_t)entry;
   stack_top -= sizeof(uint64_t);
@@ -106,7 +126,7 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
   t->context.r13 = 0;
   t->context.r14 = 0;
   t->context.r15 = 0;
-  t->context.cr3 = 0;
+  t->context.cr3 = kernel_cr3;
 
   t->state = TASK_STATE_READY;
   task_active_count++;
@@ -184,6 +204,22 @@ void task_yield(void) {
 void task_sleep(uint64_t ticks) {
   if (!current_task) return;
   extern void scheduler_sleep_current(uint64_t ticks);
+  extern int scheduler_can_sleep_current(void);
+  extern void scheduler_yield(void);
+  /* alpha.311: if this task cannot be woken by a timer tick (no APIC tick on
+   * this platform -- e.g. VMware, where the tick never advances -- or nothing
+   * else is runnable), a real sleep would block it FOREVER. Degrade to a
+   * cooperative yield so the caller stays runnable and keeps making progress.
+   * This mirrors the desktop runtime's own guarded task_sleep and is exactly
+   * the case that left the ring-3 graphical browser (capygfx) sleeping forever
+   * after its first poll iteration, so it never observed WINDOW_CLOSE and never
+   * exited. scheduler_sleep_current keeps its original contract (used directly
+   * elsewhere and unit-tested), so only the ring-3 sleep path (capy_sleep ->
+   * SYS_SLEEP -> task_sleep) gains the guard. */
+  if (!scheduler_can_sleep_current()) {
+    scheduler_yield();
+    return;
+  }
   scheduler_sleep_current(ticks);
 }
 

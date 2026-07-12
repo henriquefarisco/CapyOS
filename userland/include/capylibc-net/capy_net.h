@@ -173,6 +173,7 @@ int capy_url_parse(const char *url, struct capy_url_parts *out);
 #define CAPY_HTTP_MAX_HEADERS         16
 #define CAPY_HTTP_MAX_HEADER_NAME     48
 #define CAPY_HTTP_MAX_HEADER_VALUE    192
+#define CAPY_HTTP_MAX_LOCATION        2048
 
 struct capy_http_header {
   char name[CAPY_HTTP_MAX_HEADER_NAME];
@@ -190,6 +191,10 @@ struct capy_http_response {
   int                     status_code;
   int                     header_count;
   struct capy_http_header headers[CAPY_HTTP_MAX_HEADERS];
+  /* Redirect targets routinely exceed the generic header-value cap. Keep the
+   * complete, bounded Location value independently, including when it appears
+   * after the stored-header table is full. */
+  char                    location[CAPY_HTTP_MAX_LOCATION];
   size_t                  body_len;
   size_t                  content_length;
   int                     truncated;
@@ -204,9 +209,12 @@ const char *capy_http_response_find_header(
 
 /* One-shot HTTP/1.1 GET. Resolves `host`, opens a TCP socket,
  * sends the request, and parses the status line + headers + body. Response
- * heads may terminate with CRLFCRLF or LF-only empty lines.
- * (Content-Length only -- any Transfer-Encoding or non-identity
- * Content-Encoding is rejected as `CAPY_NET_EUNSUPPORTED` in this iteration).
+ * heads may terminate with CRLFCRLF or LF-only empty lines. Bodies may use a
+ * valid Content-Length, connection-close framing, or one exact
+ * `Transfer-Encoding: chunked`. Other transfer codings, duplicate/combined
+ * Transfer-Encoding fields, TE+Content-Length, malformed chunks, framing
+ * trailers, and non-identity Content-Encoding fail closed. Chunk extensions and
+ * trailer fields are syntax-checked with fixed line/aggregate/count budgets.
  * The body is written
  * into `body_buf` up to `body_buf_cap`; if the on-wire body is
  * larger, `out->truncated = 1` and the tail bytes are silently
@@ -226,7 +234,7 @@ const char *capy_http_response_find_header(
  *
  * NOT supported in this iteration:
  *   - HTTPS (returns CAPY_NET_EUNSUPPORTED via libcapy-tls fail-closed adapter)
- *   - transfer-encoding response bodies
+ *   - transfer-encoding response bodies other than exact `chunked`
  *   - content-encoding response bodies except identity
  *   - informational 1xx response continuation to a final response
  *   - automatic redirect follow (caller must inspect Location
@@ -253,8 +261,9 @@ int capy_http_get(const char *url,
  * Each header is validated fail-closed BEFORE any socket is opened: the name
  * must be a valid HTTP token and the value must contain no raw CTL bytes (so a
  * `\r`/`\n` in either can never inject a second header line). Framing- and
- * routing-critical names the builder owns -- `Host`, `Connection`,
- * `Content-Length`, `Transfer-Encoding` -- are rejected (anti request-smuggling
+ * routing/representation-critical names the builder owns -- `Host`,
+ * `Connection`, `Content-Length`, `Transfer-Encoding`, `Accept-Encoding` -- are
+ * rejected (anti request-smuggling
  * / anti Host-routing confusion) with `CAPY_NET_EPARSE`. `req_headers` may be
  * NULL only when `req_header_count == 0`; otherwise it is `CAPY_NET_EINVAL`.
  * `capy_http_get(url, ...)` is exactly this with `(NULL, 0)` headers. */

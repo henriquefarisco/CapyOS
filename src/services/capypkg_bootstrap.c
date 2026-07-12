@@ -254,6 +254,10 @@ struct bootstrap_planner {
  * bootstrap) are single-threaded, so a file-scope instance keeps the
  * ~3 KiB plan off the kernel stack without a reentrancy hazard. */
 static struct bootstrap_planner g_bootstrap_plan;
+/* The planner, capypkg catalog and VFS commit path all use shared scratch.
+ * Admit one bootstrap sweep at a time so the first-boot Wizard, background
+ * service and shell command cannot interleave those mutations. */
+static int g_bootstrap_in_progress;
 
 static void bootstrap_zero(void *ptr, size_t len) {
     uint8_t *dst = (uint8_t *)ptr;
@@ -423,7 +427,7 @@ static void bootstrap_plan_build(const struct install_profile *profile) {
     }
 }
 
-int capypkg_bootstrap_run_with_progress(
+static int capypkg_bootstrap_run_locked(
         int force,
         int *out_installed,
         int *out_failed,
@@ -575,6 +579,29 @@ int capypkg_bootstrap_run_with_progress(
     emit_progress(progress, ctx, CAPYPKG_BOOTSTRAP_EVENT_SWEEP_DONE,
                   NULL, installed, planned, failed);
     return INSTALL_PROFILE_OK;
+}
+
+int capypkg_bootstrap_run_with_progress(
+        int force,
+        int *out_installed,
+        int *out_failed,
+        capypkg_bootstrap_progress_fn progress,
+        void *ctx) {
+    int rc;
+    if (out_installed) *out_installed = 0;
+    if (out_failed) *out_failed = 0;
+
+    if (__atomic_exchange_n(&g_bootstrap_in_progress, 1,
+                            __ATOMIC_ACQUIRE) != 0) {
+        klog(KLOG_WARN,
+             "[audit] [capypkg] bootstrap: sweep already in progress");
+        return INSTALL_PROFILE_ERR_NOT_READY;
+    }
+
+    rc = capypkg_bootstrap_run_locked(force, out_installed, out_failed,
+                                      progress, ctx);
+    __atomic_store_n(&g_bootstrap_in_progress, 0, __ATOMIC_RELEASE);
+    return rc;
 }
 
 /* Backwards-compatible silent entry point: just forwards. */

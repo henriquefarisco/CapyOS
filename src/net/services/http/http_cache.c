@@ -28,12 +28,6 @@ static int ci_eq(const char *a, const char *b) {
   return *a == '\0' && *b == '\0';
 }
 
-static size_t s_len(const char *s) {
-  size_t n = 0;
-  while (s[n]) n++;
-  return n;
-}
-
 static void s_copy(char *dst, const char *src, size_t cap) {
   size_t i = 0;
   if (cap == 0) return;
@@ -394,6 +388,26 @@ int http_cache_store(struct http_cache *c, const struct http_request *req,
   e->lru = ++c->clock;
   c->stores++;
   return 1;
+}
+
+int http_cache_invalidate(struct http_cache *c,
+                          const struct http_request *req) {
+  char key[HTTP_CACHE_KEY_MAX];
+  uint32_t i;
+  if (!c || !req) return 0;
+  build_key(req, key, sizeof(key));
+  for (i = 0; i < HTTP_CACHE_MAX_ENTRIES; i++) {
+    struct http_cache_entry *e = &c->entries[i];
+    if (!e->valid || !ci_eq(e->key, key)) continue;
+    e->valid = 0;
+    e->body_len = 0;
+    e->header_count = 0;
+    e->key[0] = '\0';
+    e->location[0] = '\0';
+    e->lru = 0;
+    return 1;
+  }
+  return 0;
 }
 
 enum http_cache_status http_cache_lookup(struct http_cache *c,

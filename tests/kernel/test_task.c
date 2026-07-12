@@ -2,6 +2,7 @@
 #include <string.h>
 #include "kernel/task.h"
 #include "kernel/scheduler.h"
+#include "memory/vmm.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -40,6 +41,26 @@ void test_task_create(void) {
   struct task *found = task_by_pid(t->pid);
   if (found == t) { PASS(); }
   else { FAIL("task not found by pid"); }
+
+  TEST("fresh kernel task stack honors SysV call alignment");
+  if (t && (t->context.rsp & 0xFu) == 0u &&
+      ((uint64_t *)(uintptr_t)t->context.rsp)[2] ==
+          (uint64_t)(uintptr_t)dummy_entry) {
+    PASS();
+  } else {
+    FAIL("trampoline stack would misalign a C worker entry");
+  }
+}
+
+void test_kernel_task_binds_kernel_cr3(void) {
+  task_system_init();
+  struct task *t = task_create_kernel("kernel-cr3", dummy_entry, NULL);
+  uint64_t expected = vmm_kernel_pml4_phys();
+
+  TEST("kernel task binds the initialized kernel CR3");
+  if (t && expected != 0u && t->cr3 == expected &&
+      t->context.cr3 == expected) { PASS(); }
+  else { FAIL("kernel task retained implicit/zero CR3"); }
 }
 
 void test_task_kill(void) {
@@ -122,6 +143,7 @@ int test_task_run(void) {
   tests_passed = 0;
   test_task_init();
   test_task_create();
+  test_kernel_task_binds_kernel_cr3();
   test_task_kill();
   test_task_kill_unlinks_run_queue();
   test_scheduler_tick_reaps_zombie_run_queue();

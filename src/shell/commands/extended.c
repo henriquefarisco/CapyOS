@@ -27,6 +27,7 @@
 #include "apps/file_manager.h"
 #include "apps/text_editor.h"
 #include "apps/task_manager.h"
+#include "apps/capyai_chat.h"
 #include "apps/settings.h"
 #endif
 #include "security/tls.h"
@@ -334,6 +335,20 @@ static int cmd_open_tasks(struct shell_context *c, int a, char **v) {
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
   task_manager_open(); return 0;
 }
+static int cmd_open_capyai(struct shell_context *c, int a, char **v) {
+  (void)a;(void)v;
+  if (!desktop_is_active()) {
+    /* Queue the app before entering the synchronous desktop loop; the runtime
+     * consumes it immediately after compositor initialization. */
+    (void)desktop_launch_capyai();
+    return ensure_desktop(c);
+  }
+  if (desktop_launch_capyai() != 0) {
+    shell_print_error("CapyAI nao abriu: memoria de superficie insuficiente.");
+    return -1;
+  }
+  return 0;
+}
 static int cmd_open_settings(struct shell_context *c, int a, char **v) {
   (void)a;(void)v;
   if (!desktop_is_active() && ensure_desktop(c) != 0) { return -1; }
@@ -395,7 +410,7 @@ int kernel_desktop_open_browser_graphical(void) {
  * browser legado foi removido; o sucessor deve voltar como adaptador
  * versionado na etapa correta. */
 
-#define EXT_CMD_COUNT 24
+#define EXT_CMD_COUNT 26
 #define EXT_EARLY_COUNT 6
 
 static struct shell_command g_extended_commands[EXT_CMD_COUNT];
@@ -426,6 +441,7 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "open-files",       cmd_open_files);
   set_cmd(&g_extended_commands[i++], "open-editor",      cmd_open_editor);
   set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_open_tasks);
+  set_cmd(&g_extended_commands[i++], "open-capyai",      cmd_open_capyai);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_open_settings);
   set_cmd(&g_extended_commands[i++], "open-browser-graphical", cmd_open_browser_graphical);
 #else
@@ -433,6 +449,7 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "open-files",       cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-editor",      cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-tasks",       cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "open-capyai",      cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-browser-graphical", cmd_desktop_unavailable);
 #endif
@@ -449,6 +466,7 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "auth-status",      cmd_auth_status);
   set_cmd(&g_extended_commands[i++], "scheduler-stats",  cmd_scheduler_stats);
   set_cmd(&g_extended_commands[i++], "print-pci",        cmd_print_pci);
+  capyai_command_register(&g_extended_commands[i++]);
 
   i = 0;
   set_cmd(&g_extended_early_commands[i++], "clock",          cmd_print_clock);

@@ -5,6 +5,9 @@
 
 int x64_kernel_try_shell_command(struct shell_context *ctx,
                                  int shell_initialized, char *line);
+int x64_kernel_try_shell_command_result(struct shell_context *ctx,
+                                        int shell_initialized, char *line,
+                                        int *out_rc);
 int x64_kernel_run_shell_alias(struct shell_context *ctx,
                                int shell_initialized,
                                const char *alias_line);

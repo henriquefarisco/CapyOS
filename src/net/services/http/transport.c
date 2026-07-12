@@ -53,7 +53,7 @@ int http_transport_connect(struct http_transport *transport,
   if (!transport || !req) return http_fail(HTTP_ERR_INVALID_ARGUMENT);
   http_transport_reset(transport);
 
-  {
+  if (http_request_wants_keepalive(req)) {
     struct http_pool_entry *pooled = http_pool_find(req->host, req->port,
                                                     req->use_tls);
     if (pooled) {

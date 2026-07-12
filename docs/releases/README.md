@@ -4,14 +4,18 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.265+20260611.md`
-  - Handoff cross-repo da Etapa 6 / Slice 6.4: `CapyBrowser v0.6.0` publica
-    `org.capyos.browser.text` (`capy-browser-core` textual) via `make package
-    STAGE=text`, com `depends=` vazio para nao bloquear em codecs de imagem.
-    CapyOS atualiza matriz, auditoria e plano; proximo gate e o adapter
-    CapyOS-side + `make smoke-x64-vmware-capybrowse-text`.
+- `capyos-0.8.0-alpha.312+20260712.md`
+  - Browser grafico estatico interativo com toolbar, historico, CSS, imagens e
+    navegacao real; correcoes de lifecycle/VM, Wizard transacional, CapyAI
+    grafico, indice agregado e updater autenticado fail-closed.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.309+20260702.md`
+  - Fix do preemption guard que eliminou a tela azul ao coexistir desktop e
+    capygfx em VMware.
+- `capyos-0.8.0-alpha.265+20260611.md`
+  - Handoff cross-repo da Etapa 6 / Slice 6.4 para CapyBrowser textual.
 
 - `capyos-0.8.0-alpha.264+20260607.md`
   - **Fecho da Etapa 5** (TLS userland real): flag `CAPYOS_TLS_USERLAND_HANDSHAKE` promovida a default apos o gate externo (smoke VMware `tls-handshake` + `release-check`). **Abertura da Etapa 6** (apps basicos + CapyBrowse Text) com a fundacao CapyOS-side: `capy_net_strerror` (6.2), `capy_net_diagnose_stage`/`stage_name` (6.3, diagnostico DNS/TCP/TLS/HTTP) e fallback EN universal em `localization_select` (6.5). Hardening de seguranca: overflows do ELF loader (userland + boot), tetos KDF do volume header, cobertura adversarial DNS/DHCP/ICMP/ARP, bound do `names_equal` do CAPYFS. Tag a ser criada manualmente.

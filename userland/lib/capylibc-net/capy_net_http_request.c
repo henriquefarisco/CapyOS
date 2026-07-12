@@ -164,8 +164,9 @@ int capy_http_build_get_request_ex(const char *host, uint16_t port,
     }
   }
   if (http_buf_puts(buf, buf_cap, &pos,
-                    "\r\nUser-Agent: capylibc-net/0.1"
-                    "\r\nAccept: */*\r\n") != 0) {
+                     "\r\nUser-Agent: capylibc-net/0.1"
+                     "\r\nAccept: */*"
+                     "\r\nAccept-Encoding: identity\r\n") != 0) {
     capy_net_internal_set_error(CAPY_NET_EBUF);
     return -1;
   }

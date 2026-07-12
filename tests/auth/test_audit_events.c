@@ -139,7 +139,7 @@ static void setup_agent(void) {
 int run_audit_events_tests(void) {
   int fails = 0;
 
-  /* stage success emits [update] Update staged. */
+  /* Persistent stage/arm fail closed and emit explicit audit refusals. */
   setup_agent();
   set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
                 "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
@@ -153,27 +153,36 @@ int run_audit_events_tests(void) {
                 "payload_cache=/system/update/payload.bin\npayload_cache_sha256="
                 UPDATE_AGENT_GOOD_SHA256 "\n");
   reset_capture();
-  fails += expect_true(update_agent_stage_latest() == 0,
-                       "stage should succeed with valid verified cache");
+  fails += expect_true(
+      update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
+      "stage should fail closed without persistent boot-slot writer");
   flush_capture();
-  fails += expect_true(strstr(g_klog_capture, "[update] Update staged.") != NULL,
-                       "stage success should emit audit event");
+  fails += expect_true(
+      strstr(g_klog_capture,
+             "[audit] [update] stage refused: persistent boot-slot writer unavailable") !=
+          NULL,
+      "stage refusal should emit audit event");
 
-  /* arm success emits [update] Update armed for activation. */
+  /* Arm has the same capability gate and must not simulate persistence. */
   reset_capture();
-  fails += expect_true(update_agent_set_pending_activation(1) == 0,
-                       "arm should succeed when staged");
+  fails += expect_true(
+      update_agent_set_pending_activation(1) == UPDATE_AGENT_ERR_UNSUPPORTED,
+      "arm should fail closed without persistent boot-slot writer");
   flush_capture();
-  fails += expect_true(strstr(g_klog_capture, "[update] Update armed for activation.") != NULL,
-                       "arm success should emit audit event");
+  fails += expect_true(
+      strstr(g_klog_capture,
+             "[audit] [update] arm refused: persistent boot-slot writer unavailable") !=
+          NULL,
+      "arm refusal should emit audit event");
 
-  /* disarm emits [update] Update activation disarmed. */
+  /* With no persistent staged slot, disarm is idempotent and silent. */
   reset_capture();
   fails += expect_true(update_agent_set_pending_activation(0) == 0,
                        "disarm should succeed");
   flush_capture();
-  fails += expect_true(strstr(g_klog_capture, "[update] Update activation disarmed.") != NULL,
-                       "disarm should emit audit event");
+  fails += expect_true(
+      strstr(g_klog_capture, "[update] Update activation disarmed.") == NULL,
+      "disarm should not claim a nonexistent persistent state change");
 
   /* clear emits [update] Staged update cleared. */
   reset_capture();

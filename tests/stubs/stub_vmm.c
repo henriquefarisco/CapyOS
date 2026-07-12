@@ -19,6 +19,17 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+static const struct vmm_address_space *g_stub_vmm_active_as = NULL;
+static uint64_t g_stub_vmm_next_user_cr3 = 0x2000u;
+
+void stub_vmm_set_active_address_space(const struct vmm_address_space *as) {
+    g_stub_vmm_active_as = as;
+}
+
+int vmm_address_space_is_active(const struct vmm_address_space *as) {
+    return as != NULL && as == g_stub_vmm_active_as;
+}
+
 struct vmm_address_space *vmm_create_address_space(void) {
     /* Allocate enough storage so the caller can safely zero-init or
      * read back the refcount field; the size of the real struct is
@@ -27,6 +38,8 @@ struct vmm_address_space *vmm_create_address_space(void) {
         (struct vmm_address_space *)calloc(1, sizeof(struct vmm_address_space));
     if (!as) return NULL;
     as->refcount = 1;
+    as->pml4_phys = g_stub_vmm_next_user_cr3;
+    g_stub_vmm_next_user_cr3 += 0x1000u;
     return as;
 }
 
@@ -45,6 +58,7 @@ struct vmm_address_space *vmm_clone_address_space(
 
 void vmm_destroy_address_space(struct vmm_address_space *as) {
     if (!as) return;
+    if (vmm_address_space_is_active(as)) return;
     if (as->refcount > 0) {
         as->refcount--;
         if (as->refcount > 0) return;
@@ -119,3 +133,18 @@ void vmm_switch_address_space(struct vmm_address_space *as) {
     g_stub_vmm_last_switch = as;
     g_stub_vmm_switch_calls++;
 }
+
+/* alpha.310: pmm_init now calls this to skip firmware read-only (reserved)
+ * RAM frames (real impl walks the CR3 page tables, x86_64-only). Host tests
+ * link the real pmm.c but not the real vmm.c; there is no firmware identity
+ * map in the host process, so report every frame usable (1). */
+int vmm_identity_is_writable(uint64_t phys) {
+    (void)phys;
+    return 1;
+}
+
+/* alpha.311: elf_load wraps its segment writes in enter/leave to run on the
+ * kernel's own page tables. Host tests have no CR3; provide no-op symbols. */
+uint64_t vmm_enter_kernel_tables(void) { return 0; }
+void vmm_leave_kernel_tables(uint64_t prev_cr3) { (void)prev_cr3; }
+uint64_t vmm_kernel_pml4_phys(void) { return 0x1000u; }

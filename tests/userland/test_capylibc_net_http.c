@@ -14,8 +14,8 @@
  *   - Status-code edge cases (404 empty body, 100/103 informational,
  *     204 no-content body tail, 304 with non-zero Content-Length)
  *   - Content-Encoding gating (identity accepted, gzip/empty rejected)
- *   - Header parser robustness (no separator, obs-fold, chunked,
- *     identity transfer encoding, bad Content-Length, overflow,
+ *   - Header parser robustness (no separator, obs-fold, unsupported
+ *     transfer encoding, bad Content-Length, overflow,
  *     duplicates, validations beyond stored header cap)
  *   - Request format on the wire (request target + Host + Connection
  *     close, fragment stripping)
@@ -36,6 +36,22 @@ static const char k_canned_response[] =
     "\r\n"
     "Hello, world!";
 
+#define LONG_LOCATION_64 \
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+#define LONG_LOCATION_URL \
+  "https://example.com/" LONG_LOCATION_64 LONG_LOCATION_64 \
+  LONG_LOCATION_64 LONG_LOCATION_64 LONG_LOCATION_64
+
+static const char k_canned_long_location_after_header_cap[] =
+    "HTTP/1.1 302 Found\r\n"
+    "X-00: a\r\nX-01: a\r\nX-02: a\r\nX-03: a\r\n"
+    "X-04: a\r\nX-05: a\r\nX-06: a\r\nX-07: a\r\n"
+    "X-08: a\r\nX-09: a\r\nX-10: a\r\nX-11: a\r\n"
+    "X-12: a\r\nX-13: a\r\nX-14: a\r\nX-15: a\r\n"
+    "Location: " LONG_LOCATION_URL "\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+
 static void test_http_get_happy_path(void) {
   fake_reset();
   g_fake.dns_canned_ip = 0x01020304u;
@@ -51,6 +67,24 @@ static void test_http_get_happy_path(void) {
       r.content_length == 13 && r.body_len == 13 && r.truncated == 0 &&
       memcmp(body, "Hello, world!", 13) == 0) PASS();
   else FAIL("end-to-end parse failed");
+}
+
+static void test_http_get_preserves_long_location_after_header_cap(void) {
+  fake_reset();
+  g_fake.dns_canned_ip = 0x7F000001u;
+  g_fake.recv_canned_buf =
+      (const uint8_t *)k_canned_long_location_after_header_cap;
+  g_fake.recv_canned_len =
+      sizeof(k_canned_long_location_after_header_cap) - 1u;
+
+  TEST("http_get preserves full long Location after stored-header cap");
+  uint8_t body[1];
+  struct capy_http_response r;
+  int rc = capy_http_get("http://example.com/redirect", body, sizeof(body), &r);
+  if (rc == 0 && r.status_code == 302 && r.header_count == 16 &&
+      strcmp(r.location, LONG_LOCATION_URL) == 0 &&
+      capy_http_response_find_header(&r, "Location") == NULL) PASS();
+  else FAIL("long redirect target was truncated or dropped");
 }
 
 static const char k_canned_lf_only_response[] =
@@ -426,26 +460,6 @@ static void test_http_get_rejects_obs_fold_header(void) {
   else FAIL("folded response header accepted");
 }
 
-static const char k_canned_chunked[] =
-    "HTTP/1.1 200 OK\r\n"
-    "Transfer-Encoding: chunked\r\n"
-    "\r\n"
-    "5\r\nHello\r\n0\r\n\r\n";
-
-static void test_http_get_rejects_chunked(void) {
-  fake_reset();
-  g_fake.dns_canned_ip = 0x7F000001u;
-  g_fake.recv_canned_buf = (const uint8_t *)k_canned_chunked;
-  g_fake.recv_canned_len = sizeof(k_canned_chunked) - 1;
-
-  TEST("http_get rejects chunked transfer-encoding");
-  uint8_t body[64];
-  struct capy_http_response r;
-  if (capy_http_get("http://example.com/", body, sizeof(body), &r) == -1 &&
-      capy_net_last_error() == CAPY_NET_EUNSUPPORTED) PASS();
-  else FAIL("chunked accepted");
-}
-
 static const char k_canned_identity_transfer_encoding[] =
     "HTTP/1.1 200 OK\r\n"
     "Transfer-Encoding: identity\r\n"
@@ -689,6 +703,7 @@ static void test_http_get_request_format(void) {
   g_fake.send_log[g_fake.send_log_len] = '\0';
   if (strstr((char *)g_fake.send_log, "GET /path?x=1 HTTP/1.1\r\n") != NULL &&
       strstr((char *)g_fake.send_log, "Host: example.com:8080\r\n") != NULL &&
+      strstr((char *)g_fake.send_log, "Accept-Encoding: identity\r\n") != NULL &&
       strstr((char *)g_fake.send_log, "Connection: close\r\n\r\n") != NULL) PASS();
   else FAIL("request line / Host header malformed");
 }
@@ -731,8 +746,26 @@ static void test_http_get_with_headers_reserved_fails_before_connect(void) {
   else FAIL("reserved header did not fail closed before I/O");
 }
 
+static void test_http_get_with_headers_rejects_accept_encoding(void) {
+  fake_reset();
+  g_fake.dns_canned_ip = 0x7F000001u;
+
+  TEST("http_get_with_headers reserves Accept-Encoding identity");
+  uint8_t body[8];
+  struct capy_http_response r;
+  struct capy_http_header h = { .name = "Accept-Encoding", .value = "gzip" };
+  int rc = capy_http_get_with_headers("http://example.com/", &h, 1,
+                                      body, sizeof(body), &r);
+  if (rc == -1 && capy_net_last_error() == CAPY_NET_EPARSE &&
+      g_fake.socket_calls == 0 && g_fake.connect_calls == 0)
+    PASS();
+  else
+    FAIL("caller overrode the fixed identity content-coding policy");
+}
+
 void test_capylibc_net_http_cases(void) {
   test_http_get_happy_path();
+  test_http_get_preserves_long_location_after_header_cap();
   test_http_get_lf_only_head();
   test_http_get_lf_only_head_split_recv();
   test_http_get_chunked_recv();
@@ -753,7 +786,6 @@ void test_capylibc_net_http_cases(void) {
   test_http_get_rejects_empty_content_encoding();
   test_http_get_rejects_header_without_separator();
   test_http_get_rejects_obs_fold_header();
-  test_http_get_rejects_chunked();
   test_http_get_rejects_identity_transfer_encoding();
   test_http_get_rejects_bad_content_length_suffix();
   test_http_get_rejects_content_length_overflow();
@@ -766,4 +798,6 @@ void test_capylibc_net_http_cases(void) {
   test_http_get_request_format();
   test_http_get_with_headers_sends_cookie_and_conditional();
   test_http_get_with_headers_reserved_fails_before_connect();
+  test_http_get_with_headers_rejects_accept_encoding();
+  test_capylibc_net_chunked_cases();
 }

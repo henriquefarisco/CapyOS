@@ -57,11 +57,13 @@ static uint32_t g_surface[FAKE_W * FAKE_H];
 
 static struct fake_state {
   int create_calls, destroy_calls, present_calls, blit_calls, fill_calls,
-      poll_calls;
-  int32_t last_created, last_destroyed;
+      poll_calls, focus_calls;
+  int32_t last_created, last_destroyed, last_focused;
   int create_should_fail;
   int poll_has_event;
+  int poll_should_fail; /* make fk_poll_event return -1 (backend error) */
   struct capy_gfx_event poll_event;
+  char last_title[64]; /* records the (sanitized) title the handler passed */
 } g_fake;
 
 static void fake_reset(void) {
@@ -71,11 +73,19 @@ static void fake_reset(void) {
 
 static int32_t fk_win_create(const char *title, uint32_t w, uint32_t h,
                              uint32_t pid) {
-  (void)title;
+  size_t i;
   (void)w;
   (void)h;
   (void)pid;
   g_fake.create_calls++;
+  /* Record exactly what the handler forwarded so a test can assert the
+   * title sanitization the handler performed (gfx_copy_title). */
+  g_fake.last_title[0] = '\0';
+  if (title) {
+    for (i = 0u; i + 1u < sizeof(g_fake.last_title) && title[i]; ++i)
+      g_fake.last_title[i] = title[i];
+    g_fake.last_title[i] = '\0';
+  }
   if (g_fake.create_should_fail) return -1;
   g_fake.last_created = FAKE_BACKEND_ID_BASE + g_fake.create_calls;
   return g_fake.last_created;
@@ -126,9 +136,15 @@ static void fk_win_present(int32_t id) {
   g_fake.present_calls++;
 }
 
+static void fk_win_focus(int32_t id) {
+  g_fake.focus_calls++;
+  g_fake.last_focused = id;
+}
+
 static int fk_poll_event(int32_t id, struct capy_gfx_event *out) {
   (void)id;
   g_fake.poll_calls++;
+  if (g_fake.poll_should_fail) return -1; /* backend error path */
   if (g_fake.poll_has_event) {
     *out = g_fake.poll_event;
     return 1;
@@ -137,8 +153,14 @@ static int fk_poll_event(int32_t id, struct capy_gfx_event *out) {
 }
 
 static const struct syscall_gfx_ops g_fake_ops = {
-    fk_win_create,   fk_win_destroy,  fk_surface_info, fk_surface_fill,
-    fk_surface_blit, fk_win_present,  fk_poll_event,
+    .win_create = fk_win_create,
+    .win_destroy = fk_win_destroy,
+    .surface_info = fk_surface_info,
+    .surface_fill = fk_surface_fill,
+    .surface_blit = fk_surface_blit,
+    .win_present = fk_win_present,
+    .poll_event = fk_poll_event,
+    .win_focus = fk_win_focus,
 };
 
 /* === harness ============================================================== */
@@ -414,6 +436,165 @@ static void test_handle_table_full(void) {
   CHECK(make_window(FAKE_W, FAKE_H) == -1, "33rd window -> -1 (table full)");
 }
 
+/* === alpha.311 / hardening: additional handler-layer coverage ============ */
+
+/* Ownership is enforced for poll + blit too (test_ownership_enforced only
+ * covered fill / present / destroy). */
+static void test_ownership_enforced_poll_blit(void) {
+  struct process *a, *b;
+  int64_t ha;
+  struct syscall_frame f;
+  struct capy_gfx_event ev;
+  uint32_t src = 0u;
+  reset_world();
+  a = process_create("gfx-a", 0, 0);
+  b = process_create("gfx-b", 0, 0);
+  process_set_current(a);
+  ha = make_window(FAKE_W, FAKE_H);
+  CHECK(ha > 0, "A creates window");
+
+  process_set_current(b);
+  f = frame6((uint64_t)ha, (uint64_t)(uintptr_t)&ev, 0, 0, 0, 0);
+  CHECK(sys_window_poll_event(&f) == -1, "B poll of A window -> -1");
+  f = frame6((uint64_t)ha, (uint64_t)(uintptr_t)&src, 1, 1, 0, 0);
+  CHECK(sys_surface_blit(&f) == -1, "B blit of A window -> -1");
+  CHECK(g_fake.poll_calls == 0 && g_fake.blit_calls == 0,
+        "unowned poll/blit never reach the backend");
+}
+
+/* poll_event fail-closed: no process, NULL out, and a backend error all -> -1. */
+static void test_poll_fail_closed(void) {
+  struct process *p;
+  int64_t h;
+  struct syscall_frame f;
+  struct capy_gfx_event ev;
+  reset_world();
+  p = process_create("gfx", 0, 0);
+  process_set_current(p);
+  h = make_window(FAKE_W, FAKE_H);
+
+  process_set_current((struct process *)0); /* no process context */
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&ev, 0, 0, 0, 0);
+  CHECK(sys_window_poll_event(&f) == -1, "poll without process -> -1");
+
+  process_set_current(p);
+  f = frame6((uint64_t)h, 0 /*NULL out*/, 0, 0, 0, 0);
+  CHECK(sys_window_poll_event(&f) == -1, "poll with NULL out -> -1");
+
+  g_fake.poll_should_fail = 1; /* backend returns -1 */
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&ev, 0, 0, 0, 0);
+  CHECK(sys_window_poll_event(&f) == -1, "backend poll error -> -1");
+}
+
+/* blit boundary branches: zero dims are a no-op success; dx/dy overflow and a
+ * pixel-product over the 16 Mpx cap fail-closed WITHOUT reaching the backend. */
+static void test_blit_boundaries(void) {
+  struct process *p;
+  int64_t h;
+  struct syscall_frame f;
+  uint32_t one = 0u;
+  reset_world();
+  p = process_create("gfx", 0, 0);
+  process_set_current(p);
+  h = make_window(FAKE_W, FAKE_H);
+
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&one, 0, 4, 0, 0);
+  CHECK(sys_surface_blit(&f) == 0, "blit sw==0 -> 0 (nothing to copy)");
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&one, 4, 0, 0, 0);
+  CHECK(sys_surface_blit(&f) == 0, "blit sh==0 -> 0 (nothing to copy)");
+  CHECK(g_fake.blit_calls == 0, "zero-dim blit never reaches the backend");
+
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&one, 1, 1, CAPY_GFX_MAX_DIM + 1u,
+             0);
+  CHECK(sys_surface_blit(&f) == -1, "blit dx overflow -> -1");
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&one, 1, 1, 0,
+             CAPY_GFX_MAX_DIM + 1u);
+  CHECK(sys_surface_blit(&f) == -1, "blit dy overflow -> -1");
+
+  /* 4097*4097 = 16,785,409 > 16,777,216 (16 Mpx) even though each dim is
+   * <= CAPY_GFX_MAX_DIM: proves the u64 product guard, not just per-dim. */
+  f = frame6((uint64_t)h, (uint64_t)(uintptr_t)&one, 4097, 4097, 0, 0);
+  CHECK(sys_surface_blit(&f) == -1, "blit pixel-product over 16Mpx -> -1");
+  CHECK(g_fake.blit_calls == 0, "overflowing blit never reaches the backend");
+}
+
+/* fill bounds each of x/y/w/h; the original suite only checked width. */
+static void test_fill_rejects_bad_y_and_h(void) {
+  struct process *p;
+  int64_t h;
+  struct syscall_frame f;
+  reset_world();
+  p = process_create("gfx", 0, 0);
+  process_set_current(p);
+  h = make_window(FAKE_W, FAKE_H);
+  f = frame6((uint64_t)h, 0, CAPY_GFX_MAX_DIM + 1u, 2, 2, 0xFFu);
+  CHECK(sys_surface_fill(&f) == -1, "oversized fill y -> -1");
+  f = frame6((uint64_t)h, 0, 0, 2, CAPY_GFX_MAX_DIM + 1u, 0xFFu);
+  CHECK(sys_surface_fill(&f) == -1, "oversized fill height -> -1");
+  CHECK(g_fake.fill_calls == 0, "oversized fill never reaches the backend");
+}
+
+/* The title is sanitized (control bytes -> '?') and NUL-terminated before it
+ * reaches the backend, so a hostile title cannot inject terminal escapes. */
+static void test_title_sanitized(void) {
+  struct process *p;
+  struct syscall_frame f;
+  char evil[6];
+  reset_world();
+  p = process_create("gfx", 0, 0);
+  process_set_current(p);
+  evil[0] = 'H';
+  evil[1] = (char)0x1b; /* ESC -> '?' */
+  evil[2] = 'i';
+  evil[3] = (char)0x07; /* BEL -> '?' */
+  evil[4] = (char)0x7f; /* DEL -> '?' */
+  evil[5] = '\0';
+  f = frame6((uint64_t)(uintptr_t)evil, 64, 32, 0, 0, 0);
+  CHECK(sys_window_create(&f) > 0, "create with a hostile title succeeds");
+  CHECK(g_fake.last_title[0] == 'H' && g_fake.last_title[1] == '?' &&
+            g_fake.last_title[2] == 'i' && g_fake.last_title[3] == '?' &&
+            g_fake.last_title[4] == '?' && g_fake.last_title[5] == '\0',
+        "control bytes replaced with '?' and NUL-terminated");
+}
+
+/* release_owner(0) is a no-op: pid 0 never owns a window. */
+static void test_release_owner_zero_is_noop(void) {
+  struct process *a;
+  int64_t ha;
+  struct syscall_frame f;
+  reset_world();
+  a = process_create("gfx-a", 0, 0);
+  process_set_current(a);
+  ha = make_window(FAKE_W, FAKE_H);
+  CHECK(ha > 0, "A owns a window");
+  syscall_gfx_release_owner(0u);
+  CHECK(g_fake.destroy_calls == 0, "release_owner(0) destroys nothing");
+  f = frame6((uint64_t)ha, 0, 0, 0, 0, 0);
+  CHECK(sys_window_present(&f) == 0, "A's window survives release_owner(0)");
+}
+
+static void test_focus_owner_isolated_and_lifecycle_safe(void) {
+  struct process *a;
+  struct process *b;
+  int64_t ha;
+  reset_world();
+  a = process_create("gfx-a", 0, 0);
+  b = process_create("gfx-b", 0, 0);
+  process_set_current(a);
+  ha = make_window(FAKE_W, FAKE_H);
+  CHECK(ha > 0, "focus_owner fixture creates A window");
+  CHECK(syscall_gfx_focus_owner(a->pid) == 1 && g_fake.focus_calls == 1 &&
+            g_fake.last_focused == g_fake.last_created,
+        "focus_owner raises the matching owner's backend window");
+  CHECK(syscall_gfx_focus_owner(b->pid) == 0 && g_fake.focus_calls == 1,
+        "focus_owner does not cross process ownership");
+  syscall_gfx_release_owner(a->pid);
+  CHECK(syscall_gfx_focus_owner(a->pid) == 0 && g_fake.focus_calls == 1,
+        "focus_owner forgets handles after owner teardown");
+  CHECK(syscall_gfx_focus_owner(0u) == 0,
+        "focus_owner rejects the kernel pseudo-owner");
+}
+
 int test_syscall_gfx_run(void) {
   printf("[test_syscall_gfx]\n");
   tests_run = 0;
@@ -434,6 +615,13 @@ int test_syscall_gfx_run(void) {
   test_release_owner();
   test_invalid_handles();
   test_handle_table_full();
+  test_ownership_enforced_poll_blit();
+  test_poll_fail_closed();
+  test_blit_boundaries();
+  test_fill_rejects_bad_y_and_h();
+  test_title_sanitized();
+  test_release_owner_zero_is_noop();
+  test_focus_owner_isolated_and_lifecycle_safe();
 
   syscall_gfx_install_ops(NULL); /* leave a clean state for the next suite */
   printf("  %d/%d checks passed\n", tests_passed, tests_run);

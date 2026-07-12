@@ -29,9 +29,9 @@ int cmd_update_arm(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-arm [on|off]\nArma ou desarma a ativacao pendente do update staged sem remover o manifesto preparado.\n",
-        "Usage: update-arm [on|off]\nArms or disarms pending activation for the staged update without removing the prepared manifest.\n",
-        "Uso: update-arm [on|off]\nArma o desarma la activacion pendiente del update staged sin eliminar el manifiesto preparado.\n"));
+        "Uso: update-arm [on|off]\n'on' fica indisponivel ate existir boot slot persistente; 'off' limpa estado legado sem remover o manifesto.\n",
+        "Usage: update-arm [on|off]\n'on' is unavailable until persistent boot slots exist; 'off' clears legacy state without removing the manifest.\n",
+        "Uso: update-arm [on|off]\n'on' no esta disponible hasta existir boot slots persistentes; 'off' limpia estado legado sin eliminar el manifiesto.\n"));
     return 0;
   }
 

@@ -29,6 +29,7 @@
  * because .inc fragments are #included by this TU, not compiled separately.
  */
 #include "capypkg_test_harness.h"
+#include "services/capypkg_network.h"
 #ifdef CAPYPKG_BOOTSTRAP_TESTS
 #include "auth/session.h"
 #include "fs/vfs.h"
@@ -44,6 +45,7 @@
 #endif
 
 #include "test_capypkg_install_manifest.inc"
+#include "test_capypkg_network.inc"
 
 #include "test_capypkg_signature.inc"
 
@@ -83,11 +85,16 @@ int run_capypkg_tests(void) {
     test_bootstrap_profile_directory_is_retryable_storage();
     test_bootstrap_per_package_retry_recovers();
     test_bootstrap_per_package_retry_caps_attempts();
+    test_bootstrap_single_flight_rejects_reentry();
     test_bootstrap_installs_dependency_before_dependent();
     test_bootstrap_custom_pulls_transitive_dependency();
     test_bootstrap_dependency_cycle_does_not_hang();
 #endif
     test_install_accepts_payload_larger_than_one_mib();
+    test_install_db_failure_rolls_back_and_retry_reinstalls();
+    test_capypkg_network_requires_address_and_dns();
+    test_capypkg_network_prepare_advances_dhcp();
+    test_capypkg_network_prepare_is_bounded();
     test_install_fail_closed_without_verifier();
     test_install_no_source_when_no_repo();
     test_repo_serialize_roundtrip();

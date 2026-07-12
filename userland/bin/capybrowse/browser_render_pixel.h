@@ -87,4 +87,18 @@ int capyos_browser_render_pixels(const struct capy_dl *dl, uint32_t *out,
                                  const struct capyos_browser_pixel_opts *opts,
                                  struct capyos_browser_pixel_stats *stats);
 
+/*
+ * alpha.311: same as capyos_browser_render_pixels but with an explicit pixel
+ * scroll offset subtracted from every node's position, so an interactive viewer
+ * (capygfx) can scroll a page larger than the surface. Passing scroll_x ==
+ * scroll_y == 0 is byte-for-byte identical to capyos_browser_render_pixels
+ * (which is just this with a 0,0 offset), so existing callers and the struct
+ * ABI are unchanged. All draw primitives clip safely for negative / offscreen
+ * coordinates.
+ */
+int capyos_browser_render_pixels_scrolled(
+    const struct capy_dl *dl, uint32_t *out, uint32_t out_w, uint32_t out_h,
+    const struct capyos_browser_pixel_opts *opts, int32_t scroll_x,
+    int32_t scroll_y, struct capyos_browser_pixel_stats *stats);
+
 #endif /* CAPYOS_BROWSER_RENDER_PIXEL_H */

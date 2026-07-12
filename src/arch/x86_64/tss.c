@@ -20,6 +20,17 @@
 static struct tss g_boot_tss;
 static int g_tss_loaded = 0;
 
+/* Dedicated stack for the double-fault handler, referenced by IST1. A #DF
+ * is raised when the CPU cannot even push an exception frame on the current
+ * stack (the classic symptom of a kernel-stack overflow). Without an IST the
+ * #DF handler runs on that same broken stack, faults again, and the CPU
+ * triple-faults -> silent reset/reboot with no diagnostic. Pointing the #DF
+ * IDT gate at IST1 (see interrupts.c) makes the CPU switch to this known-good
+ * stack so panic_with_regs() can actually run and render the fault. 16 KiB,
+ * 16-byte aligned. */
+#define TSS_DF_STACK_SIZE 16384u
+static uint8_t g_df_stack[TSS_DF_STACK_SIZE] __attribute__((aligned(16)));
+
 /* GDT slot index where the 64-bit TSS descriptor lives. The 64-bit
  * TSS descriptor is 16 bytes (occupies two 8-byte GDT slots) so
  * `interrupts.c::gdt_init` reserves slots 5 + 6. The corresponding
@@ -76,6 +87,10 @@ uint64_t tss_get_rsp0(void) {
     return g_boot_tss.rsp0;
 }
 
+uint64_t tss_get_ist1(void) {
+    return g_boot_tss.ist1;
+}
+
 void tss_init(uint64_t rsp0) {
     /* Always update RSP0 so a second call (e.g. phase 8f.2 after
      * the first user task lands) refreshes the slot without a
@@ -86,6 +101,12 @@ void tss_init(uint64_t rsp0) {
     }
     g_boot_tss.rsp0 = rsp0;
     g_boot_tss.iomap_base = (uint16_t)sizeof(struct tss);
+
+    /* IST1 = top of the dedicated double-fault stack (grows down), aligned
+     * down to 16 bytes. Re-set on every call because the memset above zeroed
+     * it. The #DF IDT gate selects this via ist index 1 (interrupts.c). */
+    g_boot_tss.ist1 =
+        ((uint64_t)(uintptr_t)(g_df_stack + TSS_DF_STACK_SIZE)) & ~0xFULL;
 
     if (g_tss_loaded) {
         /* Second call: just refresh fields, no LTR re-issue. */

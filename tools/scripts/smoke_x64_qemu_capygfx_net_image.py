@@ -53,9 +53,13 @@ from smoke_x64_common import (  # noqa: E402  (sys.path tweak above)
 )
 
 READY_MARKER = "[smoke] capygfx ready"
+SITE_READY_MARKER = (
+    "[smoke] capygfx site redirect+css+image+link+history ready"
+)
 FAILURE_MARKERS = (
     "panic",
     "capygfx: FAIL",
+    "capygfx-site:",
     "[user_init] capygfx spawn returned without entering Ring 3.",
 )
 
@@ -77,21 +81,80 @@ LOGO_PNG = bytes([
     0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ])
 
+SITE_HTML = (
+    b"<html><head><title>Capy site</title>"
+    b"<link rel=\"stylesheet\" href=\"/style.css\"></head>"
+    b"<body><h1>CapyBrowser</h1><p>static site acceptance</p>"
+    b"<img src=\"/logo.png\" alt=\"logo\">"
+    b"<a href=\"/next\">next page</a></body></html>"
+)
+SITE_CSS = b"body { background-color: #ffffff; } h1 { color: #1a4fd0; }"
+NEXT_HTML = b"<html><body><h1>Next page</h1><p>history target</p></body></html>"
+REQUEST_COUNTS: dict[str, int] = {}
+
 
 class _SmokeHTTPHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802 (stdlib handler method name)
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(LOGO_PNG)))
+    protocol_version = "HTTP/1.1"
+
+    def _count(self, path: str) -> None:
+        REQUEST_COUNTS[path] = REQUEST_COUNTS.get(path, 0) + 1
+
+    def _fixed(self, status: int, content_type: str, payload: bytes,
+               *, cache: bool = True) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "max-age=300" if cache else "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(LOGO_PNG)
+        self.wfile.write(payload)
+        self.close_connection = True
+
+    def do_GET(self):  # noqa: N802 (stdlib handler method name)
+        path = self.path.split("?", 1)[0]
+        self._count(path)
+        if path == "/start":
+            self.send_response(302)
+            self.send_header("Location", "/page")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            return
+        if path == "/page":
+            # Deliberately frame the top-level document as chunked so this is a
+            # release gate for the strict userland decoder, not only routing.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Cache-Control", "max-age=300")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            split = len(SITE_HTML) // 2
+            for chunk in (SITE_HTML[:split], SITE_HTML[split:]):
+                self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
+                self.wfile.write(chunk + b"\r\n")
+            self.wfile.write(b"0\r\nX-Smoke-Trailer: ok\r\n\r\n")
+            self.close_connection = True
+            return
+        if path == "/style.css":
+            self._fixed(200, "text/css", SITE_CSS)
+            return
+        if path == "/logo.png":
+            self._fixed(200, "image/png", LOGO_PNG)
+            return
+        if path == "/next":
+            self._fixed(200, "text/html; charset=utf-8", NEXT_HTML)
+            return
+        self._fixed(404, "text/plain", b"not found", cache=False)
 
     def log_message(self, *args):  # silence per-request logging on stderr
         pass
 
 
 def start_local_http_server() -> http.server.HTTPServer:
+    REQUEST_COUNTS.clear()
     srv = http.server.HTTPServer(("0.0.0.0", LOCAL_HTTP_PORT), _SmokeHTTPHandler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -119,6 +182,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keyboard-layout", default="us")
     parser.add_argument("--language", default="en")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--site", action="store_true",
+        help="Run the full static-site navigation/toolbar acceptance flow",
+    )
     return parser.parse_args()
 
 
@@ -155,8 +222,9 @@ def main() -> int:
     ovmf_vars_runtime = create_runtime_ovmf_vars(log_path, ovmf_vars_template)
 
     http_server = start_local_http_server()
+    endpoint = "/start" if args.site else "/logo.png"
     print(f"[info] local HTTP endpoint up on host :{LOCAL_HTTP_PORT} "
-          f"(guest fetches http://10.0.2.2:{LOCAL_HTTP_PORT}/logo.png via SLIRP)")
+          f"(guest fetches http://10.0.2.2:{LOCAL_HTTP_PORT}{endpoint} via SLIRP)")
     print(f"[info] launching QEMU (E1000 user-net); serial+stdout -> {log_path}")
     session = boot_with_session(
         qemu_bin=qemu_bin,
@@ -173,10 +241,21 @@ def main() -> int:
 
     rc = 1
     try:
+        marker = SITE_READY_MARKER if args.site else READY_MARKER
         print(f"[info] waiting for capygfx ready (<= {args.timeout:.0f}s)")
-        session.wait_for(READY_MARKER, timeout=args.timeout)
-        print(f"[ok]   + {READY_MARKER!r}")
-        print("[ok] qemu-capygfx-net-image smoke passed")
+        session.wait_for(marker, timeout=args.timeout)
+        print(f"[ok]   + {marker!r}")
+        if args.site:
+            required = ("/start", "/page", "/style.css", "/logo.png", "/next")
+            missing = [path for path in required if REQUEST_COUNTS.get(path, 0) < 1]
+            if missing:
+                raise RuntimeError(f"guest did not fetch required paths: {missing}")
+            if REQUEST_COUNTS.get("/next", 0) < 2:
+                raise RuntimeError("reload did not refetch /next")
+            print(f"[ok] endpoint coverage: {REQUEST_COUNTS}")
+            print("[ok] qemu-capygfx-static-site smoke passed")
+        else:
+            print("[ok] qemu-capygfx-net-image smoke passed")
         rc = 0
     except (TimeoutError, RuntimeError) as exc:
         print(f"[err] qemu-capygfx-net-image smoke failed: {exc}", file=sys.stderr)

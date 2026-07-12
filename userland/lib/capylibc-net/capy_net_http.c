@@ -12,15 +12,16 @@
  *   5. read into a small (4 KB) ring buffer until we've seen
  *      the empty line terminating the headers;
  *   6. parse the status line and headers;
- *   7. drain the body into the caller's buffer up to
- *      `body_buf_cap`, marking `truncated=1` if more arrives.
+ *   7. stream-decode an exact `Transfer-Encoding: chunked` body, or drain an
+ *      identity body, into the caller's bounded buffer; extra decoded bytes are
+ *      validated and discarded with `truncated=1`.
  *
  * Limitations (intentional, see capy_net.h header for rationale):
- *   - no chunked encoding (returns CAPY_NET_EUNSUPPORTED);
+ *   - strict chunked is supported; every other Transfer-Encoding is rejected;
  *   - no auto-redirect (caller loops on Location);
  *   - no POST/PUT/DELETE (GET only);
  *   - no keep-alive (Connection: close baked into request);
- *   - no compression (Accept-Encoding: identity is implicit).
+ *   - no compression (Accept-Encoding: identity is explicit).
  *
  * Buffer sizing:
  *   - HEADER_BUF_CAP = 4096 covers any reasonable response head;
@@ -152,6 +153,38 @@ static int http_header_copy(char *dst, size_t cap, const char *src,
   return 0;
 }
 
+static int http_header_name_eq_ci(const char *src, size_t src_len,
+                                  const char *expected) {
+  size_t i = 0;
+  if (!src || !expected) return 0;
+  while (i < src_len && expected[i]) {
+    char a = src[i];
+    char b = expected[i];
+    if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+    if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+    if (a != b) return 0;
+    i++;
+  }
+  return i == src_len && expected[i] == '\0';
+}
+
+static int http_header_copy_exact(char *dst, size_t cap, const char *src,
+                                  size_t src_len) {
+  while (src_len > 0 && (*src == ' ' || *src == '\t')) {
+    src++;
+    src_len--;
+  }
+  while (src_len > 0 &&
+         (src[src_len - 1] == ' ' || src[src_len - 1] == '\t' ||
+          src[src_len - 1] == '\r')) {
+    src_len--;
+  }
+  if (src_len + 1 > cap) return -1;
+  for (size_t i = 0; i < src_len; i++) dst[i] = src[i];
+  dst[src_len] = '\0';
+  return 0;
+}
+
 /* http_header_name_safe / http_header_value_safe (and their char predicate)
  * are shared with the request builder via capy_net_http_internal.h. */
 
@@ -163,6 +196,7 @@ int capy_http_parse_headers(const char *buf, size_t len,
     return -1;
   }
   out->header_count = 0;
+  out->location[0] = '\0';
   int saw_terminator = 0;
   size_t i = 0;
   while (i < len) {
@@ -207,6 +241,17 @@ int capy_http_parse_headers(const char *buf, size_t len,
       out->header_count = 0;
       capy_net_internal_set_error(CAPY_NET_EPARSE);
       return -1;
+    }
+    if (http_header_name_eq_ci(buf + line_start, colon - line_start,
+                               "Location")) {
+      if (http_header_copy_exact(out->location, sizeof(out->location),
+                                 buf + colon + 1,
+                                 real_end - (colon + 1)) != 0) {
+        out->header_count = 0;
+        out->location[0] = '\0';
+        capy_net_internal_set_error(CAPY_NET_EBUF);
+        return -1;
+      }
     }
     if (out->header_count >= CAPY_HTTP_MAX_HEADERS) continue;
 
@@ -371,27 +416,6 @@ static int http_headers_have_unsupported_content_encoding(const char *buf,
   return 0;
 }
 
-static int http_headers_have_transfer_encoding(const char *buf, size_t len) {
-  if (!buf) return 0;
-  size_t i = 0;
-  while (i < len) {
-    size_t line_start = i;
-    while (i < len && buf[i] != '\n') i++;
-    if (i >= len) break;
-    size_t line_end = i;
-    i++;
-    size_t real_end = line_end;
-    if (real_end > line_start && buf[real_end - 1] == '\r') real_end--;
-    if (real_end == line_start) break;
-    size_t colon = line_start;
-    while (colon < real_end && buf[colon] != ':') colon++;
-    if (colon >= real_end) continue;
-    if (http_header_name_equals_ci(buf + line_start, colon - line_start,
-                                   "Transfer-Encoding")) return 1;
-  }
-  return 0;
-}
-
 /* === transport seam (TCP plaintext vs userland TLS) ========== */
 
 /* HTTP runs over a raw TCP fd; HTTPS runs over a libcapy-tls context
@@ -472,6 +496,7 @@ int capy_http_get_with_headers(const char *url,
   /* Zero the response so partial reads never leak prior state. */
   out->status_code = 0;
   out->header_count = 0;
+  out->location[0] = '\0';
   out->body_len = 0;
   out->content_length = 0;
   out->truncated = 0;
@@ -596,8 +621,12 @@ have_head:;
     return -1;
   }
 
-  /* Reject unsupported Transfer-Encoding before Content-Length framing. */
-  if (http_headers_have_transfer_encoding(head + after_status, headers_len)) {
+  /* Resolve framing from the complete raw header block, not only the bounded
+   * stored header array. Supporting exactly one final `chunked` coding avoids
+   * ambiguous transfer-coding chains. */
+  int transfer_chunked = capy_http_resolve_transfer_encoding(
+      head + after_status, headers_len);
+  if (transfer_chunked < 0) {
     capy_http_conn_close(&conn);
     capy_net_internal_set_error(CAPY_NET_EUNSUPPORTED);
     return -1;
@@ -616,14 +645,58 @@ have_head:;
     capy_net_internal_set_error(CAPY_NET_EHTTP);
     return -1;
   }
+  /* RFC 9112 section 6.3: TE overrides CL for recipients, but accepting both is
+   * a request/response-smuggling hazard. This client is deliberately stricter
+   * and rejects the ambiguous message before consuming any body bytes. */
+  if (transfer_chunked && content_length_known) {
+    capy_http_conn_close(&conn);
+    capy_net_internal_set_error(CAPY_NET_EHTTP);
+    return -1;
+  }
   if (http_status_has_no_body(out->status_code)) {
-    if (content_length_known && out->content_length != 0) {
+    if (transfer_chunked ||
+        (content_length_known && out->content_length != 0)) {
       capy_http_conn_close(&conn);
       capy_net_internal_set_error(CAPY_NET_EHTTP);
       return -1;
     }
     out->content_length = 0;
     content_length_known = 1;
+  }
+
+  if (transfer_chunked) {
+    struct capy_http_chunk_decoder decoder;
+    uint8_t scratch[HTTP_DRAIN_CHUNK];
+    int decode_rc;
+    size_t already = head_len - header_end;
+
+    capy_http_chunk_decoder_init(&decoder, body_buf, body_buf_cap);
+    decode_rc = capy_http_chunk_decoder_feed(
+        &decoder, (const uint8_t *)head + header_end, already);
+    while (decode_rc == 0) {
+      long n = capy_http_conn_recv(&conn, scratch, sizeof(scratch));
+      if (n < 0) {
+        capy_http_conn_close(&conn);
+        capy_net_internal_set_error(CAPY_NET_ERECV);
+        return -1;
+      }
+      if (n == 0) {
+        capy_http_conn_close(&conn);
+        capy_net_internal_set_error(CAPY_NET_EHTTP);
+        return -1;
+      }
+      decode_rc = capy_http_chunk_decoder_feed(&decoder, scratch, (size_t)n);
+    }
+    if (decode_rc < 0) {
+      capy_http_conn_close(&conn);
+      capy_net_internal_set_error(CAPY_NET_EHTTP);
+      return -1;
+    }
+    out->body_len = decoder.out_len;
+    out->truncated = decoder.truncated;
+    out->content_length = 0u; /* unknown on wire for chunked framing */
+    capy_http_conn_close(&conn);
+    return 0;
   }
 
   size_t body_received = 0;

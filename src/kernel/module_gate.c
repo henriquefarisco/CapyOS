@@ -27,6 +27,8 @@ static const char *const k_desktop_session_name =
     "org.capyos.ui.desktop-session";
 static const char *const k_widget_core_name =
     "org.capyos.ui.widget-core";
+static const char *const k_ai_assistant_name =
+    "org.capyos.ai.assistant";
 
 static int module_gate_compose_marker(const char *name,
                                       char *out, size_t out_size) {
@@ -88,4 +90,11 @@ int kernel_module_widget_core_available(void) {
 #else
     return kernel_module_is_installed(k_widget_core_name);
 #endif
+}
+
+int kernel_module_ai_assistant_available(void) {
+    /* Not profile-gated: the `capyai` command ships built-in when the
+     * CapyAI sibling core is compiled in. This only reports whether a
+     * capypkg-delivered model package has been staged on top. */
+    return kernel_module_is_installed(k_ai_assistant_name);
 }

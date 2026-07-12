@@ -68,7 +68,9 @@
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
-#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE)
+#if defined(CAPYOS_GFX_SMOKE) || \
+    defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE) || \
+    defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
 /* Etapa 7 / Slice 7.2.2 (+ Slice 7.5 alpha.304): the graphical-surface boot
  * smoke AND the capygfx-desktop-spawn smoke both bring up the compositor over
  * the boot framebuffer before spawning capygfx (the latter via
@@ -76,6 +78,9 @@
  * these smoke builds pull these in. */
 #include "gui/compositor.h"
 #include "kernel/syscall_gfx.h"
+#endif
+#ifdef CAPYOS_CAPYAI_GUI_ASYNC_SMOKE
+#include "gui/desktop_runtime.h"
 #endif
 #include "memory/pmm.h"
 #include "memory/vmm.h"
@@ -252,11 +257,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   }
 
   /* Initialise the framebuffer console from handoff data.
-   * The kernel keeps the firmware's PML4 (vmm_init adopts CR3 verbatim),
-   * so any physical address the firmware identity-mapped is reachable
-   * here -- including high-memory GOP framebuffers (Hyper-V/VMware
-   * place them around 0x80000000-0xFC000000). A simple non-NULL,
-   * non-overflow range check is therefore the correct guard. */
+   * This runs before vmm_init, so the firmware's identity map is still
+   * active here; vmm_init later switches to the kernel's OWN identity map
+   * (alpha.311, vmm_build_kernel_tables) which flat-maps [0,16GiB) RW, so
+   * high-memory GOP framebuffers (Hyper-V/VMware place them around
+   * 0x80000000-0xFC000000) stay reachable after the switch too. A simple
+   * non-NULL, non-overflow range check is therefore the correct guard. */
   g_con.fb = range_ok(h->fb.base, h->fb.size)
                  ? (uint32_t *)(uintptr_t)h->fb.base
                  : NULL;
@@ -512,6 +518,18 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     syscall_net_install_default_ops();
     dbgcon_putc('v');
     klog(KLOG_INFO, "[syscall] Syscall ABI registered.");
+#if defined(CAPYOS_SMOKE_CAPYAI) && defined(CAPYOS_HAVE_CAPYAI)
+    /* Boot self-test for the CapyAI assistant pipeline (smoke-x64-capyai):
+     * run fixed intents through inference + risk gates, emit debugcon
+     * markers, then halt so the smoke result is deterministic. */
+    {
+        extern void capyai_selftest_run(void);
+        capyai_selftest_run();
+    }
+    for (;;) {
+        __asm__ volatile("cli; hlt");
+    }
+#endif
 #ifdef CAPYOS_BOOT_RUN_HELLO
     /* M4 phase 5d: when the build defines CAPYOS_BOOT_RUN_HELLO,
      * spawn the embedded `hello` user binary and drop into Ring 3.
@@ -611,6 +629,10 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   boot_metrics_stage_begin("serial-console");
   com1_init();
   com1_puts("[COM1] CapyOS 64-bit serial console ready\r\n");
+  /* alpha.310: now that COM1 is up, report any firmware read-only RAM frames
+   * the PMM reserved during pmm_init (VMware firmware-reserved low RAM that
+   * the memory map wrongly reported usable). Silent on QEMU/OVMF. */
+  pmm_report_firmware_readonly();
   boot_metrics_stage_end();
   dbgcon_putc('6');
 
@@ -749,6 +771,34 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
          "Ring 3.");
   }
 #endif
+#ifdef CAPYOS_CAPYGFX_LIFECYCLE_SMOKE
+  /* Regression gate for the real failure class: return from ring-3 capygfx to
+   * a kernel-CR3 supervisor, reap, and respawn repeatedly. Unlike the older
+   * ELF-load loop this crosses the assembly context-switch boundary on every
+   * round and therefore catches active-CR3 UAF, RFLAGS loss and lifecycle
+   * leaks. */
+  dbgcon_write(
+      "[user_init] CAPYOS_CAPYGFX_LIFECYCLE_SMOKE; init compositor + "
+      "supervised respawn.\n");
+  compositor_init(g_con.fb, g_con.width, g_con.height, g_con.stride * 4u);
+  syscall_gfx_install_default_ops();
+  {
+    int lifecycle_rc = kernel_boot_run_capygfx_lifecycle_smoke();
+    (void)lifecycle_rc;
+    klog(KLOG_WARN,
+         "[user_init] capygfx lifecycle smoke returned before bootstrap.");
+  }
+#endif
+#ifdef CAPYOS_ELFLOAD_RESPAWN_SMOKE
+  /* Etapa 7 / Slice 7.5 (alpha.3xx): headless reproducer for the VMware panic
+   * on close+reopen of the graphical browser (elf_load #PF writing a segment
+   * to a read-only-in-identity-map physical frame). Runs a pure PMM/identity
+   * write probe and emits `[smoke] elfload-respawn ok` if every frame was
+   * writable; a read-only frame #PFs (repro) with a full COM1 panic dump.
+   * Gated so production boot is unaffected; returns and falls through. */
+  dbgcon_write("[user_init] CAPYOS_ELFLOAD_RESPAWN_SMOKE; probing pmm.\n");
+  kernel_boot_run_elfload_respawn_smoke();
+#endif
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE
   /* Etapa 6 / Slice 6.6: run the apps-basic-roundtrip orchestrator in-kernel
    * (the basic apps are in-kernel functions, not ring-3 processes). It runs
@@ -761,6 +811,16 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     int apps_roundtrip_rc = kernel_boot_run_apps_roundtrip();
     (void)apps_roundtrip_rc;
   }
+#endif
+#ifdef CAPYOS_CAPYAI_GUI_ASYNC_SMOKE
+  /* Build-only end-to-end regression for the CapyAI VM freeze. It enters the
+   * real CapyUI desktop loop, creates the real chat window, overlaps a real
+   * worker command with compositor frames, then closes/reopens the window four
+   * times. The CapyUI probe owns the COM1 ready/fail marker and returns after
+   * stopping the desktop. Production builds contain none of this branch. */
+  dbgcon_write(
+      "[user_init] CAPYOS_CAPYAI_GUI_ASYNC_SMOKE; running desktop chat.\n");
+  (void)desktop_capyai_gui_async_smoke_run();
 #endif
   {
     struct login_runtime_ops login_ops;

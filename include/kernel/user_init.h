@@ -2,6 +2,7 @@
 #define KERNEL_USER_INIT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 struct process;
 
@@ -112,14 +113,15 @@ int kernel_boot_run_capymultifetch(void);
 int kernel_boot_run_capygfx(void);
 #endif
 
-#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
-/* Etapa 7 / Slice 7.5 (alpha.304): spawn the embedded `/bin/capygfx` program
- * as an ORDINARY process from a caller that is NOT noreturn -- unlike every
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER) || \
+    defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
+/* Etapa 7 / Slice 7.5 (alpha.304+): launch the embedded `/bin/capygfx` program
+ * as an ORDINARY root process from a caller that is NOT noreturn -- unlike every
  * other `kernel_boot_run_*` above (all boot-time, noreturn on success, mutually
  * exclusive with login/desktop). This is the first spawn path meant to be
  * called from WITHIN an already-running desktop session (e.g. a shell command
  * dispatched from the desktop terminal), so the CALLER keeps running: the new
- * process is created, its main thread is armed for first dispatch
+ * On the first request, a process is created and its main thread is armed for first dispatch
  * (user_task_arm_for_first_dispatch_with_rax) and queued
  * (scheduler_add) exactly like the second process in
  * kernel_boot_run_two_busy_users, but WITHOUT calling process_enter_user_mode
@@ -132,8 +134,31 @@ int kernel_boot_run_capygfx(void);
  * (syscall_gfx_install_default_ops) on every call, since by construction the
  * caller is already inside a live desktop session (compositor already
  * initialised by desktop_init); installing the same ops vtable twice is a
- * harmless no-op. Returns a KERNEL_SPAWN_* status (0 = OK); never noreturn. */
+ * harmless no-op. Later requests while that process is live focus/restore its
+ * owned compositor window and return success without allocating another
+ * process. Once it exits, the root-zombie reaper owns cleanup and the next
+ * request creates a fresh instance. Returns a KERNEL_SPAWN_* status (0 = OK);
+ * never noreturn. */
 int kernel_spawn_capygfx_desktop(void);
+
+/* Observable lifecycle counters for the desktop Browser launcher. Repeated
+ * launch requests are coalesced onto the one live `capygfx` process; exited
+ * root processes are reaped before a replacement is allocated. The snapshot
+ * lets diagnostics/smokes verify that open-close-reopen remains resource
+ * bounded instead of inferring health from a single success marker. */
+struct kernel_capygfx_lifecycle_stats {
+  uint64_t launch_requests;
+  uint64_t processes_spawned;
+  uint64_t launches_coalesced;
+  uint64_t focus_successes;
+  uint64_t spawn_failures;
+  uint64_t zombies_reaped_before_spawn;
+  uint32_t last_pid;
+};
+
+int kernel_capygfx_lifecycle_snapshot(
+    struct kernel_capygfx_lifecycle_stats *out);
+void kernel_capygfx_lifecycle_reset(void);
 #endif
 
 #ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE
@@ -150,6 +175,28 @@ int kernel_spawn_capygfx_desktop(void);
  * scheduler_add) the eventual real integration relies on. The caller
  * (kernel_main) must have already initialised the compositor. */
 int kernel_boot_run_capygfx_desktop_spawn_smoke(void);
+#endif
+
+#ifdef CAPYOS_CAPYGFX_LIFECYCLE_SMOKE
+/* End-to-end Browser lifecycle gate. A kernel supervisor repeatedly performs
+ * root spawn -> real context switch to ring 3 -> process exit -> switch back
+ * to kernel CR3 -> orphan reap -> respawn, checking PMM/task/process counts
+ * after every round. Noreturn on success: emits
+ * `[smoke] capygfx-lifecycle ok` and parks. */
+int kernel_boot_run_capygfx_lifecycle_smoke(void);
+#endif
+
+#ifdef CAPYOS_ELFLOAD_RESPAWN_SMOKE
+/* Etapa 7 / Slice 7.5 (alpha.3xx): headless reproducer for the VMware panic on
+ * close+reopen of the graphical browser. The real fault was elf_load writing a
+ * segment to physical 0x400000 via the kernel identity map, which was PRESENT
+ * but READ-ONLY (#PF error 3), i.e. pmm_alloc_page handed out a frame whose
+ * kernel identity mapping is read-only. This pulls many frames from the PMM
+ * and writes one byte to each THROUGH THE IDENTITY MAP (exactly as elf_load
+ * does), scanning well past physical 0x400000, so a read-only free frame
+ * faults here in QEMU with a full serial dump -- no desktop/VMware needed.
+ * Emits `[smoke] elfload-respawn ok` on COM1 if every frame was writable. */
+void kernel_boot_run_elfload_respawn_smoke(void);
 #endif
 
 #ifdef CAPYOS_APPS_ROUNDTRIP_SMOKE

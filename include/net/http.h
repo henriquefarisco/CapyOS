@@ -65,6 +65,13 @@ struct http_response {
   uint8_t *body;
   size_t body_len;
   size_t content_length;
+  /* Critical framing/connection headers are tracked independently from
+   * headers[].  The generic collection is intentionally bounded, but these
+   * values must remain available even when a server sends more than
+   * HTTP_MAX_HEADERS fields before them. */
+  int content_length_present;
+  int connection_close;
+  int connection_keep_alive;
   int chunked;
 };
 
@@ -117,6 +124,9 @@ int http_download_progress(const char *url, uint8_t *buffer,
                            size_t buffer_size, size_t *out_len,
                            http_progress_fn cb, void *ctx);
 int http_last_error(void);
+/* Final non-zero HTTP status observed by http_download, or 0 when the failure
+ * happened before a response was received. */
+int http_last_status_code(void);
 const char *http_error_string(int error);
 void http_response_free(struct http_response *resp);
 int http_parse_url(const char *url, char *host, size_t host_len,

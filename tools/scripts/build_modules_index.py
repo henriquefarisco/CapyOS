@@ -2,7 +2,7 @@
 """build_modules_index.py — aggregate per-repo manifests into a single
 capypkg index that the CapyOS in-tree adapter can consume.
 
-Scans sibling repositories (default: the six external repos listed in
+Scans sibling repositories (default: the seven external repos listed in
 `docs/reference/integration/compatibility-matrix.md`) for a
 `build/capypkg/*.manifest` file produced by each repo's
 `make package` target, then concatenates them with `---\\n` separators
@@ -17,6 +17,7 @@ checked out CapyOS + the sibling repos side by side, e.g.:
 
     /workspace/CapyOS/
     /workspace/CapyAgent/
+    /workspace/CapyAI/
     /workspace/CapyBrowser/
     /workspace/CapyCodecs/
     /workspace/CapyUI/
@@ -51,6 +52,7 @@ from typing import Dict, List, Optional, Tuple
 
 DEFAULT_REPOS: Tuple[str, ...] = (
     "CapyAgent",
+    "CapyAI",
     "CapyBrowser",
     "CapyCodecs",
     "CapyUI",
@@ -227,7 +229,7 @@ def main(argv: Optional[List[str]] = None) -> int:
              "build/capypkg/modules-index.txt).")
     parser.add_argument(
         "--repos", nargs="+", default=list(DEFAULT_REPOS),
-        help="Sibling repos to aggregate. Defaults to the six external "
+        help="Sibling repos to aggregate. Defaults to the seven external "
              "repos listed in compatibility-matrix.md.")
     args = parser.parse_args(argv)
 

@@ -41,6 +41,7 @@
 #include "security/tls.h"
 #include "services/capypkg.h"
 #include "services/capypkg_bootstrap.h"
+#include "services/capypkg_network.h"
 #include "services/capypkg_runtime.h"
 #include "services/install_profile.h"
 #include "fs/vfs.h"
@@ -53,8 +54,9 @@
 /*
  * Default modules-index URL.
  *
- * Pin the modules index to the frozen CapyUI release consumed by this
- * CapyOS alpha. Avoiding `/releases/latest/download/` keeps the kernel
+ * Pin the modules index to the immutable CapyOS release that aggregates all
+ * official packages consumed by this alpha. Avoiding `/releases/latest/download/`
+ * keeps the kernel
  * downloader on a direct release asset URL with no redirect dependency.
  *
  * The compile-time CAPYOS_DEFAULT_MODULES_INDEX_URL knob lets vendor
@@ -63,7 +65,7 @@
  */
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://github.com/henriquefarisco/CapyUI/releases/download/v2.13.0/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.312+20260712/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME
@@ -71,7 +73,7 @@
 #endif
 
 #define MODULES_PROFILE_BUF 1024u
-#define MODULES_OFFICIAL_COUNT 7u
+#define MODULES_OFFICIAL_COUNT 9u
 
 /* ---- localized strings (PT default, EN, ES) -------------------------- */
 /* The L(language, pt, en, es) picker is shared with the status-bar
@@ -94,17 +96,25 @@ static const struct modules_official_package g_modules_official[MODULES_OFFICIAL
      "Official CapyUI desktop",
      "Escritorio oficial CapyUI"},
     {"org.capyos.browser.core",
-     "Navegador oficial",
-     "Official browser",
-     "Navegador oficial"},
+      "Navegador oficial",
+      "Official browser",
+      "Navegador oficial"},
+    {"org.capyos.browser.text",
+     "Navegador textual oficial",
+     "Official text browser",
+     "Navegador textual oficial"},
     {"org.capyos.codecs.image-basic",
      "Codecs oficiais de imagem",
      "Official image codecs",
      "Codecs oficiales de imagen"},
     {"org.capyos.agent.core",
-     "Agente oficial",
-     "Official agent",
-     "Agente oficial"},
+      "Agente oficial",
+      "Official agent",
+      "Agente oficial"},
+    {"org.capyos.ai.assistant",
+     "Assistente oficial CapyAI",
+     "Official CapyAI assistant",
+     "Asistente oficial CapyAI"},
     {"org.capyos.lang.runtime",
      "Runtime oficial CapyLang",
      "Official CapyLang runtime",
@@ -265,18 +275,25 @@ static void modules_sleep_ticks(uint32_t ticks) {
  * Returns 1 on success, 0 on timeout. */
 static int modules_wait_for_network(uint32_t timeout_ticks,
                                     const char *setup_language) {
+    static const struct capypkg_network_ops network_ops = {
+        net_stack_status,
+        net_stack_poll,
+        net_stack_dhcp_acquire,
+    };
     (void)setup_language;
     uint64_t deadline = pit_ticks() + (uint64_t)timeout_ticks;
+    uint32_t dhcp_budget = 2u;
     int announced = 0;
     while (pit_ticks() < deadline) {
-        struct net_stack_status status;
-        if (net_stack_status(&status) == 0 &&
-            status.initialized && status.runtime_supported &&
-            status.nic.found && status.ready) {
-            int dhcp_tried = (status.dhcp_attempts > 0u);
-            if (!dhcp_tried || status.dhcp_lease_acquired) {
-                return 1;
-            }
+        struct capypkg_network_prepare_result prepared;
+        uint32_t dhcp_timeout_ms = dhcp_budget > 0u ? 500u : 0u;
+        int ready = capypkg_network_prepare(&network_ops, 4u,
+                                            dhcp_timeout_ms, &prepared);
+        if (prepared.dhcp_attempted && dhcp_budget > 0u) {
+            dhcp_budget--;
+        }
+        if (ready) {
+            return 1;
         }
         if (!announced) {
             config_print_line("[modules] aguardando rede ficar pronta...");
@@ -303,6 +320,17 @@ static int modules_run_bootstrap_with_retry(struct modules_ui_state *ui,
     for (uint32_t attempt = 0u; attempt < MODULES_RETRY_MAX; ++attempt) {
         int installed = 0;
         int failed = 0;
+        /* PACKAGE_OK/FAIL counters describe one sweep. Keeping them across
+         * outer retries made the progress display exceed pkg_total and appear
+         * frozen at 100% while another network attempt was still running. */
+        ui->pkg_index = 0;
+        ui->pkg_total = 0;
+        ui->ok_count = 0;
+        ui->fail_count = 0;
+        ui->retry_count = 0;
+        ui->phase = -1;
+        ui->dl_cur = 0u;
+        ui->dl_total = 0u;
         rc = capypkg_bootstrap_run_with_progress(
             1, &installed, &failed, modules_render_progress, ui);
         if (out_installed) *out_installed = installed;

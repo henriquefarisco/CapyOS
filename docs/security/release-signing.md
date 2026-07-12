@@ -2,10 +2,10 @@
 
 ## Objetivo
 
-A trilha oficial de release deve publicar checksums verificaveis e uma assinatura
-Ed25519 separada. O fluxo protege o operador contra artefatos trocados depois da
-geração de `build/release-artifacts.sha256` e prepara a integracao futura com o
-fetch remoto do `update-agent`.
+A trilha oficial de release deve publicar checksums verificaveis, uma assinatura
+Ed25519 separada e um `latest.ini` assinado para o `update-agent`. O fluxo
+protege o operador contra artefatos trocados depois da geração de
+`build/release-artifacts.sha256` e autentica o catálogo remoto antes do download.
 
 Este procedimento cobre a assinatura operacional de artefatos de release. O gate
 local de manifestos do `update-agent` continua documentado nas release notes de
@@ -44,6 +44,22 @@ openssl pkey -in ~/.capyos/release-ed25519.pem -pubout -out ~/.capyos/release-ed
 
 A chave publica pode ser versionada ou publicada; a chave privada nao deve ser
 copiada para o workspace.
+
+## Chave dedicada do update-agent
+
+O manifesto `latest.ini` usa uma chave dedicada, distinta do fluxo histórico de
+assinatura dos checksums. A chave pública raw Ed25519 pinada no runtime é:
+
+```text
+be230bddb4144dfbcfbf0f24495ed2c8c9acf3866fb48633f4d29e49de69ae6d
+```
+
+`tools/scripts/build_update_manifest.py` extrai somente a parte pública da chave
+privada fornecida pelo operador e recusa assinar quando ela não corresponde a
+esse pin. `tools/scripts/verify_update_manifest.py` verifica a mesma chave, a
+assinatura sobre os bytes canônicos e o SHA-256 do payload. A chave privada do
+update-agent permanece offline e não deve ser configurada como secret do
+workflow; a CI publica apenas `latest.unsigned.ini` como handoff não implantável.
 
 ## Fingerprint da chave pública
 
@@ -298,17 +314,17 @@ catalogo local depois de reutilizar os invariantes ja exigidos pelo
 - `payload_url` HTTPS ou local sob `/system/update/`, sem espaços ou `..`;
 - `signature_ed25519` hex128 no manifesto;
 - trilha `channel`/`branch`/`source` compativel, com `develop` em
-  `refs/heads/<branch>` e `stable` em `refs/tags/v<major>.<minor>.<patch>`;
+  `refs/heads/<branch>` e `stable` no asset mutável autenticado
+  `releases/latest/download/latest.ini`;
 - download operacional via `update-download-payload`, que recalcula SHA-256
   real do payload baixado antes de persistir `/system/update/payload.bin`;
 - diagnóstico operacional via `update-prepare-explain`, que mostra gates locais
   de catálogo, repositório, payload, assinatura e cache sem efeitos de update;
 - preflight operacional via `update-prepare-dry-run`, que revisa catálogo
   local, `payload_url`, assinatura e cache verificado sem staging/arm/apply;
-- preparo operacional via `update-prepare`, que encadeia fetch, download
-  verificado, staging e arm sem aplicar boot slot;
-- apply operacional via `update-apply`, que consome `payload_cache_sha256`
-  verificado por padrão; `update-apply <payload_sha256>` segue disponível como
-  fallback manual explícito para `update_agent_apply_boot_slot_verified()`;
-- conclusão pós-apply via `update-confirm-health` ou rollback assistido via
-  `update-rollback-check`.
+- `update-prepare-explain` termina no gate `persistence` quando todos os gates
+  criptográficos e de cache passam;
+- `update-prepare`, `update-stage`, `update-arm on` e `update-apply` retornam
+  `UPDATE_AGENT_ERR_UNSUPPORTED` até existir escrita persistente e atômica do
+  slot inativo, readback e rollback real após reboot. Essa recusa impede que o
+  antigo metadado `boot_slot` em RAM seja reportado como atualização aplicada.

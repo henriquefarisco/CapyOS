@@ -5,9 +5,7 @@
  * http/url_request_builder.c): http_parse_url, http_build_request and
  * http_parse_status_line. All three are pure string logic — no
  * transport, DNS or allocation — so this test links only that TU and
- * supplies the single external symbol it references (g_http_last_error,
- * normally defined in prelude_headers_encoding.c, which is deliberately
- * not linked into this focused unit).
+ * links the shared header parser/error prelude alongside the request builder.
  *
  * The security cases lock the request-smuggling / CRLF-injection
  * defense: any byte <= 0x20 or == 0x7F anywhere in the URL must be
@@ -22,11 +20,6 @@
 
 #include "net/http.h"
 
-/* http_parse_url records its last error in this global via the
- * header-inline http_set_ok/http_fail. The production definition lives
- * in prelude_headers_encoding.c (not linked here), so provide it. */
-int g_http_last_error = 0;
-
 /* http_build_request / http_parse_status_line are declared in the
  * module-internal http_internal.h (not the public net/http.h). Forward-
  * declare them here so this focused unit can exercise them without
@@ -36,6 +29,11 @@ int http_build_request(const struct http_request *req, char *buf,
                        size_t buf_size);
 int http_parse_status_line(const char *line, int *status_code);
 size_t http_parse_content_length(const char *value);
+int http_request_wants_keepalive(const struct http_request *req);
+int http_connection_should_pool(const struct http_request *req,
+                                const struct http_response *resp);
+void http_store_headers(const char *headers, size_t len,
+                        struct http_response *resp);
 
 static int g_failures = 0;
 
@@ -324,6 +322,88 @@ static void test_content_length_saturates_on_overflow(void) {
           "overflowing Content-Length saturates, not wraps");
 }
 
+/* ---- connection lifetime: never reuse a channel sent with close ---- */
+
+static void set_connection_header(struct http_header *header,
+                                  const char *value) {
+    strcpy(header->name, "Connection");
+    strcpy(header->value, value);
+}
+
+static void test_default_close_is_never_pooled(void) {
+    struct http_request req;
+    struct http_response resp;
+    memset(&req, 0, sizeof(req));
+    memset(&resp, 0, sizeof(resp));
+    resp.status_code = 200;
+    resp.connection_keep_alive = 1;
+    CHECK(http_request_wants_keepalive(&req) == 0,
+          "request without explicit keep-alive uses builder default close");
+    CHECK(http_connection_should_pool(&req, &resp) == 0,
+          "default-close request must never enter socket pool");
+}
+
+static void test_pool_requires_explicit_opt_in_from_both_peers(void) {
+    struct http_request req;
+    struct http_response resp;
+    memset(&req, 0, sizeof(req));
+    memset(&resp, 0, sizeof(resp));
+    set_connection_header(&req.headers[0], "keep-alive");
+    req.header_count = 1;
+    resp.status_code = 200;
+    resp.connection_keep_alive = 1;
+    CHECK(http_connection_should_pool(&req, &resp) == 1,
+          "explicit keep-alive on request and response permits pooling");
+
+    resp.connection_keep_alive = 0;
+    CHECK(http_connection_should_pool(&req, &resp) == 0,
+          "response without explicit keep-alive is closed conservatively");
+    resp.connection_keep_alive = 1;
+    resp.connection_close = 1;
+    CHECK(http_connection_should_pool(&req, &resp) == 0,
+          "response close token overrides keep-alive");
+
+    set_connection_header(&req.headers[1], "close");
+    req.header_count = 2;
+    resp.connection_close = 0;
+    CHECK(http_connection_should_pool(&req, &resp) == 0,
+          "request close token overrides duplicate keep-alive");
+}
+
+static void test_critical_headers_survive_generic_header_cap(void) {
+    char wire[4096];
+    struct http_response resp;
+    size_t used = 0;
+    int n;
+    memset(&resp, 0, sizeof(resp));
+    n = snprintf(wire, sizeof(wire), "HTTP/1.1 200 OK\r\n");
+    CHECK(n > 0, "header fixture prefix built");
+    used = (size_t)n;
+    for (int i = 0; i < HTTP_MAX_HEADERS + 3; i++) {
+        n = snprintf(wire + used, sizeof(wire) - used,
+                     "X-Filler-%d: value\r\n", i);
+        CHECK(n > 0 && (size_t)n < sizeof(wire) - used,
+              "header fixture filler built");
+        used += (size_t)n;
+    }
+    n = snprintf(wire + used, sizeof(wire) - used,
+                 "Connection: close\r\nContent-Length: 42\r\n"
+                 "Location: https://example.com/final\r\n\r\n");
+    CHECK(n > 0 && (size_t)n < sizeof(wire) - used,
+          "header fixture suffix built");
+    used += (size_t)n;
+
+    http_store_headers(wire, used, &resp);
+    CHECK(resp.header_count == HTTP_MAX_HEADERS,
+          "generic header collection remains bounded");
+    CHECK(resp.connection_close == 1,
+          "late Connection close remains authoritative");
+    CHECK(resp.content_length_present == 1 && resp.content_length == 42u,
+          "late Content-Length remains available for framing");
+    CHECK(strcmp(resp.location, "https://example.com/final") == 0,
+          "late Location remains available for redirect handling");
+}
+
 /* ---- security: port out-of-range / integer-wrap rejection ---- */
 
 static void test_parse_rejects_oversized_port(void) {
@@ -387,6 +467,15 @@ int run_http_url_tests(void) {
     test_status_line_rejects_overlong_code();
     test_content_length_parses_value();
     test_content_length_saturates_on_overflow();
+    test_default_close_is_never_pooled();
+    test_pool_requires_explicit_opt_in_from_both_peers();
+    test_critical_headers_survive_generic_header_cap();
     if (g_failures == 0) printf("[PASS] http_url\n");
     return g_failures;
 }
+
+#if defined(CAPY_HTTP_URL_STANDALONE)
+int main(void) {
+    return run_http_url_tests();
+}
+#endif

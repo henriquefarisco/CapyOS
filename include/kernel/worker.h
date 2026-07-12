@@ -8,6 +8,7 @@
 #define WORKER_POOL_NAME_MAX 24
 #define WORKER_QUEUE_MAX 64
 #define WORKER_POOL_MAX 4
+#define WORKER_POOL_THREAD_MAX 4
 
 typedef void (*worker_fn)(void *arg);
 
@@ -34,6 +35,7 @@ struct worker_pool {
   uint32_t head;
   uint32_t tail;
   uint32_t count;
+  struct task *threads[WORKER_POOL_THREAD_MAX];
   struct spinlock lock;
   uint64_t jobs_completed;
   uint64_t jobs_failed;

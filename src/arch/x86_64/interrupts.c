@@ -275,6 +275,14 @@ __attribute__((optimize("O0"))) void idt_install(void) {
                      IDT_GATE_INTERRUPT);
   }
 
+  /* Route #DF (Double Fault, vector 8) to IST1 so it always runs on the
+   * dedicated known-good stack wired by tss_init(). The exception loop above
+   * installed vector 8 with ist=0 (current stack); a fault that corrupts or
+   * overflows the current kernel stack would then escalate #DF -> triple
+   * fault -> silent CPU reset (the "reboots by itself" symptom). With IST1
+   * the #DF handler runs and panic_with_regs() can render the fault. */
+  g_idt[8].ist = 1u;
+
   g_idtr.limit = (uint16_t)(sizeof(g_idt) - 1u);
   g_idtr.base = (uint64_t)(uintptr_t)&g_idt[0];
   __asm__ volatile("lidt (%0)" : : "r"(&g_idtr) : "memory");

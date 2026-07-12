@@ -16,6 +16,50 @@ static void elf_memset(void *dst, int val, size_t len) {
   for (size_t i = 0; i < len; i++) d[i] = (uint8_t)val;
 }
 
+#ifdef CAPYOS_ELFLOAD_RO_DIAG
+#include "memory/vmm.h"
+#include "drivers/serial/serial_com1.h"
+static void elf_diag_hex(uint64_t v) {
+  static const char h[] = "0123456789ABCDEF";
+  char b[17];
+  int i;
+  for (i = 0; i < 16; i++) b[i] = h[(v >> ((15 - i) * 4)) & 0xFu];
+  b[16] = '\0';
+  com1_puts(b);
+}
+/* alpha.311 diagnostic: elf_load writes segment bytes into freshly-allocated
+ * frames THROUGH THE KERNEL IDENTITY MAP. On VMware, some frame handed out on
+ * the 2nd browser open is read-only in the (firmware-owned) identity map at
+ * write time -> #PF. This checks the target's writability first; if read-only
+ * it LOGS phys/vaddr on COM1 and returns 0 so the caller SKIPS the write
+ * (avoids the kernel panic so the full picture reaches the serial log and the
+ * host survives). Gated: production builds are unchanged. */
+static int elf_diag_write_ok(uint64_t phys, uint64_t vaddr, const char *tag) {
+  if (vmm_identity_is_writable(phys)) return 1;
+  com1_puts("[elf-diag] read-only target ");
+  com1_puts(tag);
+  com1_puts(" phys=0x");
+  elf_diag_hex(phys);
+  com1_puts(" vaddr=0x");
+  elf_diag_hex(vaddr);
+  com1_puts("\n");
+  return 0;
+}
+/* Log once: the CR3 elf_load was called on vs the kernel's own PML4. Confirms
+ * on a VMware run whether the caller was on a process AS (prev != kernel) and
+ * that vmm_enter_kernel_tables switched to the kernel's RW tables. */
+static void elf_diag_log_ctx_once(uint64_t prev_cr3) {
+  static int logged = 0;
+  if (logged) return;
+  logged = 1;
+  com1_puts("[elf-diag] ctx prev_cr3=0x");
+  elf_diag_hex(prev_cr3 & ~0xFFFULL);
+  com1_puts(" kernel_pml4=0x");
+  elf_diag_hex(vmm_kernel_pml4_phys());
+  com1_puts("\n");
+}
+#endif
+
 int elf_validate(const uint8_t *data, size_t size) {
   if (!data || size < sizeof(struct elf64_header)) return -1;
   const struct elf64_header *hdr = (const struct elf64_header *)data;
@@ -87,10 +131,26 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
     if (phdr->p_flags & PF_W) flags |= VMM_PAGE_WRITE;
     if (!(phdr->p_flags & PF_X)) flags |= VMM_PAGE_NX;
 
+    /* alpha.311: run this segment's frame writes on the kernel's OWN page
+     * tables. elf_load writes via the identity map ((void*)phys); on VMware the
+     * caller's address space can have that frame read-only, but the kernel's
+     * own tables (vmm_build_kernel_tables) map all RAM RW. vmm_map_page /
+     * vmm_virt_to_phys below still target `as` correctly (they reach its tables
+     * by physical address, which stays identity-mapped in kernel_as). */
+    uint64_t elf_prev_cr3 = vmm_enter_kernel_tables();
+#ifdef CAPYOS_ELFLOAD_RO_DIAG
+    elf_diag_log_ctx_once(elf_prev_cr3);
+#endif
     for (size_t p = 0; p < num_pages; p++) {
       uint64_t phys = pmm_alloc_page();
-      if (!phys) return -1;
-      elf_memset((void *)(uintptr_t)phys, 0, VMM_PAGE_SIZE);
+      if (!phys) {
+        vmm_leave_kernel_tables(elf_prev_cr3);
+        return -1;
+      }
+#ifdef CAPYOS_ELFLOAD_RO_DIAG
+      if (elf_diag_write_ok(phys, vaddr_start + p * VMM_PAGE_SIZE, "memset"))
+#endif
+        elf_memset((void *)(uintptr_t)phys, 0, VMM_PAGE_SIZE);
       vmm_map_page(as, vaddr_start + p * VMM_PAGE_SIZE, phys, flags);
     }
 
@@ -115,11 +175,17 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
         if (to_copy > page_remain) to_copy = page_remain;
         uint64_t page_phys = vmm_virt_to_phys(as, page_base);
         if (!page_phys) break;
-        elf_memcpy((void *)(uintptr_t)(page_phys + page_off),
-                   data + phdr->p_offset + copied, (size_t)to_copy);
+#ifdef CAPYOS_ELFLOAD_RO_DIAG
+        if (elf_diag_write_ok(page_phys, page_base, "memcpy"))
+#endif
+          elf_memcpy((void *)(uintptr_t)(page_phys + page_off),
+                     data + phdr->p_offset + copied, (size_t)to_copy);
         copied += to_copy;
       }
     }
+    /* alpha.311: restore the caller's address space now that this segment's
+     * frame writes are done. */
+    vmm_leave_kernel_tables(elf_prev_cr3);
 
     uint64_t seg_end = phdr->p_vaddr + phdr->p_memsz;
     if (seg_end > result->brk) result->brk = seg_end;
@@ -180,6 +246,7 @@ int elf_load_into_process(struct process *proc, const uint8_t *data,
   if (proc->main_thread) {
     proc->main_thread->context.rip = result.entry_point;
     proc->main_thread->context.rsp = proc->stack_top - 8;
+    proc->main_thread->cr3 = proc->address_space->pml4_phys;
     proc->main_thread->context.cr3 = proc->address_space->pml4_phys;
   }
 

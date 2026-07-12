@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "browser_fetch.h"
+#include "browser_fetch_internal.h"
 #include "page_budget.h"
 
 static int g_failures = 0;
@@ -195,6 +196,65 @@ static void test_cookie_rides_along(void) {
         "stored cookie attached to later request");
 }
 
+static void test_reload_invalidates_exact_entry_only(void) {
+  static struct browser_fetch_ctx ctx;
+  struct http_response resp;
+  struct fake f;
+  char eff[BROWSER_FETCH_URL_MAX];
+  int hsts_required = 0;
+  static const uint8_t body_a[] = {'o', 'l', 'd', '-', 'a'};
+  static const uint8_t body_b[] = {'k', 'e', 'e', 'p', '-', 'b'};
+  static const uint8_t body_new[] = {'n', 'e', 'w', '-', 'a'};
+
+  browser_fetch_init(&ctx);
+  memset(&f, 0, sizeof(f));
+  f.cc = "max-age=300";
+  f.set_cookie = "SID=reload";
+  f.sts = "max-age=1000; includeSubDomains";
+  f.body = body_a;
+  f.body_len = sizeof(body_a);
+  CHECK(browser_fetch_get_with_transport(&ctx, "https://secure.example/a",
+                                          &resp, 3000, fake_fetch, &f) ==
+                HTTP_CACHE_RESULT_MISS_FETCHED &&
+            f.calls == 1,
+        "reload setup: first URL cached");
+
+  f.set_cookie = NULL;
+  f.sts = NULL;
+  f.body = body_b;
+  f.body_len = sizeof(body_b);
+  CHECK(browser_fetch_get_with_transport(&ctx, "https://secure.example/b",
+                                          &resp, 3001, fake_fetch, &f) ==
+                HTTP_CACHE_RESULT_MISS_FETCHED &&
+            f.calls == 2,
+        "reload setup: second URL cached independently");
+
+  f.body = body_new;
+  f.body_len = sizeof(body_new);
+  CHECK(browser_fetch_get_reload_with_transport(
+            &ctx, "https://secure.example/a", &resp, 3002, fake_fetch, &f) ==
+                HTTP_CACHE_RESULT_MISS_FETCHED &&
+            f.calls == 3 && resp.body_len == sizeof(body_new) &&
+            memcmp(resp.body, body_new, sizeof(body_new)) == 0 &&
+            ctx.session.cache.misses == 3 && ctx.session.cache.stores == 3,
+        "reload invalidates and refetches only the exact URL");
+  CHECK(strcmp(f.seen_cookie, "SID=reload") == 0,
+        "reload preserves and attaches the existing cookie jar");
+
+  CHECK(browser_fetch_get_with_transport(&ctx, "https://secure.example/b",
+                                          &resp, 3003, fake_fetch, &f) ==
+                HTTP_CACHE_RESULT_FRESH_SERVED &&
+            f.calls == 3 && resp.body_len == sizeof(body_b) &&
+            memcmp(resp.body, body_b, sizeof(body_b)) == 0 &&
+            ctx.session.cache.hits == 1,
+        "reload leaves every other cache entry intact");
+  CHECK(browser_fetch_plan(&ctx, "http://secure.example/after", 3004, eff,
+                           sizeof(eff), &hsts_required) == HTTP_FETCH_UPGRADE &&
+            hsts_required == 1 &&
+            strcmp(eff, "https://secure.example/after") == 0,
+        "reload preserves the existing HSTS store");
+}
+
 /* === navigation policy + HSTS (live fetch-policy wiring) ===== */
 
 static void test_navigation_plan(void) {
@@ -309,17 +369,65 @@ static void test_fail_closed(void) {
         "NULL transport -> ERROR");
 }
 
+static void test_wire_response_truncation_gate(void) {
+  struct capy_http_response wire;
+  struct http_response mapped;
+  uint8_t body[4] = {'d', 'a', 't', 'a'};
+  size_t i;
+
+  memset(&wire, 0, sizeof(wire));
+  memset(&mapped, 0xA5, sizeof(mapped));
+  wire.status_code = 200;
+  wire.body_len = sizeof(body);
+  wire.content_length = sizeof(body) + 1u;
+  wire.truncated = 1;
+  CHECK(browser_fetch_map_wire_response(&wire, body, &mapped) == -1 &&
+            mapped.status_code == 0 && mapped.body == NULL &&
+            mapped.body_len == 0u && mapped.header_count == 0u,
+        "truncated wire response fails closed and clears stale output");
+
+  memset(&wire, 0, sizeof(wire));
+  wire.status_code = 200;
+  wire.body_len = sizeof(body);
+  wire.content_length = sizeof(body);
+  wire.header_count = 2;
+  strcpy(wire.headers[0].name, "Content-Length");
+  strcpy(wire.headers[0].value, "4");
+  strcpy(wire.headers[1].name, "Location");
+  strcpy(wire.headers[1].value, "https://example.com/final");
+  CHECK(browser_fetch_map_wire_response(&wire, body, &mapped) == 0 &&
+            mapped.status_code == 200 && mapped.body == body &&
+            mapped.body_len == sizeof(body) && mapped.content_length_present == 1 &&
+            strcmp(mapped.location, "https://example.com/final") == 0,
+        "complete wire response maps body and critical metadata");
+
+  memset(&wire, 0, sizeof(wire));
+  wire.status_code = 302;
+  strcpy(wire.location, "https://example.com/");
+  for (i = strlen(wire.location); i < 600u; ++i) wire.location[i] = 'a';
+  wire.location[600] = '\0';
+  wire.header_count = 1;
+  strcpy(wire.headers[0].name, "Location");
+  strcpy(wire.headers[0].value, "https://truncated.invalid/");
+  CHECK(browser_fetch_map_wire_response(&wire, NULL, &mapped) == 0 &&
+            strlen(mapped.location) == 600u &&
+            strcmp(mapped.location, wire.location) == 0,
+        "dedicated full Location wins over generic truncated header storage");
+}
+
 int run_browser_fetch_tests(void) {
   g_failures = 0;
   test_build_url();
   test_fill_request();
   test_multifetch_cache_short_circuit();
   test_cookie_rides_along();
+  test_reload_invalidates_exact_entry_only();
   test_navigation_plan();
   test_hsts_forces_https();
   test_subresource_mixed_content();
   test_page_budget();
   test_fail_closed();
+  test_wire_response_truncation_gate();
   if (g_failures == 0) printf("[browser_fetch] all multi-fetch runtime tests passed\n");
   return g_failures;
 }

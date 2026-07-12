@@ -36,6 +36,11 @@ def fail(message: str) -> int:
 
 def tool_path(name: str) -> str | None:
     path = shutil.which(name)
+    # WSL can execute Windows binaries directly, but shutil.which does not
+    # apply PATHEXT there. Accept vmrun.exe when the VMware Windows directory
+    # was added to PATH so the same harness works from Linux CI and WSL.
+    if not path and os.name != "nt":
+        path = shutil.which(name + ".exe")
     return path if path else None
 
 

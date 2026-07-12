@@ -7,6 +7,7 @@
  */
 
 #include "browser_fetch.h"
+#include "browser_fetch_internal.h"
 
 #include "capylibc-net/capy_net.h" /* capy_url_parse, capy_http_get_with_headers */
 
@@ -211,22 +212,52 @@ static int browser_fetch_real_transport(const struct http_request *req,
                                  sizeof(ctx->fetch_body), &cr) != 0)
     return -1;
 
-  resp->status_code = cr.status_code;
-  resp->body = ctx->fetch_body;
-  resp->body_len = cr.body_len;
-  resp->content_length = cr.content_length;
+  return browser_fetch_map_wire_response(&cr, ctx->fetch_body, resp);
+}
+
+int browser_fetch_map_wire_response(const struct capy_http_response *wire,
+                                    uint8_t *body,
+                                    struct http_response *resp) {
+  uint32_t i;
+  if (!resp) return -1;
+  /* Always clear externally observable state first. A failed/truncated fetch
+   * must never leave a prior response available for caching or rendering. */
+  resp->status_code = 0;
+  resp->body = NULL;
+  resp->body_len = 0u;
+  resp->content_length = 0u;
+  resp->content_length_present = 0;
+  resp->connection_close = 0;
+  resp->connection_keep_alive = 0;
   resp->chunked = 0;
-  resp->header_count = 0;
+  resp->header_count = 0u;
   resp->location[0] = '\0';
-  for (i = 0; i < (uint32_t)cr.header_count && resp->header_count < HTTP_MAX_HEADERS;
+  if (!wire || (!body && wire->body_len != 0u) || wire->truncated) return -1;
+  if (wire->location[0] != '\0' &&
+      !bf_copy_field(resp->location, sizeof(resp->location), wire->location))
+    return -1;
+
+  resp->status_code = wire->status_code;
+  resp->body = body;
+  resp->body_len = wire->body_len;
+  resp->content_length = wire->content_length;
+  for (i = 0; i < (uint32_t)wire->header_count &&
+              resp->header_count < HTTP_MAX_HEADERS;
        i++) {
     struct http_header *dst = &resp->headers[resp->header_count];
-    if (!bf_copy_field(dst->name, sizeof(dst->name), cr.headers[i].name))
+    if (!bf_copy_field(dst->name, sizeof(dst->name), wire->headers[i].name))
       continue;
-    if (!bf_copy_field(dst->value, sizeof(dst->value), cr.headers[i].value))
+    if (!bf_copy_field(dst->value, sizeof(dst->value), wire->headers[i].value))
       continue;
-    if (bf_streq_ci(dst->name, "Location"))
+    if (bf_streq_ci(dst->name, "Location") && resp->location[0] == '\0')
       (void)bf_copy_field(resp->location, sizeof(resp->location), dst->value);
+    if (bf_streq_ci(dst->name, "Content-Length"))
+      resp->content_length_present = 1;
+    if (bf_streq_ci(dst->name, "Connection")) {
+      if (bf_streq_ci(dst->value, "close")) resp->connection_close = 1;
+      if (bf_streq_ci(dst->value, "keep-alive"))
+        resp->connection_keep_alive = 1;
+    }
     resp->header_count++;
   }
   return 0;
@@ -258,8 +289,26 @@ int browser_fetch_get_with_transport(struct browser_fetch_ctx *ctx,
   return r;
 }
 
+int browser_fetch_get_reload_with_transport(
+    struct browser_fetch_ctx *ctx, const char *url,
+    struct http_response *resp, long now, http_cache_fetch_fn fetch,
+    void *fctx) {
+  struct http_request req;
+  if (!ctx || !url || !resp || !fetch) return HTTP_CACHE_RESULT_ERROR;
+  if (browser_fetch_fill_request(url, &req) != 0)
+    return HTTP_CACHE_RESULT_ERROR;
+  (void)http_cache_invalidate(&ctx->session.cache, &req);
+  return browser_fetch_get_with_transport(ctx, url, resp, now, fetch, fctx);
+}
+
 int browser_fetch_get(struct browser_fetch_ctx *ctx, const char *url,
                       struct http_response *resp, long now) {
   return browser_fetch_get_with_transport(ctx, url, resp, now,
                                            browser_fetch_real_transport, ctx);
+}
+
+int browser_fetch_get_reload(struct browser_fetch_ctx *ctx, const char *url,
+                             struct http_response *resp, long now) {
+  return browser_fetch_get_reload_with_transport(
+      ctx, url, resp, now, browser_fetch_real_transport, ctx);
 }

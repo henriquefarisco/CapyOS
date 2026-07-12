@@ -149,11 +149,13 @@ static int compare_update_versions(const char *candidate, const char *current,
 
 /* ── manifest field validators ──────────────────────────────────────── */
 
+/* Raw Ed25519 public key for signed latest.ini catalogs. The corresponding
+ * private key is offline-only and must never be present in the image or CI. */
 static const uint8_t update_agent_release_public_key[ED25519_PUBLIC_KEY_SIZE] = {
-    0x63, 0x61, 0x70, 0x79, 0x6f, 0x73, 0x2d, 0x72,
-    0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x2d, 0x61,
-    0x6c, 0x70, 0x68, 0x61, 0x2d, 0x32, 0x30, 0x32,
-    0x36, 0x2d, 0x65, 0x64, 0x32, 0x35, 0x35, 0x31};
+    0xbe, 0x23, 0x0b, 0xdd, 0xb4, 0x14, 0x4d, 0xfb,
+    0xcf, 0xbf, 0x0f, 0x24, 0x49, 0x5e, 0xd2, 0xc8,
+    0xc9, 0xac, 0xf3, 0x86, 0x6f, 0xb4, 0x86, 0x33,
+    0xf4, 0xd2, 0x9e, 0x49, 0xde, 0x69, 0xae, 0x6d};
 
 int update_agent_manifest_payload_sha256_valid(
     const struct update_manifest_view *view) {
@@ -251,50 +253,9 @@ static const char *branch_for_channel(const char *channel) {
              : UPDATE_AGENT_DEFAULT_BRANCH;
 }
 
-static int build_stable_tag_ref(const char *version, char *dst,
-                                size_t dst_size) {
-  const char *p = version;
-  size_t dots = 0u;
-  size_t written = 0u;
-
-  if (!dst || dst_size == 0u) {
-    return -1;
-  }
-  dst[0] = '\0';
-  if (!p || !p[0]) {
-    return -1;
-  }
-  if (*p == 'v' || *p == 'V') {
-    ++p;
-  }
-  update_agent_local_append(dst, dst_size, "refs/tags/v");
-  while (dst[written] && written + 1u < dst_size) {
-    ++written;
-  }
-  while (*p && *p != '-' && *p != '+' && written + 1u < dst_size) {
-    char next[2];
-    if (!(update_agent_local_is_digit(*p) || *p == '.')) {
-      break;
-    }
-    if (*p == '.') {
-      ++dots;
-    }
-    next[0] = *p++;
-    next[1] = '\0';
-    update_agent_local_append(dst, dst_size, next);
-    while (dst[written] && written + 1u < dst_size) {
-      ++written;
-    }
-  }
-  return dots == 2u ? 0 : -1;
-}
-
 static void build_remote_manifest_url(const char *source, const char *channel,
                                       const char *branch,
-                                      const char *current_version,
                                       char *dst, size_t dst_size) {
-  char remote_ref[32];
-
   if (!dst || dst_size == 0u) {
     return;
   }
@@ -303,21 +264,128 @@ static void build_remote_manifest_url(const char *source, const char *channel,
       !update_agent_local_starts_with(source, UPDATE_AGENT_GITHUB_PREFIX)) {
     return;
   }
-  update_agent_local_append(dst, dst_size, "https://raw.githubusercontent.com/");
-  update_agent_local_append(dst, dst_size, source + 7u);
-  update_agent_local_append(dst, dst_size, "/");
   if (update_agent_local_equal(channel, "develop")) {
+    update_agent_local_append(dst, dst_size,
+                              "https://raw.githubusercontent.com/");
+    update_agent_local_append(dst, dst_size, source + 7u);
+    update_agent_local_append(dst, dst_size, "/");
     update_agent_local_append(dst, dst_size, "refs/heads/");
     update_agent_local_append(dst, dst_size,
                               (branch && branch[0]) ? branch : branch_for_channel(channel));
+    update_agent_local_append(dst, dst_size,
+                              UPDATE_AGENT_REMOTE_MANIFEST_SUFFIX);
   } else {
-    if (build_stable_tag_ref(current_version, remote_ref, sizeof(remote_ref)) !=
-        0) {
-      update_agent_local_copy(remote_ref, sizeof(remote_ref), "refs/heads/main");
-    }
-    update_agent_local_append(dst, dst_size, remote_ref);
+    update_agent_local_append(dst, dst_size, "https://github.com/");
+    update_agent_local_append(dst, dst_size, source + 7u);
+    update_agent_local_append(dst, dst_size,
+                              "/releases/latest/download/latest.ini");
   }
-  update_agent_local_append(dst, dst_size, UPDATE_AGENT_REMOTE_MANIFEST_SUFFIX);
+}
+
+static int legacy_official_stable_url(const char *url) {
+  static const char prefix[] =
+      "https://raw.githubusercontent.com/henriquefarisco/CapyOS/";
+  static const char tag_prefix[] = "refs/tags/v";
+  static const char main_ref[] =
+      "refs/heads/main/system/update/latest.ini";
+  const char *p = NULL;
+  size_t dots = 0u;
+
+  if (!url || !update_agent_local_starts_with(url, prefix)) {
+    return 0;
+  }
+  p = url + sizeof(prefix) - 1u;
+  if (update_agent_local_equal(p, main_ref)) {
+    return 1;
+  }
+  if (!update_agent_local_starts_with(p, tag_prefix)) {
+    return 0;
+  }
+  p += sizeof(tag_prefix) - 1u;
+  while (*p && *p != '/') {
+    if (*p == '.') {
+      ++dots;
+    } else if (!update_agent_local_is_digit(*p)) {
+      return 0;
+    }
+    ++p;
+  }
+  return dots == 2u && update_agent_local_equal(
+                            p, UPDATE_AGENT_REMOTE_MANIFEST_SUFFIX);
+}
+
+static int replace_repository_remote(const char *buffer, size_t len,
+                                     const char *old_url,
+                                     const char *new_url, char *out,
+                                     size_t out_size) {
+  static const char key[] = "remote_manifest=";
+  size_t start = 0u;
+  size_t written = 0u;
+  int replaced = 0;
+
+  if (!buffer || !old_url || !new_url || !out || out_size == 0u) {
+    return -1;
+  }
+  while (start < len) {
+    size_t line_end = start;
+    size_t end = start;
+    size_t i = 0u;
+    int exact_legacy_line = 1;
+    while (line_end < len && buffer[line_end] != '\n' &&
+           buffer[line_end] != '\r') {
+      ++line_end;
+    }
+    end = line_end;
+    while (end < len && (buffer[end] == '\n' || buffer[end] == '\r')) {
+      ++end;
+    }
+    while (key[i] && start + i < line_end && buffer[start + i] == key[i]) {
+      ++i;
+    }
+    if (key[i] || line_end - start - i == 0u) {
+      exact_legacy_line = 0;
+    } else {
+      size_t j = 0u;
+      while (old_url[j] && start + i + j < line_end &&
+             buffer[start + i + j] == old_url[j]) {
+        ++j;
+      }
+      if (old_url[j] || start + i + j != line_end) {
+        exact_legacy_line = 0;
+      }
+    }
+    if (exact_legacy_line) {
+      for (i = 0u; key[i]; ++i) {
+        if (written + 1u >= out_size) {
+          return -1;
+        }
+        out[written++] = key[i];
+      }
+      for (i = 0u; new_url[i]; ++i) {
+        if (written + 1u >= out_size) {
+          return -1;
+        }
+        out[written++] = new_url[i];
+      }
+      for (i = line_end; i < end; ++i) {
+        if (written + 1u >= out_size) {
+          return -1;
+        }
+        out[written++] = buffer[i];
+      }
+      replaced = 1;
+    } else {
+      for (i = start; i < end; ++i) {
+        if (written + 1u >= out_size) {
+          return -1;
+        }
+        out[written++] = buffer[i];
+      }
+    }
+    start = end;
+  }
+  out[written] = '\0';
+  return replaced ? 0 : 1;
 }
 
 /* ── .ini line parsers + buffer iterator ────────────────────────────── */
@@ -593,9 +661,12 @@ int update_agent_read_state_view(struct update_state_view *view) {
 
 void update_agent_prepare_repository_status(void) {
   char buffer[768];
+  char migrated[768];
+  char legacy_url[UPDATE_AGENT_REMOTE_MAX];
   char current_version[UPDATE_AGENT_VERSION_MAX];
   size_t read_len = 0u;
   update_agent_read_file_fn reader = update_agent_active_reader();
+  update_agent_write_file_fn writer = update_agent_active_writer();
 
   update_agent_init(NULL);
   update_agent_local_copy(current_version, sizeof(current_version),
@@ -614,11 +685,29 @@ void update_agent_prepare_repository_status(void) {
                             sizeof(update_agent_g_status.branch),
                             branch_for_channel(update_agent_g_status.channel));
   }
+  if (update_agent_local_equal(update_agent_g_status.source,
+                               UPDATE_AGENT_DEFAULT_SOURCE) &&
+      !update_agent_local_equal(update_agent_g_status.channel, "develop") &&
+      legacy_official_stable_url(
+          update_agent_g_status.remote_manifest_url)) {
+    update_agent_local_copy(legacy_url, sizeof(legacy_url),
+                            update_agent_g_status.remote_manifest_url);
+    build_remote_manifest_url(update_agent_g_status.source,
+                              update_agent_g_status.channel,
+                              update_agent_g_status.branch,
+                              update_agent_g_status.remote_manifest_url,
+                              sizeof(update_agent_g_status.remote_manifest_url));
+    if (writer && replace_repository_remote(
+                      buffer, read_len, legacy_url,
+                      update_agent_g_status.remote_manifest_url, migrated,
+                      sizeof(migrated)) == 0) {
+      (void)writer(UPDATE_AGENT_REPOSITORY_PATH, migrated);
+    }
+  }
   if (!update_agent_g_status.remote_manifest_url[0]) {
     build_remote_manifest_url(update_agent_g_status.source,
                               update_agent_g_status.channel,
                               update_agent_g_status.branch,
-                              update_agent_g_status.current_version,
                               update_agent_g_status.remote_manifest_url,
                               sizeof(update_agent_g_status.remote_manifest_url));
   }

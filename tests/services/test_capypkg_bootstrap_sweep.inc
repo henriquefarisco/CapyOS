@@ -101,6 +101,78 @@ static void test_bootstrap_per_package_retry_caps_attempts(void) {
            "failed bootstrap must not write the done marker");
 }
 
+static int g_bootstrap_reentry_calls;
+static int g_bootstrap_reentry_rc;
+static int g_bootstrap_reentry_installed;
+static int g_bootstrap_reentry_failed;
+
+static void bootstrap_reentry_progress(enum capypkg_bootstrap_event event,
+                                       const char *name, int index, int total,
+                                       int rc, void *ctx) {
+    (void)name;
+    (void)index;
+    (void)total;
+    (void)rc;
+    (void)ctx;
+    if (event != CAPYPKG_BOOTSTRAP_EVENT_INDEX_FETCH ||
+        g_bootstrap_reentry_calls != 0) {
+        return;
+    }
+    g_bootstrap_reentry_calls++;
+    g_bootstrap_reentry_installed = 91;
+    g_bootstrap_reentry_failed = 92;
+    g_bootstrap_reentry_rc = capypkg_bootstrap_run(
+        1, &g_bootstrap_reentry_installed, &g_bootstrap_reentry_failed);
+}
+
+static void test_bootstrap_single_flight_rejects_reentry(void) {
+    static char idx[1024];
+    char hex[65];
+    int installed = 0;
+    int failed = 0;
+    int rc;
+
+    reset_state(1);
+    reset_bootstrap_vfs_state();
+    compute_sha256_hex((const uint8_t *)CAPYPKG_TEST_PAYLOAD,
+                       strlen(CAPYPKG_TEST_PAYLOAD), hex);
+    snprintf(idx, sizeof(idx),
+             "name=single.flight\nversion=1.0.0\n"
+             "payload_url=https://example.com/single-flight.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/single.flight\n---\n",
+             hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    fs_mkdir(INSTALL_PROFILE_DIR);
+    fs_write_text(INSTALL_PROFILE_PATH,
+                  "profile=full\n"
+                  "bootstrap_repo_name=stable\n"
+                  "bootstrap_repo_url=https://example.com/modules-index.txt\n"
+                  "bootstrap_repo_signed=0\n");
+    g_index_text = idx;
+    g_index_rc = 0;
+    g_payload_bytes = (const uint8_t *)CAPYPKG_TEST_PAYLOAD;
+    g_payload_len = strlen(CAPYPKG_TEST_PAYLOAD);
+    g_payload_rc = 0;
+    g_bootstrap_reentry_calls = 0;
+    g_bootstrap_reentry_rc = 0;
+
+    rc = capypkg_bootstrap_run_with_progress(
+        1, &installed, &failed, bootstrap_reentry_progress, NULL);
+    EXPECT(rc == INSTALL_PROFILE_OK && installed == 1 && failed == 0,
+           "outer bootstrap sweep must complete while reentry is rejected");
+    EXPECT(g_bootstrap_reentry_calls == 1,
+           "progress callback must attempt exactly one nested sweep");
+    EXPECT(g_bootstrap_reentry_rc == INSTALL_PROFILE_ERR_NOT_READY,
+           "nested bootstrap sweep must fail fast behind single-flight gate");
+    EXPECT(g_bootstrap_reentry_installed == 0 &&
+               g_bootstrap_reentry_failed == 0,
+           "rejected nested sweep must reset its result counters");
+    EXPECT(g_payload_fetch_calls == 1,
+           "single-flight gate must prevent duplicate payload downloads");
+}
+
 /* ---- dependency-ordered wave planner coverage --------------------------
  *
  * The bootstrap install order is observable through PACKAGE_BEGIN events,

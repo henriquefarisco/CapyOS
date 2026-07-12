@@ -15,11 +15,11 @@
  *
  * Per the browser-core integration contract and Etapa 7 criterion 5/6, the
  * parser/layout/display-list stay in CapyBrowser; CapyOS only drives them and
- * owns the render backend. There is no convenience facade in the core, so this
- * adapter is the single place CapyOS sequences the stages.
+ * owns the render backend. The adapter delegates to the core's production
+ * facade so stage ordering, truncation and warning behavior cannot drift.
  *
- * The intermediate arenas (DOM/stylesheet/cascade/layout) and the output
- * display list are large (~1 MiB total), so they live in this TU's .bss (zeroed
+ * The caller-owned page arena and its output display list are large, so they
+ * live in this TU's .bss (zeroed
  * by the ELF loader / host BSS) rather than on a caller stack. The adapter is
  * therefore SINGLE-SHOT / NOT reentrant: each call overwrites the previous
  * render. Pure (no clock/RNG/IO), deterministic and fail-closed: any stage

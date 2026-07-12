@@ -64,6 +64,16 @@ int gui_event_push_paint(uint32_t window_id, uint64_t timestamp);
 int gui_event_push_timer(uint32_t window_id, uint32_t timer_id,
                          uint64_t timestamp);
 int gui_event_poll(struct gui_event *ev);
+/* Remove the oldest event addressed to `window_id` without consuming or
+ * reordering events for any other window.  This is the ownership-aware poll
+ * used by ring-3 graphical clients: the desktop dispatcher and multiple
+ * clients share the physical queue, so a client must never steal a foreign
+ * event merely because it happened to be at the FIFO head.  `window_id == 0`
+ * is rejected deliberately; global/raw input belongs to the desktop router,
+ * which resolves it to a concrete target before a user process can consume
+ * it. Returns 0 when an event was removed, -1 when none matched/arguments are
+ * invalid. */
+int gui_event_poll_window(uint32_t window_id, struct gui_event *ev);
 uint32_t gui_event_poll_many(struct gui_event *out, uint32_t max);
 uint32_t gui_event_peek_many(struct gui_event *out, uint32_t max);
 uint32_t gui_event_dispatch(gui_event_dispatch_fn dispatch, void *ctx,

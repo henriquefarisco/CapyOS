@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* x86_64 default. Kept public so host budget tests can verify that mandatory
+ * desktop surfaces fit without instantiating the kernel allocator. */
+#define KHEAP_DEFAULT_SIZE (32u * 1024u * 1024u)
+
 void   kinit(void);                 // inicializa o heap (bump = 0)
 void*  kalloc(size_t size);         // aloca blocos (alinhado a 16B); retorna NULL se OOM
 void   kfree(void* ptr);            // (no-op por enquanto)

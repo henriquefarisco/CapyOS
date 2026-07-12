@@ -240,10 +240,39 @@ int run_update_agent_tests(void) {
     fails += expect_true(strcmp(status.source, "github:henriquefarisco/CapyOS") == 0,
                          "default source mismatch");
     fails += expect_true(strcmp(status.remote_manifest_url,
-                                "https://raw.githubusercontent.com/henriquefarisco/CapyOS/refs/tags/v0.8.0/system/update/latest.ini") == 0,
-                         "default stable remote manifest tag mismatch");
+                                "https://github.com/henriquefarisco/CapyOS/releases/latest/download/latest.ini") == 0,
+                         "default stable latest-release manifest mismatch");
     fails += expect_true(strcmp(status.summary, "catalog cache missing") == 0,
                          "missing catalog summary mismatch");
+
+    set_file_text(
+        UPDATE_AGENT_REPOSITORY_PATH,
+        "channel=stable\nbranch=main\nsource=github:henriquefarisco/CapyOS\n"
+        "manifest=/system/update/latest.ini\n"
+        "remote_manifest=https://raw.githubusercontent.com/henriquefarisco/CapyOS/refs/tags/v0.8.0/system/update/latest.ini\n");
+    fails += expect_true(update_agent_poll() == 0,
+                         "official legacy stable URL should migrate safely");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.remote_manifest_url,
+                                "https://github.com/henriquefarisco/CapyOS/releases/latest/download/latest.ini") == 0,
+                         "legacy official URL should resolve to latest release");
+    fails += expect_true(strstr(find_file(UPDATE_AGENT_REPOSITORY_PATH)->text,
+                                "remote_manifest=https://github.com/henriquefarisco/CapyOS/releases/latest/download/latest.ini") != NULL,
+                         "legacy official URL migration should persist");
+
+    set_file_text(
+        UPDATE_AGENT_REPOSITORY_PATH,
+        "channel=stable\nbranch=main\nsource=github:henriquefarisco/CapyOS\n"
+        "remote_manifest=https://updates.example.test/capyos/custom.ini\n");
+    fails += expect_true(update_agent_poll() == 0,
+                         "custom remote URL should remain usable");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.remote_manifest_url,
+                                "https://updates.example.test/capyos/custom.ini") == 0,
+                         "custom remote URL must not be migrated");
+    fails += expect_true(strstr(find_file(UPDATE_AGENT_REPOSITORY_PATH)->text,
+                                "remote_manifest=https://updates.example.test/capyos/custom.ini") != NULL,
+                         "custom repository file must remain unchanged");
 
     set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
                   "channel=develop\nbranch=develop\nsource=github:test/CapyOS\n");
@@ -280,32 +309,34 @@ int run_update_agent_tests(void) {
                   "pending_activation=0\nstaged_manifest=/system/update/staged.ini\n"
                   "payload_cache=/system/update/payload.bin\npayload_cache_sha256="
                   UPDATE_AGENT_GOOD_SHA256 "\n");
-    fails += expect_true(update_agent_stage_latest() == 0,
-                         "staging should succeed when a verified payload cache exists");
+    fails += expect_true(update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "staging must fail closed until persistent slots exist");
     update_agent_status_get(&status);
-    fails += expect_true(status.stage_ready == 1u,
-                         "staged update should be visible after staging");
+    fails += expect_true(status.stage_ready == 0u,
+                         "unsupported staging must not create staged state");
     fails += expect_true(status.pending_activation == 0u,
-                         "staging should not arm activation automatically");
-    fails += expect_true(strcmp(status.staged_version, "0.9.0-alpha.1") == 0,
-                         "staged version mismatch");
-    fails += expect_true(strcmp(status.staged_payload_url,
-                                "https://github.com/test/CapyOS/releases/download/v1.0.0/kernel.bin") == 0,
-                         "staged payload url mismatch");
-    fails += expect_true(strcmp(status.summary, "staged update ready") == 0,
-                         "staged summary mismatch");
-    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 1,
-                         "staged manifest file should exist");
+                         "unsupported staging must not arm activation");
+    fails += expect_true(strcmp(status.summary,
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "unsupported staging summary mismatch");
+    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0,
+                         "unsupported staging must not write a staged manifest");
     fails += expect_true(find_file(UPDATE_AGENT_STATE_PATH)->present == 1,
-                         "state file should exist after staging");
+                         "pre-existing verified cache state should remain intact");
 
-    fails += expect_true(update_agent_set_pending_activation(1) == 0,
-                         "arming a staged update should succeed");
+    set_file_text(UPDATE_AGENT_STAGE_PATH,
+                  find_file(UPDATE_AGENT_CACHE_PATH)->text);
+    fails += expect_true(update_agent_poll() == 0,
+                         "manually seeded legacy stage should remain inspectable");
+    fails += expect_true(update_agent_set_pending_activation(1) ==
+                             UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "arming must fail closed until persistent slots exist");
     update_agent_status_get(&status);
-    fails += expect_true(status.pending_activation == 1u,
-                         "pending activation flag mismatch");
-    fails += expect_true(strcmp(status.summary, "staged update armed for activation") == 0,
-                         "armed summary mismatch");
+    fails += expect_true(status.pending_activation == 0u,
+                         "unsupported arm must not set pending activation");
+    fails += expect_true(strcmp(status.summary,
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "unsupported arm summary mismatch");
 
     fails += expect_true(update_agent_set_pending_activation(0) == 0,
                          "disarming a staged update should succeed");
@@ -330,11 +361,12 @@ int run_update_agent_tests(void) {
                          "state file should be removed");
     fails += expect_true(strcmp(status.summary, "update available in local catalog") == 0,
                          "clear should fall back to catalog summary");
-    fails += expect_true(update_agent_stage_latest() == -49,
-                         "staging should require a verified payload cache");
+    fails += expect_true(update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "staging remains unsupported without a payload cache");
     update_agent_status_get(&status);
-    fails += expect_true(strcmp(status.summary, "payload cache missing or unverified for staging") == 0,
-                         "stage without verified payload cache summary mismatch");
+    fails += expect_true(strcmp(status.summary,
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "unsupported stage summary mismatch");
 
     set_file_text(UPDATE_AGENT_CACHE_PATH,
                   "available_version=0.8.0-alpha.0+20260305\npublished_at=2026-04-08\n");
@@ -345,11 +377,12 @@ int run_update_agent_tests(void) {
                          "catalog should remain present");
     fails += expect_true(status.update_available == 0u,
                          "matching version should not signal update");
-    fails += expect_true(update_agent_stage_latest() == -5,
-                         "staging should refuse when there is no new cached update");
+    fails += expect_true(update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "staging remains unsupported without a newer catalog");
     update_agent_status_get(&status);
-    fails += expect_true(strcmp(status.summary, "no cached update available to stage") == 0,
-                         "stage refusal summary mismatch");
+    fails += expect_true(strcmp(status.summary,
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "unsupported stage refusal summary mismatch");
 
     set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
                   "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
@@ -393,8 +426,8 @@ int run_update_agent_tests(void) {
     fails += expect_true(strcmp(status.summary, "remote manifest fetched into local catalog") == 0,
                          "fetch success summary mismatch");
     fails += expect_true(strcmp(g_last_fetch_url,
-                                "https://raw.githubusercontent.com/test/CapyOS/refs/tags/v0.8.0/system/update/latest.ini") == 0,
-                         "fetch should use stable tag remote manifest URL");
+                                "https://github.com/test/CapyOS/releases/latest/download/latest.ini") == 0,
+                         "fetch should use latest-release manifest URL");
     fails += expect_true(find_file(UPDATE_AGENT_FETCHED_PATH)->present == 0,
                          "fetched temporary manifest should be removed after import");
 
@@ -413,7 +446,8 @@ int run_update_agent_tests(void) {
                          "prepare dry-run should not arm activation");
     fails += expect_true(strcmp(status.available_version, "1.0.0-alpha.2") == 0,
                          "prepare dry-run available version mismatch");
-    fails += expect_true(strcmp(status.summary, "prepare dry-run passed; local catalog is ready") == 0,
+    fails += expect_true(strcmp(status.summary,
+                                "dry-run passed; verified download ready, apply unsupported") == 0,
                          "prepare dry-run summary mismatch");
     fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0,
                          "prepare dry-run should not persist staged manifest");
@@ -421,8 +455,9 @@ int run_update_agent_tests(void) {
                          "prepare dry-run should not fetch remote manifest");
     fails += expect_true(g_last_payload_url[0] == '\0',
                          "prepare dry-run should not download payload");
-    fails += expect_true(update_agent_prepare_explain(&explain) == 0,
-                         "prepare explain should pass with verified local cache");
+    fails += expect_true(update_agent_prepare_explain(&explain) ==
+                             UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "prepare explain should expose missing persistent apply");
     fails += expect_true(explain.poll_ready == 1u && explain.catalog_ready == 1u &&
                              explain.repository_ready == 1u && explain.version_ready == 1u,
                          "prepare explain primary gates should pass");
@@ -430,10 +465,10 @@ int run_update_agent_tests(void) {
                              explain.payload_url_ready == 1u &&
                              explain.signature_ready == 1u && explain.cache_ready == 1u,
                          "prepare explain payload gates should pass");
-    fails += expect_true(explain.stage_safe == 1u,
-                         "prepare explain should mark staging as safe");
-    fails += expect_true(strcmp(explain.failing_gate, "-") == 0,
-                         "prepare explain passing gate mismatch");
+    fails += expect_true(explain.stage_safe == 0u,
+                         "prepare explain must not advertise persistent staging");
+    fails += expect_true(strcmp(explain.failing_gate, "persistence") == 0,
+                         "prepare explain persistence gate mismatch");
     set_file_text(UPDATE_AGENT_STATE_PATH, NULL);
     fails += expect_true(update_agent_prepare_dry_run() == -53,
                          "prepare dry-run should require verified payload cache");
@@ -456,24 +491,24 @@ int run_update_agent_tests(void) {
     g_payload_rc = 0;
     g_payload_bytes = (const uint8_t *)"abc";
     g_payload_len = 3u;
-    fails += expect_true(update_agent_prepare_staged_update() == 0,
-                         "prepare should fetch, download, stage and arm update");
+    fails += expect_true(update_agent_prepare_staged_update() ==
+                             UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "mutating prepare must fail closed without persistent slots");
     update_agent_status_get(&status);
-    fails += expect_true(status.stage_ready == 1u,
-                         "prepare should leave staged update ready");
-    fails += expect_true(status.pending_activation == 1u,
-                         "prepare should arm activation");
-    fails += expect_true(strcmp(status.staged_version, "1.0.0-alpha.3") == 0,
-                         "prepared staged version mismatch");
-    fails += expect_true(strcmp(status.payload_cache_sha256, UPDATE_AGENT_ABC_SHA256) == 0,
-                         "prepared cache sha256 mismatch");
-    fails += expect_true(strcmp(status.summary, "update prepared and armed for activation") == 0,
-                         "prepare summary mismatch");
-    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 1,
-                         "prepare should persist staged manifest");
-    fails += expect_true(strstr(find_file(UPDATE_AGENT_STATE_PATH)->text,
-                                "pending_activation=1") != NULL,
-                         "prepare should persist activation flag");
+    fails += expect_true(status.stage_ready == 0u,
+                         "unsupported prepare must not leave staged state");
+    fails += expect_true(status.pending_activation == 0u,
+                         "unsupported prepare must not arm activation");
+    fails += expect_true(strcmp(status.summary,
+                                "persistent update apply unsupported; verified download only") == 0,
+                         "unsupported prepare summary mismatch");
+    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0,
+                         "unsupported prepare must not persist staged manifest");
+    fails += expect_true(find_file(UPDATE_AGENT_STATE_PATH)->present == 0,
+                         "unsupported prepare must not persist activation state");
+    fails += expect_true(g_last_fetch_url[0] == '\0' &&
+                             g_last_payload_url[0] == '\0',
+                         "unsupported prepare must not perform network side effects");
     fails += expect_true(find_file(UPDATE_AGENT_FETCHED_PATH)->present == 0,
                          "prepare should remove fetched temporary manifest");
 

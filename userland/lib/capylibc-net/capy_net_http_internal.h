@@ -17,11 +17,17 @@
  *     rejects reserved framing/routing names (http_req_header_is_reserved).
  *     This is the anti request-smuggling gate the transport-header API
  *     enforces before a request reaches the wire.
+ *
+ * The bounded streaming chunk decoder is declared here too. Its implementation
+ * lives in capy_net_http_chunked.c so the security-sensitive framing state
+ * machine stays independently reviewable and capy_net_http.c remains below the
+ * source-layout ceiling.
  */
 #ifndef CAPY_NET_HTTP_INTERNAL_H
 #define CAPY_NET_HTTP_INTERNAL_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "capylibc-net/capy_net.h"
 
@@ -75,8 +81,56 @@ static inline int http_req_header_is_reserved(const char *name) {
   return http_streq_ci(name, "Host") ||
          http_streq_ci(name, "Connection") ||
          http_streq_ci(name, "Content-Length") ||
-         http_streq_ci(name, "Transfer-Encoding");
+         http_streq_ci(name, "Transfer-Encoding") ||
+         http_streq_ci(name, "Accept-Encoding");
 }
+
+/* Strict streaming response framing. Only one exact `chunked` transfer coding
+ * is supported. Chunk extension/trailer lines and the aggregate trailer block
+ * are bounded independently, preventing an attacker from turning metadata into
+ * unbounded work even when the decoded body is tiny. */
+#define CAPY_HTTP_CHUNK_LINE_MAX 1024u
+#define CAPY_HTTP_TRAILER_MAX_BYTES 4096u
+#define CAPY_HTTP_TRAILER_MAX_FIELDS 32u
+
+enum capy_http_chunk_state {
+  CAPY_HTTP_CHUNK_SIZE = 0,
+  CAPY_HTTP_CHUNK_SIZE_LF,
+  CAPY_HTTP_CHUNK_DATA,
+  CAPY_HTTP_CHUNK_DATA_CR,
+  CAPY_HTTP_CHUNK_DATA_LF,
+  CAPY_HTTP_CHUNK_TRAILER,
+  CAPY_HTTP_CHUNK_TRAILER_LF,
+  CAPY_HTTP_CHUNK_DONE
+};
+
+struct capy_http_chunk_decoder {
+  uint8_t *out;
+  size_t out_cap;
+  size_t out_len;
+  size_t decoded_len;
+  size_t chunk_remaining;
+  size_t line_len;
+  size_t trailer_bytes;
+  unsigned int trailer_fields;
+  enum capy_http_chunk_state state;
+  int truncated;
+  char line[CAPY_HTTP_CHUNK_LINE_MAX];
+};
+
+/* Parse raw response headers. Returns 0 for no Transfer-Encoding, 1 for the
+ * single supported exact `chunked` coding, and -1 for every other/duplicate
+ * form. The caller separately rejects TE+Content-Length as ambiguous framing. */
+int capy_http_resolve_transfer_encoding(const char *headers, size_t len);
+
+void capy_http_chunk_decoder_init(struct capy_http_chunk_decoder *decoder,
+                                  uint8_t *out, size_t out_cap);
+
+/* Consume one arbitrary transport fragment. Returns 1 only when the complete
+ * terminal chunk and bounded trailer block ended exactly at `len`, 0 when more
+ * bytes are required, and -1 for malformed framing or bytes after completion. */
+int capy_http_chunk_decoder_feed(struct capy_http_chunk_decoder *decoder,
+                                 const uint8_t *data, size_t len);
 
 /* Validate a caller's request-header array: NULL only when count==0; each name
  * a valid HTTP token (non-empty), each value CTL-free (so no embedded CRLF can

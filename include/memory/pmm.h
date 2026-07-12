@@ -29,6 +29,13 @@ uint64_t pmm_alloc_pages(size_t count);
 void pmm_free_pages(uint64_t phys_addr, size_t count);
 void pmm_reserve_range(uint64_t start, uint64_t length);
 void pmm_stats_get(struct pmm_stats *out);
+
+/* alpha.310: report on COM1 how many firmware read-only RAM frames pmm_init
+ * reserved (VMware firmware-reserved low RAM). Call once from kernel_main
+ * AFTER com1_init; the scan itself runs in pmm_init, before the serial
+ * console is up. No output when nothing was reserved (QEMU/OVMF) or under
+ * UNIT_TEST. */
+void pmm_report_firmware_readonly(void);
 int pmm_is_free(uint64_t phys_addr);
 int pmm_low_memory(void);
 void pmm_set_reclaim_callback(void (*cb)(void));

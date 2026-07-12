@@ -74,6 +74,45 @@ static inline void write_cr3(uint64_t val) {
   __asm__ volatile("movq %0, %%cr3" : : "r"(val) : "memory");
 }
 
+/* alpha.310: query whether the kernel's identity mapping of physical frame
+ * `phys` is PRESENT and WRITABLE. See the doc comment in include/memory/vmm.h.
+ *
+ * The kernel adopts the firmware page tables (vmm_init: read_cr3()). VMware's
+ * UEFI maps firmware-reserved low RAM (0x400000+) READ-ONLY there. Those
+ * frames are NOT general-purpose RAM -- an earlier fix that force-flipped them
+ * writable and let elf_load write into them corrupted firmware state and
+ * crashed the host VMM. So the firmware's read-only mapping is authoritative:
+ * a frame that is not writable in the identity map must be treated as reserved
+ * and never handed out by the PMM. Returns 1 if usable (present + writable), 0
+ * otherwise. Pure query (no logging -- it runs during pmm_init, before COM1 is
+ * up). Returns 1 (no-op) under UNIT_TEST / non-x86. */
+int vmm_identity_is_writable(uint64_t phys) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  uint64_t va = phys; /* identity: kernel virtual == physical for managed RAM */
+  uint64_t *tbl = (uint64_t *)(uintptr_t)(read_cr3() & VMM_PTE_PHYS_MASK);
+  uint64_t *e = &tbl[(va >> 39) & 0x1FFu]; /* PML4E */
+  if (!(*e & VMM_PAGE_PRESENT)) return 0;
+
+  tbl = (uint64_t *)(uintptr_t)(*e & VMM_PTE_PHYS_MASK);
+  e = &tbl[(va >> 30) & 0x1FFu]; /* PDPTE */
+  if (!(*e & VMM_PAGE_PRESENT)) return 0;
+  if (!(*e & VMM_PAGE_HUGE)) { /* not a 1 GiB leaf -> descend */
+    tbl = (uint64_t *)(uintptr_t)(*e & VMM_PTE_PHYS_MASK);
+    e = &tbl[(va >> 21) & 0x1FFu]; /* PDE */
+    if (!(*e & VMM_PAGE_PRESENT)) return 0;
+    if (!(*e & VMM_PAGE_HUGE)) { /* not a 2 MiB leaf -> descend */
+      tbl = (uint64_t *)(uintptr_t)(*e & VMM_PTE_PHYS_MASK);
+      e = &tbl[(va >> 12) & 0x1FFu]; /* PTE */
+      if (!(*e & VMM_PAGE_PRESENT)) return 0;
+    }
+  }
+  return (*e & VMM_PAGE_WRITE) ? 1 : 0; /* present + writable -> usable RAM */
+#else
+  (void)phys;
+  return 1;
+#endif
+}
+
 static uint64_t *get_or_create_table(uint64_t *table, uint32_t index,
                                       uint64_t flags) {
   if (!(table[index] & VMM_PAGE_PRESENT)) {
@@ -183,9 +222,79 @@ static uint64_t clone_table_for_user_as(uint64_t src_phys, int level,
   return dst_phys;
 }
 
+/* alpha.311: number of GiB the kernel identity-maps in its own page tables.
+ * Must cover RAM + framebuffer + MMIO. 16 GiB (2 MiB huge pages) fits any VM
+ * we target; unbacked physical entries are harmless as long as nothing
+ * accesses them. Device MMIO cache type comes from the firmware MTRRs (UC),
+ * which override the WB page attribute, so a flat WB identity map is safe. */
+#define VMM_KERNEL_IDMAP_GIB 16u
+
+/* alpha.311: build kernel-OWNED page tables instead of inheriting the
+ * firmware's. Identity-maps [0, VMM_KERNEL_IDMAP_GIB GiB) with 2 MiB huge
+ * pages, RW + executable, and preserves the firmware's high-half PML4 entries
+ * (256..511) for any firmware runtime mappings. Returns the new PML4 physical
+ * address or 0 on allocation failure.
+ *
+ * Why: the kernel writes to freshly-allocated frames through its identity map
+ * (elf_load segment copy, page-table scrubs, anon zero-fill). VMware's firmware
+ * marks some RAM read-only in its page tables after first use AND those tables
+ * are host-protected (writing their PTEs crashes the host VMM), so the kernel
+ * must own a direct map with stable RW permissions. The kernel's virtual layout
+ * is identity (virtual == physical), so a flat identity map is equivalent to
+ * what the firmware provided, minus the read-only surprises. QEMU/OVMF runs on
+ * these same tables, so the full boot + smoke suite validates it. */
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+static uint64_t vmm_build_kernel_tables(void) {
+  uint64_t *fw_pml4 = (uint64_t *)(uintptr_t)(read_cr3() & VMM_PTE_PHYS_MASK);
+
+  uint64_t pml4_phys = pmm_alloc_page();
+  if (!pml4_phys) return 0;
+  uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+  for (int i = 0; i < 512; i++) pml4[i] = 0;
+  /* Preserve the firmware high half (kernel-half / runtime mappings). */
+  for (int i = 256; i < 512; i++) pml4[i] = fw_pml4[i];
+
+  uint64_t pdpt_phys = pmm_alloc_page();
+  if (!pdpt_phys) return 0;
+  uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_phys;
+  for (int i = 0; i < 512; i++) pdpt[i] = 0;
+  pml4[0] = pdpt_phys | VMM_PAGE_PRESENT | VMM_PAGE_WRITE;
+
+  for (uint64_t g = 0; g < VMM_KERNEL_IDMAP_GIB; g++) {
+    uint64_t pd_phys = pmm_alloc_page();
+    if (!pd_phys) return 0;
+    uint64_t *pd = (uint64_t *)(uintptr_t)pd_phys;
+    for (uint64_t i = 0; i < 512; i++) {
+      uint64_t addr = g * (1ULL << 30) + i * (2ULL << 20);
+      pd[i] = addr | VMM_PAGE_PRESENT | VMM_PAGE_WRITE | VMM_PAGE_HUGE;
+    }
+    pdpt[g] = pd_phys | VMM_PAGE_PRESENT | VMM_PAGE_WRITE;
+  }
+  return pml4_phys;
+}
+#endif
+
 void vmm_init(void) {
-  kernel_as.pml4_phys = read_cr3() & ~0xFFFULL;
-  kernel_as.pml4_virt = (uint64_t *)(uintptr_t)kernel_as.pml4_phys;
+  static int kernel_tables_built = 0;
+  if (!kernel_tables_built) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+    uint64_t new_pml4 = vmm_build_kernel_tables();
+    if (new_pml4) {
+      write_cr3(new_pml4);
+      kernel_as.pml4_phys = new_pml4;
+      kernel_as.pml4_virt = (uint64_t *)(uintptr_t)new_pml4;
+    } else {
+      /* Fallback to the firmware tables so boot still proceeds if page-table
+       * frames could not be allocated (never expected this early). */
+      kernel_as.pml4_phys = read_cr3() & ~0xFFFULL;
+      kernel_as.pml4_virt = (uint64_t *)(uintptr_t)kernel_as.pml4_phys;
+    }
+#else
+    kernel_as.pml4_phys = read_cr3() & ~0xFFFULL;
+    kernel_as.pml4_virt = (uint64_t *)(uintptr_t)kernel_as.pml4_phys;
+#endif
+    kernel_tables_built = 1;
+  }
   kernel_as.refcount = 1;
   vmm_global_stats.kernel_mapped_pages = 0;
   vmm_global_stats.user_mapped_pages = 0;
@@ -366,6 +475,15 @@ static int clone_pt_into(uint64_t *dst, uint64_t *src, int level) {
 
 void vmm_destroy_address_space(struct vmm_address_space *as) {
   if (!as || as == &kernel_as) return;
+
+  /* Never release the PML4 (or any table reachable from it) while the CPU is
+   * still walking it.  Process teardown normally runs from a kernel task and
+   * context_switch has already installed kernel_as.  This guard turns any
+   * ordering regression into a deferred cleanup instead of a CR3 use-after-
+   * free / triple fault.  It must precede the refcount decrement so retrying
+   * later observes the original ownership count. */
+  if (vmm_address_space_is_active(as)) return;
+
   as->refcount--;
   if (as->refcount > 0) return;
 
@@ -466,6 +584,41 @@ void vmm_switch_address_space(struct vmm_address_space *as) {
     write_cr3(as->pml4_phys);
   }
 }
+
+/* alpha.311: temporarily run on the kernel's OWN page tables and restore the
+ * caller's afterwards. elf_load writes segment bytes into freshly-allocated
+ * frames through the identity map ((void*)phys), which is only guaranteed RW
+ * in the kernel's own tables (vmm_build_kernel_tables). The caller may be on a
+ * process address space (e.g. the desktop spawning capygfx from a ring-3
+ * shell), whose low-region identity clone can be read-only for a reused frame.
+ * `vmm_enter_kernel_tables` switches to kernel_as if not already active and
+ * returns the previous CR3; `vmm_leave_kernel_tables` restores it. Page-table
+ * edits (vmm_map_page) and walks (vmm_virt_to_phys) done in between operate on
+ * the target AS via its physical frames, which stay identity-mapped in
+ * kernel_as, so they remain correct. No-op under UNIT_TEST / non-x86. */
+uint64_t vmm_enter_kernel_tables(void) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  uint64_t prev = read_cr3();
+  if ((prev & ~0xFFFULL) != (kernel_as.pml4_phys & ~0xFFFULL)) {
+    write_cr3(kernel_as.pml4_phys);
+  }
+  return prev;
+#else
+  return 0;
+#endif
+}
+
+void vmm_leave_kernel_tables(uint64_t prev_cr3) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  if ((read_cr3() & ~0xFFFULL) != (prev_cr3 & ~0xFFFULL)) {
+    write_cr3(prev_cr3);
+  }
+#else
+  (void)prev_cr3;
+#endif
+}
+
+uint64_t vmm_kernel_pml4_phys(void) { return kernel_as.pml4_phys; }
 
 int vmm_map_page(struct vmm_address_space *as, uint64_t virt, uint64_t phys,
                  uint64_t flags) {

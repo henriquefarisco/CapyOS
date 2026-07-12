@@ -23,6 +23,7 @@
 #include "services/capypkg.h"
 #include "services/capypkg_local_bundle.h"
 #include "services/capypkg_bootstrap.h"
+#include "services/capypkg_network.h"
 #include "services/capypkg_runtime.h"
 #include "services/service_manager.h"
 
@@ -286,7 +287,8 @@ static int capypkg_runtime_fetch_bytes(const char *url, uint8_t *buffer,
   }
   int rc = http_download(url, buffer, buffer_size, out_len);
   if (rc != 0) {
-    capypkg_runtime_log_fetch_failure(url, http_last_error(), 0);
+    capypkg_runtime_log_fetch_failure(url, http_last_error(),
+                                      http_last_status_code());
     return -1;
   }
   return 0;
@@ -336,7 +338,8 @@ static int capypkg_runtime_fetch_bytes_progress(
                               cb ? capypkg_runtime_http_progress : NULL,
                               cb ? &bridge : NULL);
   if (rc != 0) {
-    capypkg_runtime_log_fetch_failure(url, http_last_error(), 0);
+    capypkg_runtime_log_fetch_failure(url, http_last_error(),
+                                      http_last_status_code());
     return -1;
   }
   return 0;
@@ -429,21 +432,20 @@ static uint32_t kernel_capypkg_bootstrap_backoff_ticks(void) {
  * silently every 60 seconds while the kernel is still in network
  * warm-up. */
 static int kernel_capypkg_network_is_usable(void) {
+  static const struct capypkg_network_ops network_ops = {
+      net_stack_status,
+      net_stack_poll,
+      net_stack_dhcp_acquire,
+  };
+  struct capypkg_network_prepare_result prepared;
   if (capypkg_local_bundle_available()) {
     return 1;
   }
-  struct net_stack_status status;
-  if (net_stack_status(&status) != 0) {
-    return 0;
-  }
-  if (!status.initialized || !status.runtime_supported ||
-      !status.nic.found || !status.ready) {
-    return 0;
-  }
-  if (status.dhcp_attempts > 0u && !status.dhcp_lease_acquired) {
-    return 0;
-  }
-  return 1;
+  /* A service poll may arrive between link readiness and the DHCP reply.
+   * Advance a small, bounded amount of network work instead of either
+   * declaring a false-ready state (addr/dns still zero) or waiting for the
+   * next 60-second service interval. */
+  return capypkg_network_prepare(&network_ops, 4u, 500u, &prepared);
 }
 
 static void kernel_capypkg_maybe_bootstrap(void) {

@@ -43,8 +43,9 @@ static int command_name_matches(const char *input, const char *registered) {
   return *input == '\0' && *registered == '\0';
 }
 
-int x64_kernel_try_shell_command(struct shell_context *ctx,
-                                 int shell_initialized, char *line) {
+int x64_kernel_try_shell_command_result(struct shell_context *ctx,
+                                        int shell_initialized, char *line,
+                                        int *out_rc) {
   if (!ctx || !line || !line[0]) {
     return 0;
   }
@@ -61,7 +62,8 @@ int x64_kernel_try_shell_command(struct shell_context *ctx,
     const struct shell_command *early = shell_commands_extended_early(&early_count);
     for (size_t i = 0; i < early_count; ++i) {
       if (command_name_matches(argv[0], early[i].name)) {
-        (void)early[i].handler(ctx, argc, argv);
+        int rc = early[i].handler(ctx, argc, argv);
+        if (out_rc) *out_rc = rc;
         return 1;
       }
     }
@@ -74,6 +76,7 @@ int x64_kernel_try_shell_command(struct shell_context *ctx,
     for (size_t i = 0; i < ext_count; ++i) {
       if (command_name_matches(argv[0], ext[i].name)) {
         fbcon_print("Command unavailable until shell runtime is initialized.\n");
+        if (out_rc) *out_rc = -1;
         return 1;
       }
     }
@@ -83,6 +86,7 @@ int x64_kernel_try_shell_command(struct shell_context *ctx,
       for (size_t j = 0; j < sets[i].count; ++j) {
         if (command_name_matches(argv[0], sets[i].commands[j].name)) {
           fbcon_print("Command unavailable until shell runtime is initialized.\n");
+          if (out_rc) *out_rc = -1;
           return 1;
         }
       }
@@ -97,7 +101,8 @@ int x64_kernel_try_shell_command(struct shell_context *ctx,
     for (size_t i = 0; i < set_count; ++i) {
       for (size_t j = 0; j < sets[i].count; ++j) {
         if (command_name_matches(argv[0], sets[i].commands[j].name)) {
-          (void)sets[i].commands[j].handler(ctx, argc, argv);
+          int rc = sets[i].commands[j].handler(ctx, argc, argv);
+          if (out_rc) *out_rc = rc;
           return 1;
         }
       }
@@ -110,13 +115,20 @@ int x64_kernel_try_shell_command(struct shell_context *ctx,
     const struct shell_command *ext = shell_commands_extended(&ext_count);
     for (size_t i = 0; i < ext_count; ++i) {
       if (command_name_matches(argv[0], ext[i].name)) {
-        (void)ext[i].handler(ctx, argc, argv);
+        int rc = ext[i].handler(ctx, argc, argv);
+        if (out_rc) *out_rc = rc;
         return 1;
       }
     }
   }
 
   return 0;
+}
+
+int x64_kernel_try_shell_command(struct shell_context *ctx,
+                                 int shell_initialized, char *line) {
+  return x64_kernel_try_shell_command_result(ctx, shell_initialized, line,
+                                             (int *)0);
 }
 
 int x64_kernel_run_shell_alias(struct shell_context *ctx,

@@ -15,17 +15,21 @@
 #   0x48: cr3
 #
 # IRQ-safety contract (M4 phase 2):
-#   - The function disables interrupts on entry via cli so that no
-#     IRQ can fire while we are mid-swap (between saving the old
-#     stack pointer and switching to the new one). The swap is
-#     completed atomically from the perspective of any handler that
-#     might preempt the current task.
-#   - The new task's RFLAGS slot is restored via popfq just before
-#     the final jmpq. If the new task was preempted with IF=1 (the
-#     normal case for any task spawned via task_create which seeds
-#     rflags=0x202), interrupts are re-enabled exactly when control
-#     transfers, leaving no observable window in which the kernel
-#     state is inconsistent AND interrupts are pending.
+#   - The function snapshots RFLAGS before disabling interrupts.  A
+#     voluntary switch can arrive with IF=1, and saving flags after
+#     `cli` would permanently resume that task with IF=0.  `pushfq;
+#     cli; popq` keeps the original flags on the current stack while
+#     closing the interrupt window before any context field is changed.
+#     An IRQ between pushfq and cli is safe: the interrupt frame is
+#     nested below that saved word and iretq returns to the cli.
+#   - The new task's RIP, kernel CS, RFLAGS, RSP and SS are restored together
+#     by iretq.  AMD64 IRETQ unconditionally pops RSP/SS even when CPL does
+#     not change, so a three-slot frame would consume arbitrary task-stack
+#     words and fault on the first kernel-task dispatch.  A popfq+jmp pair
+#     would expose a narrow window with IF=1
+#     after the new stack/registers were installed but before its RIP
+#     was reached; a timer IRQ there could recursively overwrite the
+#     selected task's context.  iretq makes that final transfer atomic.
 #   - When invoked from an IRQ handler that already entered with
 #     IF=0 (interrupt gate semantics), the explicit cli is a no-op
 #     but keeps the function's invariant uniform across callers.
@@ -38,11 +42,13 @@
 .global context_switch
 .type context_switch, @function
 context_switch:
-    # Disable interrupts for the duration of the swap. Must be the
-    # very first instruction so that the old task's IF state has not
-    # already been clobbered by an unexpected IRQ between schedule()
-    # and the start of context_switch.
+    # Capture the caller's flags BEFORE cli.  In particular, preserve IF=1
+    # across a cooperative yield.  Keep this three-instruction sequence at
+    # the entry; tests/test_context_switch.c locks the ordering contract.
+    pushfq
     cli
+    popq %rax
+    movq %rax, 0x40(%rdi)
 
     # Save callee-saved registers into old context
     movq %rsp, 0x00(%rdi)
@@ -56,19 +62,6 @@ context_switch:
     # Save return address as RIP
     leaq 1f(%rip), %rax
     movq %rax, 0x38(%rdi)
-
-    # Save flags. Because the cli above forced IF=0 in the architectural
-    # state, the bit we record here always reflects the IF that the
-    # caller wanted (pushfq is taken AFTER cli and would always observe
-    # IF=0); however for resumption purposes the meaningful IF value is
-    # the one that the new task wants, which we restore further below
-    # via popfq from new_ctx->rflags. Saving here keeps the contract
-    # symmetric and lets a task that enters context_switch with a
-    # well-defined IF observe it again on its next turn through this
-    # routine via the legacy rflags bit pattern.
-    pushfq
-    popq %rax
-    movq %rax, 0x40(%rdi)
 
     # Check if we need to switch address spaces (cr3)
     movq 0x48(%rsi), %rax
@@ -87,16 +80,18 @@ context_switch:
     movq 0x28(%rsi), %r14
     movq 0x30(%rsi), %r15
     movq 0x08(%rsi), %rbp
-    movq 0x00(%rsi), %rsp
+    movq 0x00(%rsi), %rdx
+    movq %rdx, %rsp
 
-    # Restore flags
-    movq 0x40(%rsi), %rax
-    pushq %rax
-    popfq
-
-    # Jump to new task's saved RIP
-    movq 0x38(%rsi), %rax
-    jmpq *%rax
+    # AMD64 IRETQ always pops [RIP, CS, RFLAGS, RSP, SS] in 64-bit mode,
+    # including same-CPL returns.  Seed the full frame in reverse push order;
+    # the target RSP is the value captured before these temporary pushes.
+    pushq $0x10
+    pushq %rdx
+    pushq 0x40(%rsi)
+    pushq $0x08
+    pushq 0x38(%rsi)
+    iretq
 
 1:
     # Old task resumes here after being switched back in
@@ -107,7 +102,7 @@ context_switch:
 # void context_switch_into_first(struct task_context *new_ctx) (M4 phase 8e)
 #
 # One-way jump into a freshly-created task: loads the task's saved
-# regs, RSP, RFLAGS and RIP, then `jmp`s to the entry. The caller's
+# regs and RSP, then restores RFLAGS/RIP atomically with `iretq`. The caller's
 # stack/RIP is intentionally abandoned because there is no "old"
 # context to save into - this is the kernel's bootstrap into the
 # very first task it dispatches.
@@ -148,18 +143,18 @@ context_switch_into_first:
     movq 0x28(%rdi), %r14
     movq 0x30(%rdi), %r15
     movq 0x08(%rdi), %rbp
-    movq 0x00(%rdi), %rsp
+    movq 0x00(%rdi), %rdx
+    movq %rdx, %rsp
 
-    # Restore RFLAGS (typically 0x202 = IF=1 for tasks created via
-    # task_create). This re-enables interrupts at the same instant
-    # control transfers into the task body, mirroring context_switch.
-    movq 0x40(%rdi), %rax
-    pushq %rax
-    popfq
-
-    # Jump to the task entry. Abandoning the boot stack is intentional.
-    movq 0x38(%rdi), %rax
-    jmpq *%rax
+    # Restore the full AMD64 IRETQ frame as one architectural transfer.
+    # Abandoning the boot stack is intentional; RSP is explicitly restored to
+    # the freshly-created task's saved stack after the five fields are popped.
+    pushq $0x10
+    pushq %rdx
+    pushq 0x40(%rdi)
+    pushq $0x08
+    pushq 0x38(%rdi)
+    iretq
 
 .size context_switch_into_first, .-context_switch_into_first
 

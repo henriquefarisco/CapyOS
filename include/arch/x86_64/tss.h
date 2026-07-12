@@ -88,6 +88,10 @@ void tss_set_rsp0(uint64_t rsp0);
  * if the TSS has not been initialised yet. */
 uint64_t tss_get_rsp0(void);
 
+/* Read back IST1, the dedicated double-fault stack top wired by
+ * tss_init() (test/observability). Nonzero after tss_init(). */
+uint64_t tss_get_ist1(void);
+
 /* Encode the low 8 bytes of a 64-bit TSS GDT descriptor pointing
  * at `base` with `limit` bytes. `dpl` is the privilege level
  * (always 0 for kernel TSS). Pure function for host tests. */

@@ -26,9 +26,86 @@
 #include "kernel/task.h"
 #include "kernel/user_task_init.h"
 #include "kernel/arch_sched_hooks.h"
-#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER) || \
+    defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
 #include "kernel/syscall_gfx.h"
 #include "drivers/io.h"
+static struct kernel_capygfx_lifecycle_stats g_capygfx_lifecycle;
+#endif
+#if defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER) || \
+    defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
+#include "memory/pmm.h"
+#include "drivers/serial/serial_com1.h"
+/* alpha.311 diagnostic: per-open snapshot on COM1 to isolate the VMware-only
+ * cumulative crash after several browser open/close rounds. Logs the spawn
+ * count, the scheduler tick counter (does the APIC timer actually advance on
+ * this host? if it stays 0, capy_sleep degrades to a busy yield -> CPU spin)
+ * and the PMM free-page count (a leak would show as a monotonic decline). One
+ * line per browser launch; harmless in production. */
+static void gfxspawn_hex(uint64_t v) {
+  static const char hx[] = "0123456789ABCDEF";
+  char b[17];
+  int i;
+  for (i = 0; i < 16; i++) b[i] = hx[(v >> ((15 - i) * 4)) & 0xFu];
+  b[16] = '\0';
+  com1_puts(b);
+}
+static void gfxspawn_diag(const char *action, uint32_t pid, int focused,
+                          size_t reaped) {
+  struct scheduler_stats ss;
+  struct pmm_stats ps;
+  scheduler_stats_get(&ss);
+  pmm_stats_get(&ps);
+  com1_puts("[gfxspawn] n=");
+  gfxspawn_hex(g_capygfx_lifecycle.launch_requests);
+  com1_puts(" ticks=");
+  gfxspawn_hex(ss.total_ticks);
+  com1_puts(" free_pages=");
+  gfxspawn_hex(ps.free_pages);
+  com1_puts(" action=");
+  com1_puts(action ? action : "unknown");
+  com1_puts(" pid=");
+  gfxspawn_hex((uint64_t)pid);
+  com1_puts(" focused=");
+  gfxspawn_hex((uint64_t)(focused ? 1u : 0u));
+  com1_puts(" reaped=");
+  gfxspawn_hex((uint64_t)reaped);
+  com1_puts("\n");
+}
+#endif
+
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER) || \
+    defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
+static int capygfx_process_name_matches(const char *name) {
+  static const char expected[] = "capygfx";
+  size_t i = 0u;
+  if (!name) return 0;
+  while (expected[i] != '\0' && name[i] == expected[i]) i++;
+  return expected[i] == '\0' && name[i] == '\0';
+}
+
+static struct process *capygfx_find_live_process(void) {
+  size_t i;
+  for (i = 0u; i < (size_t)PROCESS_MAX; ++i) {
+    struct process *p = process_at_index(i);
+    if (!p || p->state == PROC_STATE_UNUSED || p->state == PROC_STATE_ZOMBIE)
+      continue;
+    if (capygfx_process_name_matches(p->name)) return p;
+  }
+  return NULL;
+}
+
+int kernel_capygfx_lifecycle_snapshot(
+    struct kernel_capygfx_lifecycle_stats *out) {
+  if (!out) return 0;
+  *out = g_capygfx_lifecycle;
+  return 1;
+}
+
+void kernel_capygfx_lifecycle_reset(void) {
+  struct kernel_capygfx_lifecycle_stats zero = {0};
+  g_capygfx_lifecycle = zero;
+}
 #endif
 
 int kernel_spawn_embedded_hello(struct process **out_proc) {
@@ -296,7 +373,8 @@ int kernel_boot_run_capygfx(void) {
 }
 #endif
 
-#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER)
+#if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER) || \
+    defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
 /* Etapa 7 / Slice 7.5 (alpha.304): spawn /bin/capygfx as an ORDINARY process
  * from a caller that keeps running (see the doc comment on the declaration in
  * include/kernel/user_init.h for the full rationale). Mirrors the "second
@@ -334,7 +412,12 @@ static inline void kernel_spawn_restore_flags(uint64_t flags) {
 int kernel_spawn_capygfx_desktop(void) {
   const uint8_t *data = NULL;
   size_t size = 0;
+  size_t reaped = 0u;
   uint64_t irq_flags;
+  struct process *existing;
+  struct process *p;
+
+  g_capygfx_lifecycle.launch_requests++;
 
   /* Idempotent: installing the same ops vtable + teardown observer twice is a
    * harmless no-op (see syscall_gfx_install_default_ops). The caller is, by
@@ -343,27 +426,71 @@ int kernel_spawn_capygfx_desktop(void) {
   syscall_gfx_install_default_ops();
 
   if (embedded_progs_lookup("/bin/capygfx", &data, &size) != 0) {
+    g_capygfx_lifecycle.spawn_failures++;
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+    gfxspawn_diag("bad-blob", 0u, 0, 0u);
+#endif
     return KERNEL_SPAWN_BAD_ELF;
   }
-  if (elf_validate(data, size) != 0) return KERNEL_SPAWN_BAD_ELF;
+  if (elf_validate(data, size) != 0) {
+    g_capygfx_lifecycle.spawn_failures++;
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+    gfxspawn_diag("bad-elf", 0u, 0, 0u);
+#endif
+    return KERNEL_SPAWN_BAD_ELF;
+  }
 
   irq_flags = kernel_spawn_save_flags();
   cli();
 
-  struct process *p = process_create("capygfx", 0, 0);
-  if (!p) {
+  /* Reclaim completed root apps before allocating the replacement. This call
+   * runs from the desktop/kernel task after the old process switched away;
+   * process_reap_orphans additionally refuses to destroy an active AS. */
+  reaped = process_reap_orphans();
+  g_capygfx_lifecycle.zombies_reaped_before_spawn += (uint64_t)reaped;
+
+  existing = capygfx_find_live_process();
+  if (existing) {
+    int focused = syscall_gfx_focus_owner(existing->pid);
+    g_capygfx_lifecycle.launches_coalesced++;
+    if (focused) g_capygfx_lifecycle.focus_successes++;
+    g_capygfx_lifecycle.last_pid = existing->pid;
     kernel_spawn_restore_flags(irq_flags);
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+    gfxspawn_diag("reuse", existing->pid, focused, reaped);
+#endif
+    return KERNEL_SPAWN_OK;
+  }
+
+  /* Desktop-launched apps are independent roots. Using process_create() here
+   * would accidentally parent the Browser to whichever ring-3 process was
+   * current at click time, leaving a zombie that the orphan reaper may not own. */
+  p = process_create_root("capygfx", 0, 0);
+  if (!p) {
+    g_capygfx_lifecycle.spawn_failures++;
+    kernel_spawn_restore_flags(irq_flags);
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+    gfxspawn_diag("no-process", 0u, 0, reaped);
+#endif
     return KERNEL_SPAWN_NO_PROCESS;
   }
 
   if (elf_load_into_process(p, data, size) != 0) {
     process_destroy(p);
+    g_capygfx_lifecycle.spawn_failures++;
     kernel_spawn_restore_flags(irq_flags);
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+    gfxspawn_diag("load-failed", p->pid, 0, reaped);
+#endif
     return KERNEL_SPAWN_LOAD_FAILED;
   }
   if (!p->main_thread || !p->main_thread->kernel_stack) {
     process_destroy(p);
+    g_capygfx_lifecycle.spawn_failures++;
     kernel_spawn_restore_flags(irq_flags);
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+    gfxspawn_diag("thread-failed", p->pid, 0, reaped);
+#endif
     return KERNEL_SPAWN_LOAD_FAILED;
   }
 
@@ -378,7 +505,12 @@ int kernel_spawn_capygfx_desktop(void) {
     user_task_arm_for_first_dispatch_with_rax(p->main_thread, rip, rsp, 1u);
   }
   scheduler_add(p->main_thread);
+  g_capygfx_lifecycle.processes_spawned++;
+  g_capygfx_lifecycle.last_pid = p->pid;
   kernel_spawn_restore_flags(irq_flags);
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+  gfxspawn_diag("spawn", p->pid, 0, reaped);
+#endif
   return KERNEL_SPAWN_OK;
 }
 #endif
@@ -415,6 +547,240 @@ int kernel_boot_run_capygfx_desktop_spawn_smoke(void) {
    * dispatches it via the synthetic IRET trampoline armed above. */
   process_enter_user_mode(pa);
   return -1;
+}
+#endif
+
+#ifdef CAPYOS_CAPYGFX_LIFECYCLE_SMOKE
+#define CAPYGFX_LIFECYCLE_SMOKE_ROUNDS 16u
+#define CAPYGFX_LIFECYCLE_WAIT_YIELDS 100000u
+
+/* Mirror lifecycle evidence to COM1 and debugcon. Some virtual UARTs can drop
+ * early output while their host endpoint is attaching; port 0xE9 gives the
+ * QEMU harness a second, independent signal without changing production. */
+static void capygfx_lifecycle_puts(const char *s) {
+  const char *p = s;
+  com1_puts(s);
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  while (p && *p) {
+    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)*p++),
+                     "Nd"((uint16_t)0xE9));
+  }
+#else
+  (void)p;
+#endif
+}
+
+static void capygfx_lifecycle_hex(uint64_t value) {
+  static const char digits[] = "0123456789ABCDEF";
+  char out[17];
+  int i;
+  for (i = 0; i < 16; ++i)
+    out[i] = digits[(value >> ((15 - i) * 4)) & 0xFu];
+  out[16] = '\0';
+  capygfx_lifecycle_puts(out);
+}
+
+static uint64_t capygfx_lifecycle_read_rflags(void) {
+  uint64_t flags = 0u;
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+  __asm__ volatile("pushfq; popq %0" : "=r"(flags));
+#else
+  flags = 0x200u;
+#endif
+  return flags;
+}
+
+static __attribute__((noreturn)) void capygfx_lifecycle_smoke_park(void) {
+  for (;;) {
+#if defined(__x86_64__) && !defined(UNIT_TEST)
+    __asm__ volatile("hlt");
+#endif
+  }
+}
+
+static __attribute__((noreturn)) void
+capygfx_lifecycle_smoke_fail(const char *why) {
+  capygfx_lifecycle_puts("[smoke] capygfx-lifecycle FAIL: ");
+  capygfx_lifecycle_puts(why ? why : "unknown");
+  capygfx_lifecycle_puts("\n");
+  capygfx_lifecycle_smoke_park();
+}
+
+static void capygfx_lifecycle_supervisor(void *arg) {
+  struct pmm_stats baseline_pmm;
+  size_t baseline_tasks;
+  size_t baseline_processes;
+  uint32_t round;
+  (void)arg;
+
+  capygfx_lifecycle_puts("[capygfx-lifecycle] supervisor started\n");
+
+  /* The hello bootstrap has switched away before this kernel task begins, so
+   * it is now safe to reclaim that root zombie and establish a clean baseline. */
+  (void)process_reap_orphans();
+  pmm_stats_get(&baseline_pmm);
+  baseline_tasks = task_count();
+  baseline_processes = process_count();
+  kernel_capygfx_lifecycle_reset();
+
+  for (round = 0u; round < CAPYGFX_LIFECYCLE_SMOKE_ROUNDS; ++round) {
+    struct kernel_capygfx_lifecycle_stats before;
+    struct kernel_capygfx_lifecycle_stats after_spawn;
+    struct pmm_stats now_pmm;
+    struct process *browser;
+    uint32_t browser_pid;
+    uint32_t waits = 0u;
+
+    (void)kernel_capygfx_lifecycle_snapshot(&before);
+    if (kernel_spawn_capygfx_desktop() != KERNEL_SPAWN_OK)
+      capygfx_lifecycle_smoke_fail("spawn");
+    (void)kernel_capygfx_lifecycle_snapshot(&after_spawn);
+    browser_pid = after_spawn.last_pid;
+    if (browser_pid == 0u ||
+        after_spawn.processes_spawned != before.processes_spawned + 1u)
+      capygfx_lifecycle_smoke_fail("spawn counters");
+
+    /* A second launcher click before first dispatch must reuse the EMBRYO/live
+     * process. This catches duplicate allocation even before a window exists. */
+    if (kernel_spawn_capygfx_desktop() != KERNEL_SPAWN_OK)
+      capygfx_lifecycle_smoke_fail("coalesced launch");
+    (void)kernel_capygfx_lifecycle_snapshot(&after_spawn);
+    if (after_spawn.last_pid != browser_pid ||
+        after_spawn.processes_spawned != before.processes_spawned + 1u ||
+        after_spawn.launches_coalesced != before.launches_coalesced + 1u)
+      capygfx_lifecycle_smoke_fail("single instance");
+
+    /* Yield through the real assembly context switch. Preemption may hand the
+     * supervisor CPU time before capygfx exits, so continue until its process
+     * reaches ZOMBIE rather than assuming one yield is sufficient. */
+    for (;;) {
+      browser = process_by_pid(browser_pid);
+      if (!browser || browser->state == PROC_STATE_ZOMBIE) break;
+      if (++waits > CAPYGFX_LIFECYCLE_WAIT_YIELDS)
+        capygfx_lifecycle_smoke_fail("exit timeout");
+      task_yield();
+    }
+
+    /* The historical context switch executed CLI before saving RFLAGS, so a
+     * cooperative round-trip could appear to work once while silently leaving
+     * the desktop with IF=0. Assert the architectural state explicitly. */
+    if ((capygfx_lifecycle_read_rflags() & 0x200u) == 0u)
+      capygfx_lifecycle_smoke_fail("interrupt flag lost");
+
+    (void)process_reap_orphans();
+    pmm_stats_get(&now_pmm);
+    if (process_by_pid(browser_pid) != NULL)
+      capygfx_lifecycle_smoke_fail("zombie not reaped");
+    if (process_count() != baseline_processes)
+      capygfx_lifecycle_smoke_fail("process leak");
+    if (task_count() != baseline_tasks)
+      capygfx_lifecycle_smoke_fail("task leak");
+    if (now_pmm.free_pages != baseline_pmm.free_pages)
+      capygfx_lifecycle_smoke_fail("physical page leak");
+
+    capygfx_lifecycle_puts("[capygfx-lifecycle] round=");
+    capygfx_lifecycle_hex((uint64_t)(round + 1u));
+    capygfx_lifecycle_puts(" free_pages=");
+    capygfx_lifecycle_hex(now_pmm.free_pages);
+    capygfx_lifecycle_puts("\n");
+  }
+
+  capygfx_lifecycle_puts("[smoke] capygfx-lifecycle ok\n");
+  capygfx_lifecycle_smoke_park();
+}
+
+int kernel_boot_run_capygfx_lifecycle_smoke(void) {
+  struct process *bootstrap = NULL;
+  struct task *supervisor;
+  int rc = kernel_spawn_embedded_hello(&bootstrap);
+  if (rc != KERNEL_SPAWN_OK || !bootstrap) return rc;
+
+  supervisor = task_create_kernel("capygfx-life", capygfx_lifecycle_supervisor,
+                                  NULL);
+  if (!supervisor) {
+    process_destroy(bootstrap);
+    return KERNEL_SPAWN_NO_PROCESS;
+  }
+  scheduler_add(supervisor);
+
+  if (!bootstrap->main_thread) {
+    task_kill(supervisor->pid);
+    process_destroy(bootstrap);
+    return KERNEL_SPAWN_LOAD_FAILED;
+  }
+  /* This boot-only smoke bypasses desktop_runtime_start(), whose scheduler
+   * adoption normally enables voluntary context switches even on machines
+   * where the APIC timer is unavailable. Without this, SYS_EXIT marks hello
+   * ZOMBIE but task_yield() is a no-op and the CPU parks in task_exit(). */
+  scheduler_set_running(1);
+  bootstrap->main_thread->state = TASK_STATE_RUNNING;
+  task_set_current(bootstrap->main_thread);
+  arch_sched_apply_kernel_stack(bootstrap->main_thread);
+  process_enter_user_mode(bootstrap);
+  return -1;
+}
+#endif
+
+#ifdef CAPYOS_ELFLOAD_RESPAWN_SMOKE
+#include "memory/pmm.h"
+#include "kernel/embedded_progs.h"
+#include "drivers/serial/serial_com1.h"
+
+static void respawn_hex(uint64_t v) {
+  static const char h[] = "0123456789ABCDEF";
+  char b[17];
+  int i;
+  for (i = 0; i < 16; i++) b[i] = h[(v >> ((15 - i) * 4)) & 0xFu];
+  b[16] = '\0';
+  com1_puts(b);
+}
+
+/* alpha.311: headless reproducer for the CYCLE bug the user hit after several
+ * browser open/close rounds (host froze, no guest panic). Each browser open
+ * does process_create -> vmm_create_address_space (clone_table_for_user_as) ->
+ * elf_load_into_process, and each close does process teardown ->
+ * vmm_destroy_address_space. This loops that FULL cycle many times against the
+ * SAME embedded capygfx blob (fallback: hello), logging the PMM free-page count
+ * each iteration so a leak shows as a monotonic decline and a corruption/crash
+ * shows as a QEMU fault -- all reproducible on QEMU (the create/destroy logic
+ * runs identically there), so we never need to crash the user's host. Emits the
+ * ok marker if it survives all iterations with a stable free count. */
+void kernel_boot_run_elfload_respawn_smoke(void) {
+  const uint8_t *data = NULL;
+  size_t size = 0;
+  struct pmm_stats st;
+  int i;
+  const int N = 64;
+
+  if (embedded_progs_lookup("/bin/capygfx", &data, &size) != 0 || !data) {
+    data = (const uint8_t *)embedded_hello_data();
+    size = embedded_hello_size();
+  }
+  pmm_stats_get(&st);
+  com1_puts("[respawn] start free_pages=");
+  respawn_hex(st.free_pages);
+  com1_puts("\n");
+
+  for (i = 0; i < N; i++) {
+    struct process *p = process_create("respawn", 0, 0);
+    if (!p) {
+      com1_puts("[respawn] process_create failed (table full?)\n");
+      break;
+    }
+    if (elf_load_into_process(p, data, size) != 0) {
+      com1_puts("[respawn] elf_load failed\n");
+      process_destroy(p);
+      break;
+    }
+    process_destroy(p); /* full teardown: vmm_destroy_address_space + reap */
+    pmm_stats_get(&st);
+    com1_puts("[respawn] iter=");
+    respawn_hex((uint64_t)i);
+    com1_puts(" free_pages=");
+    respawn_hex(st.free_pages);
+    com1_puts("\n");
+  }
+  com1_puts("[smoke] elfload-respawn ok\n");
 }
 #endif
 

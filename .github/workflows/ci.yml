@@ -50,15 +50,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Checkout CapyUI sibling
+      - name: Checkout pinned release siblings
         shell: bash
-        run: |
-          CAPYUI_REF=main
-          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
-            CAPYUI_REF=develop
-          fi
-          git clone --depth 1 --branch "$CAPYUI_REF" \
-            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+        env:
+          CAPYAI_DEPLOY_KEY: ${{ secrets.CAPYAI_DEPLOY_KEY }}
+        run: bash tools/scripts/checkout_release_siblings.sh
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -79,6 +75,10 @@ jobs:
       - name: Check dependencies
         run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
 
+      - name: Verify pinned graphical browser build plan
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh plan
+
       - name: Run host and release gates
         run: |
           make test
@@ -88,6 +88,10 @@ jobs:
           make all64 TOOLCHAIN64=host
           make iso-uefi TOOLCHAIN64=host
           make verify-release-checksums TOOLCHAIN64=host
+
+      - name: Verify linked graphical browser siblings
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh linked
 
       - name: Resolve ISO path
         id: iso
@@ -120,15 +124,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Checkout CapyUI sibling
+      - name: Checkout pinned release siblings
         shell: bash
-        run: |
-          CAPYUI_REF=main
-          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
-            CAPYUI_REF=develop
-          fi
-          git clone --depth 1 --branch "$CAPYUI_REF" \
-            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+        env:
+          CAPYAI_DEPLOY_KEY: ${{ secrets.CAPYAI_DEPLOY_KEY }}
+        run: bash tools/scripts/checkout_release_siblings.sh
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -151,8 +151,16 @@ jobs:
       - name: Check dependencies
         run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
 
+      - name: Verify pinned graphical browser build plan
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh plan
+
       - name: Run ISO install smoke
         run: make smoke-x64-iso TOOLCHAIN64=host
+
+      - name: Verify linked graphical browser siblings
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh linked
 
       - name: Upload smoke logs
         if: always()
@@ -181,15 +189,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Checkout CapyUI sibling
+      - name: Checkout pinned release siblings
         shell: bash
-        run: |
-          CAPYUI_REF=main
-          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
-            CAPYUI_REF=develop
-          fi
-          git clone --depth 1 --branch "$CAPYUI_REF" \
-            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+        env:
+          CAPYAI_DEPLOY_KEY: ${{ secrets.CAPYAI_DEPLOY_KEY }}
+        run: bash tools/scripts/checkout_release_siblings.sh
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -212,8 +216,16 @@ jobs:
       - name: Check dependencies
         run: python3 tools/scripts/check_deps.py --allow-fallback-toolchain
 
+      - name: Verify pinned graphical browser build plan
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh plan
+
       - name: Run apps-basic-roundtrip QEMU marker gate
         run: make smoke-x64-qemu-apps-basic-roundtrip TOOLCHAIN64=host
+
+      - name: Verify linked graphical browser siblings
+        shell: bash
+        run: bash tools/scripts/verify_release_siblings.sh linked
 
       - name: Upload smoke logs
         if: always()

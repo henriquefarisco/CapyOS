@@ -1,12 +1,17 @@
 #include "internal/http_internal.h"
 
 int g_http_last_error = HTTP_OK;
+int g_http_last_status_code = 0;
 
 http_progress_fn g_http_progress_fn = NULL;
 void *g_http_progress_ctx = NULL;
 
 int http_last_error(void) {
   return g_http_last_error;
+}
+
+int http_last_status_code(void) {
+  return g_http_last_status_code;
 }
 
 void http_set_progress_observer(http_progress_fn fn, void *ctx) {
@@ -31,6 +36,8 @@ const char *http_error_string(int error) {
     case HTTP_ERR_NO_MEMORY: return "out of memory";
     case HTTP_ERR_REDIRECT_LIMIT: return "too many redirects";
     case HTTP_ERR_BAD_REDIRECT: return "invalid redirect target";
+    case HTTP_ERR_STATUS: return "unexpected http status";
+    case HTTP_ERR_DESTINATION_TOO_SMALL: return "download buffer too small";
     default: return "network error";
   }
 }
@@ -39,7 +46,13 @@ void http_store_headers(const char *headers, size_t len,
                         struct http_response *resp) {
   size_t pos = 0;
   if (!headers || !resp) return;
+  resp->header_count = 0;
   resp->location[0] = '\0';
+  resp->content_length = 0;
+  resp->content_length_present = 0;
+  resp->connection_close = 0;
+  resp->connection_keep_alive = 0;
+  resp->chunked = 0;
   while (pos + 1 < len) {
     if (headers[pos] == '\r' && headers[pos + 1] == '\n') {
       pos += 2;
@@ -47,11 +60,14 @@ void http_store_headers(const char *headers, size_t len,
     }
     pos++;
   }
-  while (pos + 1 < len && resp->header_count < HTTP_MAX_HEADERS) {
+  /* Parse every header line.  Only the generic headers[] collection is
+   * bounded; framing and connection metadata below must not disappear just
+   * because a server placed it after the first HTTP_MAX_HEADERS fields. */
+  while (pos + 1 < len) {
     size_t line_start = pos;
     size_t line_end = pos;
     size_t colon = 0;
-    struct http_header *hdr = NULL;
+    struct http_header parsed;
     if (headers[pos] == '\r' && headers[pos + 1] == '\n') break;
     while (line_end + 1 < len &&
            !(headers[line_end] == '\r' && headers[line_end + 1] == '\n')) {
@@ -64,12 +80,15 @@ void http_store_headers(const char *headers, size_t len,
       size_t value_start = colon + 1;
       size_t full_value_len = 0;
       size_t value_len = 0;
+      size_t name_copy_len = name_len;
       while (value_start < line_end && headers[value_start] == ' ') value_start++;
       full_value_len = line_end - value_start;
       value_len = full_value_len;
-      hdr = &resp->headers[resp->header_count++];
-      if (name_len >= sizeof(hdr->name)) name_len = sizeof(hdr->name) - 1;
-      if (value_len >= sizeof(hdr->value)) value_len = sizeof(hdr->value) - 1;
+      http_memset(&parsed, 0, sizeof(parsed));
+      if (name_copy_len >= sizeof(parsed.name)) {
+        name_copy_len = sizeof(parsed.name) - 1;
+      }
+      if (value_len >= sizeof(parsed.value)) value_len = sizeof(parsed.value) - 1;
       /* Strip non-printable bytes from header name and value during
        * storage. RFC 7230 §3.2.6 forbids control characters in
        * field-content; some real servers emit them anyway and a
@@ -81,18 +100,31 @@ void http_store_headers(const char *headers, size_t len,
        * with '?' so the header text remains readable and length-
        * stable for downstream parsers that already key on prefixes
        * (Content-Length digits, "chunked" substring, etc). */
-      for (size_t i = 0; i < name_len; i++) {
+      for (size_t i = 0; i < name_copy_len; i++) {
         unsigned char nc = (unsigned char)headers[line_start + i];
-        hdr->name[i] = (nc <= 0x20u || nc == 0x7Fu) ? '?' : (char)nc;
+        parsed.name[i] = (nc <= 0x20u || nc == 0x7Fu) ? '?' : (char)nc;
       }
-      hdr->name[name_len] = '\0';
+      parsed.name[name_copy_len] = '\0';
       for (size_t i = 0; i < value_len; i++) {
         unsigned char vc = (unsigned char)headers[value_start + i];
-        hdr->value[i] = (vc < 0x20u || vc == 0x7Fu) ? '?' : (char)vc;
+        parsed.value[i] = (vc < 0x20u || vc == 0x7Fu) ? '?' : (char)vc;
       }
-      hdr->value[value_len] = '\0';
-      if (http_streq_ci(hdr->name, "Transfer-Encoding") &&
-          http_contains_ci(hdr->value, "chunked")) {
+      parsed.value[value_len] = '\0';
+
+      if (http_streq_ci(parsed.name, "Content-Length")) {
+        resp->content_length = http_parse_content_length(parsed.value);
+        resp->content_length_present = 1;
+      }
+      if (http_streq_ci(parsed.name, "Connection")) {
+        if (http_contains_ci(parsed.value, "close")) {
+          resp->connection_close = 1;
+        }
+        if (http_contains_ci(parsed.value, "keep-alive")) {
+          resp->connection_keep_alive = 1;
+        }
+      }
+      if (http_streq_ci(parsed.name, "Transfer-Encoding") &&
+          http_contains_ci(parsed.value, "chunked")) {
         resp->chunked = 1;
       }
       /* Capture the full Location header value into the dedicated
@@ -106,7 +138,7 @@ void http_store_headers(const char *headers, size_t len,
        * would close the connection without responding, and the
        * caller would see HTTP_ERR_RECV (rc=-6 "response receive
        * failed") with no actionable diagnostic. */
-      if (http_streq_ci(hdr->name, "Location") &&
+      if (http_streq_ci(parsed.name, "Location") &&
           resp->location[0] == '\0') {
         size_t loc_len = full_value_len;
         if (loc_len >= sizeof(resp->location)) {
@@ -117,6 +149,9 @@ void http_store_headers(const char *headers, size_t len,
           resp->location[i] = (vc < 0x20u || vc == 0x7Fu) ? '?' : (char)vc;
         }
         resp->location[loc_len] = '\0';
+      }
+      if (resp->header_count < HTTP_MAX_HEADERS) {
+        resp->headers[resp->header_count++] = parsed;
       }
     }
     pos = line_end;
