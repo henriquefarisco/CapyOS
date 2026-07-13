@@ -57,4 +57,13 @@ static inline int elf_vaddr_in_user_range(uint64_t vaddr, uint64_t memsz,
   return 1;
 }
 
+/* Initial entry stack for the capylibc `_start` symbol. `_start` is entered
+ * without a return address and immediately executes `call main`; therefore
+ * RSP must be 16-byte aligned here so main observes the SysV-required
+ * RSP%%16==8 after CALL pushes eight bytes. Subtracting a fake return slot at
+ * process entry inverts the alignment and makes aligned SIMD spills #GP. */
+static inline uint64_t elf_initial_user_rsp(uint64_t stack_top) {
+  return stack_top & ~(uint64_t)0xFu;
+}
+
 #endif /* KERNEL_ELF_BOUNDS_H */

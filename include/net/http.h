@@ -73,6 +73,10 @@ struct http_response {
   int connection_close;
   int connection_keep_alive;
   int chunked;
+  /* The transport delivered a valid prefix but the caller's bounded body
+   * buffer was full.  Consumers may render that prefix in compatibility mode,
+   * but caches must never persist it as a complete representation. */
+  int truncated;
 };
 
 struct http_request {

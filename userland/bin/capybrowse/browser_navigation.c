@@ -374,6 +374,7 @@ static void bn_commit_document(struct browser_navigation *nav, const char *url,
   nav->body = resp->body;
   nav->body_len = resp->body_len;
   bn_copy_content_type(nav, resp->content_type);
+  nav->document_truncated = resp->truncated ? 1 : 0;
   nav->state = BROWSER_NAVIGATION_READY;
   nav->document_generation++;
 }
@@ -429,7 +430,12 @@ static int bn_load(struct browser_navigation *nav, const char *start_url,
       return -1;
     }
     nav->last_http_status = resp.status_code;
-    if (resp.truncated) {
+    /* A syntactically valid non-empty prefix is useful for static HTML.  Keep
+     * following redirects from their complete headers, then commit a partial
+     * final 2xx document in compatibility mode instead of converting bounded
+     * memory into a navigation failure. */
+    if (resp.truncated && resp.body_len == 0u &&
+        resp.status_code >= 200 && resp.status_code < 300) {
       nav->state = BROWSER_NAVIGATION_TOO_LARGE;
       return -1;
     }
@@ -491,6 +497,7 @@ void browser_navigation_init(struct browser_navigation *nav) {
   nav->last_fetch_error = 0;
   nav->last_redirect_count = 0u;
   nav->document_generation = 0u;
+  nav->document_truncated = 0;
 }
 
 static void bn_history_push(struct browser_navigation *nav, const char *url) {

@@ -164,12 +164,45 @@ static void test_navigation_sync(void) {
                                          BROWSER_NAVIGATION_READY &&
             toolbar.http_status == 200,
         "READY sync updates URL, buttons and status");
+  toolbar.address_focused = 1;
+  toolbar.select_all = 1;
+  CHECK(capygfx_toolbar_key(&toolbar, 'x') == CAPYGFX_TOOLBAR_ACTION_NONE &&
+            strcmp(toolbar.address, "x") == 0,
+        "focused address accepts replacement typing");
+  capygfx_toolbar_sync_navigation(&toolbar, &nav);
+  CHECK(strcmp(toolbar.address, "x") == 0 && toolbar.address_focused,
+        "READY repaint preserves focused address edits");
+  CHECK(capygfx_toolbar_key(&toolbar, '\b') == CAPYGFX_TOOLBAR_ACTION_NONE &&
+            strcmp(toolbar.address, "") == 0,
+        "focused address accepts backspace deletion");
+  capygfx_toolbar_sync_navigation(&toolbar, &nav);
+  CHECK(strcmp(toolbar.address, "") == 0,
+        "READY repaint preserves focused deletion");
+  toolbar.address_focused = 0;
+  capygfx_toolbar_sync_navigation(&toolbar, &nav);
+  CHECK(strcmp(toolbar.address, nav.current_url) == 0,
+        "unfocused READY sync restores canonical URL");
   nav.state = BROWSER_NAVIGATION_FETCH_ERROR;
   strcpy(nav.attempted_url, "https://failed.example/");
   capygfx_toolbar_sync_navigation(&toolbar, &nav);
   CHECK(strcmp(toolbar.address, "https://ready.example/") == 0 &&
             toolbar.navigation_state == BROWSER_NAVIGATION_FETCH_ERROR,
         "error sync preserves editable/current address");
+}
+
+static void test_status_detail_is_bounded(void) {
+  struct capygfx_toolbar toolbar;
+  char long_detail[CAPYGFX_TOOLBAR_DETAIL_MAX + 32u];
+  size_t i;
+  capygfx_toolbar_init(&toolbar);
+  for (i = 0u; i + 1u < sizeof(long_detail); ++i) long_detail[i] = 'x';
+  long_detail[sizeof(long_detail) - 1u] = '\0';
+  capygfx_toolbar_set_detail(&toolbar, long_detail);
+  CHECK(toolbar.detail[CAPYGFX_TOOLBAR_DETAIL_MAX - 1u] == '\0' &&
+            strlen(toolbar.detail) == CAPYGFX_TOOLBAR_DETAIL_MAX - 1u,
+        "status detail is bounded and terminated");
+  capygfx_toolbar_set_detail(&toolbar, NULL);
+  CHECK(toolbar.detail[0] == '\0', "NULL status detail clears message");
 }
 
 static void test_draw_is_bounded(void) {
@@ -270,6 +303,7 @@ int main(void) {
   test_layout_and_hitboxes();
   test_editing();
   test_navigation_sync();
+  test_status_detail_is_bounded();
   test_draw_is_bounded();
   test_link_hit_test();
   printf("[capygfx-toolbar] %d checks, %d failures\n", g_runs, g_failures);

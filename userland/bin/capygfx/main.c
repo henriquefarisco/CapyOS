@@ -147,9 +147,13 @@ static const char g_html[] =
 #ifdef CAPYGFX_DESKTOP_INTERACTIVE
 #define CAPYGFX_W 640u
 #define CAPYGFX_H 480u
+#define CAPYGFX_FB_MAX_W 1920u
+#define CAPYGFX_FB_MAX_H 1080u
 #else
 #define CAPYGFX_W 320u
 #define CAPYGFX_H 240u
+#define CAPYGFX_FB_MAX_W CAPYGFX_W
+#define CAPYGFX_FB_MAX_H CAPYGFX_H
 #endif
 
 /* Etapa 7 / Slice 7.5 (alpha.304): OPT-IN interactive-desktop-launch mode. OFF
@@ -187,7 +191,10 @@ static int capygfx_poll_budget_remaining(unsigned int iterations) {
 
 /* Composition buffer in .bss (zeroed by the loader): the app owns these pixels
  * and hands them to the kernel via a bounds-checked blit. */
-static unsigned int g_fb[CAPYGFX_W * CAPYGFX_H];
+/* Production keeps enough retained pixel storage for resize/maximize on the
+ * supported desktop resolutions.  BSS does not inflate the embedded ELF file;
+ * it is committed only in the browser process address space. */
+static unsigned int g_fb[CAPYGFX_FB_MAX_W * CAPYGFX_FB_MAX_H];
 
 static unsigned long cb_strlen(const char *s) {
   unsigned long n = 0ul;
@@ -195,6 +202,7 @@ static unsigned long cb_strlen(const char *s) {
   return n;
 }
 static void cb_print(const char *s) { capy_write(1, s, cb_strlen(s)); }
+static void cb_error(const char *s) { capy_write(2, s, cb_strlen(s)); }
 
 static void fail(const char *why) {
   cb_print("capygfx: FAIL ");
@@ -244,7 +252,23 @@ int main(int rank) {
 #if defined(CAPYGFX_DESKTOP_INTERACTIVE) && \
     defined(CAPYOS_HAVE_CAPYBROWSER_CORE) && defined(CAPYOS_HAVE_CAPYGFX_NET)
   if (capygfx_browser_run(win, g_fb, CAPYGFX_W, CAPYGFX_H) != 0)
-    fail("browser runtime");
+  {
+    /* A transient fetch/render/input error must not look like the user closed
+     * the Browser.  Keep the already-created window alive; relaunch/focus and
+     * the toolbar remain available instead of process teardown making the app
+     * disappear.  Only an explicit compositor CLOSE ends the process. */
+    cb_error("[capybrowser] runtime degradado; verificando janela\n");
+    for (;;) {
+      struct capy_gfx_event recover_ev;
+      int recover_poll = capy_window_poll_event((int)win, &recover_ev);
+      if (recover_poll > 0 && recover_ev.kind == CAPY_GFX_EV_CLOSE) break;
+      if (recover_poll < 0) {
+        cb_error("[capybrowser] janela perdida; encerrando processo com log\n");
+        break;
+      }
+      capy_sleep(CAPYGFX_DESKTOP_POLL_SLEEP_TICKS);
+    }
+  }
   cb_print("capygfx: browser window closed\n");
   capy_exit(0);
   return 0;

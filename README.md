@@ -7,7 +7,7 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.8.0-alpha.313` (build `0.8.0-alpha.313+20260712`; canal `alpha`; ver `VERSION.yaml`)
+Versao de referencia: `0.8.0-alpha.314` (build `0.8.0-alpha.314+20260713`; canal `alpha`; ver `VERSION.yaml`)
 
 ## Destaques
 

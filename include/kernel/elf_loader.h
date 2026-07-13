@@ -65,9 +65,11 @@ int elf_load(struct vmm_address_space *as, const uint8_t *data, size_t size,
              struct elf_load_result *result);
 
 /* High-level helper that loads an ELF image already resident in
- * memory into `proc`. After the segments are mapped, allocates a
- * 16-page user stack at VMM_USER_STACK and writes the entry point
- * into `proc->main_thread->context.rip` (RSP -> stack_top - 8).
+ * memory into `proc`. After the segments are mapped, allocates 16 eager pages
+ * plus 240 demand pages (1 MiB total, RW+NX) below VMM_USER_STACK and writes
+ * the entry point into `proc->main_thread->context.rip`. RSP is 16-byte
+ * aligned at `_start`; its immediate CALL then gives main the SysV-required
+ * RSP%%16 == 8.
  *
  * Returns 0 on success, < 0 on any failure (invalid ELF, OOM,
  * missing main_thread). The caller is responsible for choosing

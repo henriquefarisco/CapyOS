@@ -36,6 +36,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "capylibc-net/capy_net_error.h"
 
 /* libcapy-tls types for the network diagnostic below: capy_net_diagnose_stage
  * combines the net error with the TLS state, since TLS handshake/cert failures
@@ -324,34 +325,18 @@ int capy_http_parse_headers(const char *buf, size_t header_block_len,
 
 /* === Errors ================================================== */
 
-typedef enum {
-  CAPY_NET_OK            = 0,
-  CAPY_NET_EINVAL        = -1,  /* NULL pointer, zero length, etc. */
-  CAPY_NET_EPARSE        = -2,  /* malformed string (inet_pton4 / URL / status line) */
-  CAPY_NET_ESOCK         = -3,  /* underlying capy_socket failed */
-  CAPY_NET_ECONNECT      = -4,  /* underlying capy_connect failed */
-  CAPY_NET_ESEND         = -5,  /* underlying capy_send failed */
-  CAPY_NET_ERECV         = -6,  /* underlying capy_recv failed */
-  CAPY_NET_EBUF          = -7,  /* caller buffer too small (e.g. ntoa cap < 16) */
-  CAPY_NET_EDNS          = -8,  /* DNS lookup failed (cache miss, etc.) */
-  CAPY_NET_EHTTP         = -9,  /* HTTP-level error (malformed response) */
-  CAPY_NET_EUNSUPPORTED  = -10  /* feature not implemented (HTTPS, chunked, etc.) */
-} capy_net_err_t;
-
 /* The most recent error code logged by a libcapy-net call. The
  * value is reset to `CAPY_NET_OK` at the start of every call,
  * so reading it AFTER a failed call gives the cause; reading it
  * after success returns `CAPY_NET_OK`. The slot is a single
  * static int (libcapy-net is single-threaded today; pthread-style
  * TLS will land alongside the threading work). */
-capy_net_err_t capy_net_last_error(void);
 
 /* Stable, human-readable English description of a libcapy-net error
  * code (POSIX-strerror style). Always returns a non-NULL static string
  * — including for unknown/out-of-range codes — so callers can print it
  * unconditionally. This is the EN base; the CapyBrowse Text app layers
  * a localized, stage-aware diagnostic (DNS/TCP/TLS/HTTP) on top. */
-const char *capy_net_strerror(capy_net_err_t err);
 
 /* === Diagnostic stage (Etapa 6 / Slice 6.3) ================== */
 

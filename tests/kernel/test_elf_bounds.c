@@ -78,6 +78,17 @@ int run_elf_bounds_tests(void) {
     fails++;
   }
 
+  /* `_start` has no caller return address. It must begin 16-byte aligned so
+   * CALL main produces the ABI entry alignment (8 mod 16). */
+  {
+    uint64_t start_rsp = elf_initial_user_rsp(0x00007FFFFFF00000u);
+    if ((start_rsp & 0xFu) != 0u || ((start_rsp - 8u) & 0xFu) != 8u ||
+        elf_initial_user_rsp(0x1234Fu) != 0x12340u) {
+      printf("[elf-bounds] initial user stack violates SysV alignment\n");
+      fails++;
+    }
+  }
+
   if (fails == 0) {
     printf("[tests] elf_bounds OK\n");
   }

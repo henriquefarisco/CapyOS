@@ -28,12 +28,19 @@ opt-in, e.g.:
              EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
              EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE -DCAPYGFX_IMAGE_URL=\"http://10.0.2.2:18082/logo.png\"'
   make iso-uefi manifest64
+
+``--real-sites-dir`` reuses the same VM/server harness for the browser
+liveness regression. The guest requests ``/real-site`` three times; the host
+serves authenticated captures of YouTube, Wikipedia and Tumblr in that order
+and waits for the browser's second delayed window-present heartbeat.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.server
+import json
 import sys
 import threading
 from pathlib import Path
@@ -56,10 +63,18 @@ READY_MARKER = "[smoke] capygfx ready"
 SITE_READY_MARKER = (
     "[smoke] capygfx site redirect+css+image+link+history ready"
 )
+REAL_SITES_LIVENESS_MARKER = (
+    "[smoke] capygfx real-sites window alive 2"
+)
 FAILURE_MARKERS = (
     "panic",
     "capygfx: FAIL",
     "capygfx-site:",
+    "capygfx-real-sites:",
+    "[user-fault]",
+    "user exception",
+    "browser runtime degraded",
+    "browser window closed",
     "[user_init] capygfx spawn returned without entering Ring 3.",
 )
 
@@ -91,6 +106,71 @@ SITE_HTML = (
 SITE_CSS = b"body { background-color: #ffffff; } h1 { color: #1a4fd0; }"
 NEXT_HTML = b"<html><body><h1>Next page</h1><p>history target</p></body></html>"
 REQUEST_COUNTS: dict[str, int] = {}
+REAL_SITE_ORDER = ("youtube", "wikipedia", "tumblr")
+REAL_SITE_PAYLOADS: list[tuple[str, bytes]] = []
+REAL_SITE_SERVED: list[str] = []
+MAX_REAL_SITE_BYTES = 512 * 1024
+
+
+def _resolve_repo_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
+
+
+def load_real_site_payloads(directory: Path) -> list[tuple[str, bytes]]:
+    """Load and authenticate the capture tool's three bounded fixtures."""
+    manifest_path = directory / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"cannot read real-site manifest {manifest_path}: {exc}"
+        ) from exc
+
+    if manifest.get("schema_version") != 1:
+        raise ValueError("real-site manifest schema_version must be 1")
+    records = manifest.get("sites")
+    if not isinstance(records, list):
+        raise ValueError("real-site manifest sites must be a list")
+    by_name = {
+        record.get("name"): record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("name"), str)
+    }
+
+    payloads: list[tuple[str, bytes]] = []
+    for name in REAL_SITE_ORDER:
+        record = by_name.get(name)
+        if record is None:
+            raise ValueError(f"real-site manifest is missing {name!r}")
+        filename = record.get("file")
+        if filename != f"{name}.html":
+            raise ValueError(
+                f"real-site {name!r} has unexpected file {filename!r}"
+            )
+        path = directory / filename
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"cannot read real-site fixture {path}: {exc}") from exc
+        if not payload:
+            raise ValueError(f"real-site fixture {path} is empty")
+        if len(payload) > MAX_REAL_SITE_BYTES:
+            raise ValueError(
+                f"real-site fixture {path} exceeds {MAX_REAL_SITE_BYTES} bytes"
+            )
+        if record.get("served_bytes") != len(payload):
+            raise ValueError(
+                f"real-site fixture {name!r} size does not match manifest"
+            )
+        expected_hash = record.get("served_sha256")
+        actual_hash = hashlib.sha256(payload).hexdigest()
+        if expected_hash != actual_hash:
+            raise ValueError(f"real-site fixture {name!r} SHA-256 does not match")
+        payloads.append((name, payload))
+    return payloads
 
 
 class _SmokeHTTPHandler(http.server.BaseHTTPRequestHandler):
@@ -113,6 +193,16 @@ class _SmokeHTTPHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib handler method name)
         path = self.path.split("?", 1)[0]
         self._count(path)
+        if path == "/real-site":
+            index = REQUEST_COUNTS[path] - 1
+            if index >= len(REAL_SITE_PAYLOADS):
+                self._fixed(410, "text/plain", b"real-site sequence exhausted",
+                            cache=False)
+                return
+            name, payload = REAL_SITE_PAYLOADS[index]
+            REAL_SITE_SERVED.append(name)
+            self._fixed(200, "text/html; charset=utf-8", payload, cache=False)
+            return
         if path == "/start":
             self.send_response(302)
             self.send_header("Location", "/page")
@@ -155,6 +245,7 @@ class _SmokeHTTPHandler(http.server.BaseHTTPRequestHandler):
 
 def start_local_http_server() -> http.server.HTTPServer:
     REQUEST_COUNTS.clear()
+    REAL_SITE_SERVED.clear()
     srv = http.server.HTTPServer(("0.0.0.0", LOCAL_HTTP_PORT), _SmokeHTTPHandler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -182,15 +273,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keyboard-layout", default="us")
     parser.add_argument("--language", default="en")
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--site", action="store_true",
         help="Run the full static-site navigation/toolbar acceptance flow",
+    )
+    mode.add_argument(
+        "--real-sites-dir",
+        help=(
+            "Directory containing youtube.html, wikipedia.html, tumblr.html "
+            "and manifest.json from capture_capygfx_real_sites.py"
+        ),
     )
     return parser.parse_args()
 
 
 def main() -> int:
+    global REAL_SITE_PAYLOADS
     args = parse_args()
+
+    if args.real_sites_dir:
+        real_sites_dir = _resolve_repo_path(args.real_sites_dir)
+        try:
+            REAL_SITE_PAYLOADS = load_real_site_payloads(real_sites_dir)
+        except ValueError as exc:
+            print(f"[err] {exc}", file=sys.stderr)
+            return 2
+        print(f"[info] loaded real-site fixtures from {real_sites_dir}")
+        for name, payload in REAL_SITE_PAYLOADS:
+            print(
+                f"[info]   {name}: {len(payload)} bytes, "
+                f"sha256={hashlib.sha256(payload).hexdigest()}"
+            )
+    else:
+        REAL_SITE_PAYLOADS = []
 
     log_path = (REPO_ROOT / args.log).resolve()
     debugcon_log = (REPO_ROOT / args.debugcon_log).resolve()
@@ -222,7 +338,11 @@ def main() -> int:
     ovmf_vars_runtime = create_runtime_ovmf_vars(log_path, ovmf_vars_template)
 
     http_server = start_local_http_server()
-    endpoint = "/start" if args.site else "/logo.png"
+    endpoint = (
+        "/real-site" if args.real_sites_dir
+        else "/start" if args.site
+        else "/logo.png"
+    )
     print(f"[info] local HTTP endpoint up on host :{LOCAL_HTTP_PORT} "
           f"(guest fetches http://10.0.2.2:{LOCAL_HTTP_PORT}{endpoint} via SLIRP)")
     print(f"[info] launching QEMU (E1000 user-net); serial+stdout -> {log_path}")
@@ -241,11 +361,34 @@ def main() -> int:
 
     rc = 1
     try:
-        marker = SITE_READY_MARKER if args.site else READY_MARKER
+        marker = (
+            REAL_SITES_LIVENESS_MARKER if args.real_sites_dir
+            else SITE_READY_MARKER if args.site
+            else READY_MARKER
+        )
         print(f"[info] waiting for capygfx ready (<= {args.timeout:.0f}s)")
         session.wait_for(marker, timeout=args.timeout)
         print(f"[ok]   + {marker!r}")
-        if args.site:
+        captured = session.text()
+        failures = [item for item in FAILURE_MARKERS if item in captured]
+        if failures:
+            raise RuntimeError(
+                f"failure markers present before liveness: {failures}"
+            )
+        if args.real_sites_dir:
+            expected = list(REAL_SITE_ORDER)
+            if REAL_SITE_SERVED != expected:
+                raise RuntimeError(
+                    f"real-site sequence mismatch: expected {expected}, "
+                    f"served {REAL_SITE_SERVED}"
+                )
+            if REQUEST_COUNTS.get("/real-site", 0) != len(expected):
+                raise RuntimeError(
+                    "guest did not fetch /real-site exactly three times"
+                )
+            print(f"[ok] real-site sequence: {REAL_SITE_SERVED}")
+            print("[ok] qemu-capygfx-real-sites liveness smoke passed")
+        elif args.site:
             required = ("/start", "/page", "/style.css", "/logo.png", "/next")
             missing = [path for path in required if REQUEST_COUNTS.get(path, 0) < 1]
             if missing:
@@ -258,7 +401,12 @@ def main() -> int:
             print("[ok] qemu-capygfx-net-image smoke passed")
         rc = 0
     except (TimeoutError, RuntimeError) as exc:
-        print(f"[err] qemu-capygfx-net-image smoke failed: {exc}", file=sys.stderr)
+        mode_name = (
+            "qemu-capygfx-real-sites" if args.real_sites_dir
+            else "qemu-capygfx-static-site" if args.site
+            else "qemu-capygfx-net-image"
+        )
+        print(f"[err] {mode_name} smoke failed: {exc}", file=sys.stderr)
         captured = session.text()
         for marker in FAILURE_MARKERS:
             if marker in captured:

@@ -57,6 +57,8 @@ int run_capypkg_tests(void) {
     test_repo_add_requires_https();
     test_repo_remove_protects_pinned();
     test_fetch_index_populates_catalog_signed_repo();
+    test_fetch_index_recovers_from_transient_transport_failure();
+    test_fetch_index_retry_is_bounded();
     test_install_rejects_non_https_payload();
     test_install_verifies_sha256_and_signature();
     test_install_rejects_sha256_mismatch();

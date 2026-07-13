@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-07-12 (rev. `alpha.313`)
-**Versão atual:** `0.8.0-alpha.313+20260712`
+**Data de referência:** 2026-07-13 (rev. `alpha.314`)
+**Versão atual:** `0.8.0-alpha.314+20260713`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).

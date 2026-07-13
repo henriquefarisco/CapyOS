@@ -111,6 +111,22 @@ void capygfx_toolbar_init(struct capygfx_toolbar *toolbar) {
   toolbar->can_forward = 0;
   toolbar->navigation_state = BROWSER_NAVIGATION_IDLE;
   toolbar->http_status = 0;
+  toolbar->detail[0] = '\0';
+}
+
+void capygfx_toolbar_set_detail(struct capygfx_toolbar *toolbar,
+                               const char *detail) {
+  size_t i = 0u;
+  if (!toolbar) return;
+  if (!detail) {
+    toolbar->detail[0] = '\0';
+    return;
+  }
+  while (detail[i] && i + 1u < sizeof(toolbar->detail)) {
+    toolbar->detail[i] = detail[i];
+    i++;
+  }
+  toolbar->detail[i] = '\0';
 }
 
 int capygfx_toolbar_set_address(struct capygfx_toolbar *toolbar,
@@ -135,6 +151,7 @@ void capygfx_toolbar_sync_navigation(
   toolbar->navigation_state = navigation->state;
   toolbar->http_status = navigation->last_http_status;
   if (navigation->state == BROWSER_NAVIGATION_READY &&
+      !toolbar->address_focused &&
       navigation->current_url[0] != '\0')
     (void)capygfx_toolbar_set_address(toolbar, navigation->current_url);
 }
@@ -346,7 +363,9 @@ static int tb_state_is_error(enum browser_navigation_state state) {
 
 static void tb_status_text(const struct capygfx_toolbar *toolbar, char *out,
                            size_t cap) {
-  const char *name = browser_navigation_state_name(toolbar->navigation_state);
+  const char *name = toolbar->detail[0]
+                         ? toolbar->detail
+                         : browser_navigation_state_name(toolbar->navigation_state);
   size_t pos = 0u;
   char digits[12];
   size_t count = 0u;
@@ -374,7 +393,7 @@ int capygfx_toolbar_draw(const struct capygfx_toolbar *toolbar, uint32_t *pixels
   struct capygfx_toolbar_layout layout;
   struct capygfx_toolbar_rect whole;
   size_t start, columns, shown;
-  char status_text[48];
+  char status_text[CAPYGFX_TOOLBAR_DETAIL_MAX];
   uint32_t status_color;
   if (!toolbar || !pixels || width == 0u || height == 0u) return -1;
   capygfx_toolbar_compute_layout(width, height, &layout);

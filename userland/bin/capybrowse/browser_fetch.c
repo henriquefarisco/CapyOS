@@ -230,9 +230,10 @@ int browser_fetch_map_wire_response(const struct capy_http_response *wire,
   resp->connection_close = 0;
   resp->connection_keep_alive = 0;
   resp->chunked = 0;
+  resp->truncated = 0;
   resp->header_count = 0u;
   resp->location[0] = '\0';
-  if (!wire || (!body && wire->body_len != 0u) || wire->truncated) return -1;
+  if (!wire || (!body && wire->body_len != 0u)) return -1;
   if (wire->location[0] != '\0' &&
       !bf_copy_field(resp->location, sizeof(resp->location), wire->location))
     return -1;
@@ -241,6 +242,7 @@ int browser_fetch_map_wire_response(const struct capy_http_response *wire,
   resp->body = body;
   resp->body_len = wire->body_len;
   resp->content_length = wire->content_length;
+  resp->truncated = wire->truncated ? 1 : 0;
   for (i = 0; i < (uint32_t)wire->header_count &&
               resp->header_count < HTTP_MAX_HEADERS;
        i++) {

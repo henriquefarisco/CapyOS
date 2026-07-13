@@ -894,6 +894,11 @@ USERLAND_DIR = userland
 #   make capylibc CAPYLIBC_BUILD_DIR=/tmp/capyos_capylibc
 CAPYLIBC_BUILD_DIR ?= $(BUILD)/userland
 BEARSSL_USERLAND_OBJS := $(patsubst $(BEARSSL_DIR)/%.c,$(CAPYLIBC_BUILD_DIR)/third_party/bearssl/%.o,$(BEARSSL_SRCS))
+# Ring-3 task switches do not preserve XMM/YMM state yet. BearSSL's per-function
+# target attributes otherwise bypass USERLAND_CFLAGS=-mno-sse and select
+# AES-NI/PCLMUL/SSE2 on some HTTPS cipher paths. Keep the constant-time scalar
+# implementations until architectural FPU/SIMD context switching exists.
+BEARSSL_USERLAND_CFLAGS := -DBR_AES_X86NI=0 -DBR_SSE2=0
 
 # User-space C flags: drop -mno-red-zone (user code can use the red
 # zone; SYSCALL itself does not clobber it) and add the userland
@@ -1225,7 +1230,8 @@ $(CAPYLIBC_BUILD_DIR)/security/%.o: src/security/%.c
 	$(CC64) $(USERLAND_CFLAGS) $(DEPFLAGS64) -c $< -o $@
 $(CAPYLIBC_BUILD_DIR)/third_party/bearssl/%.o: $(BEARSSL_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC64) $(USERLAND_CFLAGS) -I$(BEARSSL_DIR)/src $(DEPFLAGS64) -c $< -o $@
+	$(CC64) $(USERLAND_CFLAGS) $(BEARSSL_USERLAND_CFLAGS) \
+		-I$(BEARSSL_DIR)/src $(DEPFLAGS64) -c $< -o $@
 endif
 
 .PHONY: capylibc capylibc-net capylibc-tls
@@ -3288,6 +3294,53 @@ smoke-x64-qemu-capygfx-static-site:
 	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py --site \
 		$(SMOKE_X64_QEMU_CAPYGFX_STATIC_SITE_ARGS)
 
+# Regression for the production failure class: current bounded captures of
+# YouTube, Wikipedia and Tumblr are rendered consecutively by the real ring-3
+# browser. The final marker is emitted only after two delayed blit/present
+# heartbeats while the process and window are still alive.
+.PHONY: smoke-x64-qemu-capygfx-real-sites
+smoke-x64-qemu-capygfx-real-sites:
+	@echo "Executando smoke QEMU de sites reais e liveness do browser..."
+	$(MAKE) clean
+	python3 tools/scripts/capture_capygfx_real_sites.py \
+		--output-dir build/ci/capygfx_real_sites
+	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 \
+		EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
+		EXTRA_USERLAND_CFLAGS='-DCAPYGFX_DESKTOP_INTERACTIVE -DCAPYGFX_REAL_SITE_LIVENESS_SMOKE'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py \
+		--real-sites-dir build/ci/capygfx_real_sites \
+		--log build/ci/smoke_x64_qemu_capygfx_real_sites.log \
+		--debugcon-log build/ci/smoke_x64_qemu_capygfx_real_sites.debugcon.log \
+		--disk build/ci/smoke_x64_qemu_capygfx_real_sites.img \
+		$(SMOKE_X64_QEMU_CAPYGFX_REAL_SITES_ARGS)
+
+# Internet-dependent complement to the deterministic captured-content gate
+# above. This exercises DNS + TCP + HTTPS inside the guest and is intentionally
+# opt-in: remote policy, availability or markup may change independently of
+# CapyOS. Success still requires all three pages plus two delayed presents.
+.PHONY: smoke-x64-qemu-capygfx-live-sites
+smoke-x64-qemu-capygfx-live-sites:
+	@echo "Executando smoke QEMU HTTPS direto de sites reais..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
+		CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
+		EXTRA_USERLAND_CFLAGS='-DCAPYGFX_DESKTOP_INTERACTIVE -DCAPYGFX_REAL_SITE_LIVENESS_SMOKE -DCAPYGFX_INITIAL_URL=\"https://www.youtube.com/\" -DCAPYGFX_REAL_SITE_2_URL=\"https://www.wikipedia.org/\" -DCAPYGFX_REAL_SITE_3_URL=\"https://www.tumblr.com/\"'
+	$(MAKE) iso-uefi
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_qemu_marker.py --networking \
+		--marker "[smoke] capygfx real-sites window alive 2" \
+		--fail-marker "capygfx-real-sites: FAIL" \
+		--fail-marker "[user-fault]" \
+		--fail-marker "browser runtime degraded" \
+		--fail-marker "browser window closed" \
+		--timeout 900 \
+		--log build/ci/smoke_x64_qemu_capygfx_real_sites_live.log \
+		--debugcon-log build/ci/smoke_x64_qemu_capygfx_real_sites_live.debugcon.log \
+		--disk build/ci/smoke_x64_qemu_capygfx_real_sites_live.img \
+		$(SMOKE_X64_QEMU_CAPYGFX_LIVE_SITES_ARGS)
+
 # Etapa 7 / Slice 7.5 (alpha.304) external validation gate -- capygfx
 # desktop-spawn mechanics. Proves kernel_spawn_capygfx_desktop (a NEW,
 # non-noreturn spawn meant to be called from a live desktop session, unlike
@@ -3730,7 +3783,7 @@ smoke-x64-iso: all64 iso-uefi manifest64
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.313+20260712/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.314+20260713/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)

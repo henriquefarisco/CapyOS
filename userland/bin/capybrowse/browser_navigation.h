@@ -76,6 +76,9 @@ struct browser_navigation {
   int last_fetch_error;
   unsigned int last_redirect_count;
   uint64_t document_generation;
+  /* A valid prefix was committed because the bounded HTTP body buffer filled.
+   * Renderers use this to select deterministic compatibility mode. */
+  int document_truncated;
 };
 
 void browser_navigation_init(struct browser_navigation *nav);

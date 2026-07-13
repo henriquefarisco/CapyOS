@@ -381,10 +381,10 @@ static void test_wire_response_truncation_gate(void) {
   wire.body_len = sizeof(body);
   wire.content_length = sizeof(body) + 1u;
   wire.truncated = 1;
-  CHECK(browser_fetch_map_wire_response(&wire, body, &mapped) == -1 &&
-            mapped.status_code == 0 && mapped.body == NULL &&
-            mapped.body_len == 0u && mapped.header_count == 0u,
-        "truncated wire response fails closed and clears stale output");
+  CHECK(browser_fetch_map_wire_response(&wire, body, &mapped) == 0 &&
+            mapped.status_code == 200 && mapped.body == body &&
+            mapped.body_len == sizeof(body) && mapped.truncated == 1,
+        "truncated wire response preserves a marked renderable prefix");
 
   memset(&wire, 0, sizeof(wire));
   wire.status_code = 200;

@@ -34,6 +34,7 @@
 #include "kernel/pipe.h"
 #include "kernel/task.h"
 #include "kernel/stdin_buf.h"
+#include "kernel/log/klog.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -66,6 +67,7 @@ static void reset_world(void) {
     stdin_buf_init();
     task_set_current((struct task *)0);
     process_set_current((struct process *)0);
+    klog_reset();
 }
 
 /* Build the syscall_frame the dispatcher would have built. The
@@ -216,6 +218,28 @@ static void test_sys_write_fd1_falls_back_to_debugcon(void) {
     else FAIL("legacy debugcon fallback did not return len");
 }
 
+static void test_sys_write_fd2_falls_back_to_debugcon_and_klog(void) {
+    reset_world();
+    struct process *p = process_create("legacy-stderr", 0u, 0u);
+    if (!p) { TEST("setup process"); FAIL("alloc"); return; }
+    process_set_current(p);
+
+    const char payload[] = "[capybrowser] falha de rede\nignored";
+    struct syscall_frame f = make_frame(/*fd*/2u,
+                                         (uint64_t)(uintptr_t)payload,
+                                         (uint64_t)(sizeof(payload) - 1u));
+    int64_t rc = sys_write(&f);
+
+    TEST("sys_write(fd=2) keeps the legacy full-len contract");
+    if (rc == (int64_t)(sizeof(payload) - 1u)) PASS();
+    else FAIL("legacy stderr fallback did not return len");
+
+    TEST("sys_write(fd=2) persists its first diagnostic line in klog");
+    if (strstr(klog_serialize(), "[capybrowser] falha de rede") != NULL
+        && strstr(klog_serialize(), "ignored") == NULL) PASS();
+    else FAIL("stderr diagnostic missing or not line-bounded in klog");
+}
+
 static void test_sys_read_fd0_falls_back_to_stdin_buf(void) {
     reset_world();
     struct process *p = process_create("legacy-stdin", 0u, 0u);
@@ -258,6 +282,7 @@ int test_syscall_pipe_priority_run(void) {
     test_sys_write_fd2_pipe_beats_debugcon();
     test_sys_read_fd0_pipe_beats_stdin_buf();
     test_sys_write_fd1_falls_back_to_debugcon();
+    test_sys_write_fd2_falls_back_to_debugcon_and_klog();
     test_sys_read_fd0_falls_back_to_stdin_buf();
 
     printf("  -> %d/%d passed\n", tests_passed, tests_run);

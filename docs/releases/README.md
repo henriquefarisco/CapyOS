@@ -4,11 +4,15 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.314+20260713.md`
+  - Browser grafico estabilizado em sites pesados, com TLS escalar, limites HTTP
+    atualizados e indice agregado de modulos republicado.
+
+## Historico recente
+
 - `capyos-0.8.0-alpha.313+20260712.md`
   - Follow-up do gate de publicação: elimina falso negativo do verificador de
     símbolos e libera ISO, índice agregado e handoff offline assinado.
-
-## Historico recente
 
 - `capyos-0.8.0-alpha.312+20260712.md`
   - Browser grafico estatico interativo com toolbar, historico, CSS, imagens e

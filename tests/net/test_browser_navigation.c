@@ -313,12 +313,13 @@ static void test_http_and_size_errors(void) {
         "non-2xx has typed HTTP error and is not committed");
   ctx.http_error_url = NULL;
   ctx.truncate_url = "https://large.example/";
-  CHECK(browser_navigation_navigate(&nav, "large.example", simple_fetch, &ctx) <
+  CHECK(browser_navigation_navigate(&nav, "large.example", simple_fetch, &ctx) ==
             0 &&
-            nav.state == BROWSER_NAVIGATION_TOO_LARGE && nav.history_count == 1u,
-        "truncated response fails closed as TOO_LARGE");
-  CHECK(strcmp(nav.current_url, "https://ok.example/") == 0,
-        "HTTP/size errors preserve previous URL");
+            nav.state == BROWSER_NAVIGATION_READY && nav.history_count == 2u &&
+            nav.document_truncated == 1,
+        "truncated response commits a marked compatibility document");
+  CHECK(strcmp(nav.current_url, "https://large.example/") == 0,
+        "partial document commits its final URL transactionally");
 }
 
 static void test_history_bound_and_names(void) {

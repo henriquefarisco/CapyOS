@@ -143,6 +143,49 @@ static void test_http_get_chunked_recv(void) {
   else FAIL("chunked recv didn't reassemble");
 }
 
+static void test_http_get_accepts_modern_large_response_head(void) {
+  static uint8_t response[6000];
+  static const char status[] = "HTTP/1.1 200 OK\r\n";
+  static const char name[] = "X-Modern-Metadata: ";
+  static const char tail[] = "Content-Length: 5\r\n\r\nHello";
+  size_t pos = 0u;
+  size_t i;
+  fake_reset();
+  g_fake.dns_canned_ip = 0x7F000001u;
+  memcpy(response + pos, status, sizeof(status) - 1u);
+  pos += sizeof(status) - 1u;
+  /* Twenty-four individually valid metadata fields put the terminator above
+   * 4 KiB, matching current CSP/reporting/cookie-heavy production sites while
+   * remaining below the explicit 16 KiB safety ceiling. */
+  for (i = 0u; i < 24u; ++i) {
+    memcpy(response + pos, name, sizeof(name) - 1u);
+    pos += sizeof(name) - 1u;
+    memset(response + pos, 'a', 170u);
+    pos += 170u;
+    response[pos++] = '\r';
+    response[pos++] = '\n';
+  }
+  memcpy(response + pos, tail, sizeof(tail) - 1u);
+  pos += sizeof(tail) - 1u;
+  g_fake.recv_canned_buf = response;
+  g_fake.recv_canned_len = pos;
+  g_fake.recv_chunk_size = 511u;
+
+  TEST("http_get accepts a valid response head larger than 4 KiB");
+  uint8_t body[8];
+  struct capy_http_response r;
+  int rc = capy_http_get("http://example.com/modern", body, sizeof(body), &r);
+  if (pos > 4096u && rc == 0 &&
+      r.status_code == 200 && r.body_len == 5u &&
+      memcmp(body, "Hello", 5u) == 0)
+    PASS();
+  else {
+    printf("[rc=%d err=%d bytes=%zu status=%d body=%zu] ", rc,
+           (int)capy_net_last_error(), pos, r.status_code, r.body_len);
+    FAIL("large modern response head was rejected or misparsed");
+  }
+}
+
 static void test_http_get_body_truncated(void) {
   fake_reset();
   g_fake.dns_canned_ip = 0x7F000001u;
@@ -769,6 +812,7 @@ void test_capylibc_net_http_cases(void) {
   test_http_get_lf_only_head();
   test_http_get_lf_only_head_split_recv();
   test_http_get_chunked_recv();
+  test_http_get_accepts_modern_large_response_head();
   test_http_get_body_truncated();
   test_http_get_truncated_known_length_stops_without_eof_recv();
   test_http_get_rejects_short_content_length_body();

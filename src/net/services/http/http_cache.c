@@ -269,6 +269,7 @@ int http_cache_is_cacheable(const struct http_request *req,
   if (!req || !resp) return 0;
   if (req->method != HTTP_GET) return 0;
   if (!status_is_cacheable(resp->status_code)) return 0;
+  if (resp->truncated) return 0;
 
   cc_scan(resp_header(resp, "Cache-Control"), &rcc);
   if (rcc.no_store) return 0;
@@ -484,6 +485,7 @@ static void serve_entry(const struct http_cache_entry *e,
   resp->body_len = e->body_len;
   resp->content_length = e->body_len;
   resp->chunked = 0;
+  resp->truncated = 0;
 }
 
 int http_cache_fetch(struct http_cache *c, struct http_request *req,

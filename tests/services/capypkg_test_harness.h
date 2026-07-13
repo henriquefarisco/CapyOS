@@ -212,6 +212,8 @@ static int fs_mkdir(const char *path) {
 
 static const char *g_index_text;
 static int g_index_rc;
+static int g_index_fail_remaining;
+static int g_index_fetch_calls;
 static const uint8_t *g_payload_bytes;
 static size_t g_payload_len;
 static int g_payload_rc;
@@ -235,6 +237,11 @@ static int net_fetch_text(const char *url, char *buffer, size_t buffer_size,
                           size_t *out_len) {
     size_t len = 0u;
     (void)url;
+    g_index_fetch_calls++;
+    if (g_index_fail_remaining > 0) {
+        g_index_fail_remaining--;
+        return -1;
+    }
     if (g_index_rc != 0 || !g_index_text) return -1;
     len = strlen(g_index_text);
     if (len + 1u > buffer_size) len = buffer_size - 1u;
@@ -330,6 +337,8 @@ static void reset_state(int with_verifier) {
     g_text_write_fail_remaining = 0;
     g_index_text = NULL;
     g_index_rc = -1;
+    g_index_fail_remaining = 0;
+    g_index_fetch_calls = 0;
     g_payload_bytes = NULL;
     g_payload_len = 0u;
     g_payload_rc = -1;

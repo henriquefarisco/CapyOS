@@ -5,6 +5,9 @@
 #include "fs/vfs.h"
 #include <stddef.h>
 
+#define ELF_USER_STACK_EAGER_PAGES 16u
+#define ELF_USER_STACK_TOTAL_PAGES 256u
+
 static void elf_memcpy(void *dst, const void *src, size_t len) {
   uint8_t *d = (uint8_t *)dst;
   const uint8_t *s = (const uint8_t *)src;
@@ -212,11 +215,20 @@ int elf_load_into_process(struct process *proc, const uint8_t *data,
    * first user-mode reference to RSP just works without going
    * through the page-fault path. This preserves the phase 5e/5f
    * smoke behaviour bit-for-bit. */
-  uint64_t stack_phys = pmm_alloc_pages(16);
+  uint64_t stack_phys = pmm_alloc_pages(ELF_USER_STACK_EAGER_PAGES);
   if (!stack_phys) return -1;
-  uint64_t stack_base = VMM_USER_STACK - 16 * VMM_PAGE_SIZE;
-  vmm_map_range(proc->address_space, stack_base, stack_phys, 16,
-                VMM_PAGE_USER | VMM_PAGE_WRITE);
+  uint64_t stack_base = VMM_USER_STACK -
+      (uint64_t)ELF_USER_STACK_EAGER_PAGES * VMM_PAGE_SIZE;
+  if (vmm_map_range(proc->address_space, stack_base, stack_phys,
+                    ELF_USER_STACK_EAGER_PAGES,
+                    VMM_PAGE_USER | VMM_PAGE_WRITE | VMM_PAGE_NX) != 0) {
+    /* vmm_map_range can fail after a prefix was installed. Remove every
+     * possible leaf before returning the contiguous physical allocation. */
+    vmm_unmap_range(proc->address_space, stack_base,
+                    ELF_USER_STACK_EAGER_PAGES);
+    pmm_free_pages(stack_phys, ELF_USER_STACK_EAGER_PAGES);
+    return -1;
+  }
   proc->stack_top = VMM_USER_STACK;
 
   /* Phase 7b: register the next 240 pages BELOW the eager mapping as
@@ -231,21 +243,27 @@ int elf_load_into_process(struct process *proc, const uint8_t *data,
    * this expansion region do not overlap; the registration is
    * therefore guaranteed to succeed under normal kmalloc pressure.
    *
-   * Errors are deliberately swallowed: if registration fails, the
-   * process simply does not get demand growth (the top 16 pages
-   * still work eagerly). This keeps the boot path resilient under
-   * pathological memory pressure. */
-  const size_t STACK_EXPANSION_PAGES = 240;
+   * Registration is part of the executable-load contract. Silently falling
+   * back to 64 KiB makes stack-heavy TLS/parser paths die nondeterministically;
+   * fail the load so the caller can tear the incomplete process down. */
+  const size_t stack_expansion_pages =
+      ELF_USER_STACK_TOTAL_PAGES - ELF_USER_STACK_EAGER_PAGES;
   uint64_t stack_expand_top = stack_base;
   uint64_t stack_expand_base = stack_expand_top -
-      (uint64_t)STACK_EXPANSION_PAGES * VMM_PAGE_SIZE;
-  (void)vmm_register_anon_region(proc->address_space, stack_expand_base,
-                                 STACK_EXPANSION_PAGES,
-                                 VMM_PAGE_USER | VMM_PAGE_WRITE);
+      (uint64_t)stack_expansion_pages * VMM_PAGE_SIZE;
+  if (vmm_register_anon_region(proc->address_space, stack_expand_base,
+                               stack_expansion_pages,
+                               VMM_PAGE_USER | VMM_PAGE_WRITE |
+                                   VMM_PAGE_NX) != 0) {
+    vmm_unmap_range(proc->address_space, stack_base,
+                    ELF_USER_STACK_EAGER_PAGES);
+    pmm_free_pages(stack_phys, ELF_USER_STACK_EAGER_PAGES);
+    return -1;
+  }
 
   if (proc->main_thread) {
     proc->main_thread->context.rip = result.entry_point;
-    proc->main_thread->context.rsp = proc->stack_top - 8;
+    proc->main_thread->context.rsp = elf_initial_user_rsp(proc->stack_top);
     proc->main_thread->cr3 = proc->address_space->pml4_phys;
     proc->main_thread->context.cr3 = proc->address_space->pml4_phys;
   }

@@ -9,7 +9,7 @@
  *   3. resolve + connect via `capy_tcp_connect_host`;
  *   4. build a "GET path HTTP/1.1\r\nHost: host[:port]\r\n
  *      Connection: close\r\n\r\n" request and send_all it;
- *   5. read into a small (4 KB) ring buffer until we've seen
+ *   5. read into a bounded (16 KiB) head buffer until we've seen
  *      the empty line terminating the headers;
  *   6. parse the status line and headers;
  *   7. stream-decode an exact `Transfer-Encoding: chunked` body, or drain an
@@ -24,9 +24,10 @@
  *   - no compression (Accept-Encoding: identity is explicit).
  *
  * Buffer sizing:
- *   - HEADER_BUF_CAP = 4096 covers any reasonable response head;
- *     bigger heads (rare server-side bug) are rejected as
- *     CAPY_NET_EHTTP rather than silently truncated.
+ *   - HEADER_BUF_CAP = 16 KiB covers modern CSP, reporting and cookie headers
+ *     (YouTube currently exceeds 4 KiB); larger heads remain rejected as
+ *     CAPY_NET_EHTTP rather than silently truncated or allocated without a
+ *     bound.
  *   - Body is streamed directly into the caller's buf; we never
  *     allocate.
  */
@@ -45,7 +46,7 @@ extern int capy_net_internal_https_fail_closed(
     const struct capy_url_parts *url);
 extern capy_net_err_t capy_net_internal_tls_error_to_net(capy_tls_err_t err);
 
-#define HTTP_HEAD_BUF_CAP    4096
+#define HTTP_HEAD_BUF_CAP    (16u * 1024u)
 #define HTTP_DRAIN_CHUNK     256
 
 /* The HTTP/1.1 GET request builder (capy_http_build_get_request[_ex]) plus its
@@ -558,8 +559,9 @@ int capy_http_get_with_headers(const char *url,
     return -1;
   }
 
-  /* Read the head + start of body into a fixed buffer until we see
-   * an empty-line terminator. 4 KB is enough for any realistic response head. */
+  /* Read the head + start of body into a fixed buffer until we see an
+   * empty-line terminator. Modern sites routinely exceed 4 KiB with CSP,
+   * reporting and Set-Cookie fields, so retain a bounded 16 KiB window. */
   char head[HTTP_HEAD_BUF_CAP];
   size_t head_len = 0;
   size_t header_end = 0;  /* index of byte AFTER the head terminator */
@@ -593,7 +595,7 @@ int capy_http_get_with_headers(const char *url,
       }
     }
   }
-  /* Filled the whole 4 KB without finding the head terminator. */
+  /* Filled the whole bounded head buffer without finding the terminator. */
   capy_http_conn_close(&conn);
   capy_net_internal_set_error(CAPY_NET_EHTTP);
   return -1;

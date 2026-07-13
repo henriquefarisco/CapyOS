@@ -8,6 +8,7 @@
 #include "kernel/embedded_progs.h"
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
+#include "kernel/log/klog.h"
 #include "fs/vfs.h"
 #include "security/csprng.h"
 #include "drivers/rtc/rtc.h"
@@ -184,6 +185,23 @@ int64_t sys_write(struct syscall_frame *f) {
      * fallback contract. */
     (void)buf;
 #endif
+    /* stderr is also copied into the bounded kernel log.  Port 0xE9 is useful
+     * to developers with a debug console attached, but is invisible to a
+     * normal VM user.  Keeping one sanitized line in klog makes browser and
+     * other ring-3 diagnostics available in /var/log/capyos_klog.txt. */
+    if (fd == 2) {
+      char line[KLOG_LINE_MAX];
+      const char *s = (const char *)buf;
+      size_t out = 0u;
+      for (size_t i = 0u; i < len && out + 1u < sizeof(line); ++i) {
+        char c = s[i];
+        if (c == '\r' || c == '\n') break;
+        if ((uint8_t)c < 0x20u && c != '\t') c = ' ';
+        line[out++] = c;
+      }
+      line[out] = '\0';
+      if (out > 0u) klog(KLOG_ERROR, line);
+    }
     return (int64_t)len;
   }
 

@@ -185,6 +185,12 @@ static int remove_installed_at(uint32_t idx) {
 }
 
 int capypkg_fetch_index(void) {
+    /* GitHub's release endpoint can transiently fail while DNS, DHCP, TLS or a
+     * redirect is being established during first boot.  Retrying here keeps
+     * that transport detail out of the wizard and makes every caller benefit.
+     * Parsing is deliberately outside this loop: malformed or untrusted bytes
+     * are never retried and never partially replace the catalog. */
+    enum { CAPYPKG_INDEX_FETCH_ATTEMPTS = 4 };
     if (!g_capypkg.initialized) {
         return CAPYPKG_ERR_NOT_READY;
     }
@@ -201,8 +207,14 @@ int capypkg_fetch_index(void) {
         const struct capypkg_repo *repo = &g_capypkg.repos[r];
         char buffer[CAPYPKG_INDEX_BUFFER_BYTES];
         size_t len = 0u;
-        int rc = g_capypkg_text_fetcher(repo->index_url, buffer,
+        int rc = -1;
+        for (uint32_t attempt = 0u;
+             attempt < (uint32_t)CAPYPKG_INDEX_FETCH_ATTEMPTS; ++attempt) {
+            len = 0u;
+            rc = g_capypkg_text_fetcher(repo->index_url, buffer,
                                         sizeof(buffer), &len);
+            if (rc == 0 && len > 0u) break;
+        }
         if (rc != 0 || len == 0u) {
             last_rc = CAPYPKG_ERR_FETCH;
             continue;

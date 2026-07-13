@@ -35,7 +35,7 @@
 /* Per-fetch response body scratch. Static pages may be larger than one cache
  * entry: they remain renderable up to this bound while the cache independently
  * declines to store bodies above HTTP_CACHE_BODY_MAX. */
-#define BROWSER_FETCH_BODY_MAX (256u * 1024u)
+#define BROWSER_FETCH_BODY_MAX (512u * 1024u)
 
 struct browser_fetch_ctx {
   struct http_session session;        /* persistent cache + cookie jar */

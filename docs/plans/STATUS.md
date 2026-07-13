@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-07-12 | **Versao:** `0.8.0-alpha.313+20260712` | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-07-13 | **Versao:** `0.8.0-alpha.314+20260713` | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -46,7 +46,7 @@
 - **Etapa 5 fechada em `alpha.264`:** `libcapy-tls` userland agora faz handshake BearSSL **real** (`capy_tls_is_supported()==1`) — entropia/wall-clock syscalls, trust anchors reais, ClientHello+SNI, handshake-drive, validação X.509 fail-closed e o seam HTTPS de `capy_net`. A flag `CAPYOS_TLS_USERLAND_HANDSHAKE` foi **promovida a default** após o gate externo (`make smoke-x64-vmware-tls-handshake`, marker `[smoke] tls-handshake ready` no COM1, + `release-check`). Hardening de segurança nesta janela: overflows de integer no ELF loader (userland + boot, corrigidos + testes), tetos de custo KDF no volume header, robustez adversarial de DNS/DHCP/ICMP/ARP e bound do `names_equal` do CAPYFS.
 - **Etapas bloqueadas:** Etapas 7-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.313)
+## Repositórios apartados (estado em alpha.314)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A

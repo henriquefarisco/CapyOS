@@ -14,6 +14,7 @@
 #define CAPYGFX_TOOLBAR_HEIGHT 40u
 #define CAPYGFX_TOOLBAR_GLYPH_W 8u
 #define CAPYGFX_TOOLBAR_GLYPH_H 8u
+#define CAPYGFX_TOOLBAR_DETAIL_MAX 96u
 
 struct capygfx_toolbar_rect {
   uint32_t x;
@@ -53,6 +54,7 @@ struct capygfx_toolbar {
   int can_forward;
   enum browser_navigation_state navigation_state;
   int http_status;
+  char detail[CAPYGFX_TOOLBAR_DETAIL_MAX];
 };
 
 void capygfx_toolbar_init(struct capygfx_toolbar *toolbar);
@@ -68,6 +70,10 @@ void capygfx_toolbar_sync_navigation(
  * and preserves the previous value on failure. */
 int capygfx_toolbar_set_address(struct capygfx_toolbar *toolbar,
                                const char *address);
+
+/* Set a bounded user-facing status/error detail. NULL or empty clears it. */
+void capygfx_toolbar_set_detail(struct capygfx_toolbar *toolbar,
+                               const char *detail);
 
 /* Deterministic responsive layout. Every rectangle remains inside width/height;
  * on very narrow surfaces the address field collapses before buttons overlap. */

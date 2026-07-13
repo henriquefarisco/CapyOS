@@ -68,6 +68,38 @@ static void test_fetch_index_populates_catalog_signed_repo(void) {
            "fetched version must match descriptor");
 }
 
+static void test_fetch_index_recovers_from_transient_transport_failure(void) {
+    reset_state(1);
+    static const char index_buf[] =
+        "name=retry.ok\nversion=1.0.0\n"
+        "payload_url=https://example.com/retry.bin\n"
+        "payload_sha256=0000000000000000000000000000000000000000000000000000000000000000\n"
+        "signature_ed25519=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n---\n";
+    g_index_text = index_buf;
+    g_index_rc = 0;
+    g_index_fail_remaining = 3;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "index fetch must recover from three transient failures");
+    EXPECT(g_index_fetch_calls == 4,
+           "index retry must stop immediately after the successful attempt");
+    EXPECT(capypkg_available_count() == 1u,
+           "recovered index must be published atomically");
+}
+
+static void test_fetch_index_retry_is_bounded(void) {
+    reset_state(1);
+    g_index_text = "unused";
+    g_index_rc = 0;
+    g_index_fail_remaining = 8;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_ERR_FETCH,
+           "persistent index transport failure must remain an error");
+    EXPECT(g_index_fetch_calls == 4,
+           "persistent index failure must be capped at four attempts");
+    EXPECT(capypkg_available_count() == 0u,
+           "failed retries must not publish a partial catalog");
+}
+
 static void test_install_rejects_non_https_payload(void) {
     reset_state(1);
     /* Manifest with HTTP payload_url should fail at parse time. */
@@ -200,4 +232,3 @@ static void test_full_sweep_can_continue_after_one_payload_failure(void) {
     EXPECT(capypkg_installed_get("good.two", &got) == CAPYPKG_OK,
            "second good package must remain installed");
 }
-

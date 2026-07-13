@@ -182,6 +182,7 @@ void http_response_free(struct http_response *resp) {
     resp->connection_keep_alive = 0;
     resp->header_count = 0;
     resp->chunked = 0;
+    resp->truncated = 0;
     /* Clear the redirect target so a follow-up http_get on this
      * same resp cannot pick up a stale Location from a previous
      * hop if the second request's Location header is missing. */

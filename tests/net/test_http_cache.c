@@ -305,6 +305,14 @@ static void test_oversize_and_fail_closed(void) {
   r.body_len = sizeof(big);
   CHECK(http_cache_store(&c, &q, &r, 1000) == 0, "over-cap body not stored");
 
+  resp_reset(&r, 200);
+  resp_add(&r, "Cache-Control", "max-age=3600");
+  r.body = big;
+  r.body_len = 8u;
+  r.truncated = 1;
+  CHECK(http_cache_store(&c, &q, &r, 1000) == 0,
+        "truncated body prefix is never cached as complete");
+
   /* NULL args fail closed. */
   CHECK(http_cache_store(NULL, &q, &r, 1000) == 0, "NULL cache store fails");
   CHECK(http_cache_lookup(NULL, &q, 1000, NULL) == HTTP_CACHE_MISS,
