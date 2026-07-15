@@ -299,45 +299,48 @@ static EFI_STATUS write_protective_mbr(EFI_BLOCK_IO_PROTOCOL *bio,
 }
 
 EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
-                                   EFI_BLOCK_IO_PROTOCOL *bio, UINT64 esp_mib,
-                                   UINT64 boot_mib, UINT64 *out_esp_lba,
-                                   UINT64 *out_esp_sectors,
-                                   UINT64 *out_boot_lba,
-                                   UINT64 *out_boot_sectors,
-                                   UINT64 *out_data_lba,
-                                   UINT64 *out_data_sectors) {
-  if (!st || !st->BootServices || !bio || !bio->Media)
+                            EFI_BLOCK_IO_PROTOCOL *bio,
+                            const struct installer_disk_layout *layout,
+                            UINT64 *out_esp_lba,
+                            UINT64 *out_esp_sectors,
+                            UINT64 *out_boot_lba,
+                            UINT64 *out_boot_sectors,
+                            UINT64 *out_data_lba,
+                            UINT64 *out_data_sectors) {
+  if (!st || !st->BootServices || !bio || !bio->Media || !layout ||
+      !out_esp_lba || !out_esp_sectors || !out_boot_lba ||
+      !out_boot_sectors || !out_data_lba || !out_data_sectors)
     return EFI_INVALID_PARAMETER;
-  if (bio->Media->BlockSize != 512)
+  if (bio->Media->BlockSize != INSTALLER_DISK_BLOCK_SIZE)
     return EFI_UNSUPPORTED;
 
-  UINT64 total_sectors = (UINT64)bio->Media->LastBlock + 1ULL;
-  if (total_sectors < 65536)
+  UINT64 total_sectors = bio->Media->LastBlock == UINT64_MAX
+                             ? 0u
+                             : (UINT64)bio->Media->LastBlock + 1ULL;
+  if (total_sectors == 0u)
     return EFI_INVALID_PARAMETER;
-
   UINT64 last_lba = total_sectors - 1ULL;
-  UINT64 backup_entries_lba = last_lba - (UINT64)GPT_ENTRIES_SECTORS;
-  UINT64 first_usable_lba = 34ULL;
-  UINT64 last_usable_lba = backup_entries_lba - 1ULL;
-
-  UINT64 esp_sectors = (esp_mib * 1024ULL * 1024ULL) / 512ULL;
-  UINT64 boot_sectors = (boot_mib * 1024ULL * 1024ULL) / 512ULL;
-
-  UINT64 esp_start = align_up_u64(2048ULL, INSTALL_ALIGN_LBA);
+  UINT64 backup_entries_lba = layout->backup_entries_lba;
+  UINT64 first_usable_lba = layout->first_usable_lba;
+  UINT64 last_usable_lba = layout->last_usable_lba;
+  UINT64 esp_sectors = layout->esp_sectors;
+  UINT64 boot_sectors = layout->boot_sectors;
+  UINT64 esp_start = layout->esp_lba;
   UINT64 esp_end = esp_start + esp_sectors - 1ULL;
-  UINT64 boot_start = align_up_u64(esp_end + 1ULL, INSTALL_ALIGN_LBA);
+  UINT64 boot_start = layout->boot_lba;
   UINT64 boot_end = boot_start + boot_sectors - 1ULL;
-  UINT64 data_start = align_up_u64(boot_end + 1ULL, INSTALL_ALIGN_LBA);
-  UINT64 data_end = last_usable_lba;
+  UINT64 data_start = layout->data_lba;
+  UINT64 data_end = data_start + layout->data_sectors - 1ULL;
 
-  if (esp_start < first_usable_lba)
-    esp_start = align_up_u64(first_usable_lba, INSTALL_ALIGN_LBA);
-  if (data_start <= boot_end)
+  if (layout->total_sectors != total_sectors || total_sectors == 0u ||
+      backup_entries_lba != last_lba - (UINT64)GPT_ENTRIES_SECTORS ||
+      last_usable_lba != backup_entries_lba - 1ULL ||
+      first_usable_lba != 34ULL || esp_start < first_usable_lba ||
+      esp_end >= boot_start || boot_end >= data_start ||
+      data_end != last_usable_lba || data_start <= boot_end ||
+      data_end <= data_start) {
     return EFI_INVALID_PARAMETER;
-  if (data_end <= data_start)
-    return EFI_INVALID_PARAMETER;
-  if (boot_end >= last_usable_lba)
-    return EFI_INVALID_PARAMETER;
+  }
 
   // Partition entries buffer (primary + backup use the same bytes).
   UINTN entries_bytes = (UINTN)GPT_NUM_ENTRIES * (UINTN)GPT_ENTRY_SIZE;

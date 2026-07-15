@@ -347,7 +347,6 @@ def smoke_first_boot(
 def smoke_second_boot(
     session: SmokeSession, timeout: float, user: str, password: str, marker: str
 ) -> None:
-    _ = password
     smoke_file = "/tmp/smoke-persist/smoke.txt"
     assert_shell_identity(session, timeout=timeout, user=user)
     run_cmd(
@@ -491,6 +490,30 @@ def smoke_second_boot(
         timeout=timeout,
         expect=("Current language: en", "Idioma atual: en", "Idioma actual: en"),
     )
+
+    # Power actions are intentionally administrative.  Validate that the
+    # ordinary account cannot power off the machine, then return to the admin
+    # session for the graceful shutdown used to finish this smoke.  Keeping
+    # this distinction in the harness prevents a security hardening from being
+    # mistaken for a boot/persistence regression.
+    run_cmd(
+        session,
+        "shutdown-off",
+        timeout=timeout,
+        expect="energia exige sessao administrativa",
+    )
+    mk = session.marker()
+    session.send_line("bye")
+    session.wait_for("Logging out", timeout=timeout, start_at=mk)
+    mode = login(
+        session=session,
+        timeout=timeout,
+        user=user,
+        password=password,
+        allow_desktop=True,
+    )
+    ensure_shell_after_login(session=session, timeout=timeout, mode=mode)
+    assert_shell_identity(session, timeout=timeout, user=user)
     try:
         powered_off = trigger_poweroff(session, timeout=timeout * 2)
     except OSError:

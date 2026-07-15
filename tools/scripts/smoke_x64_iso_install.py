@@ -71,7 +71,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disk-size", default="2G", help="Install target disk size")
     parser.add_argument("--keep-disk", action="store_true", help="Do not delete the target disk image")
     parser.add_argument("--user", default="admin", help="Admin username for first-boot + login")
-    parser.add_argument("--password", default="admin", help="Admin password for first-boot + login")
+    parser.add_argument(
+        "--password",
+        default="smoke-install-pass",
+        help="Admin password for first-boot + login",
+    )
     parser.add_argument(
         "--keyboard-layout",
         default="us",
@@ -182,6 +186,7 @@ def run_boot1(
                 volume_key=volume_key,
                 module_profile=parsed.module_profile,
                 modules_index_url=parsed.modules_index_url,
+                require_interactive=True,
             )
         except RuntimeError as exc:
             tail = session.tail(8000)

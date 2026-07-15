@@ -15,6 +15,7 @@ static void *pending_arg;
 static char observed_intent[CAPYAI_ASYNC_INTENT_MAX];
 static int observed_allow_write;
 static uint32_t observed_turns;
+static int typed_dispatch_calls;
 
 #define CHECK(cond, label)                                                    \
   do {                                                                        \
@@ -59,14 +60,13 @@ const char *capyai_builtin_model(size_t *out_len) {
   return model;
 }
 
-int capyai_execute_intent(const char *model_text, size_t model_len,
-                          const char *intent, const char *platform,
-                          const char *shell,
-                          const struct capyai_perms *perms,
-                          struct capyai_session *session,
-                          capyai_dispatch_fn dispatch, void *dispatch_ctx,
-                          struct capyai_plan *plan,
-                          struct capyai_exec_result *result) {
+int capyai_execute_intent_v2(
+    const char *model_text, size_t model_len,
+    const char *intent, const char *platform, const char *shell,
+    const struct capyai_perms *perms, struct capyai_session *session,
+    capyai_dispatch_fn dispatch, void *dispatch_ctx,
+    capyai_typed_dispatch_fn typed_dispatch, void *typed_dispatch_ctx,
+    struct capyai_plan *plan, struct capyai_exec_result *result) {
   (void)model_text;
   (void)model_len;
   (void)platform;
@@ -81,11 +81,35 @@ int capyai_execute_intent(const char *model_text, size_t model_len,
   strcpy(plan->out.command, "list");
   plan->out.risk = CAPY_AI_RISK_READ_ONLY;
   if (execute_result != 0) return execute_result;
+  if (typed_dispatch && strcmp(intent, "typed request") == 0) {
+    struct capy_ai_output call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.action, "file_edit_text");
+    strcpy(call.command, "file-edit");
+    strcpy(call.path, "notes.txt");
+    strcpy(call.content, "line");
+    call.risk = CAPY_AI_RISK_WRITE_FILE;
+    result->executed = 1;
+    result->rc = typed_dispatch(typed_dispatch_ctx, &call, result->detail,
+                                sizeof(result->detail));
+  } else
   if (dispatch) {
     result->executed = 1;
     result->rc = dispatch(dispatch_ctx, "list");
   }
   if (session) session->turns++;
+  return 0;
+}
+
+static int capture_typed(void *ctx, const struct capy_ai_output *call,
+                         char *detail, size_t detail_size) {
+  int *calls = (int *)ctx;
+  if (!call || strcmp(call->action, "file_edit_text") != 0) return 9;
+  (*calls)++;
+  if (detail_size > 0u) {
+    strncpy(detail, "typed output", detail_size - 1u);
+    detail[detail_size - 1u] = '\0';
+  }
   return 0;
 }
 
@@ -123,6 +147,7 @@ static void reset_fakes(void) {
   observed_intent[0] = '\0';
   observed_allow_write = 0;
   observed_turns = 0u;
+  typed_dispatch_calls = 0;
   capyai_async_reset_for_test();
 }
 
@@ -140,6 +165,7 @@ static void prepare_request(struct capyai_async_request *request,
 
 int main(void) {
   struct capyai_async_request request;
+  struct capyai_async_request_v2 request_v2;
   struct capyai_async_response response;
   uint64_t job_id = 0u;
   uint64_t detached_id = 0u;
@@ -177,6 +203,30 @@ int main(void) {
         "worker consumes an owned request snapshot");
   CHECK(capyai_async_poll(job_id, &response) == CAPYAI_ASYNC_ERR_STALE,
         "completed response is consumed exactly once");
+
+  memset(&request_v2, 0, sizeof(request_v2));
+  request_v2.abi_version = CAPYAI_ASYNC_REQUEST_ABI_V2;
+  request_v2.struct_size = (uint32_t)sizeof(request_v2);
+  strcpy(request_v2.base.intent, "typed request");
+  request_v2.base.client_generation = 71u;
+  request_v2.typed_dispatch = capture_typed;
+  request_v2.typed_dispatch_ctx = &typed_dispatch_calls;
+  CHECK(capyai_async_submit_v2(&request_v2, &job_id) == CAPYAI_ASYNC_OK,
+        "versioned submit accepts a complete v2 request");
+  pending_fn(pending_arg);
+  CHECK(capyai_async_poll(job_id, &response) == 1 &&
+            typed_dispatch_calls == 1 &&
+            strcmp(response.result.detail, "typed output") == 0,
+        "v2 preserves the typed callback without changing v1 layout");
+  request_v2.abi_version = 1u;
+  CHECK(capyai_async_submit_v2(&request_v2, &job_id) ==
+            CAPYAI_ASYNC_ERR_INVALID,
+        "v2 rejects an ABI mismatch before copying");
+  request_v2.abi_version = CAPYAI_ASYNC_REQUEST_ABI_V2;
+  request_v2.struct_size = (uint32_t)sizeof(request_v2) - 1u;
+  CHECK(capyai_async_submit_v2(&request_v2, &job_id) ==
+            CAPYAI_ASYNC_ERR_INVALID,
+        "v2 rejects a truncated caller structure");
 
   prepare_request(&request, &dispatch_calls, 8u);
   CHECK(capyai_async_submit(&request, &detached_id) == CAPYAI_ASYNC_OK &&

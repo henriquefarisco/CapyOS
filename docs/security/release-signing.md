@@ -312,16 +312,20 @@ catalogo local depois de reutilizar os invariantes ja exigidos pelo
 - versao semanticamente mais nova;
 - `payload_sha256` hex64;
 - `payload_url` HTTPS ou local sob `/system/update/`, sem espaços ou `..`;
+- `payload_size` decimal positivo de até 8 MiB nos manifestos novos;
 - `signature_ed25519` hex128 no manifesto;
 - trilha `channel`/`branch`/`source` compativel, com `develop` em
   `refs/heads/<branch>` e `stable` no asset mutável autenticado
   `releases/latest/download/latest.ini`;
-- download operacional via `update-download-payload`, que recalcula SHA-256
-  real do payload baixado antes de persistir `/system/update/payload.bin`;
+- download operacional via `update-download-payload`, que usa o
+  `payload_size` assinado para limitar seu buffer temporário, valida
+  tamanho/SHA-256, persiste `/system/update/payload.bin` e repete a validação
+  após readback;
 - diagnóstico operacional via `update-prepare-explain`, que mostra gates locais
   de catálogo, repositório, payload, assinatura e cache sem efeitos de update;
 - preflight operacional via `update-prepare-dry-run`, que revisa catálogo
-  local, `payload_url`, assinatura e cache verificado sem staging/arm/apply;
+  local, `payload_url`, assinatura e recalcula o cache persistido sem
+  staging/arm/apply;
 - `update-prepare-explain` termina no gate `persistence` quando todos os gates
   criptográficos e de cache passam;
 - `update-prepare`, `update-stage`, `update-arm on` e `update-apply` retornam

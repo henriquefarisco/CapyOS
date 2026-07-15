@@ -58,6 +58,8 @@ struct update_manifest_view {
   char source[UPDATE_AGENT_SOURCE_MAX];
   char published_at[24];
   char payload_url[UPDATE_AGENT_REMOTE_MAX];
+  uint32_t payload_size;
+  uint8_t payload_size_present;
   char payload_sha256[UPDATE_AGENT_SHA256_HEX_MAX];
   char signature_ed25519[UPDATE_AGENT_ED25519_SIGNATURE_HEX_MAX];
   char signed_text[UPDATE_AGENT_MANIFEST_TEXT_MAX];
@@ -102,6 +104,7 @@ int update_agent_parse_bool_value(const char *value);
 /* ── IO accessors + remote fetchers (update_agent.c) ────────────────── */
 
 update_agent_read_file_fn update_agent_active_reader(void);
+update_agent_read_bytes_fn update_agent_active_bytes_reader(void);
 update_agent_write_file_fn update_agent_active_writer(void);
 update_agent_write_bytes_fn update_agent_active_bytes_writer(void);
 update_agent_remove_file_fn update_agent_active_remover(void);
@@ -122,6 +125,8 @@ void update_agent_state_view_reset(struct update_state_view *view);
 
 int update_agent_manifest_payload_sha256_valid(
     const struct update_manifest_view *view);
+int update_agent_manifest_payload_size_valid(
+    const struct update_manifest_view *view);
 int update_agent_manifest_payload_url_valid(
     const struct update_manifest_view *view);
 int update_agent_manifest_signature_ed25519_valid(
@@ -137,5 +142,7 @@ int update_agent_read_manifest_view(const char *path,
                                     struct update_manifest_view *view);
 int update_agent_read_state_view(struct update_state_view *view);
 void update_agent_prepare_repository_status(void);
+int update_agent_verify_cached_payload(
+    const struct update_manifest_view *manifest);
 
 #endif /* SERVICES_UPDATE_AGENT_INTERNAL_H */

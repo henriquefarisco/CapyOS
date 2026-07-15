@@ -14,6 +14,7 @@
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 #define UPDATE_AGENT_ABC_SHA256 \
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+#define UPDATE_AGENT_ABC_SIZE_LINE "payload_size=3\n"
 #define UPDATE_AGENT_GOOD_SIGNATURE \
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -29,16 +30,17 @@ struct fake_file {
     const char *path;
     char text[768];
     int present;
+    size_t len;
 };
 
 static struct fake_file g_files[] = {
-    {UPDATE_AGENT_REPOSITORY_PATH, "", 0},
-    {UPDATE_AGENT_CACHE_PATH, "", 0},
-    {UPDATE_AGENT_STAGE_PATH, "", 0},
-    {UPDATE_AGENT_STATE_PATH, "", 0},
-    {UPDATE_AGENT_IMPORT_PATH, "", 0},
-    {UPDATE_AGENT_FETCHED_PATH, "", 0},
-    {UPDATE_AGENT_PAYLOAD_CACHE_PATH, "", 0},
+    {UPDATE_AGENT_REPOSITORY_PATH, "", 0, 0u},
+    {UPDATE_AGENT_CACHE_PATH, "", 0, 0u},
+    {UPDATE_AGENT_STAGE_PATH, "", 0, 0u},
+    {UPDATE_AGENT_STATE_PATH, "", 0, 0u},
+    {UPDATE_AGENT_IMPORT_PATH, "", 0, 0u},
+    {UPDATE_AGENT_FETCHED_PATH, "", 0, 0u},
+    {UPDATE_AGENT_PAYLOAD_CACHE_PATH, "", 0, 0u},
 };
 
 static const char *g_fetch_text;
@@ -46,7 +48,9 @@ static int g_fetch_rc;
 static char g_last_fetch_url[192];
 static const uint8_t *g_payload_bytes;
 static size_t g_payload_len;
+static size_t g_last_payload_buffer_size;
 static int g_payload_rc;
+static int g_corrupt_payload_write;
 static char g_last_payload_url[192];
 
 static int expect_true(int cond, const char *msg) {
@@ -77,9 +81,11 @@ static void set_file_text(const char *path, const char *text) {
     }
     file->present = text ? 1 : 0;
     file->text[0] = '\0';
+    file->len = 0u;
     if (text) {
         strncpy(file->text, text, sizeof(file->text) - 1u);
         file->text[sizeof(file->text) - 1u] = '\0';
+        file->len = strlen(file->text);
     }
 }
 
@@ -88,13 +94,16 @@ static void reset_files(void) {
     for (i = 0; i < sizeof(g_files) / sizeof(g_files[0]); ++i) {
         g_files[i].present = 0;
         g_files[i].text[0] = '\0';
+        g_files[i].len = 0u;
     }
     g_fetch_text = NULL;
     g_fetch_rc = -1;
     g_last_fetch_url[0] = '\0';
     g_payload_bytes = NULL;
     g_payload_len = 0u;
+    g_last_payload_buffer_size = 0u;
     g_payload_rc = -1;
+    g_corrupt_payload_write = 0;
     g_last_payload_url[0] = '\0';
 }
 
@@ -107,7 +116,7 @@ static int stub_read_file(const char *path, char *buffer, size_t buffer_size,
     if (!file || !file->present || !buffer || buffer_size == 0u) {
         return -1;
     }
-    len = strlen(file->text);
+    len = file->len;
     if (len + 1u > buffer_size) {
         len = buffer_size - 1u;
     }
@@ -129,6 +138,23 @@ static int stub_write_file(const char *path, const char *text) {
     return 0;
 }
 
+static int stub_read_bytes(const char *path, uint8_t *buffer,
+                           size_t buffer_size, size_t *out_len) {
+    struct fake_file *file = find_file(path);
+    size_t i = 0u;
+    if (!file || !file->present || !buffer || file->len > buffer_size) {
+        return -1;
+    }
+    while (i < file->len) {
+        buffer[i] = (uint8_t)file->text[i];
+        ++i;
+    }
+    if (out_len) {
+        *out_len = file->len;
+    }
+    return 0;
+}
+
 static int stub_write_bytes(const char *path, const uint8_t *data, size_t len) {
     struct fake_file *file = find_file(path);
     size_t i = 0u;
@@ -140,7 +166,11 @@ static int stub_write_bytes(const char *path, const uint8_t *data, size_t len) {
         file->text[i] = (char)data[i];
         ++i;
     }
+    if (g_corrupt_payload_write && len > 0u) {
+        file->text[0] ^= 1;
+    }
     file->text[len] = '\0';
+    file->len = len;
     return 0;
 }
 
@@ -151,6 +181,7 @@ static int stub_remove_file(const char *path) {
     }
     file->present = 0;
     file->text[0] = '\0';
+    file->len = 0u;
     return 0;
 }
 
@@ -186,6 +217,7 @@ static int stub_fetch_manifest(const char *url, char *buffer, size_t buffer_size
 static int stub_fetch_payload(const char *url, uint8_t *buffer,
                               size_t buffer_size, size_t *out_len) {
     size_t i = 0u;
+    g_last_payload_buffer_size = buffer_size;
     if (url) {
         strncpy(g_last_payload_url, url, sizeof(g_last_payload_url) - 1u);
         g_last_payload_url[sizeof(g_last_payload_url) - 1u] = '\0';
@@ -212,12 +244,27 @@ int run_update_agent_tests(void) {
     reset_files();
     update_agent_reset();
     update_agent_set_reader(stub_read_file);
+    update_agent_set_bytes_reader(stub_read_bytes);
     update_agent_set_writer(stub_write_file);
     update_agent_set_bytes_writer(stub_write_bytes);
     update_agent_set_remover(stub_remove_file);
     update_agent_set_manifest_verifier(stub_manifest_verify);
     update_agent_set_manifest_fetcher(stub_fetch_manifest);
     update_agent_set_payload_fetcher(stub_fetch_payload);
+    update_agent_init(NULL);
+    set_file_text(
+        UPDATE_AGENT_CACHE_PATH,
+        "available_version=0.8.0-alpha.1\nchannel=stable\nbranch=main\n"
+        "source=github:henriquefarisco/CapyOS\npublished_at=2026-04-08\n"
+        "payload_sha256=" UPDATE_AGENT_GOOD_SHA256 "\n"
+        UPDATE_AGENT_PAYLOAD_URL_LINE
+        UPDATE_AGENT_SIGNATURE_LINE);
+    fails += expect_true(update_agent_poll() == -22,
+                         "unknown current version must fail closed");
+    update_agent_status_get(&status);
+    fails += expect_true(status.update_available == 0u,
+                         "unknown current version must not expose an update");
+    set_file_text(UPDATE_AGENT_CACHE_PATH, NULL);
     update_agent_init("0.8.0-alpha.0+20260305");
 
     fails += expect_true(update_agent_poll() == 0,
@@ -411,8 +458,9 @@ int run_update_agent_tests(void) {
 
     g_fetch_rc = 0;
     g_fetch_text =
-        "available_version=1.0.0-alpha.2\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\npayload_sha256="
-        UPDATE_AGENT_GOOD_SHA256 "\n"
+        "available_version=1.0.0-alpha.2\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\n"
+        UPDATE_AGENT_ABC_SIZE_LINE
+        "payload_sha256=" UPDATE_AGENT_ABC_SHA256 "\n"
         UPDATE_AGENT_PAYLOAD_URL_LINE
         UPDATE_AGENT_SIGNATURE_LINE;
     fails += expect_true(update_agent_fetch_remote_manifest() == 0,
@@ -431,10 +479,11 @@ int run_update_agent_tests(void) {
     fails += expect_true(find_file(UPDATE_AGENT_FETCHED_PATH)->present == 0,
                          "fetched temporary manifest should be removed after import");
 
+    set_file_text(UPDATE_AGENT_PAYLOAD_CACHE_PATH, "abc");
     set_file_text(UPDATE_AGENT_STATE_PATH,
                   "pending_activation=0\nstaged_manifest=/system/update/staged.ini\n"
                   "payload_cache=/system/update/payload.bin\npayload_cache_sha256="
-                  UPDATE_AGENT_GOOD_SHA256 "\n");
+                  UPDATE_AGENT_ABC_SHA256 "\n");
     g_last_fetch_url[0] = '\0';
     g_last_payload_url[0] = '\0';
     fails += expect_true(update_agent_prepare_dry_run() == 0,
@@ -469,6 +518,15 @@ int run_update_agent_tests(void) {
                          "prepare explain must not advertise persistent staging");
     fails += expect_true(strcmp(explain.failing_gate, "persistence") == 0,
                          "prepare explain persistence gate mismatch");
+    set_file_text(UPDATE_AGENT_PAYLOAD_CACHE_PATH, NULL);
+    fails += expect_true(update_agent_prepare_dry_run() == -53,
+                         "prepare dry-run should reject state without cached payload bytes");
+    fails += expect_true(update_agent_prepare_explain(&explain) == -53,
+                         "prepare explain should reject state without cached payload bytes");
+    fails += expect_true(explain.cache_ready == 0u &&
+                             strcmp(explain.failing_gate, "cache") == 0,
+                         "missing cached bytes should fail the cache gate");
+    set_file_text(UPDATE_AGENT_PAYLOAD_CACHE_PATH, "abc");
     set_file_text(UPDATE_AGENT_STATE_PATH, NULL);
     fails += expect_true(update_agent_prepare_dry_run() == -53,
                          "prepare dry-run should require verified payload cache");
@@ -513,8 +571,9 @@ int run_update_agent_tests(void) {
                          "prepare should remove fetched temporary manifest");
 
     set_file_text(UPDATE_AGENT_CACHE_PATH,
-                  "available_version=1.0.0-alpha.4\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\npayload_sha256="
-                  UPDATE_AGENT_ABC_SHA256 "\n"
+                  "available_version=1.0.0-alpha.4\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\n"
+                  UPDATE_AGENT_ABC_SIZE_LINE
+                  "payload_sha256=" UPDATE_AGENT_ABC_SHA256 "\n"
                   UPDATE_AGENT_PAYLOAD_URL_LINE
                   UPDATE_AGENT_SIGNATURE_LINE);
     g_payload_rc = 0;
@@ -526,6 +585,8 @@ int run_update_agent_tests(void) {
     fails += expect_true(strcmp(g_last_payload_url,
                                 "https://github.com/test/CapyOS/releases/download/v1.0.0/kernel.bin") == 0,
                          "payload fetch should use manifest payload URL");
+    fails += expect_true(g_last_payload_buffer_size == 3u,
+                         "signed payload size should bound the download buffer");
     fails += expect_true(strcmp(status.payload_cache_path, UPDATE_AGENT_PAYLOAD_CACHE_PATH) == 0,
                          "payload cache path mismatch");
     fails += expect_true(strcmp(status.payload_cache_sha256, UPDATE_AGENT_ABC_SHA256) == 0,
@@ -545,8 +606,33 @@ int run_update_agent_tests(void) {
     fails += expect_true(strcmp(status.payload_cache_sha256, UPDATE_AGENT_ABC_SHA256) == 0,
                          "payload cache sha256 should survive poll");
 
+    g_corrupt_payload_write = 1;
+    fails += expect_true(update_agent_download_payload() == -49,
+                         "corrupted persisted payload should fail readback verification");
+    update_agent_status_get(&status);
+    fails += expect_true(status.payload_cache_sha256[0] == '\0',
+                         "readback failure should clear cached payload digest");
+    fails += expect_true(find_file(UPDATE_AGENT_PAYLOAD_CACHE_PATH)->present == 0,
+                         "readback failure should remove corrupted payload cache");
+    fails += expect_true(find_file(UPDATE_AGENT_STATE_PATH)->present == 0,
+                         "readback failure should remove stale cache state");
+    g_corrupt_payload_write = 0;
+
     set_file_text(UPDATE_AGENT_CACHE_PATH,
-                  "available_version=1.0.0-alpha.5\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\npayload_sha256="
+                  "available_version=1.0.0-alpha.5\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\n"
+                  "payload_size=4\n"
+                  "payload_sha256=" UPDATE_AGENT_ABC_SHA256 "\n"
+                  UPDATE_AGENT_PAYLOAD_URL_LINE
+                  UPDATE_AGENT_SIGNATURE_LINE);
+    fails += expect_true(update_agent_download_payload() == -58,
+                         "declared payload size mismatch should refuse cache");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.summary,
+                                "payload size mismatch; cache refused") == 0,
+                         "payload size mismatch summary mismatch");
+
+    set_file_text(UPDATE_AGENT_CACHE_PATH,
+                  "available_version=1.0.0-alpha.6\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\npayload_sha256="
                   UPDATE_AGENT_GOOD_SHA256 "\n"
                   UPDATE_AGENT_PAYLOAD_URL_LINE
                   UPDATE_AGENT_SIGNATURE_LINE);
@@ -608,6 +694,25 @@ int run_update_agent_tests(void) {
     update_agent_status_get(&status);
     fails += expect_true(strcmp(status.summary, "catalog cache missing or malformed payload sha256") == 0,
                          "missing payload sha256 summary mismatch");
+
+    set_file_text(UPDATE_AGENT_CACHE_PATH,
+                  "available_version=1.1.0-alpha.1\npublished_at=2026-04-10\n"
+                  "payload_size=0\npayload_sha256=" UPDATE_AGENT_GOOD_SHA256 "\n"
+                  UPDATE_AGENT_PAYLOAD_URL_LINE
+                  UPDATE_AGENT_SIGNATURE_LINE);
+    fails += expect_true(update_agent_poll() == -55,
+                         "zero payload size should fail closed");
+    update_agent_status_get(&status);
+    fails += expect_true(strcmp(status.summary,
+                                "catalog cache payload size invalid") == 0,
+                         "invalid payload size summary mismatch");
+    set_file_text(UPDATE_AGENT_CACHE_PATH,
+                  "available_version=1.1.0-alpha.1\npublished_at=2026-04-10\n"
+                  "payload_size=42949672960\npayload_sha256=" UPDATE_AGENT_GOOD_SHA256 "\n"
+                  UPDATE_AGENT_PAYLOAD_URL_LINE
+                  UPDATE_AGENT_SIGNATURE_LINE);
+    fails += expect_true(update_agent_poll() == -55,
+                         "overflowing payload size should fail closed");
 
     set_file_text(UPDATE_AGENT_CACHE_PATH,
                   "available_version=1.1.0-alpha.1\npublished_at=2026-04-10\npayload_sha256="

@@ -4,6 +4,7 @@
 #include "boot/boot_config.h"
 #include "boot/boot_manifest.h"
 #include "boot/handoff.h"
+#include "boot/installer_disk_policy.h"
 
 #include <efi.h>
 #include <efilib.h>
@@ -36,16 +37,19 @@
 #define DP_TYPE_END 0x7F
 #define DP_SUBTYPE_END_ENTIRE 0xFF
 
-#define INSTALL_ALIGN_LBA 2048ULL
-#define INSTALL_ESP_SIZE_MIB 512ULL
-#define INSTALL_BOOT_SIZE_MIB 256ULL
+#define INSTALL_ALIGN_LBA INSTALLER_DISK_ALIGN_LBA
+#define INSTALL_ESP_SIZE_MIB INSTALLER_DISK_ESP_SIZE_MIB
+#define INSTALL_BOOT_SIZE_MIB INSTALLER_DISK_BOOT_SIZE_MIB
 
 #define GPT_REVISION 0x00010000U
 #define GPT_HEADER_SIZE 92U
 #define GPT_NUM_ENTRIES 128U
 #define GPT_ENTRY_SIZE 128U
 #define GPT_ENTRIES_LBA 2ULL
-#define GPT_ENTRIES_SECTORS ((GPT_NUM_ENTRIES * GPT_ENTRY_SIZE) / 512U)
+#define GPT_ENTRIES_SECTORS INSTALLER_DISK_GPT_ENTRIES_SECTORS
+#if ((GPT_NUM_ENTRIES * GPT_ENTRY_SIZE) / 512U) != GPT_ENTRIES_SECTORS
+#error "installer disk policy GPT entry span mismatch"
+#endif
 
 typedef struct {
   UINT8 e_ident[16];
@@ -122,6 +126,15 @@ typedef enum {
   INSTALLER_LANG_PT_BR = 1,
   INSTALLER_LANG_ES = 2,
 } installer_language_t;
+
+typedef struct {
+  EFI_HANDLE handle;
+  EFI_BLOCK_IO_PROTOCOL *bio;
+  UINT32 media_id;
+  UINT64 path_id;
+  struct installer_disk_geometry geometry;
+  struct installer_disk_layout layout;
+} installer_disk_target_t;
 
 typedef struct {
   CHAR8 signature[8];
@@ -218,7 +231,9 @@ BOOLEAN boot_volume_is_readonly(EFI_HANDLE image, EFI_SYSTEM_TABLE *st);
 BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st);
 BOOLEAN boot_device_is_cdrom(EFI_HANDLE image, EFI_SYSTEM_TABLE *st);
 EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
-                              EFI_BLOCK_IO_PROTOCOL **bio_out);
+                              installer_disk_target_t *out_target);
+EFI_STATUS installer_revalidate_target(
+    EFI_SYSTEM_TABLE *st, const installer_disk_target_t *target);
 EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
                                           UINT64 *out_data_start,
                                           UINT64 *out_data_count,
@@ -244,7 +259,7 @@ EFI_STATUS scrub_data_partition_for_first_boot(EFI_BLOCK_IO_PROTOCOL *bio,
                                                UINT64 data_start,
                                                UINT64 data_last);
 EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st, EFI_BLOCK_IO_PROTOCOL *bio,
-                            UINT64 esp_mib, UINT64 boot_mib,
+                            const struct installer_disk_layout *layout,
                             UINT64 *out_esp_lba,
                             UINT64 *out_esp_sectors,
                             UINT64 *out_boot_lba,

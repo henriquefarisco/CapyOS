@@ -8,6 +8,20 @@ from contextlib import suppress
 from smoke_x64_helpers import wait_and_send, wait_for_vm_exit
 from smoke_x64_session import SmokeSession
 
+
+def installer_has_single_eligible_target(text: str) -> bool:
+    return any(
+        line.strip() == "[installer] eligible-targets=1"
+        for line in text.splitlines()
+    )
+
+
+def require_first_boot_wizard(marker: str, required: bool) -> None:
+    direct_login = marker in ("Usuario:", "User:", "Usuario: ", "User: ")
+    if required and (direct_login or marker == "Provisionamento automatico"):
+        raise RuntimeError("fresh install reached login without first-boot wizard")
+
+
 MODULE_INSTALL_DONE_MARKERS = [
     "[modules] install complete",
     "[modules] instalacao concluida",
@@ -26,7 +40,19 @@ def complete_iso_install(
     password: str = "admin",
 ) -> None:
     mk = session.marker()
-    session.wait_for("Press 'I' to start", timeout=timeout * 4, start_at=mk)
+    entry_prompt = session.wait_for_any(
+        ["Select target disk [", "Press 'I' to start"],
+        timeout=timeout * 4,
+        start_at=mk,
+    )
+    if entry_prompt == "Select target disk [":
+        if not installer_has_single_eligible_target(session.tail(2400)):
+            raise RuntimeError(
+                "installer smoke requires exactly one eligible target"
+            )
+        session.send_line("1")
+        mk = session.marker()
+        session.wait_for("Press 'I' to start", timeout=timeout, start_at=mk)
     session.send_text("I", newline=False)
 
     mk = session.marker()
@@ -34,6 +60,7 @@ def complete_iso_install(
         [
             "Select language [1]:",
             "=== Volume Recovery Key ===",
+            "Type ERASE and press ENTER to confirm:",
             "Confirm installation? [Y/n]:",
             "Confirmar instalacao? [S/n]:",
             "Confirmar instalacion? [S/n]:",
@@ -44,14 +71,27 @@ def complete_iso_install(
     if installer_prompt != "Select language [1]:":
         if installer_prompt == "=== Volume Recovery Key ===":
             confirm_prompts = [
+                "Type ERASE and press ENTER to confirm:",
                 "Confirm installation? [Y/n]:",
                 "Confirmar instalacao? [S/n]:",
                 "Confirmar instalacion? [S/n]:",
             ]
-            if not any(prompt in session.tail(2400) for prompt in confirm_prompts):
+            confirm_prompt = next(
+                (prompt for prompt in confirm_prompts if prompt in session.tail(2400)),
+                "",
+            )
+            if not confirm_prompt:
                 mk = session.marker()
-                session.wait_for_any(confirm_prompts, timeout=timeout, start_at=mk)
-        session.send_line("")
+                confirm_prompt = session.wait_for_any(
+                    confirm_prompts, timeout=timeout, start_at=mk
+                )
+        else:
+            confirm_prompt = installer_prompt
+        session.send_line(
+            "ERASE"
+            if confirm_prompt == "Type ERASE and press ENTER to confirm:"
+            else ""
+        )
         mk = session.marker()
         session.wait_for(
             "Installation complete. Rebooting...",
@@ -118,12 +158,21 @@ def complete_iso_install(
     session.send_line("")
 
     mk = session.marker()
-    session.wait_for_any(
-        ["Confirm installation? [Y/n]:", "Confirmar instalacao? [S/n]:",
-         "Confirmar instalacion? [S/n]:"],
-        timeout=timeout, start_at=mk,
+    confirm_prompt = session.wait_for_any(
+        [
+            "Type ERASE and press ENTER to confirm:",
+            "Confirm installation? [Y/n]:",
+            "Confirmar instalacao? [S/n]:",
+            "Confirmar instalacion? [S/n]:",
+        ],
+        timeout=timeout,
+        start_at=mk,
     )
-    session.send_line("")
+    session.send_line(
+        "ERASE"
+        if confirm_prompt == "Type ERASE and press ENTER to confirm:"
+        else ""
+    )
 
     mk = session.marker()
     session.wait_for(
@@ -136,8 +185,15 @@ def complete_iso_install(
 
 def cancel_iso_install(session: SmokeSession, timeout: float) -> None:
     mk = session.marker()
-    session.wait_for("Press 'I' to start", timeout=timeout * 4, start_at=mk)
-    session.send_text("x", newline=False)
+    prompt = session.wait_for_any(
+        ["Select target disk [", "Press 'I' to start"],
+        timeout=timeout * 4,
+        start_at=mk,
+    )
+    if prompt == "Select target disk [":
+        session.send_line("0")
+    else:
+        session.send_text("x", newline=False)
 
 
 def maybe_run_first_boot_setup(
@@ -149,14 +205,9 @@ def maybe_run_first_boot_setup(
     volume_key: str | None = None,
     module_profile: str = "basic",
     modules_index_url: str = "",
+    require_interactive: bool = False,
 ) -> str:
-    """Wait for first boot to complete.
-
-    When the installer has provisioned all config (hostname, theme, admin,
-    etc.), the first boot runs a silent provisioning path and goes straight
-    to the login prompt.  If for some reason the interactive wizard appears
-    instead, handle it as a fallback.
-    """
+    """Complete first boot, optionally requiring the interactive wizard."""
     mk = session.marker()
     # The silent provisioner prints this, then goes to login.
     # The interactive fallback would show layout prompts instead.
@@ -203,6 +254,7 @@ def maybe_run_first_boot_setup(
             timeout=timeout * 4,
             start_at=mk,
         )
+    require_first_boot_wizard(found, require_interactive)
     if found in ("Usuario:", "User:", "Usuario: ", "User: "):
         return "login"
     if found == "Provisionamento automatico":

@@ -1,6 +1,7 @@
 #include "auth/session.h"
 
 #include "fs/vfs.h"
+#include "kernel/task.h"
 
 #include <stdint.h>
 
@@ -227,9 +228,16 @@ int session_resolve_path(const struct session_context *ctx, const char *input, c
 }
 
 void session_set_active(struct session_context *ctx) {
-    active_session = ctx;
+    struct task *current = task_current();
+    if (current) {
+        current->active_session = ctx;
+    } else {
+        active_session = ctx;
+    }
 }
 
 struct session_context *session_active(void) {
+    struct task *current = task_current();
+    if (current) return (struct session_context *)current->active_session;
     return active_session;
 }

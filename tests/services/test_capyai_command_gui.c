@@ -59,17 +59,29 @@ int capyai_plan(const char *model_text, size_t model_len, const char *intent,
     if (plan) memset(plan, 0, sizeof(*plan));
     return 0;
 }
-int capyai_execute_intent(const char *model_text, size_t model_len,
-                          const char *intent, const char *platform,
-                          const char *shell,
-                          const struct capyai_perms *perms,
-                          struct capyai_session *session,
-                          capyai_dispatch_fn dispatch, void *dispatch_ctx,
-                          struct capyai_plan *plan,
-                          struct capyai_exec_result *result) {
+int capyai_execute_intent_v2(
+    const char *model_text, size_t model_len,
+    const char *intent, const char *platform, const char *shell,
+    const struct capyai_perms *perms, struct capyai_session *session,
+    capyai_dispatch_fn dispatch, void *dispatch_ctx,
+    capyai_typed_dispatch_fn typed_dispatch, void *typed_dispatch_ctx,
+    struct capyai_plan *plan, struct capyai_exec_result *result) {
     (void)model_text; (void)model_len; (void)intent; (void)platform;
     (void)shell; (void)perms; (void)session; (void)dispatch;
-    (void)dispatch_ctx; (void)plan; (void)result;
+    (void)dispatch_ctx; (void)typed_dispatch; (void)typed_dispatch_ctx;
+    (void)plan; (void)result;
+    return 0;
+}
+int capyai_native_file_dispatch(void *ctx,
+                                const struct capy_ai_output *tool_call,
+                                char *detail, size_t detail_size) {
+    (void)ctx; (void)tool_call; (void)detail; (void)detail_size;
+    return 0;
+}
+int capyai_native_system_dispatch(void *ctx,
+                                  const struct capy_ai_output *tool_call,
+                                  char *detail, size_t detail_size) {
+    (void)ctx; (void)tool_call; (void)detail; (void)detail_size;
     return 0;
 }
 void capyai_summary(const struct capyai_plan *plan,

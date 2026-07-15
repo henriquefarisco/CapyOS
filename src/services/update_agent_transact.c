@@ -80,6 +80,7 @@ int update_agent_staged_requires_payload_verification(void) {
 }
 
 int update_agent_apply_boot_slot_verified(const char *actual_sha256_hex) {
+    struct update_manifest_view manifest;
     int poll_rc = update_agent_poll();
     if (poll_rc < 0) return poll_rc;
     if (!update_agent_g_status.staged_payload_sha256[0]) {
@@ -122,11 +123,24 @@ int update_agent_apply_boot_slot_verified(const char *actual_sha256_hex) {
              "[audit] [update] payload-sha256 mismatch -> refused");
         return -31;
     }
+    update_agent_manifest_view_reset(&manifest);
+    if (update_agent_read_manifest_view(
+            update_agent_g_status.staged_manifest_path, &manifest) != 0 ||
+        update_agent_verify_cached_payload(&manifest) != 0) {
+        update_agent_g_status.last_result = -31;
+        update_agent_local_copy(
+            update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
+            "payload sha256 mismatch; payload cache unreadable or altered");
+        klog(KLOG_ERROR,
+             "[audit] [update] payload cache readback mismatch -> refused");
+        return -31;
+    }
 
     return update_agent_apply_unsupported();
 }
 
 int update_agent_apply_cached_payload(void) {
+    struct update_manifest_view manifest;
     int poll_rc = update_agent_poll();
     if (poll_rc < 0) return poll_rc;
     if (!update_agent_g_status.payload_cache_sha256[0]) {
@@ -137,6 +151,18 @@ int update_agent_apply_cached_payload(void) {
         klog(KLOG_WARN,
              "[audit] [update] payload cache sha256 missing -> refused");
         return -50;
+    }
+    update_agent_manifest_view_reset(&manifest);
+    if (update_agent_read_manifest_view(
+            update_agent_g_status.staged_manifest_path, &manifest) != 0 ||
+        update_agent_verify_cached_payload(&manifest) != 0) {
+        update_agent_g_status.last_result = -31;
+        update_agent_local_copy(
+            update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
+            "payload sha256 mismatch; payload cache unreadable or altered");
+        klog(KLOG_ERROR,
+             "[audit] [update] payload cache readback mismatch -> refused");
+        return -31;
     }
     return update_agent_apply_boot_slot_verified(
         update_agent_g_status.payload_cache_sha256);
@@ -163,24 +189,13 @@ int update_agent_apply_boot_slot(void) {
 int update_agent_confirm_health(void) {
     int poll_rc = update_agent_poll();
     if (poll_rc < 0) return poll_rc;
-    if (boot_slot_confirm_health() != 0) {
-        update_agent_g_status.last_result = -1;
-        update_agent_local_copy(update_agent_g_status.summary,
-                                sizeof(update_agent_g_status.summary),
-                                "boot health confirm failed");
-        klog(KLOG_WARN, "[update] Boot slot health confirm failed.");
-        return -1;
-    }
-    if (update_agent_g_status.pending_activation) {
-        int disarm_rc = update_agent_set_pending_activation(0);
-        if (disarm_rc < 0) return disarm_rc;
-    }
-    update_agent_g_status.last_result = 0;
-    update_agent_local_copy(update_agent_g_status.summary,
-                            sizeof(update_agent_g_status.summary),
-                            "boot health confirmed; update committed");
-    klog(KLOG_INFO, "[update] Boot health confirmed; update committed.");
-    return 0;
+    update_agent_g_status.last_result = UPDATE_AGENT_ERR_UNSUPPORTED;
+    update_agent_local_copy(
+        update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
+        "persistent health confirmation unsupported; no update committed");
+    klog(KLOG_WARN,
+         "[audit] [update] health confirm refused: persistent boot control unavailable");
+    return UPDATE_AGENT_ERR_UNSUPPORTED;
 }
 
 int update_agent_check_rollback(void) {

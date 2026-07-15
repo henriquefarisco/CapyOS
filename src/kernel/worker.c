@@ -94,6 +94,7 @@ int worker_pool_create(const char *name, uint32_t thread_count) {
     struct task *t = task_create_kernel(tname, worker_thread_entry, pool);
     if (t) {
       extern void scheduler_add(struct task *t);
+      t->active_session = NULL;
       pool->threads[created++] = t;
       scheduler_add(t);
     }

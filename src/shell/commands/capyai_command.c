@@ -22,6 +22,7 @@
 #ifdef CAPYOS_HAVE_CAPYAI
 
 #include "services/capyai.h"
+#include "services/capyai_system_actions.h"
 #include "drivers/console/tty.h"
 #ifndef CAPYOS_PROFILE_CORE_ONLY
 #include "apps/capyai_chat.h"
@@ -87,8 +88,6 @@ static const char CAPYAI_DEFAULT_MODEL[] =
     "T -100000 deletar\nT -100000 apagar\nT -100000 excluir\nT -100000 remova\nE\n";
 #endif /* !CAPYOS_CAPYAI_EMBED_MODEL */
 
-static struct capyai_session g_capyai_session;
-
 #ifdef CAPYOS_CAPYAI_EMBED_MODEL
 /* Trained CapyOS model artifact embedded from ../CapyAI/artifacts by the
  * Makefile (objcopy -> .rodata). Accessed RIP-relative like embedded_progs. */
@@ -127,6 +126,27 @@ static int capyai_dispatch(void *opaque, const char *command) {
     return cmd->handler(ctx, argc, argv);
 }
 
+static int capyai_action_equal(const char *value, const char *literal) {
+    size_t i = 0u;
+    if (!value || !literal) return 0;
+    while (value[i] && literal[i] && value[i] == literal[i]) ++i;
+    return value[i] == '\0' && literal[i] == '\0';
+}
+
+static int capyai_typed_dispatch(void *opaque,
+                                 const struct capy_ai_output *tool_call,
+                                 char *detail, size_t detail_size) {
+    if (!tool_call) return 127;
+    if (capyai_action_equal(tool_call->action, "file_create") ||
+        capyai_action_equal(tool_call->action, "file_edit_text") ||
+        capyai_action_equal(tool_call->action, "file_move")) {
+        return capyai_native_file_dispatch(opaque, tool_call, detail,
+                                           detail_size);
+    }
+    return capyai_native_system_dispatch(opaque, tool_call, detail,
+                                         detail_size);
+}
+
 static void capyai_process(struct shell_context *ctx, const char *intent,
                            const struct capyai_perms *perms) {
     struct capyai_plan plan;
@@ -134,9 +154,30 @@ static void capyai_process(struct shell_context *ctx, const char *intent,
     char summary[CAPYAI_SUMMARY_MAX];
     size_t mlen = 0u;
     const char *model = capyai_builtin_model(&mlen);
-    (void)capyai_execute_intent(model, mlen, intent, "capy", "capysh", perms,
-                                &g_capyai_session, capyai_dispatch, ctx,
-                                &plan, &result);
+    struct capyai_session task_session;
+    size_t i;
+    for (i = 0u; i < sizeof(task_session); ++i)
+        ((unsigned char *)&task_session)[i] = 0u;
+    if (ctx && ctx->session) {
+        for (i = 0u; ctx->session->assistant_last_file[i] &&
+                     i + 1u < sizeof(task_session.last_file); ++i) {
+            task_session.last_file[i] = ctx->session->assistant_last_file[i];
+        }
+        task_session.last_file[i] = '\0';
+        task_session.turns = ctx->session->assistant_turns;
+    }
+    (void)capyai_execute_intent_v2(
+        model, mlen, intent, "capy", "capysh", perms,
+        &task_session, capyai_dispatch, ctx,
+        capyai_typed_dispatch, ctx, &plan, &result);
+    if (ctx && ctx->session) {
+        for (i = 0u; task_session.last_file[i] &&
+                     i + 1u < sizeof(ctx->session->assistant_last_file); ++i) {
+            ctx->session->assistant_last_file[i] = task_session.last_file[i];
+        }
+        ctx->session->assistant_last_file[i] = '\0';
+        ctx->session->assistant_turns = task_session.turns;
+    }
     capyai_summary(&plan, &result, summary, sizeof(summary));
     shell_print("[capyai] ");
     shell_print(summary);

@@ -193,47 +193,249 @@ BOOLEAN boot_device_is_cdrom(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   return device_path_has_cdrom_node(dp_raw);
 }
 
-EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
-                                     EFI_BLOCK_IO_PROTOCOL **out_bio) {
-  if (!st || !st->BootServices || !out_bio)
+#define INSTALLER_DISK_MAX_CANDIDATES 16u
+
+struct installer_disk_candidate {
+  EFI_HANDLE handle;
+  EFI_BLOCK_IO_PROTOCOL *bio;
+  UINT32 media_id;
+  UINT64 path_id;
+  UINT64 disk_bytes;
+  struct installer_disk_geometry geometry;
+  struct installer_disk_layout layout;
+  int preflight_result;
+};
+
+static UINT64 installer_disk_path_id(EFI_SYSTEM_TABLE *st, EFI_HANDLE handle) {
+  VOID *path_raw = NULL;
+  dp_node_hdr_t *node;
+  UINT64 hash = installer_disk_path_hash_init();
+  UINTN total = 0u;
+  EFI_STATUS stt;
+  if (!st || !st->BootServices || !handle) {
+    return 0u;
+  }
+  stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, handle,
+                          &DevicePathProtocol, (VOID **)&path_raw);
+  if (EFI_ERROR(stt) || !path_raw) {
+    return 0u;
+  }
+  node = (dp_node_hdr_t *)path_raw;
+  for (UINTN guard = 0u; guard < 128u; ++guard) {
+    UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
+    if (len < sizeof(dp_node_hdr_t) || len > 4096u ||
+        total > 4096u - len) {
+      return 0u;
+    }
+    hash = installer_disk_path_hash_update(hash, (const uint8_t *)node,
+                                           (size_t)len);
+    if (hash == 0u) {
+      return 0u;
+    }
+    total += len;
+    if (node->Type == DP_TYPE_END &&
+        node->SubType == DP_SUBTYPE_END_ENTIRE) {
+      return hash ? hash : 1u;
+    }
+    node = (dp_node_hdr_t *)((UINT8 *)node + len);
+  }
+  return 0u;
+}
+
+static int installer_disk_layout_equal(
+    const struct installer_disk_layout *a,
+    const struct installer_disk_layout *b) {
+  return a && b && a->required_bytes == b->required_bytes &&
+         a->total_sectors == b->total_sectors &&
+         a->first_usable_lba == b->first_usable_lba &&
+         a->last_usable_lba == b->last_usable_lba &&
+         a->backup_entries_lba == b->backup_entries_lba &&
+         a->esp_lba == b->esp_lba && a->esp_sectors == b->esp_sectors &&
+         a->boot_lba == b->boot_lba &&
+         a->boot_sectors == b->boot_sectors &&
+         a->data_lba == b->data_lba &&
+         a->data_sectors == b->data_sectors;
+}
+
+static void installer_disk_geometry_from_bio(
+    EFI_BLOCK_IO_PROTOCOL *bio, struct installer_disk_geometry *geometry) {
+  geometry->block_count =
+      bio && bio->Media
+          ? (bio->Media->LastBlock == UINT64_MAX
+                 ? UINT64_MAX
+                 : (UINT64)bio->Media->LastBlock + 1ULL)
+          : 0u;
+  geometry->block_size = bio && bio->Media ? bio->Media->BlockSize : 0u;
+  geometry->media_present =
+      bio && bio->Media && bio->Media->MediaPresent ? 1u : 0u;
+  geometry->logical_partition =
+      bio && bio->Media && bio->Media->LogicalPartition ? 1u : 0u;
+  geometry->read_only = bio && bio->Media && bio->Media->ReadOnly ? 1u : 0u;
+  geometry->removable =
+      bio && bio->Media && bio->Media->RemovableMedia ? 1u : 0u;
+}
+
+EFI_STATUS installer_revalidate_target(
+    EFI_SYSTEM_TABLE *st, const installer_disk_target_t *target) {
+  EFI_BLOCK_IO_PROTOCOL *bio = NULL;
+  struct installer_disk_geometry geometry;
+  struct installer_disk_layout layout;
+  EFI_STATUS stt;
+  if (!st || !st->BootServices || !target || !target->handle ||
+      !target->bio) {
     return EFI_INVALID_PARAMETER;
-  *out_bio = NULL;
+  }
+  stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, target->handle,
+                          &BlockIoProtocol, (VOID **)&bio);
+  if (EFI_ERROR(stt) || !bio || !bio->Media || bio != target->bio) {
+    return EFI_MEDIA_CHANGED;
+  }
+  installer_disk_geometry_from_bio(bio, &geometry);
+  if (target->media_id != bio->Media->MediaId ||
+      target->path_id != installer_disk_path_id(st, target->handle) ||
+      target->geometry.block_count != geometry.block_count ||
+      target->geometry.block_size != geometry.block_size) {
+    return EFI_MEDIA_CHANGED;
+  }
+  if (installer_disk_plan(&geometry, &layout) !=
+          INSTALLER_DISK_PREFLIGHT_OK ||
+      !installer_disk_layout_equal(&target->layout, &layout)) {
+    return EFI_ACCESS_DENIED;
+  }
+  return EFI_SUCCESS;
+}
 
+EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
+                              installer_disk_target_t *out_target) {
   EFI_HANDLE *handles = NULL;
-  UINTN count = 0;
-  EFI_STATUS stt =
-      uefi_call_wrapper(st->BootServices->LocateHandleBuffer, 5, ByProtocol,
-                        &BlockIoProtocol, NULL, &count, &handles);
-  if (EFI_ERROR(stt) || !handles || count == 0)
-    return EFI_NOT_FOUND;
+  UINTN handle_count = 0;
+  struct installer_disk_candidate candidates[INSTALLER_DISK_MAX_CANDIDATES];
+  UINTN eligible_map[INSTALLER_DISK_MAX_CANDIDATES];
+  UINTN candidate_count = 0;
+  UINTN eligible_count = 0;
+  EFI_STATUS stt;
 
-  EFI_BLOCK_IO_PROTOCOL *best = NULL;
-  UINT64 best_blocks = 0;
-  for (UINTN i = 0; i < count; i++) {
+  if (!st || !st->BootServices || !out_target) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *out_target = (installer_disk_target_t){0};
+
+  stt = uefi_call_wrapper(st->BootServices->LocateHandleBuffer, 5, ByProtocol,
+                          &BlockIoProtocol, NULL, &handle_count, &handles);
+  if (EFI_ERROR(stt) || !handles || handle_count == 0u) {
+    return EFI_NOT_FOUND;
+  }
+
+  for (UINTN i = 0; i < handle_count; ++i) {
     EFI_BLOCK_IO_PROTOCOL *bio = NULL;
+    struct installer_disk_geometry geometry;
+    struct installer_disk_candidate *candidate;
+
     stt = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, handles[i],
                             &BlockIoProtocol, (VOID **)&bio);
-    if (EFI_ERROR(stt) || !bio || !bio->Media)
+    if (EFI_ERROR(stt) || !bio || !bio->Media) {
       continue;
-    if (bio->Media->LogicalPartition)
-      continue;
-    if (bio->Media->ReadOnly)
-      continue;
-    if (bio->Media->RemovableMedia)
-      continue;
-    if (bio->Media->BlockSize != 512)
-      continue; // esperado pelo layout atual
-    UINT64 blocks = (UINT64)bio->Media->LastBlock + 1ULL;
-    if (blocks > best_blocks) {
-      best = bio;
-      best_blocks = blocks;
     }
+    installer_disk_geometry_from_bio(bio, &geometry);
+    if (!geometry.media_present || geometry.logical_partition ||
+        geometry.read_only || geometry.removable) {
+      continue;
+    }
+    if (candidate_count >= INSTALLER_DISK_MAX_CANDIDATES) {
+      FreePool(handles);
+      return EFI_BUFFER_TOO_SMALL;
+    }
+    candidate = &candidates[candidate_count++];
+    candidate->handle = handles[i];
+    candidate->bio = bio;
+    candidate->media_id = bio->Media->MediaId;
+    candidate->path_id = installer_disk_path_id(st, handles[i]);
+    candidate->geometry = geometry;
+    candidate->disk_bytes =
+        geometry.block_size != 0u &&
+                geometry.block_count <= UINT64_MAX / geometry.block_size
+            ? geometry.block_count * geometry.block_size
+            : 0u;
+    candidate->preflight_result =
+        candidate->path_id == 0u
+            ? INSTALLER_DISK_PREFLIGHT_INVALID
+            : installer_disk_plan(&geometry, &candidate->layout);
   }
   FreePool(handles);
-  if (!best)
+
+  if (candidate_count == 0u) {
     return EFI_NOT_FOUND;
-  *out_bio = best;
-  return EFI_SUCCESS;
+  }
+
+  Print(L"\r\n=== Target Disk Selection ===\r\n\r\n");
+  Print(L"Select the exact fixed disk that may be erased.\r\n");
+  for (UINTN i = 0; i < candidate_count; ++i) {
+    struct installer_disk_candidate *candidate = &candidates[i];
+    if (candidate->preflight_result == INSTALLER_DISK_PREFLIGHT_OK) {
+      eligible_map[eligible_count] = i;
+      Print(L"  [%u] PathId %016lx, MediaId %u - %lu MiB - eligible "
+            L"(%lu MiB DATA)\r\n",
+            (UINT32)(eligible_count + 1u), candidate->path_id,
+            candidate->media_id,
+            candidate->disk_bytes / (1024ULL * 1024ULL),
+            (candidate->layout.data_sectors * INSTALLER_DISK_BLOCK_SIZE) /
+                (1024ULL * 1024ULL));
+      ++eligible_count;
+    } else if (candidate->preflight_result ==
+               INSTALLER_DISK_PREFLIGHT_TOO_SMALL) {
+      Print(L"  [--] PathId %016lx, MediaId %u - %lu MiB - too small "
+            L"(minimum %lu MiB)\r\n",
+            candidate->path_id, candidate->media_id,
+            candidate->disk_bytes / (1024ULL * 1024ULL),
+            (installer_disk_minimum_bytes() + (1024ULL * 1024ULL) - 1ULL) /
+                (1024ULL * 1024ULL));
+    } else if (candidate->preflight_result ==
+               INSTALLER_DISK_PREFLIGHT_BLOCK_SIZE) {
+      Print(L"  [--] PathId %016lx, MediaId %u - unsupported block size\r\n",
+            candidate->path_id, candidate->media_id);
+    } else {
+      Print(L"  [--] PathId %016lx, MediaId %u - unavailable\r\n",
+            candidate->path_id, candidate->media_id);
+    }
+  }
+  Print(L"[installer] eligible-targets=%u\r\n", (UINT32)eligible_count);
+  if (eligible_count == 0u) {
+    Print(L"No disk passed the installation preflight.\r\n");
+    return EFI_VOLUME_FULL;
+  }
+
+  while (1) {
+    CHAR16 selection_in[16];
+    char selection_ascii[16];
+    size_t selected_eligible = 0u;
+    UINTN selected_index;
+    Print(L"\r\nSelect target disk [1-%u] or 0 to cancel: ",
+          (UINT32)eligible_count);
+    uefi_readline(st, selection_in, 16u, FALSE);
+    char16_to_ascii(selection_ascii, sizeof(selection_ascii), selection_in);
+    if (ascii_streq(selection_ascii, "0")) {
+      return EFI_ABORTED;
+    }
+    if (installer_disk_parse_selection(selection_ascii,
+                                       (size_t)eligible_count,
+                                       &selected_eligible) != 0) {
+      Print(L"Invalid disk selection.\r\n");
+      continue;
+    }
+    selected_index = eligible_map[selected_eligible];
+    out_target->handle = candidates[selected_index].handle;
+    out_target->bio = candidates[selected_index].bio;
+    out_target->media_id = candidates[selected_index].media_id;
+    out_target->path_id = candidates[selected_index].path_id;
+    out_target->geometry = candidates[selected_index].geometry;
+    out_target->layout = candidates[selected_index].layout;
+    Print(L"Selected PathId %016lx, MediaId %u (%lu MiB, %lu MiB DATA).\r\n",
+          out_target->path_id, out_target->media_id,
+          candidates[selected_index].disk_bytes / (1024ULL * 1024ULL),
+          (out_target->layout.data_sectors * INSTALLER_DISK_BLOCK_SIZE) /
+              (1024ULL * 1024ULL));
+    return EFI_SUCCESS;
+  }
 }
 
 static UINTN dp_node_len(const dp_node_hdr_t *node) {

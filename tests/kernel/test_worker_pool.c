@@ -49,6 +49,7 @@ struct task *task_create_kernel(const char *name, task_entry_fn entry,
   memset(task, 0, sizeof(*task));
   task->pid = (uint32_t)created_count;
   task->state = TASK_STATE_READY;
+  task->active_session = (void *)(uintptr_t)1u;
   captured_entry = entry;
   captured_arg = arg;
   return task;
@@ -120,6 +121,8 @@ int main(void) {
   pool = worker_pool_create("bounded", 99u);
   CHECK(pool == 0 && created_count == (int)WORKER_POOL_THREAD_MAX,
         "thread count is capped");
+  CHECK(tasks[0].active_session == NULL,
+        "persistent workers start without an inherited principal");
 
   reset_fakes();
   pool = worker_pool_create("idle", 1u);

@@ -134,8 +134,7 @@ static int compare_update_versions(const char *candidate, const char *current,
     return -1;
   }
   if (parse_update_version_key(current, &b) != 0) {
-    *out_cmp = update_agent_local_equal(candidate, current) ? 0 : 1;
-    return 0;
+    return -1;
   }
   cmp = compare_u32(a.major, b.major);
   if (cmp == 0) cmp = compare_u32(a.minor, b.minor);
@@ -148,6 +147,31 @@ static int compare_update_versions(const char *candidate, const char *current,
 }
 
 /* ── manifest field validators ──────────────────────────────────────── */
+
+static int parse_payload_size(const char *value, uint32_t *out) {
+  uint32_t size = 0u;
+  size_t i = 0u;
+  if (!value || !out || value[0] < '1' || value[0] > '9') {
+    return -1;
+  }
+  while (value[i]) {
+    uint32_t digit = 0u;
+    if (!update_agent_local_is_digit(value[i])) {
+      return -1;
+    }
+    digit = (uint32_t)(value[i] - '0');
+    if (size > (0xFFFFFFFFu - digit) / 10u) {
+      return -1;
+    }
+    size = size * 10u + digit;
+    ++i;
+  }
+  if (size == 0u || size > UPDATE_AGENT_PAYLOAD_MAX_BYTES) {
+    return -1;
+  }
+  *out = size;
+  return 0;
+}
 
 /* Raw Ed25519 public key for signed latest.ini catalogs. The corresponding
  * private key is offline-only and must never be present in the image or CI. */
@@ -162,6 +186,14 @@ int update_agent_manifest_payload_sha256_valid(
   return view &&
          update_agent_local_hex_string_valid(view->payload_sha256,
                                              UPDATE_AGENT_SHA256_HEX_LEN);
+}
+
+int update_agent_manifest_payload_size_valid(
+    const struct update_manifest_view *view) {
+  return view &&
+         (!view->payload_size_present ||
+          (view->payload_size > 0u &&
+           view->payload_size <= UPDATE_AGENT_PAYLOAD_MAX_BYTES));
 }
 
 int update_agent_manifest_payload_url_valid(
@@ -454,6 +486,10 @@ static void parse_manifest_line(const char *key, const char *value,
   } else if (update_agent_local_equal(key, "payload_url")) {
     update_agent_local_copy(view->payload_url, sizeof(view->payload_url),
                             value);
+  } else if (update_agent_local_equal(key, "payload_size")) {
+    view->payload_size_present = 1u;
+    view->payload_size = 0u;
+    (void)parse_payload_size(value, &view->payload_size);
   } else if (update_agent_local_equal(key, "payload_sha256")) {
     update_agent_local_copy(view->payload_sha256, sizeof(view->payload_sha256),
                             value);

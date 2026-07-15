@@ -154,8 +154,11 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
 
   UINT32 fat_len = cluster_count + 2U;
   UINT32 *fat = AllocatePool((UINTN)fat_len * sizeof(UINT32));
-  if (!fat)
+  if (!fat) {
+    Print(L"[UEFI] FAT32 alloc failed: FAT table bytes=%lu\r\n",
+          (UINT64)fat_len * sizeof(UINT32));
     return EFI_OUT_OF_RESOURCES;
+  }
   for (UINT32 i = 0; i < fat_len; i++)
     fat[i] = 0;
   fat[0] = 0x0FFFFFF8U;
@@ -167,16 +170,19 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   UINT32 efi_n = 0, efi_boot_n = 0, bootdir_n = 0;
   if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                           bytes_per_cluster, &efi_cl, &efi_n)) {
+    Print(L"[UEFI] FAT32 cluster allocation failed: EFI directory\r\n");
     FreePool(fat);
     return EFI_OUT_OF_RESOURCES;
   }
   if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                           bytes_per_cluster, &efi_boot_cl, &efi_boot_n)) {
+    Print(L"[UEFI] FAT32 cluster allocation failed: EFI/BOOT directory\r\n");
     FreePool(fat);
     return EFI_OUT_OF_RESOURCES;
   }
   if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                           bytes_per_cluster, &bootdir_cl, &bootdir_n)) {
+    Print(L"[UEFI] FAT32 cluster allocation failed: BOOT directory\r\n");
     FreePool(fat);
     return EFI_OUT_OF_RESOURCES;
   }
@@ -185,17 +191,23 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   UINT32 bootx64_need = 0, kernel_need = 0, manifest_need = 0, bootcfg_need = 0;
   if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                           bootx64_sz, &bootx64_cl, &bootx64_need)) {
+    Print(L"[UEFI] FAT32 cluster allocation failed: BOOTX64 bytes=%lu\r\n",
+          (UINT64)bootx64_sz);
     FreePool(fat);
     return EFI_OUT_OF_RESOURCES;
   }
   if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                           kernel_sz, &kernel_cl, &kernel_need)) {
+    Print(L"[UEFI] FAT32 cluster allocation failed: kernel bytes=%lu\r\n",
+          (UINT64)kernel_sz);
     FreePool(fat);
     return EFI_OUT_OF_RESOURCES;
   }
   if (manifest && manifest_sz) {
     if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                             manifest_sz, &manifest_cl, &manifest_need)) {
+      Print(L"[UEFI] FAT32 cluster allocation failed: manifest bytes=%lu\r\n",
+            (UINT64)manifest_sz);
       FreePool(fat);
       return EFI_OUT_OF_RESOURCES;
     }
@@ -203,6 +215,8 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   if (bootcfg && bootcfg_sz) {
     if (!fat32_alloc_contig(fat, fat_len, bytes_per_cluster, &next_free,
                             bootcfg_sz, &bootcfg_cl, &bootcfg_need)) {
+      Print(L"[UEFI] FAT32 cluster allocation failed: boot config bytes=%lu\r\n",
+            (UINT64)bootcfg_sz);
       FreePool(fat);
       return EFI_OUT_OF_RESOURCES;
     }
@@ -330,6 +344,8 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   UINTN fat_bytes = (UINTN)fat_size * 512U;
   UINT8 *fatbuf = AllocatePool(fat_bytes);
   if (!fatbuf) {
+    Print(L"[UEFI] FAT32 alloc failed: serialized FAT bytes=%lu\r\n",
+          (UINT64)fat_bytes);
     FreePool(fat);
     return EFI_OUT_OF_RESOURCES;
   }
@@ -357,14 +373,19 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     return stt;
 
   UINT8 *scratch = AllocatePool(bytes_per_cluster);
-  if (!scratch)
+  if (!scratch) {
+    Print(L"[UEFI] FAT32 alloc failed: scratch bytes=%u\r\n",
+          bytes_per_cluster);
     return EFI_OUT_OF_RESOURCES;
+  }
 
   UINT8 *root = AllocatePool(bytes_per_cluster);
   UINT8 *efi_dir = AllocatePool(bytes_per_cluster);
   UINT8 *efi_boot_dir = AllocatePool(bytes_per_cluster);
   UINT8 *boot_dir = AllocatePool(bytes_per_cluster);
   if (!root || !efi_dir || !efi_boot_dir || !boot_dir) {
+    Print(L"[UEFI] FAT32 alloc failed: directory buffers bytes=%u each\r\n",
+          bytes_per_cluster);
     if (root)
       FreePool(root);
     if (efi_dir)
@@ -450,6 +471,8 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     UINTN verify_bytes = (UINTN)bootcfg_need * (UINTN)bytes_per_cluster;
     UINT8 *verify_buf = AllocatePool(verify_bytes);
     if (!verify_buf) {
+      Print(L"[UEFI] FAT32 alloc failed: verify bytes=%lu\r\n",
+            (UINT64)verify_bytes);
       FreePool(scratch);
       return EFI_OUT_OF_RESOURCES;
     }

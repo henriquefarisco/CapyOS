@@ -25,6 +25,52 @@ Observacao para ISO UEFI:
 - Em boot El Torito, o loader tambem aceita midia CD-ROM detectada pelo device
   path UEFI, alem do marcador e do atributo readonly.
 
+### 1.1 Teste manual seguro do instalador
+
+Antes desta fatia da Etapa 8, o loader escolhia silenciosamente o maior disco
+fixo gravavel; o layout so era validado depois de `wipe_blocks()`, portanto um
+disco pequeno podia ser apagado antes da falha de GPT. O fluxo atual deve:
+
+1. listar discos fisicos fixos por `PathId`, `MediaId`, capacidade e DATA
+   projetada;
+2. numerar apenas discos de setores de 512 bytes com pelo menos
+   `1880113664` bytes (1794 MiB arredondados para cima), incluindo 1 GiB minimo
+   para DATA;
+3. exigir o numero mesmo quando houver um unico alvo; `0` cancela sem escrita;
+4. repetir a identidade selecionada junto da recovery key;
+5. aceitar somente o token exato `ERASE`; Enter, `Y`, `erase` ou espacos
+   cancelam;
+6. revalidar path, media, geometria e o mesmo plano GPT antes do wipe.
+
+Teste negativo recomendado: conectar um disco menor que 1794 MiB e um guard
+elegivel com sentinela; o pequeno aparece como `[--]`, nunca pode ser escolhido,
+e o guard nao selecionado deve permanecer byte a byte intacto. Sem alvo elegivel,
+o loader informa `eligible-targets=0` e retorna sem prompt destrutivo.
+
+Teste positivo recomendado: usar dois discos descartaveis distinguiveis pelo
+`PathId`, selecionar explicitamente um deles, digitar `ERASE` e verificar que
+somente ele recebe ESP/BOOT/DATA. Depois, concluir first boot, login, criar um
+arquivo, reiniciar e confirmar persistencia.
+
+### 1.2 First boot e desktop
+
+Em disco vazio, o primeiro boot deve sempre mostrar `CAPYOS SETUP`, coletar
+teclado, hostname, administrador, senha e perfil. Login direto e
+`Provisionamento automatico` sao falha do smoke. A credencial automatizada usa
+senha exclusiva de teste, nunca `admin`; portanto uma imagem antiga com
+`admin/admin` nao pode produzir falso positivo.
+
+A ISO oficial falha no build se `CAPYCFG.BIN` contiver setup/senha preseedados
+ou se o kernel normal carregar o marker `capyai-gui-async`. Depois de qualquer
+smoke com `EXTRA_CFLAGS64`, um `make iso-uefi` normal deve imprimir que a
+variante mudou, reconstruir kernel/userland e produzir um ELF sem o marker de
+smoke.
+
+Apos login full, o desktop deve permanecer ativo ate logout, power ou
+`CTRL+ALT+F1`. Um frame seguido de shell indica variante de smoke residual;
+procure `[smoke] capyai-gui-async` entre `[desktop] session started/stopped`.
+Logout durante autostart deve voltar ao login, nunca expor o shell classico.
+
 ## 2. Validacao do boot
 
 ### 2.1 Firmware e loader
@@ -146,8 +192,11 @@ make test
 
 ## 7. Lacunas atuais
 
-- o instalador por ISO ja entra no wizard, executa o fluxo interativo e grava o
-  disco; falhas apos o reboot pelo HDD instalado devem ser tratadas como
-  problemas do runtime instalado, nao como ausencia do instalador
-- USB HID/XHCI Slice 3D está entregue por código/testes host-side; validação externa em VMware ainda pendente
+- o instalador por ISO exige selecao explicita, preflight e `ERASE`, mas ainda
+  falta o gate VMware dedicado multi-disco que prove automaticamente que o
+  disco guard nao selecionado permanece intacto;
+- falhas apos o reboot pelo HDD instalado devem ser tratadas como problemas do
+  runtime instalado, nao como ausencia do instalador;
+- USB HID/XHCI da Etapa 3 permanece como gate regressivo; a validacao externa
+  oficial foi aprovada em `alpha.245`;
 - o caminho `EFI ConIn` ainda mantem parte do boot em modo hibrido

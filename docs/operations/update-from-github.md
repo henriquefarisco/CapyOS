@@ -33,12 +33,18 @@ reescrita.
 5. A importação valida:
    - trilha `channel`/`branch`/`source`;
    - versão mais nova;
-   - `payload_sha256` hex64;
    - `payload_url` HTTPS ou caminho local sob `/system/update/`, sem espaços ou `..`;
+   - `payload_size` decimal positivo de até 8 MiB quando presente;
+   - `payload_sha256` hex64;
    - `signature_ed25519` hex128;
    - texto canônico assinado sem a própria linha de assinatura.
 6. O temporário é removido.
 7. Apenas manifesto aceito substitui `/system/update/latest.ini`.
+
+Novos manifestos canônicos usam a ordem `payload_url`, `payload_size`,
+`payload_sha256`; a forma legada sem `payload_size` permanece verificável. Em
+ambas, todos os campos anteriores a `signature_ed25519` pertencem aos bytes
+assinados.
 
 ## Comandos
 
@@ -51,10 +57,13 @@ update-rollback-check
 ```
 
 O fluxo seguro atualmente termina no download autenticado:
-`update-fetch` importa o `latest.ini` assinado, `update-download-payload` baixa e
-confere o SHA-256, e `update-prepare-dry-run` revalida catálogo e cache sem
-efeitos colaterais. `update-prepare-explain` expõe o gate `persistence` depois
-que todos os gates criptográficos passam.
+`update-fetch` importa o `latest.ini` assinado, `update-download-payload` limita
+o buffer temporário próprio pelo `payload_size` assinado, confere tamanho e
+SHA-256, grava o cache, relê os bytes persistidos e repete a validação antes de
+salvar o estado.
+`update-prepare-dry-run` reabre e recalcula o cache em vez de confiar apenas no
+hash textual de `state.ini`. `update-prepare-explain` expõe o gate `persistence`
+depois que todos os gates criptográficos e de readback passam.
 
 `update-prepare`, `update-stage`, `update-arm on` e `update-apply` retornam
 `UPDATE_AGENT_ERR_UNSUPPORTED` (`-60`). Isso é intencional: o payload ainda não
@@ -104,8 +113,12 @@ assinatura na última linha e ausência de campos duplicados.
 - `payload download buffer unavailable` — heap do kernel não conseguiu
   reservar o buffer temporário de download.
 - `payload download failed` — transporte/local read falhou, corpo vazio ou payload
-  excedeu o limite efetivo do HTTP do kernel (8 MiB; menor que o teto lógico
-  `UPDATE_AGENT_PAYLOAD_MAX_BYTES` de 16 MiB).
+  excedeu o limite efetivo do HTTP/runtime de 8 MiB.
+- `payload size mismatch; cache refused` — os bytes recebidos não têm o
+  `payload_size` assinado pelo manifesto.
+- `persisted payload cache verification failed` — a releitura do cache falhou ou
+  tamanho/SHA-256 mudaram após a gravação; o cache é invalidado e o estado de
+  staging é preservado sem o digest quando possível.
 - `payload sha256 mismatch; cache refused` — payload baixado não bate com
   `payload_sha256` do manifesto assinado.
 - `persistent update apply unsupported; verified download only` — staging,
@@ -129,6 +142,8 @@ assinatura na última linha e ausência de campos duplicados.
   `/system/update/payload.bin`.
 - `failed to persist payload cache state` — cache foi gravado, mas o digest
   verificado não pôde ser persistido em `/system/update/state.ini`.
+- `imported manifest payload size invalid` / `catalog cache payload size invalid`
+  — `payload_size` presente não é decimal canônico entre 1 e 8 MiB.
 - `imported manifest missing or malformed payload url` — manifesto importado
   não declara origem HTTPS/local aceitável para o payload.
 - `catalog cache missing or malformed payload url` — catálogo local mais novo
@@ -142,8 +157,9 @@ assinatura na última linha e ausência de campos duplicados.
 - `payload sha256 supplied is not a 64-char hex digest` — digest real malformado.
 - `payload sha256 mismatch; refusing to apply update` — payload local não bate
   com o manifesto assinado.
-- `boot health confirm failed` — o boot slot atual não aceitou confirmação de
-  saúde.
+- `persistent health confirmation unsupported; no update committed` — nenhum
+  boot-control A/B persistente existe; confirmar metadados apenas em RAM é
+  recusado com `-60`.
 - `boot rollback failed` — havia rollback pendente, mas a troca para o slot
   anterior falhou.
 
@@ -157,9 +173,17 @@ quando os comandos são aceitos. O histórico inclui `payload=` quando o catálo
 
 ## Limitações atuais
 
-- HTTPS depende do estado de F4/TLS no runtime; até lá, `payload_url` HTTPS pode
-  falhar no transporte real e deve continuar coberto por fetcher injetável em
-  testes ou por caminho local `/system/update/...`.
-- Staging/apply a partir de `/system/update/payload.bin` permanece fail-closed
-  até existir bundle versionado, slot inativo persistente, readback, troca
-  atômica e rollback comprovado após reboot.
+- HTTPS usa o TLS BearSSL real do kernel; ainda falta um smoke externo dedicado
+  do updater cobrindo DNS/TCP/TLS, redirects, manifesto e payload ponta a ponta.
+- `payload_size` limita o buffer do agente, mas `http_get` ainda materializa a
+  resposta internamente até o teto de 8 MiB; abort/streaming no tamanho assinado
+  permanece pendente.
+- O cache ainda não usa temp + rename + flush transacional nem lock entre
+  comandos concorrentes; o readback detecta divergência imediata, mas não
+  substitui tolerância a queda de energia.
+- Staging/apply e `update-confirm-health` permanecem fail-closed até existir
+  bundle versionado, slot inativo persistente, readback do slot, troca atômica,
+  confirmação pós-reboot e rollback comprovado.
+- Manifestos legados sem `payload_size` continuam aceitos para leitura, mas usam
+  o teto de 8 MiB; novos manifestos gerados pelas ferramentas oficiais sempre
+  assinam o tamanho exato.

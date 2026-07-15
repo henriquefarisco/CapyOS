@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry for decoupled core projects (updated 2026-06-17; CapyOS core `alpha.293` (Etapa 7 ativa, Slice 7.4) + CapyBrowser `0.6.6` -- display-list IMAGE node carries the resolved `src`, consumed by the CapyOS graphical render backend).
+**Status:** migration registry aligned to CapyOS `0.8.0-alpha.315+20260715`; Etapas 1-7 closed and Etapa 8 active. Current pins and ABI status are authoritative in the compatibility matrix.
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
 a versioned in-tree adapter and an external gate.
@@ -15,12 +15,13 @@ completed in-tree hygiene pass.
 
 | Repository | Current version | Intended ownership | Migration status |
 |---|---|---|---|
-| `CapyBrowser` | `0.6.6` | browser core, HTML-to-text, CSS, static layout/display list, download/forms/session | Text package `org.capyos.browser.text` published for Etapa 6 / Slice 6.4; URL parse/normalize/origin + HTML-to-text + image adapter + DOM + CSS cascade + layout/display-list + download/session/forms host-testable delivered; `0.6.6` makes the display-list IMAGE node carry the resolved `src` (additive in `capy-browser-core` v1; consumed by the CapyOS graphical render backend in Etapa 7 / Slice 7.4); graphical runtime still gated by Etapa 7 |
-| `CapyLang` | `0.1.8` | language parser, bytecode/IR, VM, host ABI mock, deterministic benchmarks | in-tree prototype fully removed; CapyLang owns its host ABI work (S1-S7 + S6.3 structs/enums delivered, host-only; +opcodes 0x64-0x66 MakeAggregate/GetField/GetTag + trap V0018) |
-| `CapyAgent` | `0.0.7` | package format, resolver, component index, release manifest model, declarative install/rollback plan, **Ed25519 signer** | legacy package manager removed in-tree; CapyOS exposes the `services/capypkg` adapter as the receiving boundary; CapyAgent Ed25519 signer **published host-side in `src/signer/`** (pending external KAT + registration via `capypkg_set_signature_verifier`; verifier slot NULL until Etapa 9) |
-| `CapyCodecs` | `0.0.7` | portable image/audio/video codec cores | legacy BMP/PNG/JPEG decoders fully removed in-tree; CapyCodecs owns portable decoders (`capy-codec-image` v2: per-call limits, detect/generic decode, metadata query, QOI) until an image adapter lands |
-| `CapyUI` | `2.22.0` | retained widget model + **desktop session, window manager and apps** (`org.capyos.ui.desktop-session` published in `alpha.241`) | widget/display-list model active for Etapa 4 via `capy-ui-widget` v2.22 schema v7 adapter; desktop/window/apps extracted (`capy-ui-desktop-session` v1); compositor/font/input plumbing **stays in CapyOS** |
-| `CapyBenchmark` | `0.0.7` | benchmark reports, replay, baseline comparison, CapyLang benchmark contracts | no coupled harness ever shipped in-tree; portable report/baseline evaluator (report/evaluation/replay serialization + baseline fixtures) initialized externally |
+| `CapyBrowser` | `0.6.7` | static text/graphical browser core | Etapas 6-7 delivered through versioned CapyOS adapters; JavaScript/WebAssembly remain outside the static scope |
+| `CapyLang` | `0.1.12` | language parser, bytecode/IR, VM and host ABI | host-only until Etapa 15 |
+| `CapyAgent` | `0.0.10` | package format, resolver, component index and Ed25519 signer | signer published and CapyOS verifier registered in `alpha.276`; production trust anchor + external KAT remain fail-closed gates |
+| `CapyCodecs` | `0.0.12` | portable image/audio/video codec cores | `capy-codec-image` v2 integrated for Etapas 6-7; audio/video remain later-stage work |
+| `CapyUI` | `2.24.1` | retained widgets, desktop session, window manager and apps | desktop/session worker hardening integrated; compositor/font/input plumbing stays in CapyOS |
+| `CapyBenchmark` | `0.0.11` | report, replay and baseline core | host-only until Etapas 15-16 |
+| `CapyAI` | `0.2.0` | governed orchestrator, reproducible model and `capy-ai-core` artifact v0 | TaskPlan/file/app/power integration in alpha.315; remaining typed capabilities fail closed; package is part of the eight-repo workspace aggregate |
 
 ## Migrated snapshots
 
@@ -52,15 +53,13 @@ The CapyAgent **Ed25519 signer** is now **published host-side** in
 (RFC 8032) + a canonical-descriptor manifest serializer
 (`src/component_index/component_manifest.c`) + the
 `capyagent_ed25519_verifier` callback whose signature matches the CapyOS
-`capypkg_verify_signature_fn`. **Two gates remain** before `signed`
-installs are promotable: (1) external known-answer-test validation
-(RFC 8032 + FIPS 180-4) via the CapyAgent `make validate`; (2) CapyOS
-registering the verifier through `capypkg_set_signature_verifier` when
-Etapa 9 opens. Until both pass, the kernel binder in
-`src/arch/x86_64/kernel_services.c::kernel_capypkg_bind_runtime_adapters`
-intentionally leaves the verifier slot NULL and the adapter rejects any
-`signed` repository install with `CAPYPKG_ERR_SIGNATURE`. Lab installs
-with `--unsigned` repositories are possible but must never be promoted
+`capypkg_verify_signature_fn`. The CapyOS binder in
+`src/arch/x86_64/kernel_services_capypkg.c` registers the verifier since
+`alpha.276`. Two promotion gates remain: (1) external known-answer-test
+validation (RFC 8032 + FIPS 180-4); (2) pinning a production publisher public
+key through the supported trust API and proving signed install end to end.
+Without both, the adapter rejects `signed` repositories fail-closed. Lab
+installs with `--unsigned` repositories are possible but must never be promoted
 to user-facing release. The canonical Ed25519 descriptor scope
 (`name=N|version=V|payload_sha256=H|payload_url=U\n`) is **unchanged**.
 
@@ -193,15 +192,14 @@ External entry points:
   variable, no `capyos-legacy-migrated` target, no quarantined objects).
 - Modular installation architecture and component selection UI:
   Etapas 8-9.
-- CapyAgent in-tree adapter (`services/capypkg`): Etapa 9 alpha —
-  available now, signature verifier intentionally fail-closed. CapyAgent's
-  Ed25519 signer is now published host-side (`0.0.7`, `src/signer/`) but
-  the verifier is not yet wired through `capypkg_set_signature_verifier`
-  (pending external KAT + Etapa 9 opening).
-- CapyBrowser text/static core: Etapas 6-7.
-- CapyCodecs image codecs: Etapas 6-7 (will land as a new
-  `gui/codecs/` adapter, not by reintroducing legacy decoders).
-- CapyUI widget/display-list model: Etapas 4 and 6.
+- CapyAgent in-tree adapter (`services/capypkg`): available; signer and verifier
+  are present, while production public-key trust + external KAT remain
+  fail-closed Etapa 8-9 gates.
+- CapyBrowser text/static graphical core: Etapas 6-7 delivered.
+- CapyCodecs image codecs: Etapas 6-7 delivered through the dedicated adapter.
+- CapyUI widget/display-list/desktop model: Etapas 4, 6 and 7 delivered.
+- CapyAI core/model and async integration: Etapa 7 delivered; aggregate/release
+  regression in Etapa 8.
 - CapyLang VM/host ABI/benchmarks: Etapa 15.
 - Benchmark regression baseline: Etapa 16.
 

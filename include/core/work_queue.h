@@ -27,6 +27,10 @@ enum system_work_id {
    * 6s at 100Hz) and self-disables when status.ready becomes 1 or when
    * the platform is not Hyper-V. */
   SYSTEM_WORK_STORAGE_HYPERV_RETRY,
+  /* Governed one-shot power transition requested by CapyAI.  It is kept in
+   * the system work queue so a delayed reboot is observable/cancellable and
+   * never consumes a worker in a sleep or busy-wait loop. */
+  SYSTEM_WORK_POWER_TRANSITION,
   SYSTEM_WORK_COUNT
 };
 

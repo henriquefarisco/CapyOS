@@ -33,6 +33,102 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(UNIT_TEST)
+static uint8_t g_update_payload_storage[UPDATE_AGENT_PAYLOAD_MAX_BYTES];
+#endif
+
+static uint8_t *payload_buffer_acquire(size_t size) {
+  if (size == 0u || size > UPDATE_AGENT_PAYLOAD_MAX_BYTES) {
+    return NULL;
+  }
+#if defined(UNIT_TEST)
+  return g_update_payload_storage;
+#else
+  return (uint8_t *)kalloc(size);
+#endif
+}
+
+static void payload_buffer_release(uint8_t *buffer) {
+#if defined(UNIT_TEST)
+  (void)buffer;
+#else
+  if (buffer) {
+    kfree(buffer);
+  }
+#endif
+}
+
+static int write_state_file(int pending_activation,
+                            const char *staged_manifest_path);
+
+static int invalidate_payload_cache_state(void) {
+  update_agent_remove_file_fn remover = update_agent_active_remover();
+  const char *staged_path = update_agent_g_status.staged_manifest_path[0]
+                                ? update_agent_g_status.staged_manifest_path
+                                : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH;
+  int rc = 0;
+
+  update_agent_g_status.payload_cache_sha256[0] = '\0';
+  if (!remover ||
+      remover(update_agent_g_status.payload_cache_path[0]
+                  ? update_agent_g_status.payload_cache_path
+                  : UPDATE_AGENT_PAYLOAD_CACHE_PATH) != 0) {
+    rc = -1;
+  }
+  if (update_agent_g_status.stage_ready ||
+      update_agent_g_status.pending_activation) {
+    if (write_state_file(update_agent_g_status.pending_activation,
+                         staged_path) != 0) {
+      rc = -1;
+      if (remover) {
+        (void)remover(UPDATE_AGENT_STATE_PATH);
+      }
+    }
+  } else if (!remover || remover(UPDATE_AGENT_STATE_PATH) != 0) {
+    rc = -1;
+  }
+  if (rc != 0) {
+    klog(KLOG_ERROR, "[audit] [update] payload cache cleanup incomplete");
+  }
+  return rc;
+}
+
+int update_agent_verify_cached_payload(
+    const struct update_manifest_view *manifest) {
+  update_agent_read_bytes_fn reader = update_agent_active_bytes_reader();
+  uint8_t digest[SHA256_DIGEST_SIZE];
+  char digest_hex[UPDATE_AGENT_SHA256_HEX_MAX];
+  size_t payload_len = 0u;
+  size_t payload_limit = UPDATE_AGENT_PAYLOAD_MAX_BYTES;
+  uint8_t *payload_buffer = NULL;
+  int valid = 0;
+
+  if (!manifest || !reader ||
+      !update_agent_manifest_payload_sha256_valid(manifest) ||
+      !update_agent_manifest_payload_size_valid(manifest)) {
+    return -1;
+  }
+  if (manifest->payload_size_present) {
+    payload_limit = (size_t)manifest->payload_size;
+  }
+  payload_buffer = payload_buffer_acquire(payload_limit);
+  if (!payload_buffer) {
+    return -1;
+  }
+  if (reader(update_agent_g_status.payload_cache_path, payload_buffer,
+             payload_limit, &payload_len) == 0 &&
+      payload_len > 0u && payload_len <= payload_limit &&
+      (!manifest->payload_size_present ||
+       payload_len == (size_t)manifest->payload_size)) {
+    sha256_hash(payload_buffer, payload_len, digest);
+    sha256_hex(digest, digest_hex);
+    valid = update_agent_local_hex_equal_fixed(
+        digest_hex, manifest->payload_sha256, UPDATE_AGENT_SHA256_HEX_LEN);
+  }
+  payload_buffer_release(payload_buffer);
+  return valid ? 0 : -1;
+}
+
 static int write_state_file(int pending_activation,
                             const char *staged_manifest_path) {
   char text[320];
@@ -141,18 +237,15 @@ int update_agent_fetch_remote_manifest(void) {
 }
 
 int update_agent_download_payload(void) {
-#if defined(UNIT_TEST)
-  static uint8_t payload_storage[UPDATE_AGENT_PAYLOAD_MAX_BYTES];
-  uint8_t *payload_buffer = payload_storage;
-#else
-  uint8_t *payload_buffer = NULL;
-#endif
   struct update_manifest_view manifest;
   uint8_t digest[SHA256_DIGEST_SIZE];
   char digest_hex[UPDATE_AGENT_SHA256_HEX_MAX];
   size_t payload_len = 0u;
+  size_t readback_len = 0u;
   size_t payload_limit = UPDATE_AGENT_PAYLOAD_MAX_BYTES;
+  uint8_t *payload_buffer = NULL;
   int rc = 0;
+  update_agent_read_bytes_fn reader = NULL;
   update_agent_write_bytes_fn writer = NULL;
 
   rc = update_agent_poll();
@@ -167,6 +260,7 @@ int update_agent_download_payload(void) {
                             "no update payload available to download");
     return -40;
   }
+  reader = update_agent_active_bytes_reader();
   writer = update_agent_active_bytes_writer();
   if (!writer) {
     update_agent_g_status.last_result = -41;
@@ -180,6 +274,7 @@ int update_agent_download_payload(void) {
   if (update_agent_read_manifest_view(update_agent_g_status.manifest_path,
                                       &manifest) != 0 ||
       !update_agent_manifest_payload_sha256_valid(&manifest) ||
+      !update_agent_manifest_payload_size_valid(&manifest) ||
       !update_agent_manifest_payload_url_valid(&manifest) ||
       !update_agent_manifest_signature_ed25519_valid(&manifest) ||
       !update_agent_local_equal(manifest.payload_url,
@@ -190,9 +285,10 @@ int update_agent_download_payload(void) {
                             "payload manifest unavailable");
     return -43;
   }
-
-#if !defined(UNIT_TEST)
-  payload_buffer = (uint8_t *)kalloc(payload_limit);
+  if (manifest.payload_size_present) {
+    payload_limit = (size_t)manifest.payload_size;
+  }
+  payload_buffer = payload_buffer_acquire(payload_limit);
   if (!payload_buffer) {
     update_agent_g_status.last_result = -48;
     update_agent_local_copy(update_agent_g_status.summary,
@@ -200,7 +296,6 @@ int update_agent_download_payload(void) {
                             "payload download buffer unavailable");
     return -48;
   }
-#endif
 
   rc = update_agent_fetch_payload_bytes(manifest.payload_url, payload_buffer,
                                         payload_limit, &payload_len);
@@ -210,10 +305,18 @@ int update_agent_download_payload(void) {
                             sizeof(update_agent_g_status.summary),
                             "payload download failed");
     klog(KLOG_WARN, "[audit] [update] payload download failed");
-#if !defined(UNIT_TEST)
-    kfree(payload_buffer);
-#endif
+    payload_buffer_release(payload_buffer);
     return -42;
+  }
+  if (manifest.payload_size_present &&
+      payload_len != (size_t)manifest.payload_size) {
+    update_agent_g_status.last_result = -58;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "payload size mismatch; cache refused");
+    klog(KLOG_ERROR, "[audit] [update] downloaded payload size mismatch");
+    payload_buffer_release(payload_buffer);
+    return -58;
   }
 
   sha256_hash(payload_buffer, payload_len, digest);
@@ -225,28 +328,50 @@ int update_agent_download_payload(void) {
                             sizeof(update_agent_g_status.summary),
                             "payload sha256 mismatch; cache refused");
     klog(KLOG_ERROR, "[audit] [update] downloaded payload sha256 mismatch");
-#if !defined(UNIT_TEST)
-    kfree(payload_buffer);
-#endif
+    payload_buffer_release(payload_buffer);
     return -44;
   }
 
   if (writer(update_agent_g_status.payload_cache_path, payload_buffer,
              payload_len) != 0) {
+    invalidate_payload_cache_state();
     update_agent_g_status.last_result = -45;
     update_agent_local_copy(update_agent_g_status.summary,
                             sizeof(update_agent_g_status.summary),
                             "failed to persist payload cache");
     klog(KLOG_WARN, "[update] Failed to persist payload cache.");
-#if !defined(UNIT_TEST)
-    kfree(payload_buffer);
-#endif
+    payload_buffer_release(payload_buffer);
     return -45;
   }
 
-#if !defined(UNIT_TEST)
-  kfree(payload_buffer);
-#endif
+  update_agent_local_zero(payload_buffer, payload_limit);
+  if (!reader ||
+      reader(update_agent_g_status.payload_cache_path, payload_buffer,
+             payload_limit, &readback_len) != 0 ||
+      readback_len != payload_len) {
+    invalidate_payload_cache_state();
+    update_agent_g_status.last_result = -49;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "persisted payload cache verification failed");
+    klog(KLOG_ERROR, "[audit] [update] payload cache readback failed");
+    payload_buffer_release(payload_buffer);
+    return -49;
+  }
+  sha256_hash(payload_buffer, readback_len, digest);
+  sha256_hex(digest, digest_hex);
+  if (!update_agent_local_hex_equal_fixed(digest_hex, manifest.payload_sha256,
+                                          UPDATE_AGENT_SHA256_HEX_LEN)) {
+    invalidate_payload_cache_state();
+    update_agent_g_status.last_result = -49;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "persisted payload cache verification failed");
+    klog(KLOG_ERROR, "[audit] [update] payload cache readback mismatch");
+    payload_buffer_release(payload_buffer);
+    return -49;
+  }
+
   update_agent_local_copy(update_agent_g_status.payload_cache_sha256,
                           sizeof(update_agent_g_status.payload_cache_sha256),
                           digest_hex);
@@ -254,13 +379,16 @@ int update_agent_download_payload(void) {
                        update_agent_g_status.staged_manifest_path[0]
                            ? update_agent_g_status.staged_manifest_path
                            : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH) != 0) {
+    invalidate_payload_cache_state();
     update_agent_g_status.last_result = -47;
     update_agent_local_copy(update_agent_g_status.summary,
                             sizeof(update_agent_g_status.summary),
                             "failed to persist payload cache state");
     klog(KLOG_WARN, "[update] Failed to persist payload cache state.");
+    payload_buffer_release(payload_buffer);
     return -47;
   }
+  payload_buffer_release(payload_buffer);
   update_agent_g_status.last_result = 0;
   update_agent_local_copy(update_agent_g_status.summary,
                           sizeof(update_agent_g_status.summary),
@@ -316,6 +444,7 @@ int update_agent_prepare_dry_run(void) {
   if (update_agent_read_manifest_view(update_agent_g_status.manifest_path,
                                       &manifest) != 0 ||
       !update_agent_manifest_payload_sha256_valid(&manifest) ||
+      !update_agent_manifest_payload_size_valid(&manifest) ||
       !update_agent_manifest_payload_url_valid(&manifest) ||
       !update_agent_manifest_signature_ed25519_valid(&manifest) ||
       !update_agent_local_equal(manifest.payload_url,
@@ -329,7 +458,8 @@ int update_agent_prepare_dry_run(void) {
   if (!update_agent_g_status.payload_cache_sha256[0] ||
       !update_agent_local_hex_equal_fixed(
           update_agent_g_status.payload_cache_sha256, manifest.payload_sha256,
-          UPDATE_AGENT_SHA256_HEX_LEN)) {
+          UPDATE_AGENT_SHA256_HEX_LEN) ||
+      update_agent_verify_cached_payload(&manifest) != 0) {
     update_agent_g_status.last_result = -53;
     update_agent_local_copy(update_agent_g_status.summary,
                             sizeof(update_agent_g_status.summary),
@@ -398,11 +528,14 @@ int update_agent_prepare_explain(struct update_prepare_explain *out) {
       version_cmp > 0) {
     out->version_ready = 1u;
   }
-  if (out->payload_sha256_ready &&
+  if (out->payload_sha256_ready && out->payload_url_ready &&
+      out->signature_ready &&
+      update_agent_manifest_payload_size_valid(&manifest) &&
       update_agent_g_status.payload_cache_sha256[0] &&
       update_agent_local_hex_equal_fixed(
           update_agent_g_status.payload_cache_sha256, manifest.payload_sha256,
-          UPDATE_AGENT_SHA256_HEX_LEN)) {
+          UPDATE_AGENT_SHA256_HEX_LEN) &&
+      update_agent_verify_cached_payload(&manifest) == 0) {
     out->cache_ready = 1u;
   }
 
@@ -424,6 +557,10 @@ int update_agent_prepare_explain(struct update_prepare_explain *out) {
   if (!out->payload_sha256_ready) {
     return prepare_explain_finish(out, -52, "payload_sha256",
                                   "prepare explain: payload sha256 invalid");
+  }
+  if (!update_agent_manifest_payload_size_valid(&manifest)) {
+    return prepare_explain_finish(out, -52, "payload_size",
+                                  "prepare explain: payload size invalid");
   }
   if (!out->payload_url_ready) {
     return prepare_explain_finish(out, -52, "payload_url",

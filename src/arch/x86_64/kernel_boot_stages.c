@@ -31,6 +31,7 @@
 #include "auth/login_runtime.h"
 #include "boot/boot_ui.h"
 #include "core/system_init.h"
+#include "core/version.h"
 #include "core/work_queue.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/input/keyboard.h"
@@ -329,6 +330,7 @@ void kernel_boot_stage_network_and_policy(struct boot_warnings *warnings) {
   (void)service_manager_set_dependencies(
       SYSTEM_SERVICE_UPDATE_AGENT, (1u << SYSTEM_SERVICE_LOGGER));
   (void)service_manager_set_restart_limit(SYSTEM_SERVICE_UPDATE_AGENT, 3u);
+  update_agent_init(CAPYOS_VERSION_FULL);
   (void)service_manager_set_poll(SYSTEM_SERVICE_CAPYPKG,
                                  kernel_service_poll_capypkg, NULL);
   (void)service_manager_set_control(SYSTEM_SERVICE_CAPYPKG,

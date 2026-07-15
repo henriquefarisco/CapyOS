@@ -91,23 +91,28 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     return stt;
   }
 
+  installer_disk_target_t target;
   EFI_BLOCK_IO_PROTOCOL *disk = NULL;
-  stt = choose_target_disk(st, &disk);
-  if (EFI_ERROR(stt) || !disk || !disk->Media) {
-    Print(L"[UEFI] Instalador: nenhum disco grav\u00E1vel encontrado.\r\n");
-    return EFI_NOT_FOUND;
-  }
 
-  UINT64 disk_bytes =
-      ((UINT64)disk->Media->LastBlock + 1ULL) * (UINT64)disk->Media->BlockSize;
-
-  /* ============================================================
-   * INSTALLER WIZARD - Full interactive setup
-   * ============================================================ */
   Print(L"\r\n");
   Print(L"========================================\r\n");
   Print(L"      CapyOS 64-bit - Installer Wizard\r\n");
   Print(L"========================================\r\n");
+
+  stt = choose_target_disk(st, &target);
+  if (stt == EFI_ABORTED) {
+    Print(L"\r\n[UEFI] Installation cancelled.\r\n");
+    return EFI_ABORTED;
+  }
+  if (EFI_ERROR(stt) || !target.bio || !target.bio->Media) {
+    Print(L"[UEFI] Installer: no eligible writable disk found: %r\r\n", stt);
+    return EFI_ERROR(stt) ? stt : EFI_NOT_FOUND;
+  }
+  disk = target.bio;
+
+  UINT64 disk_bytes =
+      target.geometry.block_count * (UINT64)target.geometry.block_size;
+
   Print(L"\r\n");
   Print(L"Target disk: %lu MiB\r\n", (disk_bytes / (1024ULL * 1024ULL)));
   Print(L"\r\n");
@@ -401,19 +406,28 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   Print(L"Record this key. The first-boot wizard inside CapyOS will\r\n");
   Print(L"collect language, keyboard, hostname, theme, admin user,\r\n");
   Print(L"password and module selection on the installed system.\r\n\r\n");
-  Print(L"Target disk: %lu MiB (WILL BE ERASED)\r\n",
+  Print(L"Target disk: PathId %016lx, MediaId %u, %lu MiB "
+        L"(WILL BE ERASED)\r\n",
+        target.path_id, target.media_id,
         (disk_bytes / (1024ULL * 1024ULL)));
-  Print(L"Confirm installation? [Y/n]: ");
+  Print(L"Type ERASE and press ENTER to confirm: ");
   CHAR16 confirm[8];
+  char confirm_ascii[8];
   uefi_readline(st, confirm, 8, FALSE);
-  if (confirm[0] == L'n' || confirm[0] == L'N') {
-    Print(L"[UEFI] Installation cancelled by the user.\r\n");
+  char16_to_ascii(confirm_ascii, sizeof(confirm_ascii), confirm);
+  if (!installer_disk_confirmation_valid(confirm_ascii)) {
+    Print(L"[UEFI] Installation cancelled: confirmation did not match.\r\n");
     return EFI_ABORTED;
+  }
+  stt = installer_revalidate_target(st, &target);
+  if (EFI_ERROR(stt)) {
+    Print(L"[UEFI] Target disk changed or failed preflight: %r\r\n", stt);
+    return stt;
   }
   Print(L"\r\n");
 
   // Clean install policy: wipe entire target disk before creating a new GPT.
-  UINT64 full_disk_sectors = (UINT64)disk->Media->LastBlock + 1ULL;
+  UINT64 full_disk_sectors = target.layout.total_sectors;
   if (install_language == INSTALLER_LANG_PT_BR) {
     Print(L"[UEFI] Limpando disco inteiro...\r\n");
   } else if (install_language == INSTALLER_LANG_ES) {
@@ -432,6 +446,11 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     }
     return stt;
   }
+  stt = installer_revalidate_target(st, &target);
+  if (EFI_ERROR(stt)) {
+    Print(L"[UEFI] Target disk changed after wipe: %r\r\n", stt);
+    return stt;
+  }
 
   UINT64 esp_lba = 0, esp_secs = 0, boot_lba = 0, boot_secs = 0;
   UINT64 data_lba = 0, data_secs = 0;
@@ -442,9 +461,8 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   } else {
     Print(L"[UEFI] Writing GPT...\r\n");
   }
-  stt = gpt_write_layout(st, disk, INSTALL_ESP_SIZE_MIB, INSTALL_BOOT_SIZE_MIB,
-                         &esp_lba, &esp_secs, &boot_lba, &boot_secs, &data_lba,
-                         &data_secs);
+  stt = gpt_write_layout(st, disk, &target.layout, &esp_lba, &esp_secs,
+                         &boot_lba, &boot_secs, &data_lba, &data_secs);
   if (EFI_ERROR(stt)) {
     if (install_language == INSTALLER_LANG_PT_BR) {
       Print(L"[UEFI] GPT falhou: %r\r\n", stt);

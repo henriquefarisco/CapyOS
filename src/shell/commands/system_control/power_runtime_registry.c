@@ -1,4 +1,21 @@
 #include "internal/system_control_internal.h"
+#include "auth/privilege.h"
+#ifdef CAPYOS_HAVE_CAPYAI
+#include "services/capyai.h"
+#endif
+#include "services/capyai_system_actions.h"
+
+static int require_power_admin(struct shell_context *ctx,
+                               const char *operation) {
+  const struct session_context *session = ctx ? ctx->session : NULL;
+  if (privilege_session_is_admin(session)) {
+    privilege_log_granted(operation, session_user(session));
+    return 0;
+  }
+  privilege_log_denied(operation, session_user(session));
+  shell_print_error("Permissao negada: energia exige sessao administrativa.");
+  return -1;
+}
 
 static void do_hard_reboot(void) {
   const char *language = shell_current_language();
@@ -17,10 +34,190 @@ static void do_power_off(void) {
   acpi_shutdown();
 }
 
+static int scheduled_reboot_transition(void *ctx) {
+  (void)ctx;
+  do_hard_reboot();
+  return 0; /* defensive: a successful ACPI reboot does not return */
+}
+
+static uint64_t power_now_ticks(void) {
+#if defined(__x86_64__)
+  return pit_ticks();
+#else
+  return 0u;
+#endif
+}
+
+static int ensure_power_schedule_ready(void) {
+  return capyai_power_schedule_configure(scheduled_reboot_transition, NULL);
+}
+
+static void power_print_u64(uint64_t value) {
+  char reverse[32];
+  char output[32];
+  size_t count = 0u;
+  size_t i;
+  if (value == 0u) {
+    shell_print("0");
+    return;
+  }
+  while (value > 0u && count < sizeof(reverse)) {
+    reverse[count++] = (char)('0' + (value % 10u));
+    value /= 10u;
+  }
+  for (i = 0u; i < count; ++i) output[i] = reverse[count - i - 1u];
+  output[count] = '\0';
+  shell_print(output);
+}
+
+static const char *power_schedule_state_label(uint32_t state) {
+  switch (state) {
+  case CAPYAI_POWER_SCHEDULE_SCHEDULED: return "scheduled";
+  case CAPYAI_POWER_SCHEDULE_CANCELLED: return "cancelled";
+  case CAPYAI_POWER_SCHEDULE_TRIGGERED: return "triggered";
+  case CAPYAI_POWER_SCHEDULE_FAILED: return "failed";
+  default: return "idle";
+  }
+}
+
+#ifdef CAPYOS_HAVE_CAPYAI
+static int power_output_equal(const char *value, const char *literal) {
+  size_t i = 0u;
+  if (!value || !literal) return 0;
+  while (value[i] && literal[i] && value[i] == literal[i]) ++i;
+  return value[i] == '\0' && literal[i] == '\0';
+}
+
+static void power_detail_copy(char *detail, size_t detail_size,
+                              const char *text) {
+  size_t i = 0u;
+  if (!detail || detail_size == 0u) return;
+  while (text && text[i] && i + 1u < detail_size) {
+    detail[i] = text[i];
+    ++i;
+  }
+  detail[i] = '\0';
+}
+
+int capyai_native_power_dispatch(const struct capy_ai_output *tool_call,
+                                 char *detail, size_t detail_size) {
+  struct capyai_power_schedule_snapshot status;
+  uint32_t delay_ticks = 0u;
+  if (!tool_call || !detail || detail_size == 0u) return 127;
+  detail[0] = '\0';
+  if (power_output_equal(tool_call->action, "power_control") &&
+      power_output_equal(tool_call->command, "power-reboot")) {
+    power_detail_copy(detail, detail_size, "reboot accepted");
+    do_hard_reboot();
+    return 0;
+  }
+  if (power_output_equal(tool_call->action, "power_control") &&
+      power_output_equal(tool_call->command, "power-shutdown")) {
+    power_detail_copy(detail, detail_size, "shutdown accepted");
+    do_power_off();
+    return 0;
+  }
+  if (power_output_equal(tool_call->action, "power_schedule") &&
+      power_output_equal(tool_call->command, "power-schedule-reboot")) {
+    if (capyai_power_parse_delay_ticks(tool_call->path, &delay_ticks) != 0) {
+      power_detail_copy(detail, detail_size, "invalid reboot schedule duration");
+      return 127;
+    }
+    if (ensure_power_schedule_ready() != 0 ||
+        capyai_power_schedule_reboot_after(power_now_ticks(), delay_ticks) != 0) {
+      power_detail_copy(detail, detail_size, "reboot scheduler unavailable");
+      return 127;
+    }
+    power_detail_copy(detail, detail_size, "reboot scheduled");
+    return 0;
+  }
+  if (power_output_equal(tool_call->action, "power_schedule_status") &&
+      power_output_equal(tool_call->command, "power-schedule-status")) {
+    if (capyai_power_schedule_snapshot(&status) != 0) {
+      power_detail_copy(detail, detail_size, "reboot schedule status unavailable");
+      return 127;
+    }
+    power_detail_copy(detail, detail_size, power_schedule_state_label(status.state));
+    return 0;
+  }
+  if (power_output_equal(tool_call->action, "power_schedule_cancel") &&
+      power_output_equal(tool_call->command, "power-schedule-cancel")) {
+    if (capyai_power_schedule_cancel() != 0) {
+      power_detail_copy(detail, detail_size, "no pending reboot schedule");
+      return 127;
+    }
+    power_detail_copy(detail, detail_size, "reboot schedule cancelled");
+    return 0;
+  }
+  return 127;
+}
+#endif
+
+static int cmd_power_schedule_reboot(struct shell_context *ctx, int argc,
+                                     char **argv) {
+  uint32_t delay_ticks = 0u;
+  if (shell_help_requested(argc, argv)) {
+    shell_print("Usage: power-schedule-reboot <duration>\n");
+    shell_print("Duration: plain minutes or suffix s/m/h/d; maximum 7d.\n");
+    return 0;
+  }
+  if (argc != 2 ||
+      capyai_power_parse_delay_ticks(argv[1], &delay_ticks) != 0) {
+    shell_print_error("Duracao invalida. Exemplos: 30s, 5m, 2h, 1d.");
+    return -1;
+  }
+  if (require_power_admin(ctx, "power-schedule-reboot") != 0) return -1;
+  if (ensure_power_schedule_ready() != 0 ||
+      capyai_power_schedule_reboot_after(power_now_ticks(), delay_ticks) != 0) {
+    shell_print_error("Nao foi possivel agendar o reinicio.");
+    return -1;
+  }
+  shell_print_ok("Reinicio agendado e registrado no work_queue.");
+  return 0;
+}
+
+static int cmd_power_schedule_status(struct shell_context *ctx, int argc,
+                                     char **argv) {
+  struct capyai_power_schedule_snapshot status;
+  (void)ctx;
+  (void)argv;
+  if (shell_help_requested(argc, argv)) {
+    shell_print("Usage: power-schedule-status\n");
+    return 0;
+  }
+  if (argc != 1 || capyai_power_schedule_snapshot(&status) != 0) {
+    shell_print_error("Estado do agendamento indisponivel.");
+    return -1;
+  }
+  shell_print("power-transition state=");
+  shell_print(power_schedule_state_label(status.state));
+  shell_print(" generation=");
+  power_print_u64(status.generation);
+  shell_print(" due_tick=");
+  power_print_u64(status.due_tick);
+  shell_newline();
+  return 0;
+}
+
+static int cmd_power_schedule_cancel(struct shell_context *ctx, int argc,
+                                     char **argv) {
+  (void)argv;
+  if (shell_help_requested(argc, argv)) {
+    shell_print("Usage: power-schedule-cancel\n");
+    return 0;
+  }
+  if (require_power_admin(ctx, "power-schedule-cancel") != 0) return -1;
+  if (argc != 1 || capyai_power_schedule_cancel() != 0) {
+    shell_print_error("Nao existe reinicio pendente para cancelar.");
+    return -1;
+  }
+  shell_print_ok("Reinicio agendado cancelado.");
+  return 0;
+}
+
 static int cmd_shutdown_reboot(struct shell_context *ctx, int argc,
                                char **argv) {
   const char *language = shell_current_language();
-  (void)ctx;
   (void)argv;
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
@@ -31,13 +228,13 @@ static int cmd_shutdown_reboot(struct shell_context *ctx, int argc,
     shell_newline();
     return 0;
   }
+  if (require_power_admin(ctx, "shutdown-reboot") != 0) return -1;
   do_hard_reboot();
   return 0;
 }
 
 static int cmd_shutdown_off(struct shell_context *ctx, int argc, char **argv) {
   const char *language = shell_current_language();
-  (void)ctx;
   (void)argv;
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
@@ -48,6 +245,7 @@ static int cmd_shutdown_off(struct shell_context *ctx, int argc, char **argv) {
     shell_newline();
     return 0;
   }
+  if (require_power_admin(ctx, "shutdown-off") != 0) return -1;
   do_power_off();
   return 0;
 }
@@ -315,7 +513,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[40];
+static struct shell_command g_system_control_commands[43];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -402,6 +600,12 @@ static void init_system_control_commands(void) {
   g_system_control_commands[38].handler = cmd_pkg_bootstrap;
   g_system_control_commands[39].name = "capy";
   g_system_control_commands[39].handler = cmd_capy;
+  g_system_control_commands[40].name = "power-schedule-reboot";
+  g_system_control_commands[40].handler = cmd_power_schedule_reboot;
+  g_system_control_commands[41].name = "power-schedule-status";
+  g_system_control_commands[41].handler = cmd_power_schedule_status;
+  g_system_control_commands[42].name = "power-schedule-cancel";
+  g_system_control_commands[42].handler = cmd_power_schedule_cancel;
   g_system_control_commands_initialized = 1;
 }
 
@@ -409,7 +613,7 @@ const struct shell_command *shell_commands_system_control(size_t *count) {
   /* keep the count in sync with the array size declared above. */
   init_system_control_commands();
   if (count) {
-    *count = 40;
+    *count = 43;
   }
   return g_system_control_commands;
 }

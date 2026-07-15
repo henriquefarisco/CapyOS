@@ -3,8 +3,8 @@
 
 /*
  * CapyAI graphical chat app (desktop). A window with the capybara system
- * logo, a scrolling conversation, a text input line, and three permission
- * toggle buttons (Escrita / Editar / Deletar) that map to the executor's
+ * logo, a scrolling conversation, a text input line, and three task-scoped
+ * permission buttons (Escrita / Deletar / Sistema) that map to the executor's
  * risk gates. Shares the same brain as the `capyai` terminal command
  * (services/capyai.h + capy-ai-core). Rendered directly into the window
  * surface (font + rect fills), so it needs no widget/display-list bridge.

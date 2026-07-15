@@ -599,6 +599,17 @@ struct gui_window *compositor_get_window(uint32_t window_id) {
   return comp_find_window(window_id);
 }
 
+struct gui_window *compositor_find_window_by_title(const char *title) {
+  int i;
+  if (!title || !title[0]) return NULL;
+  for (i = 0; i < COMPOSITOR_MAX_WINDOWS; ++i) {
+    if (comp_windows[i].id != 0u && comp_streq(comp_windows[i].title, title)) {
+      return &comp_windows[i];
+    }
+  }
+  return NULL;
+}
+
 int compositor_window_exists(uint32_t window_id) {
   return comp_find_window(window_id) ? 1 : 0;
 }

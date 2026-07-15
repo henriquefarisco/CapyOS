@@ -1,6 +1,7 @@
 #include "../internal/first_boot_internal.h"
 
 #include "auth/user_home.h"
+#include "config/first_boot_policy.h"
 
 static const char *g_cli_reference_text =
     "CapyCLI - Referencia Rapida\n"
@@ -83,16 +84,11 @@ int system_detect_first_boot(void) {
   {
     int config_exists = (vfs_stat_path("/system/config.ini", &st) == 0);
 
-    if (marker_exists && has_users && config_exists) {
+    if (!first_boot_setup_required(marker_exists, has_users, config_exists)) {
       return 0;
     }
-    if (marker_exists && (!has_users || !config_exists)) {
+    if (marker_exists) {
       vfs_unlink("/system/first-run.done");
-      return 1;
-    }
-    if (!marker_exists && has_users && config_exists) {
-      (void)system_mark_first_boot_complete();
-      return 0;
     }
   }
 
@@ -224,10 +220,10 @@ static int setup_write_docs(const char *setup_language) {
   return 0;
 }
 
-static int setup_write_settings_and_mark(const char *setup_language,
-                                         const char *hostname,
-                                         const char *theme,
-                                         int splash_enabled) {
+static int setup_write_settings(const char *setup_language,
+                                const char *hostname,
+                                const char *theme,
+                                int splash_enabled) {
   struct system_settings settings;
   cstring_copy(settings.hostname, sizeof(settings.hostname), "capyos-node");
   cstring_copy(settings.theme, sizeof(settings.theme), "capyos");
@@ -287,11 +283,6 @@ static int setup_write_settings_and_mark(const char *setup_language,
   config_print_line(
       system_ui_text(setup_language, SYS_UI_CONFIG_VALIDATED));
 
-  if (system_mark_first_boot_complete() != 0) {
-    config_print_line(
-        system_ui_text(setup_language, SYS_UI_FIRST_BOOT_COMPLETE_FAIL));
-    return -1;
-  }
   config_sync_root_device();
   config_log_process_conclude(proc_config);
   config_log_process_finalize(proc_config);
@@ -567,8 +558,8 @@ static int first_boot_setup_interactive(void) {
   config_log_process_finalize_success(proc_admin);
 
   config_log_process_progress(proc_settings);
-  if (setup_write_settings_and_mark(setup_language, hostname, theme,
-                                    splash_enabled) != 0) {
+  if (setup_write_settings(setup_language, hostname, theme,
+                           splash_enabled) != 0) {
     return -1;
   }
 
@@ -617,6 +608,15 @@ static int first_boot_setup_interactive(void) {
    * (the desktop session is the most common consumer of this gate). */
   {
     int mod_rc = first_boot_module_selection_step(setup_language);
+    if (mod_rc < 0) {
+      return -1;
+    }
+    if (system_mark_first_boot_complete() != 0) {
+      config_print_line(
+          system_ui_text(setup_language, SYS_UI_FIRST_BOOT_COMPLETE_FAIL));
+      return -1;
+    }
+    config_sync_root_device();
     if (mod_rc > 0) {
       config_print_line(
           strings_equal(setup_language, "en")
@@ -624,10 +624,8 @@ static int first_boot_setup_interactive(void) {
               : strings_equal(setup_language, "es")
                     ? "Configuracion inicial completa. Reiniciando para activar modulos..."
                     : "Configuracao inicial concluida. Reiniciando para ativar modulos...");
-      config_sync_root_device();
       config_log_flush_pending();
       acpi_reboot();
-      /* acpi_reboot does not return; this guard is defensive only. */
     }
   }
   return 0;

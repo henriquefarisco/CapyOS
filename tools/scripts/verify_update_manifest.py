@@ -16,7 +16,7 @@ from update_manifest_common import (
     ensure_regular_file,
     normalize_public_key_hex,
     parse_manifest,
-    payload_sha256,
+    payload_metadata,
     raw_public_from_public,
     raw_public_from_private,
     run_openssl,
@@ -76,6 +76,7 @@ def run_self_test(openssl: str) -> int:
                     "https://github.com/example/CapyOS/releases/download/"
                     "v0.8.0-alpha.999+20991231/capyos64.bin"
                 ),
+                "payload_size": "1",
                 "payload_sha256": "00" * 32,
             }
             body = canonical_body(fields)
@@ -90,6 +91,35 @@ def run_self_test(openssl: str) -> int:
                 captured,
                 bytes.fromhex(parsed["signature_ed25519"]),
             )
+            legacy_fields = dict(fields)
+            legacy_fields.pop("payload_size")
+            legacy_body = canonical_body(legacy_fields)
+            legacy_signature = sign_bytes(openssl, private_key, legacy_body)
+            legacy_manifest = legacy_body + (
+                f"signature_ed25519={legacy_signature.hex()}\n".encode("ascii")
+            )
+            legacy_parsed, legacy_captured = parse_manifest(legacy_manifest)
+            verify_signature(
+                openssl,
+                raw_public,
+                legacy_captured,
+                bytes.fromhex(legacy_parsed["signature_ed25519"]),
+            )
+            tampered_size = manifest.replace(
+                b"payload_size=1\n", b"payload_size=2\n"
+            )
+            tampered_fields, tampered_captured = parse_manifest(tampered_size)
+            try:
+                verify_signature(
+                    openssl,
+                    raw_public,
+                    tampered_captured,
+                    bytes.fromhex(tampered_fields["signature_ed25519"]),
+                )
+            except ManifestError:
+                pass
+            else:
+                raise ManifestError("self-test accepted a tampered payload_size")
             tampered = bytearray(signature)
             tampered[0] ^= 1
             try:
@@ -104,7 +134,7 @@ def run_self_test(openssl: str) -> int:
                 pass
             else:
                 raise ManifestError("self-test accepted non-canonical CRLF output")
-        print("[ok] update manifest self-test: canonical signature accepted; tampering rejected")
+        print("[ok] update manifest self-test: sized + legacy signatures accepted; tampering rejected")
         return 0
     except ManifestError as exc:
         print(f"[err] {exc}", file=sys.stderr)
@@ -141,7 +171,13 @@ def main() -> int:
         require_expected(fields, "source", args.expected_source)
         require_expected(fields, "payload_url", args.expected_payload_url)
         if args.payload:
-            actual_sha256 = payload_sha256(args.payload)
+            actual_size, actual_sha256 = payload_metadata(args.payload)
+            if "payload_size" in fields and actual_size != int(
+                fields["payload_size"]
+            ):
+                raise ManifestError(
+                    "payload size does not match payload_size in latest.ini"
+                )
             if actual_sha256 != fields["payload_sha256"].lower():
                 raise ManifestError(
                     "payload SHA-256 does not match payload_sha256 in latest.ini"

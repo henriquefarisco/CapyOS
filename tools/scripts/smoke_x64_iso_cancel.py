@@ -76,7 +76,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disk-size", default="2G", help="Install target disk size")
     parser.add_argument("--keep-disk", action="store_true", help="Do not delete the target disk image")
     parser.add_argument("--user", default="admin", help="Admin username for first-boot + login")
-    parser.add_argument("--password", default="admin", help="Admin password for first-boot + login")
+    parser.add_argument(
+        "--password",
+        default="smoke-install-pass",
+        help="Admin password for first-boot + login",
+    )
     parser.add_argument(
         "--keyboard-layout",
         default="us",
@@ -161,12 +165,14 @@ def main() -> int:
                 user=parsed.user,
                 password=parsed.password,
                 keyboard_layout=parsed.keyboard_layout,
+                require_interactive=True,
             )
             login(
                 session=cancel_session,
                 timeout=parsed.step_timeout,
                 user=parsed.user,
                 password=parsed.password,
+                allow_desktop=True,
             )
         finally:
             cancel_session.stop()

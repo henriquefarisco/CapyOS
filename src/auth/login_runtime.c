@@ -188,6 +188,13 @@ int login_runtime_run(struct login_runtime_ops *ops) {
       }
       dbg_login_puts("[lr] init shell ctx ok\n");
     }
+    if (ops->shell_context_should_logout(ops->shell_ctx)) {
+      ops->session_reset(ops->session_ctx);
+      ops->session_set_active(NULL);
+      login_render_screen(ops, system_language, 0,
+                          login_maintenance_mode_active(ops));
+      continue;
+    }
 
     for (;;) {
       const struct user_record *active_user = ops->session_user(ops->session_ctx);

@@ -2,6 +2,29 @@
 
 #include <stddef.h>
 
+#if defined(UNIT_TEST)
+/* Host tests cannot execute privileged interrupt instructions. The tests are
+ * process-context only, so an atomic lock provides the same data-race guard. */
+static volatile uint32_t g_work_test_lock;
+static void work_lock(uint64_t *flags) {
+  if (flags) *flags = 0u;
+  while (__sync_lock_test_and_set(&g_work_test_lock, 1u)) { }
+}
+static void work_unlock(uint64_t flags) {
+  (void)flags;
+  __sync_lock_release(&g_work_test_lock);
+}
+#else
+#include "kernel/spinlock.h"
+static struct spinlock g_work_lock = SPINLOCK_INIT;
+static void work_lock(uint64_t *flags) {
+  spin_lock_irqsave(&g_work_lock, flags);
+}
+static void work_unlock(uint64_t flags) {
+  spin_unlock_irqrestore(&g_work_lock, flags);
+}
+#endif
+
 struct work_binding {
   system_work_fn fn;
   void *ctx;
@@ -9,6 +32,9 @@ struct work_binding {
 
 static struct system_work_status g_work_items[SYSTEM_WORK_COUNT];
 static struct work_binding g_work_bindings[SYSTEM_WORK_COUNT];
+/* A callback executes without holding the queue lock. The generation prevents
+ * its completion from overwriting a concurrent disable/reschedule/register. */
+static uint64_t g_work_versions[SYSTEM_WORK_COUNT];
 static int g_work_ready = 0;
 
 static void local_zero(void *ptr, size_t len) {
@@ -60,33 +86,42 @@ static void work_seed(uint32_t id, const char *name) {
 }
 
 void work_queue_reset(void) {
+  uint64_t flags;
+  work_lock(&flags);
   local_zero(g_work_items, sizeof(g_work_items));
   local_zero(g_work_bindings, sizeof(g_work_bindings));
+  local_zero(g_work_versions, sizeof(g_work_versions));
   g_work_ready = 0;
+  work_unlock(flags);
 }
 
 void work_queue_init(void) {
-  if (g_work_ready) {
-    return;
+  uint64_t flags;
+  work_lock(&flags);
+  if (!g_work_ready) {
+    for (uint32_t id = 0; id < SYSTEM_WORK_COUNT; ++id) {
+      work_seed(id, "unnamed");
+    }
+    work_seed(SYSTEM_WORK_RECOVERY_SNAPSHOT, "recovery-snapshot");
+    work_seed(SYSTEM_WORK_GPU_DISCOVERY, "gpu-discovery");
+    work_seed(SYSTEM_WORK_USB_BRINGUP, "usb-bringup");
+    work_seed(SYSTEM_WORK_UPDATE_AGENT_WARMUP, "update-agent-warmup");
+    work_seed(SYSTEM_WORK_USB_POLL, "usb-poll");
+    work_seed(SYSTEM_WORK_STORAGE_HYPERV_RETRY, "storage-hyperv-retry");
+    work_seed(SYSTEM_WORK_POWER_TRANSITION, "power-transition");
+    g_work_ready = 1;
   }
-  for (uint32_t id = 0; id < SYSTEM_WORK_COUNT; ++id) {
-    work_seed(id, "unnamed");
-  }
-  work_seed(SYSTEM_WORK_RECOVERY_SNAPSHOT, "recovery-snapshot");
-  work_seed(SYSTEM_WORK_GPU_DISCOVERY, "gpu-discovery");
-  work_seed(SYSTEM_WORK_USB_BRINGUP, "usb-bringup");
-  work_seed(SYSTEM_WORK_UPDATE_AGENT_WARMUP, "update-agent-warmup");
-  work_seed(SYSTEM_WORK_USB_POLL, "usb-poll");
-  work_seed(SYSTEM_WORK_STORAGE_HYPERV_RETRY, "storage-hyperv-retry");
-  g_work_ready = 1;
+  work_unlock(flags);
 }
 
 int work_queue_register(uint32_t id, const char *name, system_work_fn fn,
                         void *ctx) {
+  uint64_t flags;
   work_queue_init();
   if (id >= SYSTEM_WORK_COUNT || !fn) {
     return -1;
   }
+  work_lock(&flags);
   g_work_bindings[id].fn = fn;
   g_work_bindings[id].ctx = ctx;
   if (name && name[0]) {
@@ -96,15 +131,21 @@ int work_queue_register(uint32_t id, const char *name, system_work_fn fn,
   g_work_items[id].last_result = 0;
   local_copy(g_work_items[id].summary, sizeof(g_work_items[id].summary),
              "registered");
+  ++g_work_versions[id];
+  work_unlock(flags);
   return 0;
 }
 
 int work_queue_set_interval(uint32_t id, uint32_t interval_ticks) {
+  uint64_t flags;
   work_queue_init();
   if (id >= SYSTEM_WORK_COUNT) {
     return -1;
   }
+  work_lock(&flags);
   g_work_items[id].interval_ticks = interval_ticks;
+  ++g_work_versions[id];
+  work_unlock(flags);
   return 0;
 }
 
@@ -115,9 +156,13 @@ int work_queue_schedule_now(uint32_t id, uint64_t now_ticks) {
 int work_queue_schedule_after(uint32_t id, uint64_t now_ticks,
                               uint32_t delay_ticks) {
   struct system_work_status *item = NULL;
+  uint64_t flags;
 
   work_queue_init();
-  if (id >= SYSTEM_WORK_COUNT || !g_work_bindings[id].fn) {
+  if (id >= SYSTEM_WORK_COUNT) return -1;
+  work_lock(&flags);
+  if (!g_work_bindings[id].fn) {
+    work_unlock(flags);
     return -1;
   }
   item = &g_work_items[id];
@@ -126,18 +171,24 @@ int work_queue_schedule_after(uint32_t id, uint64_t now_ticks,
   item->last_result = 0;
   local_copy(item->summary, sizeof(item->summary),
              delay_ticks == 0u ? "scheduled now" : "scheduled");
+  ++g_work_versions[id];
+  work_unlock(flags);
   return 0;
 }
 
 int work_queue_disable(uint32_t id) {
+  uint64_t flags;
   work_queue_init();
   if (id >= SYSTEM_WORK_COUNT) {
     return -1;
   }
+  work_lock(&flags);
   g_work_items[id].state = SYSTEM_WORK_STATE_DISABLED;
   g_work_items[id].next_due_tick = 0u;
   local_copy(g_work_items[id].summary, sizeof(g_work_items[id].summary),
              "disabled");
+  ++g_work_versions[id];
+  work_unlock(flags);
   return 0;
 }
 
@@ -160,32 +211,48 @@ int work_queue_poll_due(uint64_t now_ticks) {
 
   work_queue_init();
   for (uint32_t id = 0; id < SYSTEM_WORK_COUNT; ++id) {
-    struct system_work_status *item = &g_work_items[id];
-    struct work_binding *binding = &g_work_bindings[id];
+    struct system_work_status *item;
+    struct work_binding binding;
+    uint64_t flags;
+    uint64_t run_version;
     int rc = 0;
 
-    if (!work_item_due(item, binding, now_ticks)) {
+    work_lock(&flags);
+    item = &g_work_items[id];
+    if (!work_item_due(item, &g_work_bindings[id], now_ticks)) {
+      work_unlock(flags);
       continue;
     }
 
+    binding = g_work_bindings[id];
     item->state = SYSTEM_WORK_STATE_RUNNING;
     local_copy(item->summary, sizeof(item->summary), "running");
-    rc = binding->fn(binding->ctx);
-    item->runs++;
-    item->last_result = rc;
-    if (rc < 0) {
-      item->failures++;
-      item->state = SYSTEM_WORK_STATE_FAILED;
-      local_copy(item->summary, sizeof(item->summary), "last run failed");
-    } else {
-      item->state = SYSTEM_WORK_STATE_READY;
-      local_copy(item->summary, sizeof(item->summary), "last run completed");
+    run_version = ++g_work_versions[id];
+    work_unlock(flags);
+
+    rc = binding.fn(binding.ctx);
+
+    work_lock(&flags);
+    item = &g_work_items[id];
+    if (g_work_versions[id] == run_version &&
+        item->state == SYSTEM_WORK_STATE_RUNNING) {
+      item->runs++;
+      item->last_result = rc;
+      if (rc < 0) {
+        item->failures++;
+        item->state = SYSTEM_WORK_STATE_FAILED;
+        local_copy(item->summary, sizeof(item->summary), "last run failed");
+      } else {
+        item->state = SYSTEM_WORK_STATE_READY;
+        local_copy(item->summary, sizeof(item->summary), "last run completed");
+      }
+      if (item->interval_ticks != 0u) {
+        item->next_due_tick = now_ticks + (uint64_t)item->interval_ticks;
+      } else {
+        item->next_due_tick = 0u;
+      }
     }
-    if (item->interval_ticks != 0u) {
-      item->next_due_tick = now_ticks + (uint64_t)item->interval_ticks;
-    } else {
-      item->next_due_tick = 0u;
-    }
+    work_unlock(flags);
     ran++;
   }
 
@@ -193,11 +260,14 @@ int work_queue_poll_due(uint64_t now_ticks) {
 }
 
 int work_queue_get(uint32_t id, struct system_work_status *out) {
+  uint64_t flags;
   work_queue_init();
   if (id >= SYSTEM_WORK_COUNT || !out) {
     return -1;
   }
+  work_lock(&flags);
   *out = g_work_items[id];
+  work_unlock(flags);
   return 0;
 }
 
@@ -206,10 +276,12 @@ int work_queue_get_at(size_t index, struct system_work_status *out) {
 }
 
 int work_queue_find(const char *name, struct system_work_status *out) {
+  uint64_t flags;
   work_queue_init();
   if (!name || !name[0]) {
     return -1;
   }
+  work_lock(&flags);
   for (uint32_t id = 0; id < SYSTEM_WORK_COUNT; ++id) {
     if (!local_equal(name, g_work_items[id].name)) {
       continue;
@@ -217,8 +289,10 @@ int work_queue_find(const char *name, struct system_work_status *out) {
     if (out) {
       *out = g_work_items[id];
     }
+    work_unlock(flags);
     return (int)id;
   }
+  work_unlock(flags);
   return -1;
 }
 

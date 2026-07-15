@@ -513,6 +513,21 @@ int kernel_spawn_capygfx_desktop(void) {
 #endif
   return KERNEL_SPAWN_OK;
 }
+
+int kernel_close_capygfx_desktop(void) {
+  struct process *existing;
+  uint64_t irq_flags = kernel_spawn_save_flags();
+  int rc;
+  cli();
+  existing = capygfx_find_live_process();
+  if (!existing) {
+    kernel_spawn_restore_flags(irq_flags);
+    return -1;
+  }
+  rc = process_kill(existing->pid, 15);
+  kernel_spawn_restore_flags(irq_flags);
+  return rc == 0 ? 0 : -1;
+}
 #endif
 
 #ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE

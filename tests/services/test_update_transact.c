@@ -8,6 +8,8 @@
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 #define UA_OTHER_SHA256 \
     "0011223344556677889900112233445566778899001122334455667788990011"
+#define UA_ABC_SHA256 \
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 #define UA_GOOD_SIGNATURE \
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -19,18 +21,21 @@
 #define UA_CACHE_PATH   "/system/update/latest.ini"
 #define UA_STAGE_PATH   "/system/update/staged.ini"
 #define UA_STATE_PATH   "/system/update/state.ini"
+#define UA_PAYLOAD_PATH "/system/update/payload.bin"
 
 struct fake_file {
     const char *path;
     char text[512];
     int present;
+    size_t len;
 };
 
 static struct fake_file g_files[] = {
-    {UA_REPO_PATH,  "", 0},
-    {UA_CACHE_PATH, "", 0},
-    {UA_STAGE_PATH, "", 0},
-    {UA_STATE_PATH, "", 0},
+    {UA_REPO_PATH,  "", 0, 0u},
+    {UA_CACHE_PATH, "", 0, 0u},
+    {UA_STAGE_PATH, "", 0, 0u},
+    {UA_STATE_PATH, "", 0, 0u},
+    {UA_PAYLOAD_PATH, "", 0, 0u},
 };
 
 static int expect_true(int cond, const char *msg) {
@@ -52,7 +57,12 @@ static void set_file(const char *path, const char *text) {
     if (!f) return;
     f->present = text ? 1 : 0;
     f->text[0] = '\0';
-    if (text) { strncpy(f->text, text, sizeof(f->text) - 1u); }
+    f->len = 0u;
+    if (text) {
+        strncpy(f->text, text, sizeof(f->text) - 1u);
+        f->text[sizeof(f->text) - 1u] = '\0';
+        f->len = strlen(f->text);
+    }
 }
 
 static void reset_files(void) {
@@ -60,16 +70,26 @@ static void reset_files(void) {
     for (i = 0; i < sizeof(g_files) / sizeof(g_files[0]); i++) {
         g_files[i].present = 0;
         g_files[i].text[0] = '\0';
+        g_files[i].len = 0u;
     }
 }
 
 static int stub_read(const char *path, char *buf, size_t sz, size_t *out_len) {
     struct fake_file *f = find_file(path);
     if (!f || !f->present) return -1;
-    size_t len = strlen(f->text);
+    size_t len = f->len;
     if (len >= sz) return -1;
     memcpy(buf, f->text, len + 1u);
     if (out_len) *out_len = len;
+    return 0;
+}
+
+static int stub_read_bytes(const char *path, uint8_t *buf, size_t size,
+                           size_t *out_len) {
+    struct fake_file *f = find_file(path);
+    if (!f || !f->present || !buf || f->len > size) return -1;
+    memcpy(buf, f->text, f->len);
+    if (out_len) *out_len = f->len;
     return 0;
 }
 
@@ -79,6 +99,7 @@ static int stub_write(const char *path, const char *text) {
     f->present = 1;
     strncpy(f->text, text, sizeof(f->text) - 1u);
     f->text[sizeof(f->text) - 1u] = '\0';
+    f->len = strlen(f->text);
     return 0;
 }
 
@@ -87,6 +108,7 @@ static int stub_remove(const char *path) {
     if (!f) return -1;
     f->present = 0;
     f->text[0] = '\0';
+    f->len = 0u;
     return 0;
 }
 
@@ -101,6 +123,7 @@ static void setup(void) {
     reset_files();
     update_agent_reset();
     update_agent_set_reader(stub_read);
+    update_agent_set_bytes_reader(stub_read_bytes);
     update_agent_set_writer(stub_write);
     update_agent_set_remover(stub_remove);
     update_agent_set_manifest_verifier(stub_manifest_verify);
@@ -137,6 +160,7 @@ static void arm_staged_update_with_sha256(const char *version,
     set_file(UA_STATE_PATH,
              "pending_activation=1\n"
              "staged_manifest=/system/update/staged.ini\n");
+    set_file(UA_PAYLOAD_PATH, "abc");
 }
 
 static void arm_staged_update_with_sha256_cache(const char *version,
@@ -158,6 +182,7 @@ static void arm_staged_update_with_sha256_cache(const char *version,
     set_file(UA_CACHE_PATH, manifest);
     set_file(UA_STAGE_PATH, manifest);
     set_file(UA_STATE_PATH, state);
+    set_file(UA_PAYLOAD_PATH, "abc");
 }
 
 static void set_catalog_update_with_sha256(const char *version,
@@ -198,11 +223,11 @@ static int test_apply_verified_success(void) {
     int fails = 0;
     struct system_update_status status;
     setup();
-    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+    arm_staged_update_with_sha256("2.0.0", UA_ABC_SHA256);
 
     fails += expect_true(update_agent_poll() >= 0, "poll should succeed");
     fails += expect_true(
-        update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) ==
+        update_agent_apply_boot_slot_verified(UA_ABC_SHA256) ==
             UPDATE_AGENT_ERR_UNSUPPORTED,
         "matching digest must not turn RAM metadata into a fake update");
 
@@ -218,7 +243,21 @@ static int test_apply_verified_success(void) {
     return fails;
 }
 
-static int test_confirm_health_clears_rollback(void) {
+static int test_apply_verified_requires_payload_bytes(void) {
+    int fails = 0;
+    setup();
+    arm_staged_update_with_sha256("2.0.0", UA_ABC_SHA256);
+    set_file(UA_PAYLOAD_PATH, NULL);
+
+    fails += expect_true(
+        update_agent_apply_boot_slot_verified(UA_ABC_SHA256) == -31,
+        "manual verified apply refuses missing payload bytes");
+    fails += expect_true(boot_slot_needs_rollback() == 0,
+                         "missing payload bytes must not mutate boot slots");
+    return fails;
+}
+
+static int test_confirm_health_requires_persistent_boot_control(void) {
     int fails = 0;
     struct system_update_status status;
     setup();
@@ -226,18 +265,21 @@ static int test_confirm_health_clears_rollback(void) {
                          "stage synthetic slot for health test");
     fails += expect_true(boot_slot_activate(1u) == 0,
                          "activate synthetic slot for health test");
-    fails += expect_true(boot_slot_needs_rollback() != 0, "rollback pending before confirm");
+    fails += expect_true(boot_slot_needs_rollback() != 0,
+                         "rollback pending before refused confirm");
 
-    fails += expect_true(update_agent_confirm_health() == 0,
-                         "confirm_health should succeed");
-    fails += expect_true(boot_slot_needs_rollback() == 0,
-                         "rollback should not be pending after confirm_health");
+    fails += expect_true(
+        update_agent_confirm_health() == UPDATE_AGENT_ERR_UNSUPPORTED,
+        "confirm_health must reject RAM-only boot metadata");
+    fails += expect_true(boot_slot_needs_rollback() != 0,
+                         "refused health confirm must not commit RAM slot state");
     update_agent_status_get(&status);
-    fails += expect_true(status.last_result == 0,
-                         "confirm_health success should expose last_result zero");
-    fails += expect_true(strcmp(status.summary,
-                                "boot health confirmed; update committed") == 0,
-                         "confirm_health success summary mismatch");
+    fails += expect_true(status.last_result == UPDATE_AGENT_ERR_UNSUPPORTED,
+                         "confirm_health refusal should expose unsupported");
+    fails += expect_true(
+        strcmp(status.summary,
+               "persistent health confirmation unsupported; no update committed") == 0,
+        "confirm_health refusal summary mismatch");
 
     return fails;
 }
@@ -313,14 +355,14 @@ static int test_apply_verified_matching_digest(void) {
     int fails = 0;
     struct system_update_status status;
     setup();
-    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+    arm_staged_update_with_sha256("2.0.0", UA_ABC_SHA256);
 
     fails += expect_true(
         update_agent_staged_requires_payload_verification() == 1,
         "manifest with payload_sha256 reports verification required");
 
     fails += expect_true(
-        update_agent_apply_boot_slot_verified(UA_GOOD_SHA256) ==
+        update_agent_apply_boot_slot_verified(UA_ABC_SHA256) ==
             UPDATE_AGENT_ERR_UNSUPPORTED,
         "verified apply with matching digest remains unsupported");
     update_agent_status_get(&status);
@@ -333,11 +375,11 @@ static int test_apply_verified_matching_digest(void) {
     /* Case-insensitive comparison: same digest with upper-case hex must also
      * match so manifests in either case are accepted. */
     setup();
-    arm_staged_update_with_sha256("2.0.0", UA_GOOD_SHA256);
+    arm_staged_update_with_sha256("2.0.0", UA_ABC_SHA256);
     fails += expect_true(
         update_agent_apply_boot_slot_verified(
-            "ABCDEF0123456789ABCDEF0123456789"
-            "ABCDEF0123456789ABCDEF0123456789") ==
+            "BA7816BF8F01CFEA414140DE5DAE2223"
+            "B00361A396177A9CB410FF61F20015AD") ==
             UPDATE_AGENT_ERR_UNSUPPORTED,
         "uppercase matching digest still reaches unsupported capability gate");
     return fails;
@@ -403,8 +445,8 @@ static int test_apply_cached_payload_matching_digest(void) {
     int fails = 0;
     struct system_update_status status;
     setup();
-    arm_staged_update_with_sha256_cache("2.0.0", UA_GOOD_SHA256,
-                                        UA_GOOD_SHA256);
+    arm_staged_update_with_sha256_cache("2.0.0", UA_ABC_SHA256,
+                                        UA_ABC_SHA256);
 
     fails += expect_true(
         update_agent_apply_cached_payload() == UPDATE_AGENT_ERR_UNSUPPORTED,
@@ -433,13 +475,31 @@ static int test_apply_cached_payload_missing_cache_refuses(void) {
     return fails;
 }
 
+static int test_apply_cached_payload_missing_bytes_refuses(void) {
+    int fails = 0;
+    struct system_update_status status;
+    setup();
+    arm_staged_update_with_sha256_cache("2.0.0", UA_ABC_SHA256,
+                                        UA_ABC_SHA256);
+    set_file(UA_PAYLOAD_PATH, NULL);
+
+    fails += expect_true(update_agent_apply_cached_payload() == -31,
+                         "cached payload apply refuses missing payload bytes");
+    update_agent_status_get(&status);
+    fails += expect_true(status.last_result == -31,
+                         "missing payload bytes should expose last_result -31");
+    fails += expect_true(strstr(status.summary, "payload cache") != NULL,
+                         "missing payload bytes summary mismatch");
+    return fails;
+}
+
 static int test_apply_cached_payload_catalog_changed_mismatch_refuses(void) {
     int fails = 0;
     struct system_update_status status;
     setup();
     arm_staged_update_with_sha256_cache("2.0.0", UA_GOOD_SHA256,
-                                        UA_OTHER_SHA256);
-    set_catalog_update_with_sha256("2.1.0", UA_OTHER_SHA256);
+                                        UA_ABC_SHA256);
+    set_catalog_update_with_sha256("2.1.0", UA_ABC_SHA256);
 
     fails += expect_true(update_agent_apply_cached_payload() == -31,
                          "cached payload apply refuses cache/staged mismatch");
@@ -456,7 +516,8 @@ int run_update_transact_tests(void) {
     fails += test_apply_boot_slot_requires_stage();
     fails += test_direct_apply_refuses_hashed_stage();
     fails += test_apply_verified_success();
-    fails += test_confirm_health_clears_rollback();
+    fails += test_apply_verified_requires_payload_bytes();
+    fails += test_confirm_health_requires_persistent_boot_control();
     fails += test_check_rollback_triggers_rollback();
     fails += test_check_rollback_no_op_when_healthy();
     fails += test_apply_verified_refuses_missing_manifest_digest();
@@ -465,6 +526,7 @@ int run_update_transact_tests(void) {
     fails += test_apply_verified_missing_digest_refuses();
     fails += test_apply_verified_malformed_digest_refuses();
     fails += test_apply_cached_payload_catalog_changed_mismatch_refuses();
+    fails += test_apply_cached_payload_missing_bytes_refuses();
     fails += test_apply_cached_payload_missing_cache_refuses();
     fails += test_apply_cached_payload_matching_digest();
     if (fails == 0) {

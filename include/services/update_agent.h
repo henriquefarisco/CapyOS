@@ -12,7 +12,7 @@
 #define UPDATE_AGENT_REMOTE_MAX 160u
 #define UPDATE_AGENT_SUMMARY_MAX 80u
 #define UPDATE_AGENT_PREPARE_GATE_MAX 32u
-#define UPDATE_AGENT_PAYLOAD_MAX_BYTES (16u * 1024u * 1024u)
+#define UPDATE_AGENT_PAYLOAD_MAX_BYTES (8u * 1024u * 1024u)
 /* SHA-256 hex digest = 64 ASCII chars + NUL. */
 #define UPDATE_AGENT_SHA256_HEX_LEN 64u
 #define UPDATE_AGENT_SHA256_HEX_MAX (UPDATE_AGENT_SHA256_HEX_LEN + 1u)
@@ -70,6 +70,9 @@ struct system_update_status {
 typedef int (*update_agent_read_file_fn)(const char *path, char *buffer,
                                          size_t buffer_size,
                                          size_t *out_len);
+typedef int (*update_agent_read_bytes_fn)(const char *path, uint8_t *buffer,
+                                          size_t buffer_size,
+                                          size_t *out_len);
 typedef int (*update_agent_write_file_fn)(const char *path, const char *text);
 typedef int (*update_agent_write_bytes_fn)(const char *path, const uint8_t *data,
                                            size_t len);
@@ -89,6 +92,7 @@ typedef int (*update_agent_fetch_payload_fn)(const char *url, uint8_t *buffer,
 void update_agent_reset(void);
 void update_agent_init(const char *current_version);
 void update_agent_set_reader(update_agent_read_file_fn reader);
+void update_agent_set_bytes_reader(update_agent_read_bytes_fn reader);
 void update_agent_set_writer(update_agent_write_file_fn writer);
 void update_agent_set_bytes_writer(update_agent_write_bytes_fn writer);
 void update_agent_set_remover(update_agent_remove_file_fn remover);

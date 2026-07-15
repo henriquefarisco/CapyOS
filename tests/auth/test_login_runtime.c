@@ -10,6 +10,7 @@ int g_prepare_calls;
 int g_maintenance_calls;
 int g_login_calls;
 int g_init_user_calls;
+int g_init_user_requests_logout;
 int g_dispatch_calls;
 int g_banner_calls;
 int g_clear_calls;
@@ -33,6 +34,7 @@ void reset_test_state(void) {
   g_maintenance_calls = 0;
   g_login_calls = 0;
   g_init_user_calls = 0;
+  g_init_user_requests_logout = 0;
   g_dispatch_calls = 0;
   g_banner_calls = 0;
   g_clear_calls = 0;
@@ -169,12 +171,25 @@ static int system_login_stub(struct session_context *session,
 
 static int init_shell_context_user_stub(const struct user_record *user) {
   ++g_init_user_calls;
+  if (g_init_user_requests_logout) {
+    g_shell_ctx.logout = 1;
+    g_shell_ctx.running = 0;
+    g_should_logout = 1;
+  }
   return (user && user->username[0]) ? 0 : -1;
 }
 
 static int dispatch_shell_command_stub(char *line) {
   ++g_dispatch_calls;
   if (strings_equal(line, "logout")) {
+    g_should_logout = 1;
+    return 1;
+  }
+  if (strings_equal(line, "desktop")) {
+    /* Models the blocking desktop command returning after its graphical
+     * Logout callback marked the owning shell context. */
+    g_shell_ctx.logout = 1;
+    g_shell_ctx.running = 0;
     g_should_logout = 1;
     return 1;
   }
@@ -364,6 +379,53 @@ static int test_normal_login_path_still_runs(void) {
   return fails;
 }
 
+static int test_graphical_desktop_logout_returns_to_login(void) {
+  int fails = 0;
+  struct login_runtime_ops ops;
+  int rc = 0;
+
+  reset_test_state();
+  ops = build_ops();
+  g_readline_sequence[0] = "desktop";
+  g_readline_count = 1;
+
+  rc = login_runtime_run(&ops);
+  fails += expect_true(rc == -1,
+                       "desktop logout path should stop only when the next login later fails");
+  fails += expect_true(g_dispatch_calls == 1,
+                       "desktop session should return through one shell dispatch");
+  fails += expect_true(g_login_calls == 2,
+                       "desktop logout must return to the normal login loop");
+  fails += expect_true(g_banner_calls >= 2 && g_clear_calls >= 2,
+                       "desktop logout must redraw the login screen instead of exposing the shell");
+  fails += expect_true(g_session_ctx.user.username[0] == '\0',
+                       "desktop logout must clear the authenticated session before relogin");
+  return fails;
+}
+
+static int test_desktop_autostart_logout_never_exposes_shell(void) {
+  int fails = 0;
+  struct login_runtime_ops ops;
+  int rc = 0;
+
+  reset_test_state();
+  ops = build_ops();
+  g_init_user_requests_logout = 1;
+
+  rc = login_runtime_run(&ops);
+  fails += expect_true(rc == -1,
+                       "autostart logout should stop only when relogin later fails");
+  fails += expect_true(g_login_calls == 2,
+                       "autostart logout must return directly to login");
+  fails += expect_true(g_dispatch_calls == 0,
+                       "autostart logout must not expose a shell command prompt");
+  fails += expect_true(g_banner_calls >= 2 && g_clear_calls >= 2,
+                       "autostart logout must redraw the login screen");
+  fails += expect_true(g_session_ctx.user.username[0] == '\0',
+                       "autostart logout must clear the authenticated session");
+  return fails;
+}
+
 static int test_recovery_can_return_to_normal_login(void) {
   int fails = 0;
   struct login_runtime_ops ops;
@@ -522,6 +584,8 @@ int run_login_runtime_tests(void) {
   fails += test_login_runtime_credential_window_present_cases();
   fails += test_maintenance_mode_bypasses_login();
   fails += test_normal_login_path_still_runs();
+  fails += test_graphical_desktop_logout_returns_to_login();
+  fails += test_desktop_autostart_logout_never_exposes_shell();
   fails += test_recovery_can_return_to_normal_login();
   fails += test_recovery_resume_policy_requires_request_and_clear();
   fails += test_recovery_request_waits_for_maintenance_clear();

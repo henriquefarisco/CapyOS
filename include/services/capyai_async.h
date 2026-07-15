@@ -30,6 +30,8 @@ enum capyai_async_result {
 typedef int (*capyai_async_dispatch_fn)(void *ctx, const char *command_line,
                                         char *detail, size_t detail_size);
 
+/* ABI v1: keep this layout frozen.  Older modules allocate exactly this
+ * structure, so typed fields must never be inserted into it. */
 struct capyai_async_request {
   char intent[CAPYAI_ASYNC_INTENT_MAX];
   struct capyai_perms perms;
@@ -37,6 +39,18 @@ struct capyai_async_request {
   capyai_async_dispatch_fn dispatch;
   void *dispatch_ctx;
   uint64_t client_generation;
+};
+
+#define CAPYAI_ASYNC_REQUEST_ABI_V2 2u
+
+/* Additive typed request.  struct_size permits future tail extension while
+ * submit_v2 rejects truncated or mismatched callers before copying data. */
+struct capyai_async_request_v2 {
+  uint32_t abi_version;
+  uint32_t struct_size;
+  struct capyai_async_request base;
+  capyai_typed_dispatch_fn typed_dispatch;
+  void *typed_dispatch_ctx;
 };
 
 struct capyai_async_response {
@@ -55,6 +69,8 @@ struct capyai_async_response {
 int capyai_async_init(void);
 int capyai_async_submit(const struct capyai_async_request *request,
                         uint64_t *out_job_id);
+int capyai_async_submit_v2(const struct capyai_async_request_v2 *request,
+                           uint64_t *out_job_id);
 /* Returns 1 and consumes a completed response, 0 while pending, or a negative
  * enum capyai_async_result on invalid/stale input. */
 int capyai_async_poll(uint64_t job_id, struct capyai_async_response *out);

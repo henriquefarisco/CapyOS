@@ -82,19 +82,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   }
 
   // Modo instalador: ISO de instalacao contem um marcador (CAPYOS.INI).
-  // Se o boot config ja possui SETUP_DATA, o sistema foi configurado por uma
-  // instalacao anterior — pular modo instalador mesmo que o marker exista.
+  // Setup preseedado na propria midia nao prova que o disco alvo foi instalado.
   BOOLEAN install_marker = boot_volume_has_marker(image, systab);
   BOOLEAN install_ro = boot_volume_is_readonly(image, systab);
   BOOLEAN install_cdrom = boot_device_is_cdrom(image, systab);
-  BOOLEAN already_installed = (g_runtime_boot_cfg_valid &&
-      (g_runtime_boot_cfg.flags & BOOT_CONFIG_FLAG_HAS_SETUP_DATA));
-  if (already_installed && install_marker) {
-    Print(L"[UEFI] Instalacao anterior detectada; ignorando modo instalador "
-          L"(marker=%d readonly=%d cdrom=%d)\r\n",
-          install_marker ? 1 : 0, install_ro ? 1 : 0, install_cdrom ? 1 : 0);
-  }
-  if (!already_installed && install_marker) {
+  if (install_marker) {
     kernel_release_fixed_window(systab);
     Print(L"[UEFI] Modo instalador detectado (marker=%d readonly=%d cdrom=%d)\r\n",
           install_marker ? 1 : 0, install_ro ? 1 : 0, install_cdrom ? 1 : 0);

@@ -76,6 +76,7 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
   t->next = NULL;
   t->prev = NULL;
   t->wait_channel = NULL;
+  t->active_session = current_task ? current_task->active_session : NULL;
 
   t->kernel_stack_size = TASK_KERNEL_STACK_SIZE;
   t->kernel_stack = (uint8_t *)kmalloc(t->kernel_stack_size);
@@ -176,6 +177,7 @@ int task_kill(uint32_t pid) {
     t->user_stack = NULL;
   }
   t->state = TASK_STATE_UNUSED;
+  t->active_session = NULL;
   if (task_active_count > 0) task_active_count--;
   return 0;
 }

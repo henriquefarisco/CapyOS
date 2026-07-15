@@ -62,6 +62,10 @@ struct task {
   struct task *next;
   struct task *prev;
   void *wait_channel;
+  /* Authentication principal is task-local.  Keeping it on the task prevents
+   * a worker that performs governed VFS operations from changing the identity
+   * observed concurrently by the desktop or another user session. */
+  void *active_session;
 };
 
 typedef void (*task_entry_fn)(void *arg);

@@ -92,4 +92,8 @@ void capyai_summary(const struct capyai_plan *plan,
     cs_append(buf, buf_size, &len, "\", mas falhou (codigo ");
     cs_append_int(buf, buf_size, &len, result->rc);
     cs_append(buf, buf_size, &len, ").");
+    if (result->detail[0]) {
+        cs_append(buf, buf_size, &len, " Motivo: ");
+        cs_append(buf, buf_size, &len, result->detail);
+    }
 }

@@ -141,6 +141,11 @@ int kernel_boot_run_capygfx(void);
  * never noreturn. */
 int kernel_spawn_capygfx_desktop(void);
 
+/* Governed counterpart to the launcher. Terminates only the registered live
+ * capygfx root process; it never accepts a PID or executable name from user
+ * input. Returns 0 when closed, -1 when no Browser process is running. */
+int kernel_close_capygfx_desktop(void);
+
 /* Observable lifecycle counters for the desktop Browser launcher. Repeated
  * launch requests are coalesced onto the one live `capygfx` process; exited
  * root processes are reaped before a replacement is allocated. The snapshot

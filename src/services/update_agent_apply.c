@@ -43,6 +43,8 @@ int update_agent_poll(void) {
   int staged_downgrade = 0;
   int manifest_payload_invalid = 0;
   int staged_payload_invalid = 0;
+  int manifest_payload_size_invalid = 0;
+  int staged_payload_size_invalid = 0;
   int manifest_payload_url_invalid = 0;
   int staged_payload_url_invalid = 0;
   int manifest_signature_invalid = 0;
@@ -124,6 +126,9 @@ int update_agent_poll(void) {
                    &available_manifest)) {
       manifest_payload_invalid = 1;
     } else if (manifest_version_cmp > 0 &&
+               !update_agent_manifest_payload_size_valid(&available_manifest)) {
+      manifest_payload_size_invalid = 1;
+    } else if (manifest_version_cmp > 0 &&
                !update_agent_manifest_payload_url_valid(&available_manifest)) {
       manifest_payload_url_invalid = 1;
     } else if (manifest_version_cmp > 0 &&
@@ -166,6 +171,8 @@ int update_agent_poll(void) {
       staged_downgrade = 1;
     } else if (!update_agent_manifest_payload_sha256_valid(&staged_manifest)) {
       staged_payload_invalid = 1;
+    } else if (!update_agent_manifest_payload_size_valid(&staged_manifest)) {
+      staged_payload_size_invalid = 1;
     } else if (!update_agent_manifest_payload_url_valid(&staged_manifest)) {
       staged_payload_url_invalid = 1;
     } else if (!update_agent_manifest_signature_ed25519_valid(
@@ -247,6 +254,16 @@ int update_agent_poll(void) {
     update_agent_local_copy(update_agent_g_status.summary,
                             sizeof(update_agent_g_status.summary),
                             "staged update missing or malformed payload sha256");
+  } else if (manifest_payload_size_invalid) {
+    rc = -55;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "catalog cache payload size invalid");
+  } else if (staged_payload_size_invalid) {
+    rc = -56;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "staged update payload size invalid");
   } else if (manifest_payload_url_invalid) {
     rc = -37;
     update_agent_local_copy(update_agent_g_status.summary,
@@ -392,6 +409,14 @@ int update_agent_import_manifest_path(const char *path) {
         "imported manifest missing or malformed payload sha256");
     klog(KLOG_WARN, "[update] Manifest import rejected: payload sha256 invalid.");
     return -22;
+  }
+  if (!update_agent_manifest_payload_size_valid(&import_manifest)) {
+    update_agent_g_status.last_result = -55;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "imported manifest payload size invalid");
+    klog(KLOG_WARN, "[update] Manifest import rejected: payload size invalid.");
+    return -55;
   }
   if (!update_agent_manifest_payload_url_valid(&import_manifest)) {
     update_agent_g_status.last_result = -39;

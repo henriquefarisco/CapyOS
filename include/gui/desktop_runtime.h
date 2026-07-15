@@ -9,8 +9,19 @@ int desktop_runtime_start(struct shell_context *ctx);
 /* Returns 1 if the desktop is currently running, 0 otherwise. */
 int desktop_is_active(void);
 
-/* Stop the desktop (called from within the desktop terminal). */
+/* Stop only the graphical desktop loop. This does not end the authenticated
+ * session and is reserved for TTY fallback and system power transitions. */
 void desktop_stop(void);
+
+/* End the authenticated desktop session and return through login_runtime to
+ * the graphical login screen. Fails closed when no live desktop/shell context
+ * is available, so a broken logout request can never expose the text shell. */
+int desktop_request_logout(void);
+
+/* Foreground-only adapter used by the governed application registry.  It
+ * opens or focuses the one desktop Terminal window and reports whether the
+ * window became visible. */
+int desktop_open_terminal_window(void);
 
 /* Dispatch a shell command from the desktop terminal. */
 int kernel_desktop_dispatch_shell_command(char *line);
@@ -33,6 +44,15 @@ int kernel_desktop_dispatch_shell_command_scoped(
     struct shell_context *ctx, char *line, int *out_rc, int wait_if_busy,
     shell_output_write_fn write_cb, shell_output_putc_fn putc_cb,
     shell_output_clear_fn clear_cb);
+
+/* Run one typed, non-graphical operation with the same serialized session
+ * binding used by shell dispatch. This lets background services call VFS and
+ * other permission-aware adapters without racing the process-global active
+ * session or converting typed arguments into command text. */
+typedef int (*desktop_session_operation_fn)(void *operation_ctx);
+int kernel_desktop_run_session_operation_scoped(
+    struct shell_context *ctx, desktop_session_operation_fn operation,
+    void *operation_ctx, int wait_if_busy, int *out_rc);
 
 /* Copy the current desktop shell/session into caller-owned storage. This is
  * the lifetime boundary used by workers: closing the desktop cannot leave a

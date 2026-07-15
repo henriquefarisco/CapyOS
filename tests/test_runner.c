@@ -6,6 +6,8 @@ int run_keyboard_layout_tests(void);
 int run_grub_cfg_builder_tests(void);
 int run_boot_manifest_tests(void);
 int run_boot_writer_tests(void);
+int run_installer_disk_policy_tests(void);
+int run_first_boot_policy_tests(void);
 int run_csprng_tests(void);
 int run_crypt_vector_tests(void);
 int run_volume_header_tests(void);
@@ -252,6 +254,14 @@ static int tr_arg_eq(const char *a, const char *b) {
 int main(int argc, char **argv) {
     int failures = 0;
 
+    if (argc > 1 && tr_arg_eq(argv[1], "installer-disk")) {
+        failures += run_installer_disk_policy_tests();
+        printf("\n[installer-disk-selftest] %s (%d falha%s)\n",
+               failures == 0 ? "OK" : "FALHOU", failures,
+               failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
     /* Focused security regression (see docs/security/audit-playbook.md):
      * untrusted-input parsers + crypto + package signature. Selected by
      * `make security-selftest` (runs the test binary with the `security`
@@ -305,6 +315,8 @@ int main(int argc, char **argv) {
     failures += run_grub_cfg_builder_tests();
     failures += run_boot_manifest_tests();
     failures += run_boot_writer_tests();
+    failures += run_installer_disk_policy_tests();
+    failures += run_first_boot_policy_tests();
     failures += run_csprng_tests();
     failures += run_crypt_vector_tests();
     failures += run_volume_provider_tests();

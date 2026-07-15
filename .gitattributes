@@ -1,4 +1,9 @@
 * text=auto eol=lf
+src/boot/uefi_loader/fat32_writer.c text eol=crlf whitespace=cr-at-eol
+src/boot/uefi_loader/installer_disk_selection.c text eol=crlf whitespace=cr-at-eol
+src/boot/uefi_loader/recovery_gpt_layout.c text eol=crlf whitespace=cr-at-eol
+tools/scripts/smoke_x64_iso_cancel.py text eol=crlf whitespace=cr-at-eol
+tools/scripts/smoke_x64_iso_install.py text eol=crlf whitespace=cr-at-eol
 
 *.bin binary
 *.png binary

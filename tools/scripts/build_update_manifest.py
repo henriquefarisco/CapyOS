@@ -16,7 +16,7 @@ from update_manifest_common import (
     canonical_body,
     ensure_regular_file,
     normalize_public_key_hex,
-    payload_sha256,
+    payload_metadata,
     raw_public_from_private,
     require_private_key_mode,
     sign_bytes,
@@ -64,6 +64,7 @@ def main() -> int:
         expected_public = bytes.fromhex(
             normalize_public_key_hex(args.expected_public_key_hex)
         )
+        size, digest = payload_metadata(args.payload)
         fields = {
             "available_version": args.version,
             "channel": args.channel,
@@ -71,7 +72,8 @@ def main() -> int:
             "source": args.source,
             "published_at": args.published_at,
             "payload_url": args.payload_url,
-            "payload_sha256": payload_sha256(args.payload),
+            "payload_size": str(size),
+            "payload_sha256": digest,
         }
         body = canonical_body(fields)
         if args.unsigned:

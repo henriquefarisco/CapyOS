@@ -185,6 +185,10 @@ void compositor_render_cursor(int32_t x, int32_t y);
 struct gui_window *compositor_window_at(int32_t x, int32_t y);
 struct gui_window *compositor_focused_window(void);
 struct gui_window *compositor_get_window(uint32_t window_id);
+/* Exact-title lookup for trusted in-kernel app registries.  User/model text
+ * must never be passed here directly; CapyAI resolves an allowlisted app ID
+ * to a compile-time title first. */
+struct gui_window *compositor_find_window_by_title(const char *title);
 int compositor_window_exists(uint32_t window_id);
 void compositor_stats_get(struct compositor_stats *out);
 void compositor_screen_size(uint32_t *out_w, uint32_t *out_h);

@@ -7,6 +7,7 @@
 #include "boot/boot_metrics.h"
 #include "boot/boot_slot.h"
 #include "auth/auth_policy.h"
+#include "auth/privilege.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/apic.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
@@ -21,6 +22,10 @@
 #include "kernel/module_gate.h"
 #include "kernel/user_init.h"
 #include "gui/desktop_runtime.h"
+#include "services/capyai_system_actions.h"
+#ifdef CAPYOS_HAVE_CAPYAI
+#include "services/capyai.h"
+#endif
 #ifndef CAPYOS_PROFILE_CORE_ONLY
 #include "gui/desktop.h"
 #include "apps/calculator.h"
@@ -380,6 +385,223 @@ static int cmd_open_browser_graphical(struct shell_context *c, int a, char **v) 
   return -1;
 #endif
 }
+
+/* Governed application bridge used by CapyAI.  The shell-visible command has
+ * one argument only because capyai_system_actions validates it against the
+ * fixed seven-ID registry before any callback is selected.  Graphical work is
+ * queued here and performed later by capyai_system_actions_pump() on the
+ * desktop foreground frame. */
+struct capyai_window_close_context {
+  const char *title;
+};
+
+static int app_open_calculator(void *ctx) {
+  (void)ctx;
+  calculator_open();
+  return compositor_find_window_by_title("Calculator") ? 0 : -1;
+}
+
+static int app_open_files(void *ctx) {
+  (void)ctx;
+  file_manager_open();
+  return compositor_find_window_by_title("File Manager") ? 0 : -1;
+}
+
+static int app_open_editor(void *ctx) {
+  (void)ctx;
+  text_editor_open(NULL);
+  return compositor_find_window_by_title("Text Editor") ? 0 : -1;
+}
+
+static int app_open_tasks(void *ctx) {
+  (void)ctx;
+  task_manager_open();
+  return compositor_find_window_by_title("Task Manager") ? 0 : -1;
+}
+
+static int app_open_settings(void *ctx) {
+  (void)ctx;
+  settings_open();
+  return compositor_find_window_by_title("Settings") ? 0 : -1;
+}
+
+static int app_open_capyai(void *ctx) {
+  (void)ctx;
+  return desktop_launch_capyai();
+}
+
+static int app_open_browser(void *ctx) {
+  (void)ctx;
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+  return kernel_spawn_capygfx_desktop() == KERNEL_SPAWN_OK ? 0 : -1;
+#else
+  return -1;
+#endif
+}
+
+static int app_open_terminal(void *ctx) {
+  (void)ctx;
+  return desktop_open_terminal_window();
+}
+
+static int app_close_window(void *ctx) {
+  const struct capyai_window_close_context *close_ctx =
+      (const struct capyai_window_close_context *)ctx;
+  struct gui_window *window;
+  uint32_t window_id;
+  if (!close_ctx || !close_ctx->title) return -1;
+  window = compositor_find_window_by_title(close_ctx->title);
+  if (!window) return -1;
+  window_id = window->id;
+  compositor_destroy_window(window_id);
+  return compositor_window_exists(window_id) ? -1 : 0;
+}
+
+static int app_close_browser(void *ctx) {
+  (void)ctx;
+#ifdef CAPYOS_DESKTOP_GRAPHICAL_BROWSER
+  return kernel_close_capygfx_desktop();
+#else
+  return -1;
+#endif
+}
+
+static int capyai_install_desktop_app_bindings(void) {
+  static const struct capyai_window_close_context close_calculator = {"Calculator"};
+  static const struct capyai_window_close_context close_files = {"File Manager"};
+  static const struct capyai_window_close_context close_editor = {"Text Editor"};
+  static const struct capyai_window_close_context close_tasks = {"Task Manager"};
+  static const struct capyai_window_close_context close_settings = {"Settings"};
+  static const struct capyai_window_close_context close_capyai = {"CapyAI"};
+  static const struct capyai_window_close_context close_terminal = {"Terminal"};
+  static const struct capyai_system_app_binding bindings[CAPYAI_SYSTEM_APP_COUNT] = {
+      {"calculator", app_open_calculator, app_close_window, (void *)&close_calculator},
+      {"files", app_open_files, app_close_window, (void *)&close_files},
+      {"editor", app_open_editor, app_close_window, (void *)&close_editor},
+      {"tasks", app_open_tasks, app_close_window, (void *)&close_tasks},
+      {"settings", app_open_settings, app_close_window, (void *)&close_settings},
+      {"capyai", app_open_capyai, app_close_window, (void *)&close_capyai},
+      {"browser", app_open_browser, app_close_browser, NULL},
+      {"terminal", app_open_terminal, app_close_window, (void *)&close_terminal},
+  };
+  if (capyai_system_apps_install(bindings, CAPYAI_SYSTEM_APP_COUNT) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+static int cmd_capyai_app_action(struct shell_context *ctx, int argc,
+                                 char **argv, uint32_t action) {
+  int rc;
+  const char *verb;
+  (void)ctx;
+  verb = action == CAPYAI_SYSTEM_APP_OPEN ? "app-open" : "app-close";
+  if (shell_help_requested(argc, argv)) {
+    fbcon_print("Usage: ");
+    fbcon_print(verb);
+    fbcon_print(" <calculator|files|editor|tasks|settings|capyai|browser|terminal>\n");
+    return 0;
+  }
+  if (argc != 2 || !capyai_system_app_id_valid(argv[1])) {
+    shell_print_error("Aplicativo nao registrado. Use um ID exibido no help.");
+    return -1;
+  }
+  if (!desktop_is_active() || capyai_install_desktop_app_bindings() != 0) {
+    shell_print_error("Desktop indisponivel para a acao solicitada.");
+    return -1;
+  }
+  /* Shell commands dispatched by the graphical terminal already run on the
+   * desktop foreground task. Waiting on the worker queue here deadlocks the
+   * per-frame pump, so this compatibility path executes the same fixed
+   * registry callback synchronously. CapyAI workers still use the queued
+   * native dispatch below. */
+  rc = capyai_system_app_execute_foreground(action, argv[1]);
+  if (rc != CAPYAI_SYSTEM_ACTION_OK) {
+    shell_print_error("O aplicativo nao aceitou a acao solicitada.");
+    return -1;
+  }
+  shell_print_ok(action == CAPYAI_SYSTEM_APP_OPEN ? "Aplicativo aberto."
+                                                  : "Aplicativo fechado.");
+  return 0;
+}
+
+static int cmd_capyai_app_open(struct shell_context *ctx, int argc,
+                               char **argv) {
+  return cmd_capyai_app_action(ctx, argc, argv, CAPYAI_SYSTEM_APP_OPEN);
+}
+
+static int cmd_capyai_app_close(struct shell_context *ctx, int argc,
+                                char **argv) {
+  return cmd_capyai_app_action(ctx, argc, argv, CAPYAI_SYSTEM_APP_CLOSE);
+}
+
+#ifdef CAPYOS_HAVE_CAPYAI
+static void capyai_system_detail(char *detail, size_t detail_size,
+                                 const char *prefix, const char *app_id) {
+  size_t n = 0u;
+  size_t i = 0u;
+  if (!detail || detail_size == 0u) return;
+  while (prefix && prefix[i] && n + 1u < detail_size) detail[n++] = prefix[i++];
+  i = 0u;
+  while (app_id && app_id[i] && n + 1u < detail_size) detail[n++] = app_id[i++];
+  detail[n] = '\0';
+}
+
+int capyai_native_system_dispatch(void *ctx,
+                                  const struct capy_ai_output *tool_call,
+                                  char *detail, size_t detail_size) {
+  struct shell_context *shell_ctx = (struct shell_context *)ctx;
+  uint32_t action;
+  int rc;
+  (void)ctx;
+  if (!tool_call || !detail || detail_size == 0u) return 127;
+  detail[0] = '\0';
+  if (shell_string_equal(tool_call->action, "app_open")) {
+    action = CAPYAI_SYSTEM_APP_OPEN;
+  } else if (shell_string_equal(tool_call->action, "app_close")) {
+    action = CAPYAI_SYSTEM_APP_CLOSE;
+  } else {
+    const struct session_context *session =
+        shell_ctx ? shell_context_session(shell_ctx) : NULL;
+    if (!shell_string_equal(tool_call->action, "power_schedule_status") &&
+        !privilege_session_is_admin(session)) {
+      privilege_log_denied("capyai-power", session_user(session));
+      capyai_system_detail(detail, detail_size,
+                           "permission denied: admin elevation required", "");
+      return 126;
+    }
+    return capyai_native_power_dispatch(tool_call, detail, detail_size);
+  }
+  if (!capyai_system_app_id_valid(tool_call->path)) {
+    capyai_system_detail(detail, detail_size,
+                         "application is not registered: ", tool_call->path);
+    return 127;
+  }
+  if (!desktop_is_active()) {
+    capyai_system_detail(detail, detail_size, "desktop is not active", "");
+    return 127;
+  }
+  if (capyai_install_desktop_app_bindings() != 0) {
+    capyai_system_detail(detail, detail_size,
+                         "application registry is unavailable", "");
+    return 127;
+  }
+  rc = capyai_system_app_request(action, tool_call->path, 300u);
+  if (rc != CAPYAI_SYSTEM_ACTION_OK) {
+    capyai_system_detail(
+        detail, detail_size,
+        rc == CAPYAI_SYSTEM_ACTION_ERR_TIMEOUT ? "application action timed out: " :
+        rc == CAPYAI_SYSTEM_ACTION_ERR_BUSY ? "application queue is busy: " :
+        "application action failed: ", tool_call->path);
+    return 127;
+  }
+  capyai_system_detail(detail, detail_size,
+                       action == CAPYAI_SYSTEM_APP_OPEN ? "opened app="
+                                                        : "closed app=",
+                       tool_call->path);
+  return 0;
+}
+#endif
 #else /* CAPYOS_PROFILE_CORE_ONLY */
 /* core-only profile: desktop/apps symbols are not linked. Provide a
  * single explanatory stub for the shell so registry references stay
@@ -392,6 +614,41 @@ static int cmd_desktop_unavailable(struct shell_context *ctx, int argc, char **a
       "Rebuild with PROFILE=full or use a profile=full installer.\n");
   return -1;
 }
+#ifdef CAPYOS_HAVE_CAPYAI
+static void capyai_core_only_detail(char *detail, size_t detail_size,
+                                    const char *text) {
+  size_t i = 0u;
+  if (!detail || detail_size == 0u) return;
+  while (text && text[i] && i + 1u < detail_size) {
+    detail[i] = text[i];
+    ++i;
+  }
+  detail[i] = '\0';
+}
+
+int capyai_native_system_dispatch(void *ctx,
+                                  const struct capy_ai_output *tool_call,
+                                  char *detail, size_t detail_size) {
+  struct shell_context *shell_ctx = (struct shell_context *)ctx;
+  const struct session_context *session =
+      shell_ctx ? shell_context_session(shell_ctx) : NULL;
+  if (!tool_call || !detail || detail_size == 0u) return 127;
+  if (shell_string_equal(tool_call->action, "app_open") ||
+      shell_string_equal(tool_call->action, "app_close")) {
+    capyai_core_only_detail(detail, detail_size,
+                            "desktop is unavailable in core-only profile");
+    return 127;
+  }
+  if (!shell_string_equal(tool_call->action, "power_schedule_status") &&
+      !privilege_session_is_admin(session)) {
+    privilege_log_denied("capyai-power", session_user(session));
+    capyai_core_only_detail(detail, detail_size,
+                            "permission denied: admin elevation required");
+    return 126;
+  }
+  return capyai_native_power_dispatch(tool_call, detail, detail_size);
+}
+#endif
 #endif /* CAPYOS_PROFILE_CORE_ONLY */
 
 /* Etapa 7 / Slice 7.5: hook estavel do launcher (CapyUI "Navegador").
@@ -410,7 +667,7 @@ int kernel_desktop_open_browser_graphical(void) {
  * browser legado foi removido; o sucessor deve voltar como adaptador
  * versionado na etapa correta. */
 
-#define EXT_CMD_COUNT 26
+#define EXT_CMD_COUNT 28
 #define EXT_EARLY_COUNT 6
 
 static struct shell_command g_extended_commands[EXT_CMD_COUNT];
@@ -444,6 +701,8 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "open-capyai",      cmd_open_capyai);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_open_settings);
   set_cmd(&g_extended_commands[i++], "open-browser-graphical", cmd_open_browser_graphical);
+  set_cmd(&g_extended_commands[i++], "app-open",         cmd_capyai_app_open);
+  set_cmd(&g_extended_commands[i++], "app-close",        cmd_capyai_app_close);
 #else
   set_cmd(&g_extended_commands[i++], "open-calculator",  cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-files",       cmd_desktop_unavailable);
@@ -452,6 +711,8 @@ static void extended_init(void) {
   set_cmd(&g_extended_commands[i++], "open-capyai",      cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-settings",    cmd_desktop_unavailable);
   set_cmd(&g_extended_commands[i++], "open-browser-graphical", cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "app-open",         cmd_desktop_unavailable);
+  set_cmd(&g_extended_commands[i++], "app-close",        cmd_desktop_unavailable);
 #endif
   set_cmd(&g_extended_commands[i++], "print-tasks",      cmd_print_tasks);
   set_cmd(&g_extended_commands[i++], "print-mem",        cmd_print_mem);
@@ -472,9 +733,15 @@ static void extended_init(void) {
   set_cmd(&g_extended_early_commands[i++], "clock",          cmd_print_clock);
   set_cmd(&g_extended_early_commands[i++], "printclock",     cmd_print_clock);
   set_cmd(&g_extended_early_commands[i++], "print-clock",    cmd_print_clock);
+#ifndef CAPYOS_PROFILE_CORE_ONLY
   set_cmd(&g_extended_early_commands[i++], "desktop",        cmd_desktop_start);
   set_cmd(&g_extended_early_commands[i++], "desktopstart",   cmd_desktop_start);
   set_cmd(&g_extended_early_commands[i++], "desktop-start",  cmd_desktop_start);
+#else
+  set_cmd(&g_extended_early_commands[i++], "desktop",        cmd_desktop_unavailable);
+  set_cmd(&g_extended_early_commands[i++], "desktopstart",   cmd_desktop_unavailable);
+  set_cmd(&g_extended_early_commands[i++], "desktop-start",  cmd_desktop_unavailable);
+#endif
 
   g_extended_initialized = 1;
 }

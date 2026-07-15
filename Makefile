@@ -71,9 +71,8 @@ endif
 # EXTRA_CFLAGS64 is appended last so callers can flip build-time
 # feature flags without editing CFLAGS64 in place. Examples:
 #   make all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
-# Combine with `make clean` first, since the per-source .d files
-# do not track preprocessor macros and would otherwise reuse
-# stale objects compiled without the new flag.
+# The build-variant guard in prepare-x64-toolchain fingerprints these flags and
+# invalidates x64/userland artifacts whenever the effective configuration moves.
 CFLAGS64  += $(EXTRA_CFLAGS64)
 DEPFLAGS64 := -MMD -MP
 LDFLAGS64 := -nostdlib -z noexecstack
@@ -175,7 +174,9 @@ ifneq ($(strip $(CAPYAI_DIR)),)
         $(BUILD)/x86_64/capyai-core/capy_ai_predict.o \
         $(BUILD)/x86_64/capyai-core/capy_ai_slots.o \
         $(BUILD)/x86_64/services/capyai/capyai_plan.o \
+        $(BUILD)/x86_64/services/capyai/capyai_policy.o \
         $(BUILD)/x86_64/services/capyai/capyai_execute.o \
+        $(BUILD)/x86_64/services/capyai/capyai_native_files.o \
         $(BUILD)/x86_64/services/capyai/capyai_summary.o \
         $(BUILD)/x86_64/services/capyai/capyai_async.o
     $(info [build] CapyAI core detected at $(CAPYAI_DIR)/src/core (capyai enabled))
@@ -368,6 +369,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/config/system_settings.o \
 	$(BUILD)/x86_64/config/first_boot/logging.o \
 	$(BUILD)/x86_64/config/first_boot/storage_users.o \
+	$(BUILD)/x86_64/config/first_boot/policy.o \
 	$(BUILD)/x86_64/config/first_boot/program.o \
 	$(BUILD)/x86_64/config/first_boot/modules.o \
 	$(BUILD)/x86_64/config/first_boot/modules_progress.o \
@@ -400,6 +402,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/auth/session.o \
 	$(BUILD)/x86_64/auth/user_home.o \
 	$(BUILD)/x86_64/core/work_queue.o \
+	$(BUILD)/x86_64/services/capyai/capyai_system_actions.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
@@ -816,7 +819,8 @@ EFI_LOADER_SRCS = \
 	$(SRC_DIR)/boot/uefi_loader/installer_run.c \
 	$(SRC_DIR)/boot/uefi_loader/acpi_log_gop.c \
 	$(SRC_DIR)/boot/uefi_loader/efi_main.c
-EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS))
+EFI_LOADER_POLICY_OBJ = $(BUILD)/boot/uefi_loader/installer_disk_policy.o
+EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS)) $(EFI_LOADER_POLICY_OBJ)
 UEFI_LOADER_DEPS = $(EFI_LOADER_OBJS:.o=.d)
 
 all: all64
@@ -1701,15 +1705,34 @@ $(BUILD)/x86_64/third_party/tinf/%.o: third_party/tinf/%.c | $(BUILD) $(BUILD_GE
 $(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
 	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(CAPYOS64_OBJS)
 
+X64_BUILD_VARIANT_FILE := $(BUILD)/.x64-build-variant
+
 .PHONY: prepare-x64-toolchain
 prepare-x64-toolchain: | $(BUILD)
 	@mkdir -p $(BUILD)/x86_64
-	@if [ ! -f "$(BUILD)/x86_64/.toolchain" ] || [ "$$(cat "$(BUILD)/x86_64/.toolchain")" != "$(TOOLCHAIN64)" ]; then \
-		echo "[build] Switching x64 toolchain to $(TOOLCHAIN64); cleaning x64 artifacts."; \
-		rm -rf "$(BUILD)/x86_64" "$(CAPYOS_ELF64)"; \
+	@{ \
+		printf '%s\n' 'toolchain=$(TOOLCHAIN64)'; \
+		printf '%s\n' 'cc=$(CC64)'; \
+		printf '%s\n' 'profile=$(PROFILE)'; \
+		printf '%s\n' 'cflags=$(CFLAGS64)'; \
+		printf '%s\n' 'userland-extra=$(EXTRA_USERLAND_CFLAGS)'; \
+		printf '%s\n' 'desktop-root=$(DESKTOP_SRC_ROOT)'; \
+		printf '%s\n' 'window-root=$(WINDOW_SRC_ROOT)'; \
+		printf '%s\n' 'apps-root=$(APPS_SRC_ROOT)'; \
+		printf '%s\n' 'capyai-dir=$(CAPYAI_DIR)'; \
+		printf '%s\n' 'capybrowser-dir=$(CAPYBROWSER_DIR)'; \
+		printf '%s\n' 'capycodecs-dir=$(CAPYCODECS_DIR)'; \
+	} > "$(X64_BUILD_VARIANT_FILE).tmp"
+	@if [ ! -f "$(X64_BUILD_VARIANT_FILE)" ] || \
+	    ! cmp -s "$(X64_BUILD_VARIANT_FILE).tmp" "$(X64_BUILD_VARIANT_FILE)"; then \
+		echo "[build] x64 build variant changed; rebuilding kernel and userland artifacts."; \
+		rm -rf "$(BUILD)/x86_64" "$(BUILD)/userland" "$(CAPYOS_ELF64)"; \
 		mkdir -p "$(BUILD)/x86_64"; \
-		printf '%s\n' "$(TOOLCHAIN64)" > "$(BUILD)/x86_64/.toolchain"; \
+		mv "$(X64_BUILD_VARIANT_FILE).tmp" "$(X64_BUILD_VARIANT_FILE)"; \
+	else \
+		rm -f "$(X64_BUILD_VARIANT_FILE).tmp"; \
 	fi
+	@printf '%s\n' "$(TOOLCHAIN64)" > "$(BUILD)/x86_64/.toolchain"
 
 .PHONY: all64
 ifeq ($(X64_TOOLCHAIN_PREPARED),1)
@@ -1720,6 +1743,11 @@ all64: prepare-x64-toolchain
 endif
 
 # UEFI loader (stub) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compila sÃƒÆ’Ã‚Â³ quando iso-uefi for chamado e gnu-efi estiver presente
+$(EFI_LOADER_POLICY_OBJ): $(SRC_DIR)/boot/installer_disk_policy.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
 $(BUILD)/boot/uefi_loader/%.o: $(SRC_DIR)/boot/uefi_loader/%.c | $(BUILD) $(BUILD)/boot
 	@mkdir -p $(dir $@)
 	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
@@ -1735,9 +1763,22 @@ $(UEFI_LOADER): $(UEFI_LOADER_ELF) | $(BUILD) $(BUILD)/boot
 	  -j .text -j .rodata -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
 	  -O pei-x86-64 $(UEFI_LOADER_ELF) $(UEFI_LOADER)
 
-.PHONY: iso-uefi
+ISO_REUSE_X64_VARIANT ?= 0
+.PHONY: iso-uefi iso-uefi-build
 # Official Linux/WSL host path: make all64 iso-uefi
-iso-uefi: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
+ifeq ($(ISO_REUSE_X64_VARIANT),1)
+iso-uefi: iso-uefi-build
+else
+iso-uefi: prepare-x64-toolchain
+	$(MAKE) iso-uefi-build TOOLCHAIN64="$(TOOLCHAIN64)" X64_TOOLCHAIN_PREPARED=1
+endif
+
+iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
+	python3 tools/scripts/verify_official_boot_config.py $(BOOT_CONFIG_BIN)
+	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
+	    strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] capyai-gui-async ready'; then \
+		echo "[err] production ISO contains CAPYOS_CAPYAI_GUI_ASYNC_SMOKE"; exit 2; \
+	fi
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
 	mkdir -p $(ISO_DIR_EFI)/boot
@@ -2268,7 +2309,9 @@ TEST_SRCS   := \
                src/security/csprng.c src/security/crypt.c src/security/crypt_kdf.c src/security/crypt_aes_xts.c src/security/crypt_hkdf.c src/security/ed25519.c src/security/ed25519_group.c src/security/ed25519_encode.c src/security/ed25519_scalar.c src/security/fe25519.c src/security/sha256.c src/security/sha512.c src/security/blake2b.c src/security/argon2.c src/security/chacha20_poly1305.c src/security/x25519.c \
                \
                tests/boot/test_boot_manifest.c tests/boot/test_boot_writer.c \
+               tests/boot/test_installer_disk_policy.c src/boot/installer_disk_policy.c \
                tests/boot/test_grub_cfg_builder.c tests/boot/test_gen_boot_config.c \
+               tests/config/test_first_boot_policy.c src/config/first_boot/policy.c \
                tests/boot/test_efi_block.c src/drivers/storage/efi_block.c \
                tests/boot/test_boot_slot.c src/boot/boot_slot.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
@@ -2573,18 +2616,28 @@ ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
 endif
 
 TEST_CAPYAI_BIN := $(BUILD)/tests/test_capyai_standalone
+TEST_CAPYAI_POLICY_BIN := $(BUILD)/tests/test_capyai_policy
 TEST_CAPYAI_GUI_BIN := $(BUILD)/tests/test_capyai_command_gui
 TEST_CAPYAI_ASYNC_BIN := $(BUILD)/tests/test_capyai_async
+TEST_CAPYAI_SYSTEM_ACTIONS_BIN := $(BUILD)/tests/test_capyai_system_actions
+TEST_CAPYAI_NATIVE_FILES_BIN := $(BUILD)/tests/test_capyai_native_files
+TEST_CAPYAI_SESSION_ISOLATION_BIN := $(BUILD)/tests/test_capyai_session_isolation
 TEST_WORKER_POOL_BIN := $(BUILD)/tests/test_worker_pool
 
 .PHONY: test-capyai
 ifneq ($(wildcard $(CAPYAI_DIR)/src/core/capy_ai_core.h),)
-test-capyai: $(TEST_CAPYAI_BIN) $(TEST_CAPYAI_GUI_BIN) \
-		$(TEST_CAPYAI_ASYNC_BIN) $(TEST_WORKER_POOL_BIN)
+test-capyai: $(TEST_CAPYAI_BIN) $(TEST_CAPYAI_POLICY_BIN) $(TEST_CAPYAI_GUI_BIN) \
+		$(TEST_CAPYAI_ASYNC_BIN) $(TEST_CAPYAI_SYSTEM_ACTIONS_BIN) \
+		$(TEST_CAPYAI_NATIVE_FILES_BIN) $(TEST_CAPYAI_SESSION_ISOLATION_BIN) \
+		$(TEST_WORKER_POOL_BIN)
 	@echo "Executando regressao focada CapyAI..."
 	$(TEST_CAPYAI_BIN)
+	$(TEST_CAPYAI_POLICY_BIN)
 	$(TEST_CAPYAI_GUI_BIN)
 	$(TEST_CAPYAI_ASYNC_BIN)
+	$(TEST_CAPYAI_SYSTEM_ACTIONS_BIN)
+	$(TEST_CAPYAI_NATIVE_FILES_BIN)
+	$(TEST_CAPYAI_SESSION_ISOLATION_BIN)
 	$(TEST_WORKER_POOL_BIN)
 
 $(TEST_CAPYAI_BIN): tests/services/test_capyai_standalone.c \
@@ -2594,6 +2647,11 @@ $(TEST_CAPYAI_BIN): tests/services/test_capyai_standalone.c \
 		$(CAPYAI_DIR)/src/core/capy_ai_tokenize.c \
 		$(CAPYAI_DIR)/src/core/capy_ai_predict.c \
 		$(CAPYAI_DIR)/src/core/capy_ai_slots.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -I$(CAPYAI_DIR)/src/core -o $@ $^
+
+$(TEST_CAPYAI_POLICY_BIN): tests/services/test_capyai_policy.c \
+		src/services/capyai/capyai_policy.c | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	$(HOST_CC) $(HOST_CFLAGS) -I$(CAPYAI_DIR)/src/core -o $@ $^
 
@@ -2608,6 +2666,21 @@ $(TEST_CAPYAI_ASYNC_BIN): tests/services/test_capyai_async.c \
 	@mkdir -p $(BUILD)/tests
 	$(HOST_CC) $(HOST_CFLAGS) -I$(CAPYAI_DIR)/src/core -o $@ $^
 
+$(TEST_CAPYAI_SYSTEM_ACTIONS_BIN): tests/services/test_capyai_system_actions.c \
+		src/services/capyai/capyai_system_actions.c src/core/work_queue.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^
+
+$(TEST_CAPYAI_NATIVE_FILES_BIN): tests/services/test_capyai_native_files.c \
+		src/services/capyai/capyai_native_files.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -I$(CAPYAI_DIR)/src/core -o $@ $^
+
+$(TEST_CAPYAI_SESSION_ISOLATION_BIN): \
+		tests/services/test_capyai_session_isolation.c src/auth/session.c | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^
+
 $(TEST_WORKER_POOL_BIN): tests/kernel/test_worker_pool.c \
 		src/kernel/worker.c | $(BUILD)
 	@mkdir -p $(BUILD)/tests
@@ -2616,6 +2689,21 @@ else
 test-capyai:
 	@echo "[skip] CapyAI sibling core ausente"
 endif
+
+INSTALLER_DISK_TEST_BIN := $(BUILD)/tests/installer_disk_policy
+
+$(INSTALLER_DISK_TEST_BIN): tests/boot/test_installer_disk_policy.c \
+		src/boot/installer_disk_policy.c include/boot/installer_disk_policy.h | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -DINSTALLER_DISK_STANDALONE -o $@ \
+		tests/boot/test_installer_disk_policy.c src/boot/installer_disk_policy.c
+
+.PHONY: installer-disk-selftest
+installer-disk-selftest: $(INSTALLER_DISK_TEST_BIN)
+	@echo "Executando regressao focada da selecao de disco do instalador..."
+	$(INSTALLER_DISK_TEST_BIN)
+	python3 tools/scripts/test_installer_smoke_contract.py
+	python3 tools/scripts/verify_official_boot_config.py --self-test
 
 .PHONY: security-selftest
 # Focused security regression: untrusted-input parsers + crypto + package
@@ -2988,7 +3076,7 @@ smoke-x64-vmware-scheduler-fairness:
 	@echo "Executando smoke test VMware+E1000 scheduler-fairness..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
@@ -3027,7 +3115,7 @@ smoke-x64-vmware-thread-crash-survives:
 	@echo "Executando smoke test VMware+E1000 thread-crash-survives..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
@@ -3069,7 +3157,7 @@ smoke-x64-vmware-etapa-4:
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full \
 		EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE -DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
@@ -3101,7 +3189,7 @@ smoke-x64-vmware-tls-handshake:
 		CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
 		CAPYOS_TLS_HANDSHAKE_SMOKE=1 \
 		EXTRA_CFLAGS64='-DCAPYOS_TLS_HANDSHAKE_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
@@ -3129,7 +3217,7 @@ smoke-x64-vmware-capybrowse-text:
 		CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
 		CAPYOS_CAPYBROWSE_SMOKE=1 \
 		EXTRA_CFLAGS64='-DCAPYOS_CAPYBROWSE_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
@@ -3150,7 +3238,7 @@ smoke-x64-qemu-capybrowse-text:
 	@echo "Executando smoke test QEMU+E1000 capybrowse-text (dev feedback)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1 CAPYOS_CAPYBROWSE_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_CAPYBROWSE_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYOS_CAPYBROWSE_URL=\"http://10.0.2.2:18080/\"'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capybrowse.py $(SMOKE_X64_QEMU_CAPYBROWSE_ARGS)
 
@@ -3175,7 +3263,7 @@ smoke-x64-vmware-browser-multifetch:
 		CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
 		CAPYOS_MULTIFETCH_SMOKE=1 \
 		EXTRA_CFLAGS64='-DCAPYOS_MULTIFETCH_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[net] DHCP: lease acquired." \
@@ -3194,7 +3282,7 @@ smoke-x64-qemu-browser-multifetch:
 	@echo "Executando smoke test QEMU+E1000 browser-multifetch (dev feedback)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1 CAPYOS_MULTIFETCH_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_MULTIFETCH_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYMULTIFETCH_URL=\"http://10.0.2.2:18081/\"'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_browser_multifetch.py $(SMOKE_X64_QEMU_BROWSER_MULTIFETCH_ARGS)
 
@@ -3208,7 +3296,7 @@ smoke-x64-qemu-apps-basic-roundtrip:
 	@echo "Executando smoke QEMU apps-basic-roundtrip (dev feedback / CI pre-flight)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_APPS_ROUNDTRIP_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=5'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] apps-basic-roundtrip ready" --timeout 300 --log build/ci/smoke_x64_qemu_apps_roundtrip.log $(SMOKE_X64_QEMU_MARKER_ARGS)
 
@@ -3224,7 +3312,7 @@ smoke-x64-qemu-capygfx:
 	@echo "Executando smoke QEMU capygfx (dev feedback / CI pre-flight)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] capygfx ready" --timeout 300 --log build/ci/smoke_x64_qemu_capygfx.log $(SMOKE_X64_QEMU_MARKER_ARGS)
 
@@ -3241,7 +3329,7 @@ smoke-x64-vmware-browser-graphical:
 	@echo "Executando smoke test VMware+E1000 browser-graphical (capygfx)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
@@ -3258,7 +3346,7 @@ smoke-x64-vmware-capygfx-net-image:
 	@echo "Executando smoke test VMware+E1000 capygfx-net-image..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
@@ -3274,7 +3362,7 @@ smoke-x64-qemu-capygfx-net-image:
 	@echo "Executando smoke QEMU capygfx-net-image (dev feedback / CI pre-flight)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE -DCAPYGFX_IMAGE_URL=\"http://10.0.2.2:18082/logo.png\"'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py $(SMOKE_X64_QEMU_CAPYGFX_NET_IMAGE_ARGS)
 
@@ -3289,7 +3377,7 @@ smoke-x64-qemu-capygfx-static-site:
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 \
 		EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
 		EXTRA_USERLAND_CFLAGS='-DCAPYGFX_DESKTOP_INTERACTIVE -DCAPYGFX_SITE_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py --site \
 		$(SMOKE_X64_QEMU_CAPYGFX_STATIC_SITE_ARGS)
@@ -3307,7 +3395,7 @@ smoke-x64-qemu-capygfx-real-sites:
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 \
 		EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
 		EXTRA_USERLAND_CFLAGS='-DCAPYGFX_DESKTOP_INTERACTIVE -DCAPYGFX_REAL_SITE_LIVENESS_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_capygfx_net_image.py \
 		--real-sites-dir build/ci/capygfx_real_sites \
@@ -3327,7 +3415,7 @@ smoke-x64-qemu-capygfx-live-sites:
 	$(MAKE) all64 PROFILE=full CAPYOS_TLS_USERLAND_HANDSHAKE=1 \
 		CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' \
 		EXTRA_USERLAND_CFLAGS='-DCAPYGFX_DESKTOP_INTERACTIVE -DCAPYGFX_REAL_SITE_LIVENESS_SMOKE -DCAPYGFX_INITIAL_URL=\"https://www.youtube.com/\" -DCAPYGFX_REAL_SITE_2_URL=\"https://www.wikipedia.org/\" -DCAPYGFX_REAL_SITE_3_URL=\"https://www.tumblr.com/\"'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --networking \
 		--marker "[smoke] capygfx real-sites window alive 2" \
@@ -3357,7 +3445,7 @@ smoke-x64-vmware-capygfx-desktop-spawn:
 	@echo "Executando smoke test VMware+E1000 capygfx-desktop-spawn..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE=1 CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1 EXTRA_CFLAGS64='-DCAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE -DCAPYOS_DESKTOP_GRAPHICAL_BROWSER'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
@@ -3371,7 +3459,7 @@ smoke-x64-qemu-capygfx-desktop-spawn:
 	@echo "Executando smoke QEMU capygfx-desktop-spawn (dev feedback / CI pre-flight)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE=1 CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1 EXTRA_CFLAGS64='-DCAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE -DCAPYOS_DESKTOP_GRAPHICAL_BROWSER'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] capygfx ready" --timeout 300 --log build/ci/smoke_x64_qemu_capygfx_desktop_spawn.log $(SMOKE_X64_QEMU_MARKER_ARGS)
 
@@ -3384,7 +3472,7 @@ smoke-x64-vmware-capygfx-lifecycle:
 	@echo "Executando smoke VMware capygfx lifecycle (spawn/switch/reap/respawn)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_CAPYGFX_LIFECYCLE_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_CAPYGFX_LIFECYCLE_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	@if [ -n "$(SMOKE_X64_VMWARE_VMX)" ]; then \
 		if [ -z "$(SMOKE_X64_VMWARE_SERIAL_LOG)" ]; then \
@@ -3406,7 +3494,7 @@ smoke-x64-qemu-capygfx-lifecycle:
 	@echo "Executando smoke QEMU capygfx lifecycle (spawn/switch/reap/respawn)..."
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full CAPYOS_CAPYGFX_LIFECYCLE_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_CAPYGFX_LIFECYCLE_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py \
 		--marker "[smoke] capygfx-lifecycle ok" \
@@ -3432,7 +3520,7 @@ smoke-x64-vmware-apps-basic-roundtrip:
 	$(MAKE) all64 PROFILE=full \
 		CAPYOS_APPS_ROUNDTRIP_SMOKE=1 \
 		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=5'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[smoke] apps-basic-roundtrip ready" \
@@ -3489,7 +3577,7 @@ smoke-x64-hello-user:
 	@echo "Executando smoke test x64 (hello user binary)..."
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_hello_user.py $(SMOKE_X64_HELLO_USER_ARGS)
 
@@ -3502,7 +3590,7 @@ smoke-x64-capyai:
 	@echo "Executando smoke test x64 (capyai assistant pipeline)..."
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_SMOKE_CAPYAI'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_capyai.py $(SMOKE_X64_CAPYAI_ARGS)
 
@@ -3516,7 +3604,7 @@ smoke-x64-qemu-capyai-gui-async:
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full \
 		EXTRA_CFLAGS64='-DCAPYOS_CAPYAI_GUI_ASYNC_SMOKE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py \
 		--marker "[smoke] capyai-gui-async ready" \
@@ -3538,7 +3626,7 @@ smoke-x64-hello-segfault:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FAULT'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_hello_segfault.py $(SMOKE_X64_HELLO_SEGFAULT_ARGS)
 
@@ -3557,7 +3645,7 @@ smoke-x64-preemptive:
 	@echo "Executando smoke test x64 (preemptive scheduler wiring)..."
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_preemptive.py $(SMOKE_X64_PREEMPTIVE_ARGS)
 
@@ -3572,7 +3660,7 @@ smoke-x64-preemptive-demo:
 	@echo "Executando smoke test x64 (preemptive two-task demo)..."
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_PREEMPTIVE_DEMO'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_preemptive_demo.py $(SMOKE_X64_PREEMPTIVE_DEMO_ARGS)
 
@@ -3598,7 +3686,7 @@ smoke-x64-preemptive-user:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_preemptive_user.py $(SMOKE_X64_PREEMPTIVE_USER_ARGS)
 
@@ -3617,7 +3705,7 @@ smoke-x64-preemptive-user-2task:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO -DCAPYOS_BOOT_RUN_TWO_BUSY' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_preemptive_user_2task.py $(SMOKE_X64_PREEMPTIVE_USER_2TASK_ARGS)
 
@@ -3644,7 +3732,7 @@ smoke-x64-fork-cow:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FORK'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_fork_cow.py $(SMOKE_X64_FORK_COW_ARGS)
 
@@ -3669,7 +3757,7 @@ smoke-x64-exec:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_EXEC'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_exec.py $(SMOKE_X64_EXEC_ARGS)
 
@@ -3692,7 +3780,7 @@ smoke-x64-fork-wait:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FORKWAIT'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_fork_wait.py $(SMOKE_X64_FORK_WAIT_ARGS)
 
@@ -3706,7 +3794,7 @@ smoke-x64-pipe:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_PIPE'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_pipe.py $(SMOKE_X64_PIPE_ARGS)
 
@@ -3721,7 +3809,7 @@ smoke-x64-fork-crash:
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_FORK_CRASH'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_fork_crash.py $(SMOKE_X64_FORK_CRASH_ARGS)
 
@@ -3745,7 +3833,7 @@ smoke-x64-capysh:
 	@echo "Executando smoke test x64 (capysh shell)..."
 	$(MAKE) clean
 	$(MAKE) all64 EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO -DCAPYOS_BOOT_RUN_CAPYSH'
-	$(MAKE) iso-uefi
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_capysh.py $(SMOKE_X64_CAPYSH_ARGS)
 
@@ -3783,7 +3871,7 @@ smoke-x64-iso: all64 iso-uefi manifest64
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.314+20260713/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.315+20260715/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)

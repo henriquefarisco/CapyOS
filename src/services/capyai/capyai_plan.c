@@ -74,7 +74,24 @@ static int cap_action_is_delete(const char *action) {
 static int cap_action_writes_last_file(const char *action) {
     /* actions that operate on / update the session's implicit last file */
     return cap_streq(action, "file_edit_text") || cap_streq(action, "file_create") ||
-           cap_streq(action, "dir_names_to_file") || cap_streq(action, "dir_count_to_file");
+           cap_streq(action, "file_move") || cap_streq(action, "dir_names_to_file") ||
+           cap_streq(action, "dir_count_to_file");
+}
+
+static int cap_action_requires_path(const char *action) {
+    return cap_streq(action, "dir_create") || cap_streq(action, "file_create") ||
+           cap_streq(action, "file_edit_text") || cap_streq(action, "file_move") ||
+           cap_streq(action, "file_read") || cap_streq(action, "file_delete") ||
+           cap_streq(action, "dir_delete") || cap_streq(action, "dir_find") ||
+           cap_streq(action, "app_open") || cap_streq(action, "app_close") ||
+           cap_streq(action, "power_schedule");
+}
+
+static void cap_mark_slot_clarification(struct capy_ai_output *out,
+                                        const char *question) {
+    if (!out) return;
+    out->needs_clarification = 1;
+    cap_copy(out->clarifying_question, sizeof(out->clarifying_question), question);
 }
 
 /* ---- planning --------------------------------------------------------- */
@@ -109,10 +126,46 @@ int capyai_plan(const char *model_text, size_t model_len,
      * the raw intent so the executor can run the function with real arguments. */
     capy_ai_fill_slots(intent, &plan->out);
 
+    /* The portable slot ABI is bounded to CAPY_AI_STR_MAX.  Never execute a
+     * mutating request whose original text exceeded that boundary, because a
+     * path or payload could otherwise be silently truncated. */
+    if (cap_slen(intent) >= CAPY_AI_STR_MAX &&
+        plan->out.risk != CAPY_AI_RISK_READ_ONLY) {
+        cap_mark_slot_clarification(
+            &plan->out,
+            "O pedido e longo demais; envie o caminho e o conteudo em uma mensagem menor.");
+    }
+
     /* Resolve an implicit "last file" target for follow-up edits. */
     if (session && session->last_file[0] &&
         cap_action_writes_last_file(plan->out.action) && plan->out.path[0] == '\0') {
         cap_copy(plan->out.path, sizeof(plan->out.path), session->last_file);
+    }
+
+    /* Slot completeness is a deterministic policy boundary, not a model
+     * guess. Missing file content or a move destination must ask only for the
+     * absent value and can never fall through to an approximate command. */
+    if ((cap_streq(plan->out.action, "app_open") ||
+         cap_streq(plan->out.action, "app_close")) &&
+        plan->out.path[0] == '\0') {
+        cap_mark_slot_clarification(&plan->out,
+                                    "Qual aplicativo devo abrir ou fechar?");
+    } else if (cap_streq(plan->out.action, "power_schedule") &&
+               plan->out.path[0] == '\0') {
+        cap_mark_slot_clarification(&plan->out,
+                                    "Para quando devo agendar o reinicio?");
+    } else if (cap_action_requires_path(plan->out.action) &&
+               plan->out.path[0] == '\0') {
+        cap_mark_slot_clarification(&plan->out,
+                                    "Qual e o arquivo, pasta ou caminho alvo?");
+    } else if (cap_streq(plan->out.action, "file_edit_text") &&
+               plan->out.content[0] == '\0') {
+        cap_mark_slot_clarification(&plan->out,
+                                    "Qual texto devo adicionar ao arquivo?");
+    } else if (cap_streq(plan->out.action, "file_move") &&
+               plan->out.content[0] == '\0') {
+        cap_mark_slot_clarification(&plan->out,
+                                    "Qual e o caminho de destino?");
     }
 
     if (plan->out.needs_clarification) {

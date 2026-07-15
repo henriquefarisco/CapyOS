@@ -74,17 +74,17 @@ Contexto operacional atual:
 | `service-control` | `service-control <start|stop|restart> <nome>` | Controla o ciclo de vida basico dos servicos internos suportados. |
 | `job-run` | `job-run <nome>` | Agenda um job interno do kernel/work queue para execucao imediata no proximo tick. |
 | `update-check` | `update-check` | Forca uma leitura imediata do catalogo local de atualizacoes e atualiza o estado do `update-agent`. |
-| `update-fetch` | `update-fetch` | Baixa o manifesto remoto configurado, valida trilha, versão nova, `payload_sha256`, `payload_url` e `signature_ed25519`, e atualiza `/system/update/latest.ini`. |
-| `update-import-manifest` | `update-import-manifest <caminho>` | Importa um manifesto externo para `/system/update/latest.ini`, validando trilha, versão nova, `payload_sha256`, `payload_url` e `signature_ed25519`. |
-| `update-download-payload` | `update-download-payload` | Baixa o payload declarado por `payload_url`, calcula SHA-256 real, compara com `payload_sha256` e grava `/system/update/payload.bin` quando o digest bate. |
-| `update-prepare` | `update-prepare` | Executa o preparo seguro do update: fetch remoto, download/verificação de payload, staging e `update-arm on`, sem aplicar boot slot. |
-| `update-prepare-dry-run` | `update-prepare-dry-run` | Valida catálogo local, `payload_url`, assinatura e `payload_cache_sha256` que seriam usados no preparo, sem staging, arm ou apply. |
+| `update-fetch` | `update-fetch` | Baixa o manifesto remoto configurado, valida trilha, versão nova, `payload_size`, `payload_sha256`, `payload_url` e `signature_ed25519`, e atualiza `/system/update/latest.ini`. |
+| `update-import-manifest` | `update-import-manifest <caminho>` | Importa um manifesto externo para `/system/update/latest.ini`, validando trilha, versão nova, tamanho/hash, URL e assinatura. |
+| `update-download-payload` | `update-download-payload` | Limita o buffer do agente por `payload_size`, valida tamanho/SHA-256, grava `/system/update/payload.bin` e valida novamente após readback. |
+| `update-prepare` | `update-prepare` | Reservado para o futuro staging A/B; retorna `-60` enquanto não houver boot slot persistente. |
+| `update-prepare-dry-run` | `update-prepare-dry-run` | Reabre e recalcula o cache que seria usado no preparo, sem staging, arm ou apply. |
 | `update-prepare-explain` | `update-prepare-explain` | Mostra os gates locais do preparo (`poll`, catálogo, repositório, versão, payload, assinatura, cache e `stage_safe`) sem efeitos persistentes. |
-| `update-stage` | `update-stage` | Copia o manifesto cacheado mais recente para `/system/update/staged.ini` somente quando `payload_cache_sha256` já confirma o `payload_sha256` assinado. |
-| `update-arm` | `update-arm [on|off]` | Arma ou desarma a ativacao pendente do update staged sem remover o manifesto preparado. |
-| `update-apply` | `update-apply [payload_sha256]` | Aplica o staged update armado usando `payload_cache_sha256` verificado por padrão; o argumento manual continua disponível como fallback explícito. |
-| `update-confirm-health` | `update-confirm-health` | Confirma que o boot atual está saudável e conclui o update transacional. |
-| `update-rollback-check` | `update-rollback-check` | Verifica rollback de boot pendente e executa rollback seguro quando necessário. |
+| `update-stage` | `update-stage` | Reservado para staging atômico do slot inativo; retorna `-60` no estado atual. |
+| `update-arm` | `update-arm [on|off]` | `off` limpa estado legado; `on` retorna `-60` sem boot-control persistente. |
+| `update-apply` | `update-apply [payload_sha256]` | Revalida os bytes do cache, mas retorna `-60` até existir apply/rollback persistente. |
+| `update-confirm-health` | `update-confirm-health` | Scaffolding sobre slots em RAM; ainda não confirma uma atualização persistente. |
+| `update-rollback-check` | `update-rollback-check` | Scaffolding sobre slots em RAM; ainda não executa rollback após reboot. |
 | `update-clear` | `update-clear` | Remove o manifesto staged e limpa o estado persistente de ativacao pendente. |
 | `update-channel` | `update-channel [list|show|stable|develop]` | Alterna entre a trilha estavel (`main`) e a trilha em desenvolvimento (`develop`), persistindo a escolha em `/system/config.ini` e `/system/update/repository.ini`. |
 | `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. O boot pode degradar temporariamente o alvo ativo para `core` ou `maintenance` quando detectar falha estrutural. |
@@ -202,42 +202,36 @@ Contexto operacional atual:
   `job-status recovery-snapshot` para inspecionar a cadencia e `job-run
   recovery-snapshot` para forcar uma nova gravacao no proximo tick.
 - A base persistente de atualizacao agora reserva
-  `/system/update/repository.ini`, `/system/update/cache/`,
-  `/system/update/staged/` e `/system/update/state.ini`.
-- `update-channel develop` aponta `remote_manifest=` para `refs/heads/develop`; `update-channel stable` mantém `branch=main` para compatibilidade de manifesto, mas resolve `remote_manifest=` para `refs/tags/v<major>.<minor>.<patch>` derivado da versão corrente.
+  `/system/update/repository.ini`, `/system/update/latest.ini`,
+  `/system/update/staged.ini`, `/system/update/payload.bin` e
+  `/system/update/state.ini`.
+- `update-channel develop` aponta `remote_manifest=` para `refs/heads/develop`; `update-channel stable` mantém `branch=main` no contrato, mas baixa o asset autenticado `releases/latest/download/latest.ini`.
 - A escolha da trilha fica persistida tanto em `/system/config.ini` (`update_channel=`) quanto em `/system/update/repository.ini` (`channel=` e `branch=`).
-- `/system/update/repository.ini` tambem registra `source=` e `remote_manifest=`, que apontam para o manifesto bruto do ref GitHub escolhido pela política de trilha.
+- `/system/update/repository.ini` tambem registra `source=` e `remote_manifest=`; a URL pode ser derivada pela política da trilha ou configurada explicitamente.
 - Se o manifesto cacheado ou staged pertencer a outra trilha, o `update-agent`
   marca o estado como inconsistente ate que o cache seja atualizado ou o
   staging antigo seja limpo.
 - `update-fetch` baixa o `remote_manifest=` configurado em `/system/update/repository.ini`, grava uma cópia temporária em `/system/update/fetched.ini`, reutiliza a mesma validação de importação antes de substituir o catálogo persistente e imprime `payload=` com a origem declarada do payload.
-- `update-import-manifest <caminho>` permanece a ponte manual entre um manifesto externo e o catalogo local: ele valida `channel`, `branch`, `source`, versao mais nova que o sistema atual, `payload_sha256` hex64, `payload_url` HTTPS ou local sob `/system/update/`, e `signature_ed25519` hex128 antes de substituir o cache persistente. A assinatura cobre o texto canonico do manifesto sem a propria linha `signature_ed25519=`.
-- `update-download-payload` baixa a origem declarada em `payload_url`,
-  calcula SHA-256 real via `security/sha256`, recusa mismatch e persiste o
-  cache binario em `/system/update/payload.bin` com `payload_cache_sha256`
-  salvo em `/system/update/state.ini`.
+- `update-import-manifest <caminho>` permanece a ponte manual entre um manifesto externo e o catalogo local: ele valida `channel`, `branch`, `source`, versao mais nova que o sistema atual, `payload_size` opcional, `payload_sha256` hex64, `payload_url` HTTPS ou local sob `/system/update/`, e `signature_ed25519` hex128 antes de substituir o cache persistente. A assinatura cobre o texto canonico do manifesto sem a propria linha `signature_ed25519=`.
+- `update-download-payload` baixa a origem declarada em `payload_url`, limita
+  a alocação pelo `payload_size` assinado, valida tamanho e SHA-256, persiste o
+  cache binario em `/system/update/payload.bin`, relê os bytes e só então salva
+  `payload_cache_sha256` em `/system/update/state.ini`.
 - `update-prepare-explain` mostra os gates locais de preparo (`poll`, catalogo,
   repositorio, versao, `payload_sha256`, `payload_url`, assinatura, cache e
   `stage_safe`) sem fetch, download, staging, arm ou apply.
-- `update-prepare-dry-run` revisa o catálogo local e o
-  `payload_cache_sha256` verificado que seriam usados em stage/arm, sem
-  persistir staging, armar ativacao ou aplicar boot slot.
-- `update-prepare` encadeia fetch remoto, download/verificacao de payload,
-  staging e arm da ativacao pendente sem aplicar boot slot; o apply continua
-  uma etapa separada por `update-apply`.
-- `update-stage` promove o manifesto cacheado atual para o staging
-  persistente somente quando ele representa update mais novo, possui
-  `payload_sha256`, possui `payload_url` valido e tem assinatura Ed25519
-  valida; `update-arm on` marca esse staging como ativacao pendente.
-- `update-apply` aplica o staged update armado usando o
-  `payload_cache_sha256` validado por `update-download-payload`;
-  `update-apply <payload_sha256>` permanece como fallback manual explícito.
-  Cache ausente, digest malformado ou divergente é recusado antes de armar o
-  boot slot.
-- `update-confirm-health` confirma o boot atual como saudável, limpa a ativação
-  pendente persistente e conclui o update transacional.
-- `update-rollback-check` verifica rollback pendente; quando necessário, chama o
-  rollback de boot, limpa staging persistente e registra o resultado auditável.
+- `update-prepare-dry-run` revisa o catálogo local, reabre
+  `/system/update/payload.bin` e recalcula tamanho/SHA-256 sem persistir
+  staging, armar ativacao ou aplicar boot slot.
+- `update-prepare`, `update-stage`, `update-arm on` e `update-apply` permanecem
+  fail-closed com `UPDATE_AGENT_ERR_UNSUPPORTED` (`-60`) até existir escrita
+  atômica do slot inativo, readback do BOOT raw e rollback após reboot.
+- `update-apply [payload_sha256]` preserva a interface futura, mas um digest
+  informado ou salvo nunca substitui a releitura dos bytes do cache e não
+  habilita aplicação no estado atual.
+- `update-confirm-health` e `update-rollback-check` expõem o scaffolding do
+  gerenciador de slots em RAM; não representam confirmação/rollback persistente
+  enquanto o boot-control A/B não estiver implementado.
 - As operacoes `update-check`, `update-fetch`, `update-download-payload`,
   `update-import-manifest`, `update-prepare`, `update-stage`, `update-arm`,
   `update-apply`, `update-confirm-health`, `update-rollback-check`, `update-clear` e
@@ -245,16 +239,12 @@ Contexto operacional atual:
   `update-history` para auditar a trilha local de staging, a trilha
   selecionada, a origem `payload=` e o digest `payload_sha=` associado ao
   cache ou staged update.
-- O `update-agent` agora baixa manifestos remotos configurados, valida a
-  origem `payload_url`, baixa payloads por comando explícito ou por `update-prepare`, diagnostica
-  gates via `update-prepare-explain`, revisa readiness via
-  `update-prepare-dry-run`, calcula o SHA-256 real antes de
-  persistir cache binario e prepara staged updates armados quando
-  o digest baixado/cacheado bate com o manifesto assinado. A etapa ainda mantém
-  apply separado, mas já cobre repositorio selecionado,
-  catalogo local, staging persistente, protecao anti-downgrade,
-  `payload_sha256`, `payload_url`, `payload_cache_sha256`, assinatura
-  `signature_ed25519` e ativacao pendente.
+- O `update-agent` baixa manifestos remotos configurados, valida origem,
+  versão/tamanho/hash e assinatura, baixa o payload por comando explícito e
+  confirma o cache por readback. `update-prepare-explain` e
+  `update-prepare-dry-run` diagnosticam readiness sem efeitos de update. Stage,
+  arm e apply persistentes continuam deliberadamente indisponíveis até o
+  boot-control A/B.
 - `recovery-verify saved` valida primeiro se storage e, quando necessario,
   rede ja atendem ao alvo persistido antes de tentar a promocao.
 - Se o storage validado ainda nao estiver disponivel, o sistema recusa sair

@@ -12,6 +12,10 @@ struct session_context {
     struct user_record user;
     struct user_preferences prefs;
     char cwd[SESSION_PATH_MAX];
+    /* Per-login assistant memory.  This state is cleared by session_reset and
+     * can never be reused by another authenticated session. */
+    char assistant_last_file[192];
+    uint32_t assistant_turns;
 };
 
 void session_reset(struct session_context *ctx);

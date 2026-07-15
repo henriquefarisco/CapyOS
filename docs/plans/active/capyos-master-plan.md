@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-07-13 (rev. `alpha.314`)
-**Versão atual:** `0.8.0-alpha.314+20260713`
+**Data de referência:** 2026-07-15 (rev. `alpha.315`)
+**Versão atual:** `0.8.0-alpha.315+20260715`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -553,6 +553,46 @@ processos. Os itens restantes são melhorias não bloqueantes do escopo estátic
 - Release gate promove artefatos somente com evidência pública válida.
 - Instalador wizard amigável: seleção de disco, criação de usuário, idioma, fuso, política de senha.
 - Migration de volume legacy → header-managed transparente (orquestrador já entregue em `alpha.232`).
+
+**Entregue em `alpha.315` — preflight autenticado do updater:** a
+versão corrente passa a ser inicializada com `CAPYOS_VERSION_FULL` no boot,
+restaurando a proteção anti-downgrade em produção. Novos `latest.ini` assinam
+`payload_size`; o downloader limita seu buffer temporário a esse tamanho, exige
+comprimento exato, valida SHA-256 antes da escrita e repete tamanho/SHA-256 após
+readback do cache. `update-prepare-dry-run`, `update-prepare-explain` e o caminho
+futuro de apply também reabrem os bytes, em vez de confiar apenas no digest
+textual de `state.ini`. Manifestos antigos sem tamanho continuam legíveis com
+teto de 8 MiB. Staging/apply seguem fail-closed (`-60`): esta fatia remove falsos
+positivos e reduz o segundo buffer temporário, mas não fecha o critério sem slot
+A/B, readback do BOOT raw e rollback comprovado após reboot.
+
+**Entregue em `alpha.315` — seleção segura de disco:** o instalador
+UEFI deixa de escolher automaticamente o maior disco. Uma política C99 pura
+calcula o plano GPT completo e exige setores de 512 bytes, ESP/BOOT e 1 GiB
+mínimo de DATA antes de qualquer wipe. A UI numera apenas alvos elegíveis,
+expõe `PathId`/`MediaId`/capacidade/DATA projetada, exige seleção explícita e o
+token exato `ERASE`, depois revalida identidade, geometria e o mesmo plano
+consumido pelo writer GPT. O smoke ISO só automatiza quando existe exatamente
+um alvo elegível. O critério do wizard continua aberto até um gate VMware
+multi-disco provar fresh install, reboot, login, persistência e disco guard
+intacto.
+
+**Entregue em `alpha.315` — first boot e desktop:** o build normal podia
+reutilizar objetos de um smoke compilado com `EXTRA_CFLAGS64`; com
+`CAPYOS_CAPYAI_GUI_ASYNC_SMOKE`, o probe chama `desktop_stop()` após poucos
+frames, exatamente o flash seguido de shell observado. O Makefile agora compara
+uma assinatura de toolchain/profile/CFLAGS/siblings e invalida artefatos de
+kernel/userland na troca de variante; apenas o target de smoke pode reutilizar a
+variante. A ISO oficial rejeita CAPYCFG com setup/senha preseedados e kernel com
+marker desse smoke. O marker `/system/first-run.done` também passa a ser
+obrigatório para considerar setup concluído e só é gravado depois da seleção de
+módulos. O smoke de disco vazio exige o wizard e usa senha não-default. No
+lifecycle gráfico, a sessão é religada à task adotada, o frame inicial entra no
+guard de preempção e logout durante autostart retorna diretamente ao login.
+Workers persistentes iniciam sem principal herdado; dispatch legacy/tipado exige
+e vincula o snapshot sanitizado do caller. A release coordena CapyUI `2.24.1` e
+CapyAI `0.2.0`, preservando `capy-ui-widget` 2.22, desktop-session v1 e
+`capy-ai-core` artifact v0.
 
 ### Critérios de aceite
 

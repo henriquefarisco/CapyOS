@@ -19,6 +19,15 @@ PINNED_PUBLIC_KEY_HEX = (
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 MANIFEST_MAX_BYTES = 767
 PAYLOAD_MAX_BYTES = 8 * 1024 * 1024
+LEGACY_FIELD_ORDER = (
+    "available_version",
+    "channel",
+    "branch",
+    "source",
+    "published_at",
+    "payload_url",
+    "payload_sha256",
+)
 FIELD_ORDER = (
     "available_version",
     "channel",
@@ -26,6 +35,7 @@ FIELD_ORDER = (
     "source",
     "published_at",
     "payload_url",
+    "payload_size",
     "payload_sha256",
 )
 ALL_FIELDS = frozenset((*FIELD_ORDER, "signature_ed25519"))
@@ -36,6 +46,7 @@ FIELD_LIMITS = {
     "source": 95,
     "published_at": 23,
     "payload_url": 159,
+    "payload_size": 7,
     "payload_sha256": 64,
     "signature_ed25519": 128,
 }
@@ -187,18 +198,48 @@ def verify_signature(openssl: str, raw_public: bytes, body: bytes, signature: by
         raise ManifestError("Ed25519 signature verification failed")
 
 
-def payload_sha256(path: Path) -> str:
-    ensure_regular_file(path, "payload")
-    size = path.stat().st_size
-    if size > PAYLOAD_MAX_BYTES:
-        raise ManifestError(
-            f"payload is {size} bytes; runtime HTTP limit is {PAYLOAD_MAX_BYTES} bytes"
-        )
+def payload_metadata(path: Path) -> tuple[int, str]:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    counted = 0
+    try:
+        with path.open("rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size == 0:
+                raise ManifestError(f"payload missing or empty: {path}")
+            if before.st_size > PAYLOAD_MAX_BYTES:
+                raise ManifestError(
+                    f"payload is {before.st_size} bytes; runtime HTTP limit is "
+                    f"{PAYLOAD_MAX_BYTES} bytes"
+                )
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                counted += len(chunk)
+                if counted > PAYLOAD_MAX_BYTES:
+                    raise ManifestError(
+                        f"payload exceeds runtime HTTP limit of {PAYLOAD_MAX_BYTES} bytes"
+                    )
+                digest.update(chunk)
+            after = os.fstat(handle.fileno())
+    except OSError as exc:
+        raise ManifestError(f"could not read payload: {path}") from exc
+    identity_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+    identity_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    )
+    if identity_before != identity_after or counted != before.st_size:
+        raise ManifestError("payload changed while size and SHA-256 were calculated")
+    return counted, digest.hexdigest()
+
+
+def payload_sha256(path: Path) -> str:
+    return payload_metadata(path)[1]
 
 
 def _validate_ascii_value(key: str, value: str) -> None:
@@ -217,7 +258,7 @@ def _validate_ascii_value(key: str, value: str) -> None:
 
 
 def validate_fields(fields: dict[str, str], require_signature: bool) -> None:
-    required = set(FIELD_ORDER)
+    required = set(LEGACY_FIELD_ORDER)
     if require_signature:
         required.add("signature_ed25519")
     missing = sorted(key for key in required if not fields.get(key))
@@ -247,6 +288,14 @@ def validate_fields(fields: dict[str, str], require_signature: bool) -> None:
         char.isspace() for char in url
     ):
         raise ManifestError("payload_url is malformed")
+    if "payload_size" in fields:
+        if not re.fullmatch(r"[1-9][0-9]*", fields["payload_size"]):
+            raise ManifestError("payload_size must be canonical positive decimal")
+        payload_size = int(fields["payload_size"])
+        if payload_size > PAYLOAD_MAX_BYTES:
+            raise ManifestError(
+                f"payload_size exceeds runtime limit ({payload_size} > {PAYLOAD_MAX_BYTES})"
+            )
     if not HEX64_RE.fullmatch(fields["payload_sha256"]):
         raise ManifestError("payload_sha256 must be exactly hex64")
     if require_signature and not HEX128_RE.fullmatch(fields["signature_ed25519"]):
@@ -255,7 +304,8 @@ def validate_fields(fields: dict[str, str], require_signature: bool) -> None:
 
 def canonical_body(fields: dict[str, str]) -> bytes:
     validate_fields(fields, require_signature=False)
-    return "".join(f"{key}={fields[key]}\n" for key in FIELD_ORDER).encode("ascii")
+    order = FIELD_ORDER if "payload_size" in fields else LEGACY_FIELD_ORDER
+    return "".join(f"{key}={fields[key]}\n" for key in order).encode("ascii")
 
 
 def capture_runtime_signed_text(raw: bytes) -> tuple[bytes, list[str]]:

@@ -43,6 +43,7 @@
 struct system_update_status update_agent_g_status;
 
 static update_agent_read_file_fn g_update_reader = NULL;
+static update_agent_read_bytes_fn g_update_bytes_reader = NULL;
 static update_agent_write_file_fn g_update_writer = NULL;
 static update_agent_write_bytes_fn g_update_bytes_writer = NULL;
 static update_agent_remove_file_fn g_update_remover = NULL;
@@ -403,7 +404,11 @@ static int read_local_payload_bytes(const char *path, uint8_t *buffer,
                                     size_t buffer_size, size_t *out_len) {
   struct vfs_stat st;
   struct file *file = NULL;
+  uint8_t extra = 0u;
+  uint32_t opened_size = 0u;
+  uint32_t final_size = 0u;
   long read = 0;
+  long extra_read = -1;
 
   if (!path || !buffer || buffer_size == 0u) {
     return -1;
@@ -413,12 +418,23 @@ static int read_local_payload_bytes(const char *path, uint8_t *buffer,
     return -1;
   }
   file = vfs_open(path, VFS_OPEN_READ);
-  if (!file) {
+  if (!file || !file->dentry || !file->dentry->inode) {
+    if (file) {
+      vfs_close(file);
+    }
     return -1;
   }
-  read = vfs_read(file, buffer, (size_t)st.size);
+  opened_size = file->dentry->inode->size;
+  if (opened_size != st.size) {
+    vfs_close(file);
+    return -1;
+  }
+  read = vfs_read(file, buffer, (size_t)opened_size);
+  extra_read = vfs_read(file, &extra, 1u);
+  final_size = file->dentry->inode->size;
   vfs_close(file);
-  if (read < 0 || (size_t)read != (size_t)st.size) {
+  if (read < 0 || (size_t)read != (size_t)opened_size || extra_read != 0 ||
+      final_size != opened_size) {
     return -1;
   }
   if (out_len) {
@@ -427,6 +443,14 @@ static int read_local_payload_bytes(const char *path, uint8_t *buffer,
   return 0;
 }
 #endif
+
+update_agent_read_bytes_fn update_agent_active_bytes_reader(void) {
+#if defined(UNIT_TEST)
+  return g_update_bytes_reader;
+#else
+  return g_update_bytes_reader ? g_update_bytes_reader : read_local_payload_bytes;
+#endif
+}
 
 int update_agent_fetch_payload_bytes(const char *url, uint8_t *buffer,
                                      size_t buffer_size, size_t *out_len) {
@@ -529,6 +553,7 @@ void update_agent_reset(void) {
   update_agent_local_zero(&update_agent_g_status,
                           sizeof(update_agent_g_status));
   g_update_reader = NULL;
+  g_update_bytes_reader = NULL;
   g_update_writer = NULL;
   g_update_bytes_writer = NULL;
   g_update_remover = NULL;
@@ -555,6 +580,10 @@ void update_agent_init(const char *current_version) {
 
 void update_agent_set_reader(update_agent_read_file_fn reader) {
   g_update_reader = reader;
+}
+
+void update_agent_set_bytes_reader(update_agent_read_bytes_fn reader) {
+  g_update_bytes_reader = reader;
 }
 
 void update_agent_set_writer(update_agent_write_file_fn writer) {
