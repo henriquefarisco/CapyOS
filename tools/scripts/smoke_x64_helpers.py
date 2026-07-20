@@ -14,6 +14,7 @@ def run_cmd(
     timeout: float,
     expect: str | list[str] | tuple[str, ...] | None = None,
     expect_optional: bool = False,
+    expect_ignore_line_breaks: bool = False,
 ) -> None:
     mk = session.marker()
     session.send_line(cmd)
@@ -27,7 +28,12 @@ def run_cmd(
             elif expect_optional:
                 session.wait_for_any([expect, "> "], timeout=timeout, start_at=mk)
             else:
-                session.wait_for(expect, timeout=timeout, start_at=mk)
+                session.wait_for(
+                    expect,
+                    timeout=timeout,
+                    start_at=mk,
+                    ignore_line_breaks=expect_ignore_line_breaks,
+                )
         except TimeoutError:
             if not expect_optional:
                 raise

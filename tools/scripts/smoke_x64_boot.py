@@ -90,6 +90,7 @@ def smoke_first_boot(
         # Earlier checks already prove stable/main and the GitHub repository;
         # assert the immutable endpoint suffix here, including the file name.
         expect="/download/latest.ini",
+        expect_ignore_line_breaks=True,
     )
     run_open_write(
         session,

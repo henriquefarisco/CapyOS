@@ -20,6 +20,15 @@ OVMF_CANDIDATES = (
 SERIAL_CHAR_DELAY = 0.002
 
 
+def text_contains_pattern(
+    text: str, pattern: str, *, ignore_line_breaks: bool = False
+) -> bool:
+    if ignore_line_breaks:
+        text = text.replace("\r", "").replace("\n", "")
+        pattern = pattern.replace("\r", "").replace("\n", "")
+    return pattern in text
+
+
 class SmokeSession:
     def __init__(
         self,
@@ -261,18 +270,32 @@ class SmokeSession:
         pattern: str,
         timeout: float,
         start_at: int | tuple[int, int] = 0,
+        ignore_line_breaks: bool = False,
     ) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+            if any(
+                text_contains_pattern(
+                    chunk, pattern, ignore_line_breaks=ignore_line_breaks
+                )
+                for chunk in self._channel_texts_since(start_at)
+            ):
                 return
             if self.proc is not None and self.proc.poll() is not None:
                 self._drain_readers_after_exit()
-                if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+                if any(
+                    text_contains_pattern(
+                        chunk, pattern, ignore_line_breaks=ignore_line_breaks
+                    )
+                    for chunk in self._channel_texts_since(start_at)
+                ):
                     return
                 raise RuntimeError(f"qemu exited early with code {self.proc.returncode}")
             time.sleep(0.05)
-        if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+        if any(
+            text_contains_pattern(chunk, pattern, ignore_line_breaks=ignore_line_breaks)
+            for chunk in self._channel_texts_since(start_at)
+        ):
             return
         raise TimeoutError(f"timeout waiting for pattern: {pattern!r}")
 

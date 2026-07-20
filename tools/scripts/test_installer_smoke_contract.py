@@ -23,7 +23,7 @@ from smoke_x64_iso_install import (
     prepare_guard_disk,
     require_safe_disk_path,
 )
-from smoke_x64_session import SmokeSession, make_qemu_cmd
+from smoke_x64_session import SmokeSession, make_qemu_cmd, text_contains_pattern
 import smoke_x64_vmware_installer as vmware_installer
 from smoke_x64_vmware_installer import VmwareConsole
 from smoke_x64_vmware_installer_contract import (
@@ -67,6 +67,19 @@ class FakeDesktopSession:
 
 
 def main() -> int:
+    if not text_contains_pattern(
+        "remote=https://github.com/releases/latest/downlo\nad/latest.ini",
+        "/download/latest.ini",
+        ignore_line_breaks=True,
+    ):
+        print("[FAIL] wrapped update endpoint was not recognized")
+        return 1
+    if text_contains_pattern(
+        "remote=https://github.com/releases/latest/downlo\nad/latest.ini",
+        "/download/latest.ini",
+    ):
+        print("[FAIL] strict matching unexpectedly ignored line breaks")
+        return 1
     cases = {
         "[installer] eligible-targets=1\n": True,
         "prefix\n[installer] eligible-targets=1\r\nnext\n": True,
