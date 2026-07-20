@@ -265,16 +265,6 @@ class SmokeSession:
     def send_line(self, line: str) -> None:
         self.send_text(line, newline=True)
 
-    def send_firmware_line(self, line: str) -> None:
-        """Send a UEFI line using LF, which both firmware readers accept."""
-        if self.sock is None:
-            raise RuntimeError("serial socket is not connected")
-        payload = line.encode("ascii", errors="ignore") + b"\n"
-        for index, byte in enumerate(payload):
-            self.sock.sendall(bytes([byte]))
-            if index + 1 < len(payload):
-                time.sleep(SERIAL_CHAR_DELAY)
-
     def send_text(self, text: str, newline: bool = False) -> None:
         if self.sock is None:
             raise RuntimeError("serial socket is not connected")
@@ -402,7 +392,7 @@ def make_qemu_cmd(
         "-drive",
         f"if=pflash,format=raw,file={ovmf_vars_runtime}",
         "-serial",
-        f"tcp:127.0.0.1:{serial_port},server=on,wait=on",
+        f"tcp:127.0.0.1:{serial_port},server,nowait",
         "-display",
         "none",
         "-monitor",

@@ -251,8 +251,8 @@ def main() -> int:
         target, 12345, 1024, extra_disks=(guard,)
     )
     sata_text = " ".join(str(part) for part in sata_cmd)
-    if "server=on,wait=on" not in sata_text or "nowait" in sata_text:
-        print("[FAIL] QEMU can emit firmware output before serial capture connects")
+    if "server,nowait" not in sata_text or "wait=on" in sata_text:
+        print("[FAIL] QEMU serial capture can block firmware disk enumeration")
         return 1
     if "once=c,menu=off" not in sata_text:
         print("[FAIL] installed-disk boot is not pinned with BootNext")
