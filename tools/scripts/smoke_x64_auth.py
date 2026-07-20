@@ -116,7 +116,7 @@ def complete_iso_install(
     if target_selection < 1 or target_selection > expected_eligible_targets:
         raise RuntimeError("installer target selection is outside eligible range")
     mk = session.marker()
-    session.send_line(str(target_selection))
+    session.send_firmware_line(str(target_selection))
     session.wait_for("Press 'I' to start", timeout=timeout, start_at=mk)
     if (
         selected_path_id
@@ -157,7 +157,7 @@ def complete_iso_install(
         else:
             confirm_prompt = installer_prompt
         mk = session.marker()
-        session.send_line(
+        session.send_firmware_line(
             "ERASE"
             if confirm_prompt == "Type ERASE and press ENTER to confirm:"
             else ""

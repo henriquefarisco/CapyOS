@@ -265,6 +265,16 @@ class SmokeSession:
     def send_line(self, line: str) -> None:
         self.send_text(line, newline=True)
 
+    def send_firmware_line(self, line: str) -> None:
+        """Send a UEFI line with LF; firmware readers accept it reliably."""
+        if self.sock is None:
+            raise RuntimeError("serial socket is not connected")
+        payload = line.encode("ascii", errors="ignore") + b"\n"
+        for index, byte in enumerate(payload):
+            self.sock.sendall(bytes([byte]))
+            if index + 1 < len(payload):
+                time.sleep(SERIAL_CHAR_DELAY)
+
     def send_text(self, text: str, newline: bool = False) -> None:
         if self.sock is None:
             raise RuntimeError("serial socket is not connected")
