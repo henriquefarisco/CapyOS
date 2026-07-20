@@ -19,11 +19,17 @@ from smoke_x64_helpers import ensure_shell_after_login
 from smoke_x64_iso_install import (
     extract_volume_key,
     file_sha256,
+    installer_failed_before_loader,
     prepare_exclusive_disk,
     prepare_guard_disk,
     require_safe_disk_path,
 )
-from smoke_x64_session import SmokeSession, make_qemu_cmd, text_contains_pattern
+from smoke_x64_session import (
+    SmokeSession,
+    make_qemu_cmd,
+    reset_capture_file,
+    text_contains_pattern,
+)
 import smoke_x64_vmware_installer as vmware_installer
 from smoke_x64_vmware_installer import VmwareConsole
 from smoke_x64_vmware_installer_contract import (
@@ -67,6 +73,26 @@ class FakeDesktopSession:
 
 
 def main() -> int:
+    with TemporaryDirectory() as temp:
+        stale_capture = Path(temp) / "stale.debugcon.log"
+        stale_capture.write_text("old-login-evidence", encoding="utf-8")
+        reset_capture_file(stale_capture)
+        if stale_capture.read_bytes() != b"":
+            print("[FAIL] stale debugcon evidence survived session reset")
+            return 1
+        firmware_log = Path(temp) / "firmware.log"
+        firmware_log.write_text(
+            "Start HTTP Boot over IPv4\nEFI Internal Shell\n", encoding="utf-8"
+        )
+        if not installer_failed_before_loader(firmware_log):
+            print("[FAIL] pre-loader firmware miss is not retriable")
+            return 1
+        firmware_log.write_text(
+            "CapyOS UEFI loader: iniciando\nEFI Internal Shell\n", encoding="utf-8"
+        )
+        if installer_failed_before_loader(firmware_log):
+            print("[FAIL] post-loader installer failure became retriable")
+            return 1
     if not text_contains_pattern(
         "remote=https://github.com/releases/latest/downlo\nad/latest.ini",
         "/download/latest.ini",
@@ -225,11 +251,24 @@ def main() -> int:
         target, 12345, 1024, extra_disks=(guard,)
     )
     sata_text = " ".join(str(part) for part in sata_cmd)
+    if "server=on,wait=on" not in sata_text or "nowait" in sata_text:
+        print("[FAIL] QEMU can emit firmware output before serial capture connects")
+        return 1
+    if "once=c,menu=off" not in sata_text:
+        print("[FAIL] installed-disk boot is not pinned with BootNext")
+        return 1
     if "file=target.img" not in sata_text or "file=guard.img" not in sata_text:
         print("[FAIL] SATA multi-disk command omitted target or guard")
         return 1
     if sata_text.index("file=target.img") > sata_text.index("file=guard.img"):
         print("[FAIL] guard disk precedes explicit install target")
+        return 1
+    cdrom_cmd = make_qemu_cmd(
+        "qemu-system-x86_64", "OVMF_CODE.fd", Path("OVMF_VARS.fd"),
+        target, 12345, 1024, iso_path=Path("installer.iso"), boot_from="cdrom"
+    )
+    if "once=d,menu=off" not in " ".join(str(part) for part in cdrom_cmd):
+        print("[FAIL] installer ISO boot is not pinned with BootNext")
         return 1
     nvme_cmd = make_qemu_cmd(
         "qemu-system-x86_64", "OVMF_CODE.fd", Path("OVMF_VARS.fd"),

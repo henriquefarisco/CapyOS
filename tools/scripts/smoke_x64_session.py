@@ -20,6 +20,12 @@ OVMF_CANDIDATES = (
 SERIAL_CHAR_DELAY = 0.002
 
 
+def reset_capture_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb"):
+        pass
+
+
 def text_contains_pattern(
     text: str, pattern: str, *, ignore_line_breaks: bool = False
 ) -> bool:
@@ -61,6 +67,11 @@ class SmokeSession:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             self._logf = open(self.log_path, "wb")
+            if self.debugcon_log_path is not None:
+                # QEMU opens file: debugcon asynchronously. Empty it before
+                # spawning so the reader can never ingest evidence from a
+                # previous attempt during that startup race.
+                reset_capture_file(self.debugcon_log_path)
             self.proc = subprocess.Popen(
                 self.cmd,
                 stdin=subprocess.DEVNULL,
@@ -254,6 +265,16 @@ class SmokeSession:
     def send_line(self, line: str) -> None:
         self.send_text(line, newline=True)
 
+    def send_firmware_line(self, line: str) -> None:
+        """Send a UEFI line using LF, which both firmware readers accept."""
+        if self.sock is None:
+            raise RuntimeError("serial socket is not connected")
+        payload = line.encode("ascii", errors="ignore") + b"\n"
+        for index, byte in enumerate(payload):
+            self.sock.sendall(bytes([byte]))
+            if index + 1 < len(payload):
+                time.sleep(SERIAL_CHAR_DELAY)
+
     def send_text(self, text: str, newline: bool = False) -> None:
         if self.sock is None:
             raise RuntimeError("serial socket is not connected")
@@ -375,13 +396,13 @@ def make_qemu_cmd(
         "-m",
         str(memory_mb),
         "-boot",
-        "d" if boot_from == "cdrom" else "c",
+        f"once={'d' if boot_from == 'cdrom' else 'c'},menu=off",
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
         "-drive",
         f"if=pflash,format=raw,file={ovmf_vars_runtime}",
         "-serial",
-        f"tcp:127.0.0.1:{serial_port},server,nowait",
+        f"tcp:127.0.0.1:{serial_port},server=on,wait=on",
         "-display",
         "none",
         "-monitor",

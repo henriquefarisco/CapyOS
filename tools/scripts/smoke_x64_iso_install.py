@@ -238,6 +238,24 @@ def extract_volume_key(installer_log: Path) -> str | None:
     return volume_key
 
 
+def installer_failed_before_loader(installer_log: Path) -> bool:
+    """Return true only for a firmware-level miss before CapyOS starts."""
+    try:
+        text = installer_log.read_text(encoding="latin-1", errors="replace")
+    except OSError:
+        return False
+    if "CapyOS UEFI loader" in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "Start HTTP Boot",
+            "EFI Internal Shell",
+            "failed to load Boot",
+        )
+    )
+
+
 def run_boot1(
     qemu_bin: str,
     ovmf_code: str,
@@ -471,30 +489,46 @@ def main() -> int:
         ovmf_vars_runtime = create_runtime_ovmf_vars(log_base, ovmf_vars_template)
 
         installer_error: BaseException | None = None
-        try:
-            run_installer_boot(
-                qemu_bin=qemu_bin,
-                ovmf_code=ovmf_code,
-                ovmf_vars_runtime=ovmf_vars_runtime,
-                iso_path=iso_path,
-                disk_path=disk_path,
-                installer_log=installer_log,
-                installer_debugcon_log=installer_debugcon_log,
-                parsed=parsed,
-                guard_disk=guard_disk,
-            )
-        except BaseException as exc:
-            installer_error = exc
         hash_error: BaseException | None = None
         guard_after_install = ""
         target_after_install = ""
-        try:
-            guard_after_install = (
-                file_sha256(guard_disk) if guard_disk is not None else ""
+        for installer_attempt in range(2):
+            installer_error = None
+            try:
+                run_installer_boot(
+                    qemu_bin=qemu_bin,
+                    ovmf_code=ovmf_code,
+                    ovmf_vars_runtime=ovmf_vars_runtime,
+                    iso_path=iso_path,
+                    disk_path=disk_path,
+                    installer_log=installer_log,
+                    installer_debugcon_log=installer_debugcon_log,
+                    parsed=parsed,
+                    guard_disk=guard_disk,
+                )
+            except BaseException as exc:
+                installer_error = exc
+            hash_error = None
+            try:
+                guard_after_install = (
+                    file_sha256(guard_disk) if guard_disk is not None else ""
+                )
+                target_after_install = file_sha256(disk_path)
+            except BaseException as exc:
+                hash_error = exc
+                break
+            safe_to_retry = (
+                installer_attempt == 0
+                and installer_error is not None
+                and target_after_install == target_before
+                and (guard_disk is None or guard_after_install == guard_before)
+                and installer_failed_before_loader(installer_log)
             )
-            target_after_install = file_sha256(disk_path)
-        except BaseException as exc:
-            hash_error = exc
+            if not safe_to_retry:
+                break
+            print("[warn] firmware missed installer ISO; retrying once with fresh OVMF state")
+            cleanup_file(ovmf_vars_runtime)
+            ovmf_vars_runtime = create_runtime_ovmf_vars(log_base, ovmf_vars_template)
         volume_key = extract_volume_key(installer_log)
         if hash_error is not None:
             raise hash_error from installer_error
