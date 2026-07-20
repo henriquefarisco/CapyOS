@@ -4,11 +4,15 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.316+20260720.md`
+  - Evidência fail-closed multi-disco do instalador, contrato VMware UEFI/E1000,
+    índice compatível e release coordenada CapyAI 0.2.1.
+
+## Historico recente
+
 - `capyos-0.8.0-alpha.315+20260715.md`
   - Instalador seguro, first boot autoritativo, desktop/session worker hardening,
     updater autenticado e release coordenada CapyUI 2.24.1 + CapyAI 0.2.0.
-
-## Historico recente
 
 - `capyos-0.8.0-alpha.314+20260713.md`
   - Browser grafico estabilizado em sites pesados, com TLS escalar, limites HTTP

@@ -249,6 +249,10 @@ EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
                                          UINT64 *out_raw_data_count);
 
 void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st);
+void uefi_installer_serial_init(void);
+void uefi_installer_serial_write(const char *text);
+void uefi_installer_serial_write_u64(UINT64 value);
+int uefi_installer_read_key(EFI_SYSTEM_TABLE *st, EFI_INPUT_KEY *key);
 UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
                     BOOLEAN hidden);
 void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,

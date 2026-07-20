@@ -1,5 +1,85 @@
 #include "internal/uefi_loader_internal.h"
 
+#define INSTALLER_COM1_BASE 0x3F8u
+
+enum {
+  INSTALLER_INPUT_UNKNOWN = 0,
+  INSTALLER_INPUT_CONIN = 1,
+  INSTALLER_INPUT_COM1 = 2,
+};
+
+static UINT8 g_installer_input_source = INSTALLER_INPUT_UNKNOWN;
+
+static inline void installer_outb(UINT16 port, UINT8 value) {
+  __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline UINT8 installer_inb(UINT16 port) {
+  UINT8 value;
+  __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+  return value;
+}
+
+void uefi_installer_serial_init(void) {
+  g_installer_input_source = INSTALLER_INPUT_UNKNOWN;
+  installer_outb(INSTALLER_COM1_BASE + 1u, 0x00u);
+  installer_outb(INSTALLER_COM1_BASE + 3u, 0x80u);
+  installer_outb(INSTALLER_COM1_BASE + 0u, 0x01u);
+  installer_outb(INSTALLER_COM1_BASE + 1u, 0x00u);
+  installer_outb(INSTALLER_COM1_BASE + 3u, 0x03u);
+  installer_outb(INSTALLER_COM1_BASE + 2u, 0xC7u);
+  installer_outb(INSTALLER_COM1_BASE + 4u, 0x0Bu);
+}
+
+static void installer_serial_putc(char value) {
+  UINTN spins = 1000000u;
+  while (spins-- > 0u &&
+         (installer_inb(INSTALLER_COM1_BASE + 5u) & 0x20u) == 0u) {
+  }
+  installer_outb(INSTALLER_COM1_BASE, (UINT8)value);
+}
+
+void uefi_installer_serial_write(const char *text) {
+  if (!text) return;
+  while (*text) installer_serial_putc(*text++);
+}
+
+void uefi_installer_serial_write_u64(UINT64 value) {
+  char buffer[24];
+  UINTN length = 0u;
+  if (value == 0u) {
+    installer_serial_putc('0');
+    return;
+  }
+  while (value > 0u && length < sizeof(buffer)) {
+    buffer[length++] = (char)('0' + (value % 10u));
+    value /= 10u;
+  }
+  while (length > 0u) installer_serial_putc(buffer[--length]);
+}
+
+int uefi_installer_read_key(EFI_SYSTEM_TABLE *st, EFI_INPUT_KEY *key) {
+  if (!st || !st->ConIn || !key) return -1;
+  for (;;) {
+    if (g_installer_input_source != INSTALLER_INPUT_COM1) {
+      EFI_STATUS status =
+          uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2, st->ConIn, key);
+      if (!EFI_ERROR(status)) {
+        g_installer_input_source = INSTALLER_INPUT_CONIN;
+        return 0;
+      }
+    }
+    if (g_installer_input_source != INSTALLER_INPUT_CONIN &&
+        (installer_inb(INSTALLER_COM1_BASE + 5u) & 0x01u) != 0u) {
+      key->ScanCode = 0u;
+      key->UnicodeChar = (CHAR16)installer_inb(INSTALLER_COM1_BASE);
+      g_installer_input_source = INSTALLER_INPUT_COM1;
+      return 0;
+    }
+    uefi_call_wrapper(st->BootServices->Stall, 2, 1000u);
+  }
+}
+
 void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st) {
   if (!st || !st->BootServices || !st->BootServices->SetWatchdogTimer) {
     return;
@@ -16,19 +96,15 @@ UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
   buf[0] = 0;
 
   for (;;) {
-    UINTN idx = 0;
-    uefi_call_wrapper(st->BootServices->WaitForEvent, 3, 1,
-                      &st->ConIn->WaitForKey, &idx);
     EFI_INPUT_KEY key;
-    EFI_STATUS stt =
-        uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2, st->ConIn, &key);
-    if (EFI_ERROR(stt))
+    if (uefi_installer_read_key(st, &key) != 0)
       continue;
 
     /* Enter - finish */
     if (key.UnicodeChar == L'\r' || key.UnicodeChar == L'\n') {
       buf[len] = 0;
       Print(L"\r\n");
+      uefi_installer_serial_write("\r\n");
       return len;
     }
 
@@ -38,6 +114,7 @@ UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
         len--;
         buf[len] = 0;
         Print(L"\b \b"); /* Erase character */
+        uefi_installer_serial_write("\b \b");
       }
       continue;
     }
@@ -48,8 +125,13 @@ UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
       buf[len] = 0;
       if (mask) {
         Print(L"*");
+        uefi_installer_serial_write("*");
       } else {
+        char serial_char[2];
         Print(L"%c", key.UnicodeChar);
+        serial_char[0] = key.UnicodeChar <= 0x7Fu ? (char)key.UnicodeChar : '?';
+        serial_char[1] = 0;
+        uefi_installer_serial_write(serial_char);
       }
     }
   }

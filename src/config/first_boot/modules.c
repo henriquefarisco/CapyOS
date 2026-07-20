@@ -65,7 +65,7 @@
  */
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.315+20260715/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.316+20260720/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME

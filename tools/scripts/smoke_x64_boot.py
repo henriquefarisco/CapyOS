@@ -86,10 +86,10 @@ def smoke_first_boot(
         session,
         "update-channel show",
         timeout=timeout,
-        # The 80-column guest console may wrap the final ".ini" onto the next
-        # row. Match the immutable route prefix while the unit tests continue
-        # to assert the complete URL stored by the update agent.
-        expect="releases/latest/download/latest",
+        # The 80-column guest console may wrap anywhere inside the full URL.
+        # Earlier checks already prove stable/main and the GitHub repository;
+        # assert the immutable endpoint suffix here, including the file name.
+        expect="/download/latest.ini",
     )
     run_open_write(
         session,
@@ -345,7 +345,12 @@ def smoke_first_boot(
 
 
 def smoke_second_boot(
-    session: SmokeSession, timeout: float, user: str, password: str, marker: str
+    session: SmokeSession,
+    timeout: float,
+    user: str,
+    password: str,
+    marker: str,
+    expected_gateway: str | None = "10.0.2.2",
 ) -> None:
     smoke_file = "/tmp/smoke-persist/smoke.txt"
     assert_shell_identity(session, timeout=timeout, user=user)
@@ -394,7 +399,16 @@ def smoke_second_boot(
         expect_optional=True,
     )
     run_cmd(session, "net-ip", timeout=timeout, expect="ipv4=10.0.2.15", expect_optional=True)
-    run_cmd(session, "net-gw", timeout=timeout, expect="gateway=10.0.2.2")
+    run_cmd(
+        session,
+        "net-gw",
+        timeout=timeout,
+        expect=(
+            f"gateway={expected_gateway}"
+            if expected_gateway is not None
+            else "gateway="
+        ),
+    )
     run_cmd(session, "net-dns", timeout=timeout, expect="dns=", expect_optional=True)
     run_cmd(
         session,

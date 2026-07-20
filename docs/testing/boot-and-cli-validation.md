@@ -52,6 +52,24 @@ Teste positivo recomendado: usar dois discos descartaveis distinguiveis pelo
 somente ele recebe ESP/BOOT/DATA. Depois, concluir first boot, login, criar um
 arquivo, reiniciar e confirmar persistencia.
 
+O preflight automatizado de desenvolvimento executa esse contrato em QEMU:
+
+```bash
+make smoke-x64-qemu-installer-wizard TOOLCHAIN64=host
+```
+
+Ele conecta um alvo vazio de 2 GiB e um guard deterministico de 3 GiB, seleciona
+o alvo pela capacidade unica e confirma o mesmo `PathId`, exige dois alvos
+elegiveis, prova que o alvo mudou e compara o SHA-256 integral do guard antes e
+depois. As imagens sao criadas exclusivamente sob `build/ci` e, em falha, sao
+preservadas para analise sem truncar arquivos preexistentes. A persistencia nunca
+e pulada quando o desktop inicia: o harness retorna ao CLI para gravar/sincronizar
+o marker e, se o setup reiniciar antes do login, insere um boot adicional antes
+da releitura. O retorno desktop→TTY usa o sentinel real de `CTRL+ALT+F1`, nao um
+comando de terminal. A recovery key e redigida do log persistido. O gate QEMU e
+o full install networked passaram no host em 2026-07-17; ainda assim, esse
+preflight nao substitui nem fecha o gate oficial VMware multi-disco.
+
 ### 1.2 First boot e desktop
 
 Em disco vazio, o primeiro boot deve sempre mostrar `CAPYOS SETUP`, coletar
@@ -192,9 +210,9 @@ make test
 
 ## 7. Lacunas atuais
 
-- o instalador por ISO exige selecao explicita, preflight e `ERASE`, mas ainda
-  falta o gate VMware dedicado multi-disco que prove automaticamente que o
-  disco guard nao selecionado permanece intacto;
+- o preflight QEMU e o gate VMware dedicado multi-disco provam selecao
+  explicita, lifecycle persistente e guard intacto; a evidência VMware oficial
+  de `alpha.316` está publicada junto da nota de release;
 - falhas apos o reboot pelo HDD instalado devem ser tratadas como problemas do
   runtime instalado, nao como ausencia do instalador;
 - USB HID/XHCI da Etapa 3 permanece como gate regressivo; a validacao externa

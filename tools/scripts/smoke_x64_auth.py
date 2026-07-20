@@ -3,17 +3,62 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 
 from smoke_x64_helpers import wait_and_send, wait_for_vm_exit
 from smoke_x64_session import SmokeSession
 
 
-def installer_has_single_eligible_target(text: str) -> bool:
-    return any(
-        line.strip() == "[installer] eligible-targets=1"
-        for line in text.splitlines()
+def installer_eligible_target_count(text: str) -> int | None:
+    prefix = "[installer] eligible-targets="
+    values: list[int] = []
+    for line in text.splitlines():
+        normalized = line.strip()
+        if not normalized.startswith(prefix):
+            continue
+        raw = normalized[len(prefix) :]
+        if not raw or not raw.isdecimal():
+            return None
+        values.append(int(raw, 10))
+    if not values or any(value != values[0] for value in values[1:]):
+        return None
+    return values[0]
+
+
+def installer_eligible_targets(text: str) -> tuple[tuple[int, str, int], ...]:
+    pattern = re.compile(
+        r"^\s*\[(\d+)\] PathId ([0-9A-Fa-f]{16}), MediaId \d+ - (\d+) MiB - eligible(?:\s|$)"
     )
+    targets: list[tuple[int, str, int]] = []
+    for line in text.splitlines():
+        match = pattern.match(line)
+        if match:
+            targets.append(
+                (int(match.group(1), 10), match.group(2).lower(), int(match.group(3), 10))
+            )
+    return tuple(targets)
+
+
+def installer_select_target_by_size(text: str, size_mib: int) -> tuple[int, str]:
+    matches = [target for target in installer_eligible_targets(text) if target[2] == size_mib]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"installer smoke expected one {size_mib} MiB target, got {len(matches)}"
+        )
+    return matches[0][0], matches[0][1]
+
+
+def installer_has_single_eligible_target(text: str) -> bool:
+    return installer_eligible_target_count(text) == 1
+
+
+def require_installer_target_count(text: str, expected: int) -> None:
+    actual = installer_eligible_target_count(text)
+    if expected < 1 or actual != expected:
+        raise RuntimeError(
+            f"installer smoke expected {expected} eligible targets, got {actual}"
+        )
 
 
 def require_first_boot_wizard(marker: str, required: bool) -> None:
@@ -23,13 +68,25 @@ def require_first_boot_wizard(marker: str, required: bool) -> None:
 
 
 MODULE_INSTALL_DONE_MARKERS = [
-    "[modules] install complete",
-    "[modules] instalacao concluida",
-    "[modules] instalacion completa",
-    "[modules] partial install",
-    "[modules] instalacao parcial",
-    "[modules] instalacion parcial",
+    "Instalacao concluida. Reinicie para ativar.",
+    "Install complete. Reboot to activate.",
+    "Instalacion completa. Reinicie para activar.",
 ]
+MODULE_INSTALL_BACKGROUND_MARKERS = [
+    "capypkg nao iniciou; seguira em segundo plano.",
+    "capypkg not started; will continue in background.",
+    "capypkg no inicio; seguira en segundo plano.",
+]
+MODULE_REBOOT_MARKERS = [
+    "Configuracao inicial concluida. Reiniciando para ativar modulos...",
+    "Initial setup complete. Rebooting to activate modules...",
+    "Configuracion inicial completa. Reiniciando para activar modulos...",
+]
+LOGIN_PROMPTS = ["Usuario:", "User:", "Usuario: ", "User: "]
+
+
+def module_install_completed(text: str) -> bool:
+    return any(marker in text for marker in MODULE_INSTALL_DONE_MARKERS)
 
 
 def complete_iso_install(
@@ -38,6 +95,9 @@ def complete_iso_install(
     keyboard_layout: str,
     user: str = "admin",
     password: str = "admin",
+    expected_eligible_targets: int = 1,
+    target_selection: int = 1,
+    target_size_mib: int | None = None,
 ) -> None:
     mk = session.marker()
     entry_prompt = session.wait_for_any(
@@ -45,17 +105,26 @@ def complete_iso_install(
         timeout=timeout * 4,
         start_at=mk,
     )
-    if entry_prompt == "Select target disk [":
-        if not installer_has_single_eligible_target(session.tail(2400)):
-            raise RuntimeError(
-                "installer smoke requires exactly one eligible target"
-            )
-        session.send_line("1")
-        mk = session.marker()
-        session.wait_for("Press 'I' to start", timeout=timeout, start_at=mk)
-    session.send_text("I", newline=False)
-
+    if entry_prompt != "Select target disk [":
+        raise RuntimeError("installer lacks mandatory explicit target selection")
+    require_installer_target_count(session.tail(4000), expected_eligible_targets)
+    selected_path_id = ""
+    if target_size_mib is not None:
+        target_selection, selected_path_id = installer_select_target_by_size(
+            session.tail(4000), target_size_mib
+        )
+    if target_selection < 1 or target_selection > expected_eligible_targets:
+        raise RuntimeError("installer target selection is outside eligible range")
     mk = session.marker()
+    session.send_line(str(target_selection))
+    session.wait_for("Press 'I' to start", timeout=timeout, start_at=mk)
+    if (
+        selected_path_id
+        and f"selected pathid {selected_path_id}" not in session.text_since(mk).lower()
+    ):
+        raise RuntimeError("installer selected a different PathId than requested target")
+    mk = session.marker()
+    session.send_text("I", newline=False)
     installer_prompt = session.wait_for_any(
         [
             "Select language [1]:",
@@ -87,12 +156,12 @@ def complete_iso_install(
                 )
         else:
             confirm_prompt = installer_prompt
+        mk = session.marker()
         session.send_line(
             "ERASE"
             if confirm_prompt == "Type ERASE and press ENTER to confirm:"
             else ""
         )
-        mk = session.marker()
         session.wait_for(
             "Installation complete. Rebooting...",
             timeout=timeout * 8,
@@ -101,63 +170,62 @@ def complete_iso_install(
         wait_for_vm_exit(session, timeout=timeout * 2)
         return
 
-    session.send_line("")
-
     mk = session.marker()
+    session.send_line("")
     session.wait_for("Preferred layout [1]:", timeout=timeout, start_at=mk)
+    mk = session.marker()
     if keyboard_layout == "br-abnt2":
         session.send_line("2")
     else:
         session.send_line("")
 
     # Hostname
-    mk = session.marker()
     session.wait_for("Hostname [capyos-node]:", timeout=timeout, start_at=mk)
+    mk = session.marker()
     session.send_line("smoke-node")
 
     # Theme
-    mk = session.marker()
     session.wait_for_any(["Theme [1]:", "Tema [1]:"], timeout=timeout, start_at=mk)
+    mk = session.marker()
     session.send_line("")
 
     # Splash
-    mk = session.marker()
     session.wait_for_any(
         ["Enable animated splash? [Y/n]:", "Ativar splash animado? [S/n]:",
          "Activar splash animado? [S/n]:"],
         timeout=timeout, start_at=mk,
     )
+    mk = session.marker()
     session.send_line("n")
 
     # Admin user
-    mk = session.marker()
     session.wait_for_any(
         ["Administrator user [admin]:", "Usuario administrador [admin]:"],
         timeout=timeout, start_at=mk,
     )
+    mk = session.marker()
     session.send_line("" if user == "admin" else user)
 
     # Admin password
-    mk = session.marker()
     session.wait_for_any(
         ["Password for", "Senha para", "Contrasena para"],
         timeout=timeout, start_at=mk,
     )
+    mk = session.marker()
     session.send_line(password)
 
-    mk = session.marker()
     session.wait_for_any(
         ["Confirm password:", "Confirme a senha:", "Confirmar contrasena:"],
         timeout=timeout, start_at=mk,
     )
+    mk = session.marker()
     session.send_line(password)
 
     # Volume key
-    mk = session.marker()
     session.wait_for("Press ENTER to continue...", timeout=timeout, start_at=mk)
+    mk = session.marker()
     session.send_line("")
 
-    mk = session.marker()
     confirm_prompt = session.wait_for_any(
         [
             "Type ERASE and press ENTER to confirm:",
@@ -168,13 +236,12 @@ def complete_iso_install(
         timeout=timeout,
         start_at=mk,
     )
+    mk = session.marker()
     session.send_line(
         "ERASE"
         if confirm_prompt == "Type ERASE and press ENTER to confirm:"
         else ""
     )
-
-    mk = session.marker()
     session.wait_for(
         "Installation complete. Rebooting...",
         timeout=timeout * 8,
@@ -397,33 +464,27 @@ def maybe_run_first_boot_setup(
                         )
                         session.send_line("")
                     mk = session.marker()
-                    session.wait_for_any(
-                        MODULE_INSTALL_DONE_MARKERS,
+                    module_outcome = session.wait_for_any(
+                        MODULE_INSTALL_DONE_MARKERS
+                        + MODULE_INSTALL_BACKGROUND_MARKERS
+                        + MODULE_REBOOT_MARKERS
+                        + LOGIN_PROMPTS,
                         timeout=timeout * 10,
                         start_at=mk,
                     )
-                    mk = session.marker()
-                    try:
-                        found_after_modules = session.wait_for_any(
-                            volume_key_prompts + ["Usuario:", "User:", "Usuario: ", "User: "],
-                            timeout=timeout * 8,
-                            start_at=mk,
-                        )
-                    except RuntimeError:
-                        if "Initial setup complete. Rebooting" in session.tail(4000):
-                            wait_for_vm_exit(session, timeout=timeout * 2)
-                            return "rebooted"
-                        raise
-                    if found_after_modules in volume_key_prompts:
-                        if not volume_key:
-                            raise RuntimeError("post-module reboot requested volume key, but no key was provided")
-                        session.send_line(volume_key)
-                        mk = session.marker()
-                        session.wait_for_any(
-                            ["Usuario:", "User:", "Usuario: ", "User: "],
-                            timeout=timeout * 4,
-                            start_at=mk,
-                        )
+                    if module_outcome in MODULE_REBOOT_MARKERS:
+                        wait_for_vm_exit(session, timeout=timeout * 2)
+                        return "rebooted"
+                    if module_outcome in LOGIN_PROMPTS:
+                        break
+                    found_after_modules = session.wait_for_any(
+                        MODULE_REBOOT_MARKERS + LOGIN_PROMPTS,
+                        timeout=timeout * 8,
+                        start_at=mk,
+                    )
+                    if found_after_modules in MODULE_REBOOT_MARKERS:
+                        wait_for_vm_exit(session, timeout=timeout * 2)
+                        return "rebooted"
                     break
                 mk = session.marker()
                 session.wait_for_any(

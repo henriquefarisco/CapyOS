@@ -57,7 +57,7 @@ def ensure_shell_after_login(session: SmokeSession, timeout: float, mode: str) -
         return mode
     print("[info] desktop autostart detected; exiting to CLI for smoke commands")
     mk = session.marker()
-    session.send_line("exit")
+    session.send_byte(0x9D)
     session.wait_for("[desktop] session stopped", timeout=timeout, start_at=mk)
     session.wait_for(">~> ", timeout=timeout, start_at=mk)
     return "shell"

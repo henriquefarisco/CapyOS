@@ -94,6 +94,8 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   installer_disk_target_t target;
   EFI_BLOCK_IO_PROTOCOL *disk = NULL;
 
+  uefi_installer_serial_init();
+  uefi_installer_serial_write("\r\n=== CapyOS Installer Wizard ===\r\n");
   Print(L"\r\n");
   Print(L"========================================\r\n");
   Print(L"      CapyOS 64-bit - Installer Wizard\r\n");
@@ -119,13 +121,11 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   Print(L"[WARNING] ALL DATA ON THE TARGET DISK WILL BE ERASED!\r\n");
   Print(L"\r\n");
   Print(L"Press 'I' to start or any other key to cancel: ");
+  uefi_installer_serial_write("Press 'I' to start or any other key to cancel: ");
 
   EFI_INPUT_KEY key;
-  UINTN idx = 0;
-  uefi_call_wrapper(st->BootServices->WaitForEvent, 3, 1,
-                    &st->ConIn->WaitForKey, &idx);
-  stt = uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2, st->ConIn, &key);
-  if (EFI_ERROR(stt) || (key.UnicodeChar != L'I' && key.UnicodeChar != L'i')) {
+  if (uefi_installer_read_key(st, &key) != 0 ||
+      (key.UnicodeChar != L'I' && key.UnicodeChar != L'i')) {
     Print(L"\r\n[UEFI] Installation cancelled.\r\n");
     return EFI_ABORTED;
   }
@@ -387,8 +387,10 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
   /* --- Step 7: Volume key guidance --- */
   CHAR16 recovery_key[64];
+  char recovery_key_display[64];
   char recovery_key_norm[64];
   generate_recovery_key(st, recovery_key, sizeof(recovery_key) / sizeof(recovery_key[0]));
+  char16_to_ascii(recovery_key_display, sizeof(recovery_key_display), recovery_key);
   if (normalize_key_char16(recovery_key, recovery_key_norm,
                            sizeof(recovery_key_norm)) != 0) {
     Print(L"[UEFI] Falha ao gerar chave de volume.\r\n");
@@ -403,6 +405,9 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
    * collected by the in-kernel wizard, not here. */
   Print(L"\r\n=== Volume Recovery Key ===\r\n\r\n");
   Print(L"  %s\r\n\r\n", recovery_key);
+  uefi_installer_serial_write("\r\n=== Volume Recovery Key ===\r\n\r\n  ");
+  uefi_installer_serial_write(recovery_key_display);
+  uefi_installer_serial_write("\r\n\r\n");
   Print(L"Record this key. The first-boot wizard inside CapyOS will\r\n");
   Print(L"collect language, keyboard, hostname, theme, admin user,\r\n");
   Print(L"password and module selection on the installed system.\r\n\r\n");
@@ -411,6 +416,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         target.path_id, target.media_id,
         (disk_bytes / (1024ULL * 1024ULL)));
   Print(L"Type ERASE and press ENTER to confirm: ");
+  uefi_installer_serial_write("Type ERASE and press ENTER to confirm: ");
   CHAR16 confirm[8];
   char confirm_ascii[8];
   uefi_readline(st, confirm, 8, FALSE);
@@ -597,9 +603,9 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   } else {
     Print(L"[UEFI] Installation complete. Rebooting...\r\n");
   }
+  uefi_installer_serial_write("[UEFI] Installation complete. Rebooting...\r\n");
   uefi_call_wrapper(st->RuntimeServices->ResetSystem, 4, EfiResetCold,
                     EFI_SUCCESS, 0, NULL);
   return EFI_SUCCESS;
 }
-
 

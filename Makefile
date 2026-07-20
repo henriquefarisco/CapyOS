@@ -1787,7 +1787,7 @@ iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) 
 	cp $(MANIFEST64) $(ISO_DIR_EFI)/boot/manifest.bin
 	cp $(BOOT_CONFIG_BIN) $(ISO_DIR_EFI)/boot/capycfg.bin
 	$(MK_EFIBOOT_HOST) --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64) --manifest $(MANIFEST64) --bootcfg $(BOOT_CONFIG_BIN)
-	@ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); printf '%s\n' "$$ISO_OUT" > $(BUILD)/CapyOS-Installer-UEFI.last-built.txt; echo "[ok] ISO UEFI gerada em $$ISO_OUT"; echo "[ok] Ultima ISO registrada em $(BUILD)/CapyOS-Installer-UEFI.last-built.txt"
+	@set -e; ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); test -s "$$ISO_OUT"; printf '%s\n' "$$ISO_OUT" > $(BUILD)/CapyOS-Installer-UEFI.last-built.txt.tmp; mv $(BUILD)/CapyOS-Installer-UEFI.last-built.txt.tmp $(BUILD)/CapyOS-Installer-UEFI.last-built.txt; echo "[ok] ISO UEFI gerada em $$ISO_OUT"; echo "[ok] Ultima ISO registrada em $(BUILD)/CapyOS-Installer-UEFI.last-built.txt"
 
 # Manifest 64-bit (para BOOT partition GPT) - LBA relativo default = 1 (logo apÃƒÆ’Ã‚Â³s o manifest)
 $(MANIFEST64): $(CAPYOS_ELF64) | $(BUILD)
@@ -2922,7 +2922,7 @@ smoke-x64-iso-local-modules:
 	$(MAKE) iso-uefi-local-modules TOOLCHAIN64="$(TOOLCHAIN64)" \
 	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
 	  LOCAL_MODULES_REPOS="$(LOCAL_MODULES_REPOS)"
-	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full $(SMOKE_X64_ISO_ARGS)
+	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --require-module-install $(SMOKE_X64_ISO_ARGS)
 	@if grep -q "Desktop module not installed" build/ci/smoke_x64_iso_install.boot1.debugcon.log; then \
 	  echo "[FAIL] local-bundle modules did not install (FULL profile)"; exit 1; fi
 	@echo "[ok] local-bundle FULL module install validated"
@@ -3865,16 +3865,33 @@ smoke-x64-iso: all64 iso-uefi manifest64
 	@echo "Executando smoke test da ISO oficial (instalacao + reboot + persistencia)..."
 	python3 tools/scripts/smoke_x64_iso_install.py $(SMOKE_X64_ISO_ARGS)
 
+.PHONY: smoke-x64-vmware-installer-wizard
+smoke-x64-vmware-installer-wizard: all64 iso-uefi manifest64
+	@echo "Executando gate oficial VMware+UEFI+E1000 do installer wizard..."
+	@ISO_PATH="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
+	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer.py)"; \
+	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
+	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" $(SMOKE_X64_VMWARE_INSTALLER_ARGS)
+
+.PHONY: smoke-x64-qemu-installer-wizard
+smoke-x64-qemu-installer-wizard: all64 iso-uefi manifest64
+	@echo "Executando preflight QEMU multi-disco do installer wizard..."
+	python3 tools/scripts/smoke_x64_iso_install.py \
+		--guard-disk build/ci/smoke_x64_iso_install.guard.img \
+		--guard-disk-size 3G \
+		--target-selection 1 \
+		$(SMOKE_X64_ISO_ARGS)
+
 .PHONY: smoke-x64-iso-modules-net
 # Networked full-install regression gate (alpha.287): builds the ISO and runs
 # the official install smoke with profile=full + real QEMU user-net (SLIRP NAT)
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.315+20260715/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.316+20260720/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
-	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
+	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
 	@if grep -q "Install complete" build/ci/smoke_x64_iso_install.boot1.debugcon.log; then echo "[ok] download real de modulos validado (Install complete)"; else echo "[FAIL] modulos nao instalaram no full-install networked"; exit 1; fi
 
 # Host-side GPT/ESP/BOOT audit for installed disks or disk images.

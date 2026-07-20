@@ -399,6 +399,9 @@ EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
     }
   }
   Print(L"[installer] eligible-targets=%u\r\n", (UINT32)eligible_count);
+  uefi_installer_serial_write("[installer] eligible-targets=");
+  uefi_installer_serial_write_u64((UINT64)eligible_count);
+  uefi_installer_serial_write("\r\n");
   if (eligible_count == 0u) {
     Print(L"No disk passed the installation preflight.\r\n");
     return EFI_VOLUME_FULL;
@@ -411,6 +414,9 @@ EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
     UINTN selected_index;
     Print(L"\r\nSelect target disk [1-%u] or 0 to cancel: ",
           (UINT32)eligible_count);
+    uefi_installer_serial_write("Select target disk [1-");
+    uefi_installer_serial_write_u64((UINT64)eligible_count);
+    uefi_installer_serial_write("] or 0 to cancel: ");
     uefi_readline(st, selection_in, 16u, FALSE);
     char16_to_ascii(selection_ascii, sizeof(selection_ascii), selection_in);
     if (ascii_streq(selection_ascii, "0")) {
@@ -434,6 +440,10 @@ EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
           candidates[selected_index].disk_bytes / (1024ULL * 1024ULL),
           (out_target->layout.data_sectors * INSTALLER_DISK_BLOCK_SIZE) /
               (1024ULL * 1024ULL));
+    uefi_installer_serial_write("Selected target disk: ");
+    uefi_installer_serial_write_u64(
+        candidates[selected_index].disk_bytes / (1024ULL * 1024ULL));
+    uefi_installer_serial_write(" MiB\r\n");
     return EFI_SUCCESS;
   }
 }

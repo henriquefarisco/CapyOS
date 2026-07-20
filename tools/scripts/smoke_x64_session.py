@@ -40,6 +40,7 @@ class SmokeSession:
 
         self._lock = threading.Lock()
         self._buf = bytearray()
+        self._debugcon_buf = bytearray()
 
         self._proc_reader: threading.Thread | None = None
         self._serial_reader: threading.Thread | None = None
@@ -49,29 +50,32 @@ class SmokeSession:
 
     def start(self) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._logf = open(self.log_path, "wb")
-
-        self.proc = subprocess.Popen(
-            self.cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-
-        self._proc_reader = threading.Thread(target=self._read_proc_output, daemon=True)
-        self._proc_reader.start()
-
-        self.sock = self._connect_serial(timeout=25.0)
-        self.sock.settimeout(0.3)
-
-        self._serial_reader = threading.Thread(target=self._read_serial, daemon=True)
-        self._serial_reader.start()
-
-        if self.debugcon_log_path is not None:
-            self._debugcon_reader = threading.Thread(
-                target=self._read_debugcon, daemon=True
+        try:
+            self._logf = open(self.log_path, "wb")
+            self.proc = subprocess.Popen(
+                self.cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
             )
-            self._debugcon_reader.start()
+            self._proc_reader = threading.Thread(
+                target=self._read_proc_output, daemon=True
+            )
+            self._proc_reader.start()
+            self.sock = self._connect_serial(timeout=25.0)
+            self.sock.settimeout(0.3)
+            self._serial_reader = threading.Thread(
+                target=self._read_serial, daemon=True
+            )
+            self._serial_reader.start()
+            if self.debugcon_log_path is not None:
+                self._debugcon_reader = threading.Thread(
+                    target=self._read_debugcon, daemon=True
+                )
+                self._debugcon_reader.start()
+        except BaseException:
+            self.stop()
+            raise
 
     def stop(self) -> None:
         if self.sock is not None:
@@ -142,8 +146,6 @@ class SmokeSession:
             try:
                 data = self.sock.recv(4096)
             except socket.timeout:
-                if self.proc is not None and self.proc.poll() is not None:
-                    return
                 continue
             except OSError:
                 return
@@ -152,7 +154,7 @@ class SmokeSession:
 
             with self._lock:
                 self._buf.extend(data)
-            self._logf.write(data)
+                self._logf.write(data)
             if self.verbose:
                 sys.stdout.write(data.decode("latin-1", errors="replace"))
                 sys.stdout.flush()
@@ -162,8 +164,6 @@ class SmokeSession:
             return
         offset = 0
         while True:
-            if self.proc is not None and self.proc.poll() is not None:
-                return
             try:
                 with self.debugcon_log_path.open("rb") as fp:
                     fp.seek(offset)
@@ -172,26 +172,75 @@ class SmokeSession:
             except OSError:
                 data = b""
             if data:
-                with self._lock:
-                    self._buf.extend(data)
-                self._logf.write(data)
-                if self.verbose:
+                use_for_interaction = self._record_debugcon_data(data)
+                if use_for_interaction and self.verbose:
                     sys.stdout.write(data.decode("latin-1", errors="replace"))
                     sys.stdout.flush()
+            if self.proc is not None and self.proc.poll() is not None:
+                return
             time.sleep(0.05)
 
-    def marker(self) -> int:
+    def _record_debugcon_data(self, data: bytes) -> bool:
+        """Keep debugcon isolated so mirrored channels cannot interleave."""
+        if not data:
+            return False
         with self._lock:
-            return len(self._buf)
+            self._debugcon_buf.extend(data)
+        return True
+
+    def _drain_readers_after_exit(self) -> None:
+        for reader in (
+            self._proc_reader,
+            self._serial_reader,
+            self._debugcon_reader,
+        ):
+            if reader is not None:
+                reader.join(timeout=1.0)
+
+    def marker(self) -> tuple[int, int]:
+        with self._lock:
+            return len(self._buf), len(self._debugcon_buf)
+
+    @staticmethod
+    def _channel_offsets(start_at: int | tuple[int, int]) -> tuple[int, int]:
+        if isinstance(start_at, tuple):
+            return start_at
+        return start_at, start_at
+
+    def _channel_texts_since(
+        self, start_at: int | tuple[int, int]
+    ) -> tuple[str, str]:
+        serial_offset, debugcon_offset = self._channel_offsets(start_at)
+        with self._lock:
+            serial = self._buf[serial_offset:].decode("latin-1", errors="replace")
+            debugcon = self._debugcon_buf[debugcon_offset:].decode(
+                "latin-1", errors="replace"
+            )
+        return serial, debugcon
+
+    def text_since(self, start_at: int | tuple[int, int]) -> str:
+        return "\n".join(self._channel_texts_since(start_at))
 
     def text(self) -> str:
         with self._lock:
-            return self._buf.decode("latin-1", errors="replace")
+            serial = self._buf.decode("latin-1", errors="replace")
+            debugcon = self._debugcon_buf.decode("latin-1", errors="replace")
+        return serial + "\n" + debugcon
 
     def tail(self, max_bytes: int = 3500) -> str:
         with self._lock:
-            data = self._buf[-max_bytes:]
-        return data.decode("latin-1", errors="replace")
+            serial = self._buf[-max_bytes:].decode("latin-1", errors="replace")
+            debugcon = self._debugcon_buf[-max_bytes:].decode(
+                "latin-1", errors="replace"
+            )
+        return serial + "\n" + debugcon
+
+    def send_byte(self, value: int) -> None:
+        if self.sock is None:
+            raise RuntimeError("serial socket is not connected")
+        if value < 0 or value > 255:
+            raise ValueError("serial byte must be in range 0..255")
+        self.sock.sendall(bytes([value]))
 
     def send_line(self, line: str) -> None:
         self.send_text(line, newline=True)
@@ -207,26 +256,47 @@ class SmokeSession:
             if i + 1 < len(payload):
                 time.sleep(SERIAL_CHAR_DELAY)
 
-    def wait_for(self, pattern: str, timeout: float, start_at: int = 0) -> None:
+    def wait_for(
+        self,
+        pattern: str,
+        timeout: float,
+        start_at: int | tuple[int, int] = 0,
+    ) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.proc is not None and self.proc.poll() is not None:
-                raise RuntimeError(f"qemu exited early with code {self.proc.returncode}")
-            if pattern in self.text()[start_at:]:
+            if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
                 return
+            if self.proc is not None and self.proc.poll() is not None:
+                self._drain_readers_after_exit()
+                if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+                    return
+                raise RuntimeError(f"qemu exited early with code {self.proc.returncode}")
             time.sleep(0.05)
+        if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+            return
         raise TimeoutError(f"timeout waiting for pattern: {pattern!r}")
 
-    def wait_for_any(self, patterns: list[str], timeout: float, start_at: int = 0) -> str:
+    def wait_for_any(
+        self,
+        patterns: list[str],
+        timeout: float,
+        start_at: int | tuple[int, int] = 0,
+    ) -> str:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            for pattern in patterns:
+                if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+                    return pattern
             if self.proc is not None and self.proc.poll() is not None:
+                self._drain_readers_after_exit()
+                for pattern in patterns:
+                    if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+                        return pattern
                 raise RuntimeError(f"qemu exited early with code {self.proc.returncode}")
-            chunk = self.text()[start_at:]
-            for p in patterns:
-                if p in chunk:
-                    return p
             time.sleep(0.05)
+        for pattern in patterns:
+            if any(pattern in chunk for chunk in self._channel_texts_since(start_at)):
+                return pattern
         raise TimeoutError(f"timeout waiting for patterns: {patterns!r}")
 
 
@@ -273,6 +343,7 @@ def make_qemu_cmd(
     iso_path: Path | None = None,
     boot_from: str = "disk",
     networking: bool = False,
+    extra_disks: tuple[Path, ...] = (),
 ) -> list[str]:
     cmd = [
         qemu_bin,
@@ -339,6 +410,19 @@ def make_qemu_cmd(
         )
     else:
         cmd.extend(["-drive", f"format=raw,file={disk_path}"])
+
+    for index, extra_disk in enumerate(extra_disks, start=1):
+        if storage_bus == "nvme":
+            cmd.extend(
+                [
+                    "-drive",
+                    f"if=none,id=disk{index},format=raw,file={extra_disk}",
+                    "-device",
+                    f"nvme,serial=CAPYOSNVME{index + 1:02d},drive=disk{index}",
+                ]
+            )
+        else:
+            cmd.extend(["-drive", f"format=raw,file={extra_disk}"])
 
     if iso_path is not None:
         cmd.extend(["-drive", f"file={iso_path},media=cdrom,readonly=on"])

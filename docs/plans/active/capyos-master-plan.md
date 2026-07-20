@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-07-15 (rev. `alpha.315`)
-**Versão atual:** `0.8.0-alpha.315+20260715`
+**Data de referência:** 2026-07-20 (rev. `alpha.316`)
+**Versão atual:** `0.8.0-alpha.316+20260720`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -594,12 +594,33 @@ e vincula o snapshot sanitizado do caller. A release coordena CapyUI `2.24.1` e
 CapyAI `0.2.0`, preservando `capy-ui-widget` 2.22, desktop-session v1 e
 `capy-ai-core` artifact v0.
 
+**Entregue em `alpha.316` — evidência fail-closed do instalador:** o smoke
+ISO não pode mais declarar persistência quando o login inicia o desktop: ele
+retorna obrigatoriamente ao CLI, grava/sincroniza um marker, provoca reboot e o
+relê após novo login. Se o first boot reiniciar ao concluir setup/módulos, o
+harness insere um boot adicional em vez de pular a escrita. O novo preflight
+`make smoke-x64-qemu-installer-wizard` conecta dois discos elegíveis, escolhe o
+alvo pela capacidade única e confirma o mesmo `PathId`; um guard determinístico
+maior que o alvo precisa manter SHA-256 integral idêntico enquanto o alvo precisa
+mudar. Imagens são criadas exclusivamente e falhas preservam a evidência sem
+truncar arquivos preexistentes; a recovery key é redigida do log persistido.
+Caminhos destrutivos ficam restritos a `build/ci` salvo opt-in explícito. O gate
+QEMU passou no host em 2026-07-17 (dois alvos, `PathId` confirmado, install,
+first boot, dois logins, reboot, marker persistente e guard intacto); o full
+install networked também passou exigindo conclusão real de módulos + reboot.
+O contrato equivalente para VMware Workstation gera uma VM scratch UEFI/E1000,
+valida os dois discos por identidade e hash, redige a recovery key e emite um
+manifesto de evidência auditável. O gate oficial passou em 2026-07-20, incluindo
+fresh install, first boot, login, persistência após reboot e guard byte-idêntico.
+O aceite integral da Etapa 8 continua exigindo o updater A/B assinado e os gates
+externos das demais fatias; esta release fecha a fatia do instalador.
+
 ### Critérios de aceite
 
-- [ ] Smoke VMware+E1000 real passa em CI provisionada.
+- [x] Smoke VMware+E1000 real passa no host oficial provisionado.
 - [ ] Update HTTPS baixa, valida, prepara e aplica payload assinado.
-- [ ] Evidência pública permite auditoria sem chave privada.
-- [ ] Instalador wizard completa fresh install + reboot + login + persistência.
+- [x] Evidência pública permite auditoria sem chave privada.
+- [x] Instalador wizard completa fresh install + reboot + login + persistência.
 
 ### Gates externos recomendados
 

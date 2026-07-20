@@ -54,7 +54,17 @@ def resolve_ovmf_or_raise(ovmf_path: str | None) -> tuple[str, str]:
 def create_runtime_ovmf_vars(log_base: Path, ovmf_vars_template: str) -> Path:
     ovmf_vars_runtime = log_base.with_name(log_base.stem + ".OVMF_VARS.runtime.fd")
     ovmf_vars_runtime.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ovmf_vars_template, ovmf_vars_runtime)
+    created = False
+    try:
+        with open(ovmf_vars_template, "rb") as source, ovmf_vars_runtime.open(
+            "xb"
+        ) as target:
+            created = True
+            shutil.copyfileobj(source, target)
+    except BaseException:
+        if created:
+            ovmf_vars_runtime.unlink(missing_ok=True)
+        raise
     return ovmf_vars_runtime
 
 
@@ -91,7 +101,7 @@ def validate_installed_disk_artifacts(repo_root: Path) -> tuple[Path, Path, Path
 
 def validate_iso_artifact(repo_root: Path, iso_relpath: str) -> Path:
     iso_path = _resolve_iso_artifact(repo_root, iso_relpath)
-    if not iso_path.exists():
+    if not iso_path.is_file():
         raise FileNotFoundError(f"required ISO missing: {iso_path}")
     _validate_iso_tree(repo_root)
     _validate_efiboot_image(repo_root)
@@ -100,35 +110,23 @@ def validate_iso_artifact(repo_root: Path, iso_relpath: str) -> Path:
 
 def _resolve_iso_artifact(repo_root: Path, iso_relpath: str) -> Path:
     requested = (repo_root / iso_relpath).resolve()
+    canonical = (repo_root / "build/CapyOS-Installer-UEFI.iso").resolve()
     sidecar = (repo_root / "build/CapyOS-Installer-UEFI.last-built.txt").resolve()
 
-    if sidecar.exists():
-      try:
-          recorded = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
-      except OSError:
-          recorded = ""
-      if recorded:
-          recorded_path = Path(recorded)
-          if not recorded_path.is_absolute():
-              recorded_path = (repo_root / recorded).resolve()
-          if recorded_path.exists():
-              if requested == (repo_root / "build/CapyOS-Installer-UEFI.iso").resolve():
-                  print(f"[info] using latest recorded ISO: {recorded_path}")
-                  return recorded_path
-              if requested == recorded_path:
-                  return recorded_path
-
-    if requested.exists():
+    if requested != canonical:
         return requested
-
-    matches = sorted(
-        (repo_root / "build").glob("CapyOS-Installer-UEFI.iso.*.iso"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if matches:
-        print(f"[info] requested ISO not found; using newest fallback: {matches[0]}")
-        return matches[0].resolve()
+    if sidecar.is_file():
+        try:
+            recorded = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
+        except OSError:
+            recorded = ""
+        if recorded:
+            recorded_path = Path(recorded)
+            if not recorded_path.is_absolute():
+                recorded_path = (repo_root / recorded).resolve()
+            if recorded_path.is_file():
+                print(f"[info] using latest recorded ISO: {recorded_path}")
+                return recorded_path
     return requested
 
 
@@ -312,6 +310,7 @@ def boot_with_session(
     iso_path: Path | None = None,
     boot_from: str = "disk",
     networking: bool = False,
+    extra_disks: tuple[Path, ...] = (),
 ) -> SmokeSession:
     port = choose_free_port()
     cmd = make_qemu_cmd(
@@ -326,6 +325,7 @@ def boot_with_session(
         iso_path=iso_path,
         boot_from=boot_from,
         networking=networking,
+        extra_disks=extra_disks,
     )
     session = SmokeSession(
         cmd=cmd,
