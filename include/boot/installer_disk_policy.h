@@ -32,6 +32,8 @@ struct installer_disk_geometry {
   uint8_t removable;
 };
 
+struct boot_manifest;
+
 struct installer_disk_layout {
   uint64_t required_bytes;
   uint64_t total_sectors;
@@ -52,6 +54,19 @@ uint64_t installer_disk_path_hash_update(uint64_t state, const uint8_t *data,
 uint64_t installer_disk_minimum_bytes(void);
 int installer_disk_plan(const struct installer_disk_geometry *geometry,
                         struct installer_disk_layout *out_layout);
+int installer_disk_boot_manifest_valid(const struct boot_manifest *manifest,
+                                       uint64_t boot_sectors);
+int installer_disk_device_path_parent_matches(const uint8_t *parent_path,
+                                              const uint8_t *partition_path);
+int installer_disk_io_alignment_valid(uint32_t alignment);
+int installer_disk_runtime_fallback_allowed(int has_partition_node,
+                                            int boot_is_cdrom);
+int installer_disk_runtime_binding_matches(int range_match, int guid_match,
+                                           int device_path_parent_match);
+int installer_disk_fat32_plan(uint64_t total_sectors, uint32_t sectors_per_cluster,
+                              uint32_t reserved_sectors, uint32_t fat_count,
+                              uint32_t *out_fat_sectors,
+                              uint32_t *out_cluster_count);
 int installer_disk_parse_selection(const char *text, size_t candidate_count,
                                    size_t *out_index);
 int installer_disk_confirmation_valid(const char *text);

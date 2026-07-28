@@ -112,6 +112,13 @@ static void system_update_remote_manifest_url(const char *channel, char *out,
     return;
   }
   out[0] = '\0';
+#if defined(CAPYOS_UPDATE_LAB_MANIFEST_URL)
+  /* Lab gate only (see CAPYOS_UPDATE_LAB_TRUST_KEY_HEX): pins the catalog at a
+   * hermetic host endpoint so the signed A/B cycle needs no public release. */
+  (void)channel;
+  config_buffer_append(out, out_size, CAPYOS_UPDATE_LAB_MANIFEST_URL);
+  return;
+#endif
   if (strings_equal(system_update_channel_or_default(channel), "develop")) {
     config_buffer_append(out, out_size,
                          "https://raw.githubusercontent.com/henriquefarisco/"

@@ -28,6 +28,13 @@ struct boot_manifest {
     struct boot_manifest_entry entries[4];
 };
 
+typedef char boot_manifest_entry_size_must_stay_20[
+    sizeof(struct boot_manifest_entry) == 20u ? 1 : -1];
+typedef char boot_manifest_entries_offset_must_stay_16[
+    offsetof(struct boot_manifest, entries) == 16u ? 1 : -1];
+typedef char boot_manifest_size_must_stay_96[
+    sizeof(struct boot_manifest) == 96u ? 1 : -1];
+
 /* Inicializa manifest com magic/version e zera entradas. */
 void boot_manifest_init(struct boot_manifest *m);
 

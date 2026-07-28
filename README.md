@@ -7,7 +7,7 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.8.0-alpha.316` (build `0.8.0-alpha.316+20260720`; canal `alpha`; ver `VERSION.yaml`)
+Versao de referencia: `0.8.0-alpha.319` (build `0.8.0-alpha.319+20260728`; canal `alpha`; ver `VERSION.yaml`)
 
 ## Destaques
 
@@ -24,8 +24,8 @@ Versao de referencia: `0.8.0-alpha.316` (build `0.8.0-alpha.316+20260720`; canal
 - Pilha de rede x64 com `E1000`, IPv4, ICMP, TCP, DNS e HTTP/HTTPS.
 - Navegador grafico estatico com toolbar, historico, links, CSS e imagens
   (sem execucao de JavaScript).
-- Adaptador `capypkg` para receber pacotes Capy remotos verificados
-  (SHA-256 + Ed25519 sobre descritor canonico) via `capysh`.
+- Adaptador `capypkg` valida SHA-256 e possui verifier Ed25519 registrado; pacotes
+  signed de produção continuam fail-closed até trust anchor e KAT externo.
 - Gates de release com testes de host, build x64, ISO UEFI e smoke QEMU.
 
 ## Screenshots
@@ -69,12 +69,9 @@ Linux/WSL.
 
 Nao execute `make`, `./install.sh` ou `./install-linux.sh` com `sudo` dentro do
 workspace. O build recusa execucao como root por padrao para evitar artefatos
-`build/` root-owned. Se um checkout antigo ja tiver artefatos bloqueados,
-corrija a posse uma vez antes de continuar:
-
-```bash
-sudo chown -R "$(id -u):$(id -g)" build ../CapyUI/build 2>/dev/null || true
-```
+`build/` root-owned. Em filesystem Linux nativo, corrija a posse fora do build
+antes de continuar. Em workspace montado pelo Windows/WSL, não aplique `chown`;
+escalone a falha real de permissão no host.
 
 ### Windows
 

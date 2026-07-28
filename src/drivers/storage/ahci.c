@@ -4,9 +4,11 @@
 #include <stdint.h>
 
 #include "drivers/pcie.h"
+#include "drivers/timer/pit.h"
 #include "drivers/storage/ahci_commands.h"
 #include "drivers/storage/ahci_dispatch.h"
 #include "drivers/storage/ahci_slot_allocator.h"
+#include "drivers/storage/ata_status.h"
 #include "drivers/storage/block_error.h"
 #include "drivers/storage/storage_smoke.h"
 #include "kernel/log/klog.h"
@@ -98,6 +100,10 @@ struct ahci_port_ctx {
   struct ahci_cmd_table *cmd_table;
   uint16_t *identify_data;
   uint8_t *io_bounce;
+  enum ata_flush_command flush_command;
+  int flush_quarantined;
+  int recovery_required;
+  volatile int operation_busy;
   int initialized;
   /* Etapa 3 — Slice 3E.3: per-port slot allocator. Initialised to
    * AHCI_RUNTIME_SLOT_COUNT until we provision N command tables. */
@@ -116,6 +122,7 @@ static int g_ahci_scanned = 0;
  * instead of the QEMU-only port 0xE9 debug console. */
 
 static inline void cpu_relax(void) { __asm__ volatile("pause" ::: "memory"); }
+static inline void ahci_mb(void) { __asm__ volatile("mfence" ::: "memory"); }
 
 static inline uint32_t mmio_read32(volatile void *addr) {
   return *(volatile uint32_t *)addr;
@@ -199,6 +206,7 @@ static enum block_io_error_class ahci_exec_classified(
     klog(KLOG_WARN, "[ahci] port not idle");
     klog_hex(KLOG_WARN, "[ahci] port.tfd=", mmio_read32(&port->tfd));
     klog_hex(KLOG_WARN, "[ahci] port.cmd=", mmio_read32(&port->cmd));
+    ctx->recovery_required = 1;
     return BLOCK_IO_ERR_TIMEOUT;
   }
 
@@ -229,6 +237,7 @@ static enum block_io_error_class ahci_exec_classified(
   (void)ahci_build_prdt_entry(&table->prdt[0], (uint64_t)(uintptr_t)buffer,
                               byte_count, /*interrupt_on_complete=*/1);
 
+  ahci_mb();
   mmio_write32(&port->ci, 1u << slot);
 
   for (uint32_t spin = 0; spin < AHCI_TIMEOUT_SPINS; ++spin) {
@@ -244,6 +253,7 @@ static enum block_io_error_class ahci_exec_classified(
     enum ahci_dispatch_observation obs =
         ahci_dispatch_classify_tick(ci, is, tfd, 1u << slot);
     if (obs == AHCI_DISPATCH_COMPLETED) {
+      ahci_mb();
       /* Etapa 3 — Slice 3E.2: classify the outcome so callers (and
        * smoke logs) see a stable taxonomy. The legacy 0/-1 return
        * contract is preserved; the classifier is currently used to
@@ -267,8 +277,8 @@ static enum block_io_error_class ahci_exec_classified(
       klog(KLOG_WARN, block_io_error_class_name(cls));
       klog_hex(KLOG_WARN, "[ahci] port.is=", is);
       klog_hex(KLOG_WARN, "[ahci] port.tfd=", tfd);
-      (void)ahci_slot_release(&ctx->slot_alloc, slot);
-      return cls == BLOCK_IO_OK ? BLOCK_IO_ERR_TRANSIENT : cls;
+      ctx->recovery_required = 1;
+      return BLOCK_IO_ERR_TIMEOUT;
     }
     cpu_relax();
   }
@@ -286,6 +296,7 @@ static enum block_io_error_class ahci_exec_classified(
     /* Slot stays inflight on the controller side until COMRESET
      * recovery; the upper retry loop will call ahci_reset which
      * resets the allocator. We do NOT release here. */
+    ctx->recovery_required = 1;
     return cls;
   }
 }
@@ -293,6 +304,67 @@ static enum block_io_error_class ahci_exec_classified(
 /* Legacy 0/-1 wrapper retained for the internal callers (identify,
  * read_block, write_block) that have not yet been converted to the
  * extended ABI. */
+static enum block_io_error_class ahci_exec_nodata_classified(
+    struct ahci_port_ctx *ctx, uint8_t command) {
+  struct ahci_hba_port *port;
+  struct ahci_cmd_header *header;
+  struct ahci_cmd_table *table;
+  int slot;
+  if (!ctx || !ctx->initialized || ctx->flush_quarantined)
+    return BLOCK_IO_ERR_PERMANENT;
+  port = ctx->port;
+  if (!port)
+    return BLOCK_IO_ERR_PERMANENT;
+  if (!ahci_port_present(port))
+    return BLOCK_IO_ERR_DEVICE_GONE;
+  if (ahci_port_wait_idle(port) != 0) {
+    ctx->flush_quarantined = 1;
+    return BLOCK_IO_ERR_TIMEOUT;
+  }
+  mmio_write32(&port->is, 0xFFFFFFFFu);
+  mmio_write32(&port->serr, 0xFFFFFFFFu);
+  slot = ahci_slot_alloc(&ctx->slot_alloc);
+  if (slot < 0)
+    return BLOCK_IO_ERR_TRANSIENT;
+  header = &ctx->cmd_list[slot];
+  table = ctx->cmd_table;
+  for (uint32_t i = 0u; i < sizeof(*table); ++i)
+    ((uint8_t *)table)[i] = 0u;
+  if (ahci_build_command_header(header, (uint64_t)(uintptr_t)table,
+                                AHCI_H2D_FIS_LEN_DW, 0u, 0) != 0 ||
+      ahci_build_h2d_fis(table->cfis, command, 0u, 0u) != 0) {
+    (void)ahci_slot_release(&ctx->slot_alloc, slot);
+    return BLOCK_IO_ERR_PERMANENT;
+  }
+  ahci_mb();
+  mmio_write32(&port->ci, 1u << slot);
+  for (uint32_t spin = 0u; spin < AHCI_TIMEOUT_SPINS; ++spin) {
+    uint32_t ci = mmio_read32(&port->ci);
+    uint32_t is = mmio_read32(&port->is);
+    uint32_t tfd = mmio_read32(&port->tfd);
+    enum ahci_dispatch_observation obs =
+        ahci_dispatch_classify_tick(ci, is, tfd, 1u << slot);
+    if (obs == AHCI_DISPATCH_COMPLETED) {
+      enum block_io_error_class cls;
+      ahci_mb();
+      if ((tfd & (AHCI_PORT_TFD_BSY | AHCI_PORT_TFD_DRQ)) != 0u) {
+        cpu_relax();
+        continue;
+      }
+      cls = block_io_classify_ahci(is, tfd, 0, ahci_port_present(port));
+      (void)ahci_slot_release(&ctx->slot_alloc, slot);
+      return cls;
+    }
+    if (obs == AHCI_DISPATCH_ABORTED) {
+      ctx->flush_quarantined = 1;
+      return BLOCK_IO_ERR_TIMEOUT;
+    }
+    cpu_relax();
+  }
+  ctx->flush_quarantined = 1;
+  return BLOCK_IO_ERR_TIMEOUT;
+}
+
 static int ahci_exec(struct ahci_port_ctx *ctx, uint8_t command, uint64_t lba,
                      uint16_t sector_count, void *buffer, uint32_t byte_count,
                      int write) {
@@ -321,8 +393,11 @@ static int ahci_identify(struct ahci_port_ctx *ctx) {
           (uint64_t)ctx->identify_data[100];
   klog_hex(KLOG_INFO, "[ahci] identify lba28=", lba28);
   klog_hex(KLOG_INFO, "[ahci] identify lba48=", lba48);
-  ctx->lba_count = lba48 ? lba48 : (uint64_t)lba28;
-  return ctx->lba_count != 0 ? 0 : -1;
+  if (!ata_identify_supports_lba48_dma(ctx->identify_data) || lba48 == 0u)
+    return -1;
+  ctx->lba_count = lba48;
+  ctx->flush_command = ata_identify_flush_command(ctx->identify_data);
+  return 0;
 }
 
 /* Etapa 3 — Slice 3E.4 (alpha.250) + alpha.252 audit fix BUG #1.
@@ -338,25 +413,45 @@ static void ahci_smoke_signal_ok(void) {
   }
 }
 
+static int ahci_operation_begin(struct ahci_port_ctx *ctx) {
+  if (!ctx || ctx->flush_quarantined || ctx->recovery_required)
+    return 0;
+  while (__sync_lock_test_and_set(&ctx->operation_busy, 1))
+    cpu_relax();
+  if (ctx->flush_quarantined || ctx->recovery_required) {
+    __sync_lock_release(&ctx->operation_busy);
+    return 0;
+  }
+  return 1;
+}
+
+static void ahci_operation_end(struct ahci_port_ctx *ctx) {
+  if (ctx)
+    __sync_lock_release(&ctx->operation_busy);
+}
+
 static enum block_io_error_class ahci_read_block_ex(void *opaque,
                                                     uint32_t block_no,
                                                     void *buffer) {
   struct ahci_port_ctx *ctx = (struct ahci_port_ctx *)opaque;
   enum block_io_error_class cls;
-  if (!ctx || !buffer || (uint64_t)block_no >= ctx->lba_count ||
-      !ctx->io_bounce) {
+  if (!ctx || !buffer || ctx->flush_quarantined ||
+      (uint64_t)block_no >= ctx->lba_count || !ctx->io_bounce)
     return BLOCK_IO_ERR_PERMANENT;
-  }
+  if (ctx->recovery_required)
+    return BLOCK_IO_ERR_TIMEOUT;
+  if (!ahci_operation_begin(ctx))
+    return ctx->recovery_required ? BLOCK_IO_ERR_TIMEOUT
+                                  : BLOCK_IO_ERR_PERMANENT;
   cls = ahci_exec_classified(ctx, ATA_CMD_READ_DMA_EXT, (uint64_t)block_no, 1,
                              ctx->io_bounce, 512u, 0);
-  if (cls != BLOCK_IO_OK) {
-    return cls;
+  if (cls == BLOCK_IO_OK) {
+    for (uint32_t i = 0; i < 512u; ++i)
+      ((uint8_t *)buffer)[i] = ctx->io_bounce[i];
+    ahci_smoke_signal_ok();
   }
-  for (uint32_t i = 0; i < 512u; ++i) {
-    ((uint8_t *)buffer)[i] = ctx->io_bounce[i];
-  }
-  ahci_smoke_signal_ok();
-  return BLOCK_IO_OK;
+  ahci_operation_end(ctx);
+  return cls;
 }
 
 static enum block_io_error_class ahci_write_block_ex(void *opaque,
@@ -364,24 +459,42 @@ static enum block_io_error_class ahci_write_block_ex(void *opaque,
                                                      const void *buffer) {
   struct ahci_port_ctx *ctx = (struct ahci_port_ctx *)opaque;
   enum block_io_error_class cls;
-  if (!ctx || !buffer || (uint64_t)block_no >= ctx->lba_count ||
-      !ctx->io_bounce) {
+  if (!ctx || !buffer || ctx->flush_quarantined ||
+      (uint64_t)block_no >= ctx->lba_count || !ctx->io_bounce)
     return BLOCK_IO_ERR_PERMANENT;
-  }
-  for (uint32_t i = 0; i < 512u; ++i) {
+  if (ctx->recovery_required)
+    return BLOCK_IO_ERR_TIMEOUT;
+  if (!ahci_operation_begin(ctx))
+    return ctx->recovery_required ? BLOCK_IO_ERR_TIMEOUT
+                                  : BLOCK_IO_ERR_PERMANENT;
+  for (uint32_t i = 0; i < 512u; ++i)
     ctx->io_bounce[i] = ((const uint8_t *)buffer)[i];
-  }
   cls = ahci_exec_classified(ctx, ATA_CMD_WRITE_DMA_EXT, (uint64_t)block_no,
                              1, ctx->io_bounce, 512u, 1);
-  if (cls == BLOCK_IO_OK) {
+  if (cls == BLOCK_IO_OK)
     ahci_smoke_signal_ok();
-  }
+  ahci_operation_end(ctx);
   return cls;
 }
 
 /* Legacy 0/-1 ops, used by callers that still go through
  * `block_device_read`/`block_device_write` directly without
  * inspecting the classifier. */
+static enum block_io_error_class ahci_flush_ex(void *opaque) {
+  struct ahci_port_ctx *ctx = (struct ahci_port_ctx *)opaque;
+  enum block_io_error_class cls;
+  if (!ctx || ctx->flush_command == ATA_FLUSH_NONE || ctx->flush_quarantined)
+    return BLOCK_IO_ERR_PERMANENT;
+  if (ctx->recovery_required)
+    return BLOCK_IO_ERR_TIMEOUT;
+  if (!ahci_operation_begin(ctx))
+    return ctx->recovery_required ? BLOCK_IO_ERR_TIMEOUT
+                                  : BLOCK_IO_ERR_PERMANENT;
+  cls = ahci_exec_nodata_classified(ctx, (uint8_t)ctx->flush_command);
+  ahci_operation_end(ctx);
+  return cls;
+}
+
 static int ahci_read_block(void *opaque, uint32_t block_no, void *buffer) {
   return ahci_read_block_ex(opaque, block_no, buffer) == BLOCK_IO_OK ? 0 : -1;
 }
@@ -410,20 +523,27 @@ static int ahci_port_comreset(struct ahci_port_ctx *ctx) {
   struct ahci_hba_port *port;
   uint32_t sctl;
   uint32_t ssts;
-  if (!ctx || !ctx->initialized || !ctx->port) {
+  if (!ctx || !ctx->initialized || !ctx->port || ctx->flush_quarantined) {
     return -1;
   }
   port = ctx->port;
   klog(KLOG_INFO, "[ahci] COMRESET begin");
-  /* COMRESET drops all controller-side slot state. Reset the
-   * allocator to match the controller's view. */
-  ahci_slot_allocator_reset(&ctx->slot_alloc);
-  (void)ahci_port_stop(port);
+  if (ahci_port_stop(port) != 0) {
+    ctx->recovery_required = 1;
+    return -1;
+  }
   /* DET field is bits [3:0] of PxSCTL. */
   sctl = mmio_read32(&port->sctl);
   mmio_write32(&port->sctl, (sctl & ~0x0Fu) | 0x01u);
-  for (uint32_t i = 0; i < 200000u; ++i) {
-    cpu_relax();
+  {
+    uint64_t start_tick = pit_ticks();
+    if (start_tick != 0u) {
+      while (pit_ticks() == start_tick)
+        cpu_relax();
+    } else {
+      for (uint32_t i = 0; i < 1000000u; ++i)
+        cpu_relax();
+    }
   }
   mmio_write32(&port->sctl, sctl & ~0x0Fu);
   for (uint32_t spin = 0; spin < AHCI_TIMEOUT_SPINS; ++spin) {
@@ -434,37 +554,50 @@ static int ahci_port_comreset(struct ahci_port_ctx *ctx) {
     cpu_relax();
   }
   ssts = mmio_read32(&port->ssts);
-  if ((ssts & AHCI_PX_SSTS_DET_MASK) != AHCI_PX_SSTS_DET_PRESENT) {
+  if ((ssts & AHCI_PX_SSTS_DET_MASK) != AHCI_PX_SSTS_DET_PRESENT ||
+      mmio_read32(&port->ci) != 0u || mmio_read32(&port->sact) != 0u) {
     klog_hex(KLOG_ERROR, "[ahci] COMRESET no device, ssts=", ssts);
     return -1;
   }
   mmio_write32(&port->serr, 0xFFFFFFFFu);
+  ahci_slot_allocator_reset(&ctx->slot_alloc);
   if (ahci_port_start(port) != 0) {
     klog(KLOG_ERROR, "[ahci] COMRESET restart failed");
+    ctx->recovery_required = 1;
     return -1;
   }
+  ctx->recovery_required = 0;
   klog(KLOG_INFO, "[ahci] COMRESET ok");
   return 0;
 }
 
 static int ahci_reset(void *opaque) {
-  return ahci_port_comreset((struct ahci_port_ctx *)opaque);
+  struct ahci_port_ctx *ctx = (struct ahci_port_ctx *)opaque;
+  int rc;
+  if (!ctx || ctx->flush_quarantined ||
+      __sync_lock_test_and_set(&ctx->operation_busy, 1))
+    return -1;
+  rc = ahci_port_comreset(ctx);
+  __sync_lock_release(&ctx->operation_busy);
+  return rc;
 }
 
-static struct block_device_ops g_ahci_block_ops;
-static int g_ahci_block_ops_initialized = 0;
+static const struct block_device_ops g_ahci_block_ops = {
+    .read_block = ahci_read_block,
+    .write_block = ahci_write_block,
+    .read_block_ex = ahci_read_block_ex,
+    .write_block_ex = ahci_write_block_ex,
+    .reset = ahci_reset,
+};
 
-static void ahci_init_block_ops(void) {
-  if (g_ahci_block_ops_initialized) {
-    return;
-  }
-  g_ahci_block_ops.read_block = ahci_read_block;
-  g_ahci_block_ops.write_block = ahci_write_block;
-  g_ahci_block_ops.read_block_ex = ahci_read_block_ex;
-  g_ahci_block_ops.write_block_ex = ahci_write_block_ex;
-  g_ahci_block_ops.reset = ahci_reset;
-  g_ahci_block_ops_initialized = 1;
-}
+static const struct block_device_ops g_ahci_block_flush_ops = {
+    .read_block = ahci_read_block,
+    .write_block = ahci_write_block,
+    .read_block_ex = ahci_read_block_ex,
+    .write_block_ex = ahci_write_block_ex,
+    .reset = ahci_reset,
+    .flush_ex = ahci_flush_ex,
+};
 
 static int ahci_setup_port(struct ahci_port_ctx *ctx) {
   struct ahci_hba_port *port = NULL;
@@ -563,10 +696,22 @@ static int ahci_setup_port(struct ahci_port_ctx *ctx) {
     return -1;
   }
 
+  ctx->flush_command = ATA_FLUSH_NONE;
+  ctx->flush_quarantined = 0;
+  ctx->recovery_required = 0;
+  ctx->operation_busy = 0;
   ctx->initialized = 1;
   if (ahci_identify(ctx) != 0) {
     klog(KLOG_ERROR, "[ahci] identify failed");
     ctx->initialized = 0;
+    if (ahci_port_stop(port) != 0) {
+      ctx->recovery_required = 1;
+      return -1;
+    }
+    mmio_write32(&port->clb, 0u);
+    mmio_write32(&port->clbu, 0u);
+    mmio_write32(&port->fb, 0u);
+    mmio_write32(&port->fbu, 0u);
     if (ctx->io_bounce) {
       kfree_aligned(ctx->io_bounce);
       ctx->io_bounce = NULL;
@@ -595,7 +740,9 @@ static int ahci_setup_port(struct ahci_port_ctx *ctx) {
   ctx->dev.block_count =
       ctx->lba_count > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (uint32_t)ctx->lba_count;
   ctx->dev.ctx = ctx;
-  ctx->dev.ops = &g_ahci_block_ops;
+  ctx->dev.ops = ctx->flush_command == ATA_FLUSH_NONE
+                     ? &g_ahci_block_ops
+                     : &g_ahci_block_flush_ops;
   return 0;
 }
 
@@ -611,7 +758,6 @@ int ahci_init(void) {
   g_ahci_scanned = 1;
   g_ahci_count = 0;
   g_ahci_hba = NULL;
-  ahci_init_block_ops();
 
   pci_init();
   if (pci_find_device(PCI_CLASS_STORAGE, PCI_SUBCLASS_SATA, &pci_dev) != 0) {

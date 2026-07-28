@@ -68,6 +68,25 @@ ifeq ($(CAPYOS_LOCAL_MODULES),1)
   CFLAGS64 += -DCAPYOS_LOCAL_CAPYPKG_BUNDLE -DCAPYOS_DEFAULT_MODULES_INDEX_URL=\"$(CAPYPKG_LOCAL_INDEX_URL)\"
   $(info [build] CAPYOS_LOCAL_MODULES=1: embedding local capypkg bundle for lab ISO)
 endif
+# ── Etapa 8 lab gate: signed A/B update cycle (alpha.319) ───────────────────
+# The production update trust anchor is an offline Ed25519 key that can never
+# enter an automated gate, so the signed apply/reboot/confirm/rollback cycle is
+# proven with a throwaway key generated per run. Setting the hex swaps the
+# manifest trust anchor AND relaxes payload_url to plain http:// (the kernel TLS
+# stack always verifies the peer, so a hermetic host server cannot serve https).
+# A kernel built this way is NOT shippable: iso-uefi refuses the resulting ELF
+# unless the caller is the smoke target itself (ISO_REUSE_X64_VARIANT=1), and the
+# variant fingerprint in prepare-x64-toolchain forces a rebuild on the way back.
+CAPYOS_UPDATE_LAB_TRUST_KEY_HEX ?=
+CAPYOS_UPDATE_LAB_MANIFEST_URL ?=
+ifneq ($(strip $(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)),)
+  ifeq ($(strip $(CAPYOS_UPDATE_LAB_MANIFEST_URL)),)
+    $(error CAPYOS_UPDATE_LAB_TRUST_KEY_HEX requires CAPYOS_UPDATE_LAB_MANIFEST_URL)
+  endif
+  CFLAGS64 += -DCAPYOS_UPDATE_LAB_TRUST_KEY_HEX=\"$(strip $(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX))\" \
+              -DCAPYOS_UPDATE_LAB_MANIFEST_URL=\"$(strip $(CAPYOS_UPDATE_LAB_MANIFEST_URL))\"
+  $(info [build] LAB update trust anchor enabled; this kernel must never ship)
+endif
 # EXTRA_CFLAGS64 is appended last so callers can flip build-time
 # feature flags without editing CFLAGS64 in place. Examples:
 #   make all64 EXTRA_CFLAGS64='-DCAPYOS_BOOT_RUN_HELLO'
@@ -208,7 +227,7 @@ EFI_LIB_DIR := $(EFI_PREFIX)/lib
 EFI_CC ?= $(HOST_CC)
 EFI_LD ?= x86_64-linux-gnu-ld
 EFI_OBJCOPY ?= x86_64-linux-gnu-objcopy
-EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER
+EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
 EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L$(EFI_LIB_DIR) -T $(EFI_LIB_DIR)/elf_x86_64_efi.lds
 EFI_LIBS := $(EFI_LIB_DIR)/crt0-efi-x86_64.o -lefi -lgnuefi
 
@@ -280,6 +299,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime_gpt.o \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime_hyperv.o \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime_hyperv_plan.o \
+	$(BUILD)/x86_64/arch/x86_64/storage_boot_provider_policy.o \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime_native.o \
 	$(BUILD)/x86_64/arch/x86_64/storage_runtime.o \
 	$(BUILD)/x86_64/arch/x86_64/stubs.o \
@@ -710,6 +730,13 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/security/chacha20_poly1305.o \
 	$(BUILD)/x86_64/security/x25519.o \
 	$(BUILD)/x86_64/boot/boot_slot.o \
+	$(BUILD)/x86_64/boot/boot_slot_authorization.o \
+	$(BUILD)/x86_64/boot/boot_slot_lifecycle.o \
+	$(BUILD)/x86_64/boot/boot_slot_operations.o \
+	$(BUILD)/x86_64/boot/boot_slot_status.o \
+	$(BUILD)/x86_64/boot/boot_slot_store.o \
+	$(BUILD)/x86_64/boot/boot_slot_block_provider.o \
+	$(BUILD)/x86_64/boot/gpt_identity.o \
 	$(BUILD)/x86_64/drivers/input/mouse.o \
 	$(BUILD)/x86_64/gui/core/font8x8_data.o \
 	$(BUILD)/x86_64/gui/core/event.o \
@@ -820,7 +847,13 @@ EFI_LOADER_SRCS = \
 	$(SRC_DIR)/boot/uefi_loader/acpi_log_gop.c \
 	$(SRC_DIR)/boot/uefi_loader/efi_main.c
 EFI_LOADER_POLICY_OBJ = $(BUILD)/boot/uefi_loader/installer_disk_policy.o
-EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS)) $(EFI_LOADER_POLICY_OBJ)
+EFI_LOADER_GPT_IDENTITY_OBJ = $(BUILD)/boot/uefi_loader/gpt_identity.o
+EFI_LOADER_BOOT_SLOT_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_core.o
+EFI_LOADER_BOOT_SLOT_OPS_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_operations_core.o
+EFI_LOADER_BOOT_SLOT_LIFECYCLE_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_lifecycle_core.o
+EFI_LOADER_BOOT_SLOT_STORE_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_store_core.o
+EFI_LOADER_SHA256_OBJ = $(BUILD)/boot/uefi_loader/sha256_core.o
+EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS)) $(EFI_LOADER_POLICY_OBJ) $(EFI_LOADER_GPT_IDENTITY_OBJ) $(EFI_LOADER_BOOT_SLOT_OBJ) $(EFI_LOADER_BOOT_SLOT_OPS_OBJ) $(EFI_LOADER_BOOT_SLOT_LIFECYCLE_OBJ) $(EFI_LOADER_BOOT_SLOT_STORE_OBJ) $(EFI_LOADER_SHA256_OBJ)
 UEFI_LOADER_DEPS = $(EFI_LOADER_OBJS:.o=.d)
 
 all: all64
@@ -1715,6 +1748,7 @@ prepare-x64-toolchain: | $(BUILD)
 		printf '%s\n' 'cc=$(CC64)'; \
 		printf '%s\n' 'profile=$(PROFILE)'; \
 		printf '%s\n' 'cflags=$(CFLAGS64)'; \
+		printf '%s\n' 'efi-cflags=$(EFI_CFLAGS)'; \
 		printf '%s\n' 'userland-extra=$(EXTRA_USERLAND_CFLAGS)'; \
 		printf '%s\n' 'desktop-root=$(DESKTOP_SRC_ROOT)'; \
 		printf '%s\n' 'window-root=$(WINDOW_SRC_ROOT)'; \
@@ -1725,8 +1759,8 @@ prepare-x64-toolchain: | $(BUILD)
 	} > "$(X64_BUILD_VARIANT_FILE).tmp"
 	@if [ ! -f "$(X64_BUILD_VARIANT_FILE)" ] || \
 	    ! cmp -s "$(X64_BUILD_VARIANT_FILE).tmp" "$(X64_BUILD_VARIANT_FILE)"; then \
-		echo "[build] x64 build variant changed; rebuilding kernel and userland artifacts."; \
-		rm -rf "$(BUILD)/x86_64" "$(BUILD)/userland" "$(CAPYOS_ELF64)"; \
+		echo "[build] x64 build variant changed; rebuilding kernel, loader and userland artifacts."; \
+		rm -rf "$(BUILD)/x86_64" "$(BUILD)/userland" "$(BUILD)/boot" "$(CAPYOS_ELF64)"; \
 		mkdir -p "$(BUILD)/x86_64"; \
 		mv "$(X64_BUILD_VARIANT_FILE).tmp" "$(X64_BUILD_VARIANT_FILE)"; \
 	else \
@@ -1746,6 +1780,31 @@ endif
 $(EFI_LOADER_POLICY_OBJ): $(SRC_DIR)/boot/installer_disk_policy.c | $(BUILD) $(BUILD)/boot
 	@mkdir -p $(dir $@)
 	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(EFI_LOADER_GPT_IDENTITY_OBJ): $(SRC_DIR)/boot/gpt_identity.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(EFI_LOADER_BOOT_SLOT_OBJ): $(SRC_DIR)/boot/boot_slot.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(EFI_LOADER_BOOT_SLOT_OPS_OBJ): $(SRC_DIR)/boot/boot_slot_operations.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(EFI_LOADER_BOOT_SLOT_LIFECYCLE_OBJ): $(SRC_DIR)/boot/boot_slot_lifecycle.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(EFI_LOADER_BOOT_SLOT_STORE_OBJ): $(SRC_DIR)/boot/boot_slot_store.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(EFI_LOADER_SHA256_OBJ): $(SRC_DIR)/security/sha256.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
 	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD)/boot/uefi_loader/%.o: $(SRC_DIR)/boot/uefi_loader/%.c | $(BUILD) $(BUILD)/boot
@@ -1778,6 +1837,10 @@ iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) 
 	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
 	    strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] capyai-gui-async ready'; then \
 		echo "[err] production ISO contains CAPYOS_CAPYAI_GUI_ASYNC_SMOKE"; exit 2; \
+	fi
+	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
+	    strings "$(CAPYOS_ELF64)" | grep -Fq '[lab] update trust anchor overridden'; then \
+		echo "[err] production ISO contains CAPYOS_UPDATE_LAB_TRUST_KEY_HEX"; exit 2; \
 	fi
 	mkdir -p $(EFI_BOOT)
 	cp $(UEFI_LOADER) $(BOOTX64)
@@ -2314,6 +2377,11 @@ TEST_SRCS   := \
                tests/config/test_first_boot_policy.c src/config/first_boot/policy.c \
                tests/boot/test_efi_block.c src/drivers/storage/efi_block.c \
                tests/boot/test_boot_slot.c src/boot/boot_slot.c \
+               src/boot/boot_slot_authorization.c src/boot/boot_slot_lifecycle.c \
+               src/boot/boot_slot_operations.c src/boot/boot_slot_status.c \
+               tests/boot/test_boot_slot_store.c src/boot/boot_slot_store.c \
+               tests/boot/test_boot_slot_block_provider.c src/boot/boot_slot_block_provider.c src/boot/gpt_identity.c \
+               tests/drivers/test_storage_boot_provider_policy.c src/arch/x86_64/storage_boot_provider_policy.c \
                src/boot/boot_manifest.c src/boot/boot_writer.c \
                tools/host/src/grub_cfg_builder.c tools/host/src/gen_boot_config.c \
                \
@@ -2997,9 +3065,13 @@ release-check:
 	$(MAKE) boot-perf-baseline-selftest
 	$(MAKE) verify-release-signature-selftest
 	$(MAKE) smoke-marker-policy-selftest
+	$(MAKE) update-ab-selftest
 	$(MAKE) all64 TOOLCHAIN64=elf
 	$(MAKE) iso-uefi TOOLCHAIN64=elf
 	$(MAKE) verify-release-checksums TOOLCHAIN64=elf
+	@if strings $(CAPYOS_ELF64) | grep -Fq '[lab] update trust anchor overridden'; then \
+		echo "[err] release kernel carries a lab update trust anchor"; exit 2; \
+	fi
 	@echo "[ok] Gates de release robusta passaram."
 
 smoke-x64-cli: all64 iso-uefi manifest64
@@ -3882,13 +3954,75 @@ smoke-x64-qemu-installer-wizard: all64 iso-uefi manifest64
 		--target-selection 1 \
 		$(SMOKE_X64_ISO_ARGS)
 
+# ── Etapa 8: signed A/B update gate (alpha.319) ─────────────────────────────
+# Proves the whole persistent update lifecycle end to end: a signed manifest is
+# fetched over HTTP, its payload verified and written to the inactive slot, the
+# loader consumes the single attempt, the boot confirms health, and a second
+# cycle left unconfirmed is rolled back by the loader and reported.
+#
+# The production trust anchor is an offline key, so each run generates a
+# throwaway Ed25519 keypair and rebuilds the kernel with it. The lab kernel is
+# NOT shippable: `iso-uefi` refuses it outside ISO_REUSE_X64_VARIANT=1 and the
+# variant fingerprint rebuilds the official kernel afterwards. The publish-side
+# proof with the production key stays an operator step (see
+# docs/operations/etapa-8-signed-update-playbook.md).
+UPDATE_AB_LAB_ENV := $(BUILD)/ci/update-ab/lab.env
+UPDATE_AB_PUBLISHED_AT ?= $(shell date -u +%Y-%m-%d)
+# The runtime seeds its anti-downgrade baseline from CAPYOS_VERSION_FULL, so the
+# lab manifest must declare a strictly newer prerelease number than this.
+CAPYOS_RUNTIME_VERSION := $(shell sed -n 's/^#define CAPYOS_VERSION_FULL  *"\(.*\)"$$/\1/p' include/core/version.h)
+
+.PHONY: update-ab-selftest
+update-ab-selftest:
+	@echo "Executando contrato host do gate de update A/B assinado..."
+	python3 tools/scripts/test_update_ab_contract.py
+	python3 tools/scripts/verify_update_manifest.py --self-test
+
+.PHONY: smoke-x64-qemu-update-ab
+smoke-x64-qemu-update-ab:
+	@echo "Preflight QEMU do ciclo A/B assinado (fetch->apply->reboot->confirm->rollback)..."
+	python3 tools/scripts/update_ab_lab_config.py --provider qemu --out $(UPDATE_AB_LAB_ENV)
+	@set -e; . $(UPDATE_AB_LAB_ENV); \
+	$(MAKE) all64 iso-uefi manifest64 \
+		CAPYOS_UPDATE_LAB_TRUST_KEY_HEX="$$LAB_PUBLIC_KEY_HEX" \
+		CAPYOS_UPDATE_LAB_MANIFEST_URL="$$LAB_MANIFEST_URL" \
+		ISO_REUSE_X64_VARIANT=1; \
+	python3 tools/scripts/smoke_x64_qemu_update_ab.py \
+		--private-key "$$LAB_PRIVATE_KEY" \
+		--expected-public-key-hex "$$LAB_PUBLIC_KEY_HEX" \
+		--host "$$LAB_HOST" \
+		--current-version $(CAPYOS_RUNTIME_VERSION) \
+		--published-at $(UPDATE_AB_PUBLISHED_AT) \
+		$(SMOKE_X64_UPDATE_AB_ARGS)
+
+.PHONY: smoke-x64-vmware-update-ab
+smoke-x64-vmware-update-ab:
+	@echo "Executando gate oficial VMware+UEFI+E1000 do ciclo A/B assinado..."
+	python3 tools/scripts/update_ab_lab_config.py --provider vmware --out $(UPDATE_AB_LAB_ENV)
+	@set -e; . $(UPDATE_AB_LAB_ENV); \
+	$(MAKE) all64 iso-uefi manifest64 \
+		CAPYOS_UPDATE_LAB_TRUST_KEY_HEX="$$LAB_PUBLIC_KEY_HEX" \
+		CAPYOS_UPDATE_LAB_MANIFEST_URL="$$LAB_MANIFEST_URL" \
+		ISO_REUSE_X64_VARIANT=1; \
+	ISO_PATH="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
+	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_update_ab.py)"; \
+	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
+	KEY_WIN="$$(wslpath -w "$$LAB_PRIVATE_KEY")"; \
+	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" \
+		--private-key "$$KEY_WIN" \
+		--expected-public-key-hex "$$LAB_PUBLIC_KEY_HEX" \
+		--host "$$LAB_HOST" \
+		--current-version $(CAPYOS_RUNTIME_VERSION) \
+		--published-at $(UPDATE_AB_PUBLISHED_AT) \
+		$(SMOKE_X64_VMWARE_UPDATE_AB_ARGS)
+
 .PHONY: smoke-x64-iso-modules-net
 # Networked full-install regression gate (alpha.287): builds the ISO and runs
 # the official install smoke with profile=full + real QEMU user-net (SLIRP NAT)
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.316+20260720/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.318+20260727/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
@@ -3903,7 +4037,7 @@ inspect-disk:
 	@if [ -z "$(IMG)" ]; then echo "Usage: make inspect-disk IMG=build/disk-gpt.img"; exit 2; fi
 	python3 tools/scripts/inspect_disk.py "$(IMG)"
 
-$(TEST_BIN): $(TEST_SRCS) | $(BUILD)
+$(TEST_BIN): $(TEST_SRCS) include/boot/gpt_types.h include/boot/gpt_identity.h include/boot/boot_slot.h include/boot/boot_slot_store.h include/boot/boot_slot_block_provider.h include/arch/x86_64/storage_boot_provider_policy.h include/fs/block.h include/drivers/storage/ata_status.h include/drivers/nvme/nvme_commands.h src/boot/internal/boot_slot_internal.h | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $(TEST_SRCS)
 

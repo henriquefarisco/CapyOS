@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry aligned to CapyOS `0.8.0-alpha.315+20260715`; Etapas 1-7 closed and Etapa 8 active. Current pins and ABI status are authoritative in the compatibility matrix.
+**Status:** migration registry aligned to CapyOS `0.8.0-alpha.318+20260727`; Etapas 1-7 closed and Etapa 8 active. Current pins and ABI status are authoritative in the compatibility matrix.
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
 a versioned in-tree adapter and an external gate.
@@ -21,7 +21,7 @@ completed in-tree hygiene pass.
 | `CapyCodecs` | `0.0.12` | portable image/audio/video codec cores | `capy-codec-image` v2 integrated for Etapas 6-7; audio/video remain later-stage work |
 | `CapyUI` | `2.24.1` | retained widgets, desktop session, window manager and apps | desktop/session worker hardening integrated; compositor/font/input plumbing stays in CapyOS |
 | `CapyBenchmark` | `0.0.11` | report, replay and baseline core | host-only until Etapas 15-16 |
-| `CapyAI` | `0.2.0` | governed orchestrator, reproducible model and `capy-ai-core` artifact v0 | TaskPlan/file/app/power integration in alpha.315; remaining typed capabilities fail closed; package is part of the eight-repo workspace aggregate |
+| `CapyAI` | `0.2.1` | governed orchestrator, reproducible model and `capy-ai-core` artifact v0 | TaskPlan/file/app/power integration remains ABI-compatible; split leakage is eliminated and the mass risk campaign is release-gated; package is part of the eight-repo workspace aggregate |
 
 ## Migrated snapshots
 
@@ -85,11 +85,11 @@ The corresponding shell surface is:
 
 ### CapyCodecs
 
-The legacy in-tree GUI loader sources have been **removed in-tree**.
-CapyOS does not ship image decoders by default until a stage-appropriate
-adapter under `services/` or `gui/codecs/` replaces them. Portable
-decoder behavior is validated in `CapyCodecs` until that CapyOS image
-adapter exists.
+The legacy in-tree GUI loader sources have been **removed in-tree**. CapyOS now
+consumes `capy-codec-image` v2 through the versioned build-time adapter used by
+the static graphical browser; Etapas 6-7 delivery is complete. Installation as
+a production remote signed package remains gated by the package trust/publisher
+flow.
 
 External repo entry points (unchanged):
 
@@ -155,11 +155,10 @@ CapyOS source. Owned in external repo:
 
 ### CapyBrowser
 
-No active browser implementation exists in `src/apps` to migrate.
-CapyOS still owns the `browser_homepage` system setting and Settings UI
-surface as future browser adapter configuration. That retained
-preference is not an active CapyBrowser implementation and has no
-runtime browser object to quarantine.
+No legacy browser implementation remains in `src/apps`. CapyOS owns the active
+textual/graphical adapters, HTTPS/TLS, cache, filesystem, sandbox,
+window/input/render backend and lifecycle; CapyBrowser owns the static
+HTML/CSS/layout/display-list core consumed through the versioned sibling seam.
 
 External entry points:
 
@@ -167,12 +166,11 @@ External entry points:
 - `CapyBrowser/docs/compatibility.md`
 - `CapyBrowser/docs/README.md`
 
-`CapyBrowser v0.6.0` is the explicit Etapa 6 handoff: `make package
-STAGE=text` emits `org.capyos.browser.text` with an empty `depends=` line so
-the text-mode core is not blocked on the image codec package. CapyOS still owns
-the adapter, HTTPS/TLS transport, filesystem, sandbox, window/input/render
-backend and lifecycle. The graphical package `org.capyos.browser.core` remains
-Etapa 7-gated and depends on `org.capyos.codecs.image-basic`.
+`CapyBrowser v0.6.0` was the Etapa 6 textual handoff; `v0.6.7` is the current
+compatible static core. The textual and graphical integrations are delivered in
+Etapas 6-7. Production remote installation of `org.capyos.browser.core` and its
+codec dependency remains gated by the signed package publication flow, not by an
+unfinished Etapa 7 adapter.
 
 ### CapyLang
 

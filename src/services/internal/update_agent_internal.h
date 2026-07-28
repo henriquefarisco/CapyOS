@@ -145,4 +145,16 @@ void update_agent_prepare_repository_status(void);
 int update_agent_verify_cached_payload(
     const struct update_manifest_view *manifest);
 
+/* ── payload cache buffer (update_agent_prepare.c) ──────────────────── */
+
+/* Reads the cached payload, enforces the signed size and recomputes the
+ * SHA-256 declared by `manifest`. On success the caller owns the buffer until
+ * it calls `update_agent_payload_release`, which is what lets the boot-slot
+ * apply path stage the very bytes it just verified instead of re-reading them
+ * through a second, unverified pass. */
+int update_agent_payload_load_verified(
+    const struct update_manifest_view *manifest, uint8_t **out_buffer,
+    size_t *out_len);
+void update_agent_payload_release(uint8_t *buffer);
+
 #endif /* SERVICES_UPDATE_AGENT_INTERNAL_H */

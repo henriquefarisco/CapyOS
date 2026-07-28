@@ -276,9 +276,9 @@ int cmd_update_prepare(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-prepare\nIndisponivel ate existir escrita persistente de boot slot; use update-fetch, update-download-payload e update-prepare-dry-run para download verificado.\n",
-        "Usage: update-prepare\nUnavailable until persistent boot-slot writes exist; use update-fetch, update-download-payload and update-prepare-dry-run for verified downloads.\n",
-        "Uso: update-prepare\nNo disponible hasta existir escritura persistente de boot slot; use update-fetch, update-download-payload y update-prepare-dry-run para descargas verificadas.\n"));
+        "Uso: update-prepare\nExecuta fetch, download verificado, staging de catalogo e arm em um passo. Nao escreve boot slot; use update-apply para isso.\n",
+        "Usage: update-prepare\nRuns fetch, verified download, catalog staging and arm in one step. It does not write a boot slot; use update-apply for that.\n",
+        "Uso: update-prepare\nEjecuta fetch, descarga verificada, staging de catalogo y arm en un paso. No escribe boot slot; use update-apply para eso.\n"));
     return 0;
   }
   if (argc != 1) {
@@ -449,9 +449,9 @@ int cmd_update_stage(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-stage\nIndisponivel ate existir staging persistente e atomico do boot slot.\n",
-        "Usage: update-stage\nUnavailable until persistent atomic boot-slot staging exists.\n",
-        "Uso: update-stage\nNo disponible hasta existir staging persistente y atomico del boot slot.\n"));
+        "Uso: update-stage\nPromove o catalogo verificado para staged.ini. Operacao de catalogo; nao toca boot slot.\n",
+        "Usage: update-stage\nPromotes the verified catalog into staged.ini. Catalog-only operation; never touches a boot slot.\n",
+        "Uso: update-stage\nPromueve el catalogo verificado a staged.ini. Operacion de catalogo; no toca boot slot.\n"));
     return 0;
   }
 
@@ -491,9 +491,9 @@ int cmd_update_apply(struct shell_context *ctx, int argc, char **argv) {
   if (shell_help_requested(argc, argv)) {
     shell_print(localization_select(
         language,
-        "Uso: update-apply [payload_sha256]\nIndisponivel ate existir escrita persistente, verificacao e rollback real do boot slot.\n",
-        "Usage: update-apply [payload_sha256]\nUnavailable until persistent boot-slot writing, verification and real rollback exist.\n",
-        "Uso: update-apply [payload_sha256]\nNo disponible hasta existir escritura persistente, verificacion y rollback real del boot slot.\n"));
+        "Uso: update-apply [payload_sha256]\nGrava o payload verificado no slot inativo e arma uma unica tentativa de boot. Sem digest usa o cache verificado. Confirme depois com update-confirm-health.\n",
+        "Usage: update-apply [payload_sha256]\nWrites the verified payload into the inactive slot and arms a single boot attempt. Without a digest it uses the verified cache. Confirm afterwards with update-confirm-health.\n",
+        "Uso: update-apply [payload_sha256]\nGraba el payload verificado en el slot inactivo y arma un unico intento de boot. Sin digest usa el cache verificado. Confirme luego con update-confirm-health.\n"));
     return 0;
   }
   if (argc != 1 && argc != 2) {
@@ -627,16 +627,22 @@ int cmd_update_rollback_check(struct shell_context *ctx, int argc, char **argv) 
     return -1;
   }
 
-  shell_print_ok(rc > 0 ? localization_select(language,
-                                              "rollback de boot executado",
-                                              "boot rollback completed",
-                                              "rollback de boot ejecutado")
-                        : localization_select(language,
-                                              "nenhum rollback de boot pendente",
-                                              "no boot rollback pending",
-                                              "ningun rollback de boot pendiente"));
+  /* Until alpha.319 this branch tested `rc > 0`, which the agent never returns:
+   * an observed rollback is rc 0 with a distinct summary, so the operator was
+   * always told "no boot rollback pending" even right after the loader had
+   * rolled back. The durable outcome now drives both the line and the event. */
+  shell_print_ok(status.rollback_applied
+                     ? localization_select(language,
+                                           "rollback de boot executado",
+                                           "boot rollback completed",
+                                           "rollback de boot ejecutado")
+                     : localization_select(language,
+                                           "nenhum rollback de boot pendente",
+                                           "no boot rollback pending",
+                                           "ningun rollback de boot pendiente"));
   shell_print(status.summary);
   shell_newline();
-  update_history_append_event(rc > 0 ? "rollback" : "rollback-check", &status);
+  update_history_append_event(
+      status.rollback_applied ? "rollback" : "rollback-check", &status);
   return 0;
 }

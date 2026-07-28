@@ -26,6 +26,7 @@ struct mock_ctx {
     int seq_idx;
     int read_calls;
     int write_calls;
+    int flush_calls;
     int reset_calls;
     int reset_result; /* 0 success, -1 failure */
 };
@@ -58,6 +59,17 @@ static enum block_io_error_class mock_write_ex(void *opaque, uint32_t blk,
     return cls;
 }
 
+static enum block_io_error_class mock_flush_ex(void *opaque) {
+    struct mock_ctx *m = (struct mock_ctx *)opaque;
+    enum block_io_error_class cls;
+    m->flush_calls++;
+    if (m->seq_idx >= m->seq_len) {
+        return BLOCK_IO_OK;
+    }
+    cls = m->seq[m->seq_idx++];
+    return cls;
+}
+
 static int mock_reset(void *opaque) {
     struct mock_ctx *m = (struct mock_ctx *)opaque;
     m->reset_calls++;
@@ -72,6 +84,7 @@ static void setup_dev(struct block_device *dev, struct block_device_ops *ops,
     ops->read_block_ex = mock_read_ex;
     ops->write_block_ex = mock_write_ex;
     ops->reset = mock_reset;
+    ops->flush_ex = mock_flush_ex;
     memset(dev, 0, sizeof(*dev));
     dev->block_size = 512;
     dev->block_count = 1024;
@@ -299,6 +312,100 @@ static void test_legacy_driver_no_retry_overhead(void) {
     if (calls != 1) fail("legacy driver must dispatch exactly once");
 }
 
+static void test_flush_success_and_transient_budget(void) {
+    struct block_device dev;
+    struct block_device_ops ops;
+    struct mock_ctx m;
+    setup_dev(&dev, &ops, &m);
+    m.seq[0] = BLOCK_IO_OK;
+    m.seq_len = 1;
+    if (!block_device_supports_flush(&dev)) fail("flush capability must be visible");
+    if (block_device_flush_ex(&dev) != BLOCK_IO_OK || m.flush_calls != 1)
+        fail("flush OK must dispatch once");
+    setup_dev(&dev, &ops, &m);
+    m.seq[0] = BLOCK_IO_ERR_TRANSIENT;
+    m.seq[1] = BLOCK_IO_ERR_TRANSIENT;
+    m.seq[2] = BLOCK_IO_OK;
+    m.seq_len = 3;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_OK || m.flush_calls != 3)
+        fail("flush TRANSIENT must recover within budget");
+    if (m.reset_calls != 0) fail("flush TRANSIENT must not reset");
+    setup_dev(&dev, &ops, &m);
+    m.seq[0] = BLOCK_IO_ERR_TRANSIENT;
+    m.seq[1] = BLOCK_IO_ERR_TIMEOUT;
+    m.seq[2] = BLOCK_IO_OK;
+    m.seq_len = 3;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_ERR_TIMEOUT ||
+        m.flush_calls != 2 || m.reset_calls != 0)
+        fail("flush TRANSIENT then TIMEOUT must stop immediately");
+    setup_dev(&dev, &ops, &m);
+    for (int i = 0; i < 4; ++i) m.seq[i] = BLOCK_IO_ERR_TRANSIENT;
+    m.seq_len = 4;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_ERR_TRANSIENT ||
+        m.flush_calls != 4)
+        fail("flush TRANSIENT budget must stop after 3 retries");
+}
+
+static void test_flush_timeout_and_terminal_errors_do_not_retry(void) {
+    struct block_device dev;
+    struct block_device_ops ops;
+    struct mock_ctx m;
+    setup_dev(&dev, &ops, &m);
+    m.seq[0] = BLOCK_IO_ERR_TIMEOUT;
+    m.seq[1] = BLOCK_IO_OK;
+    m.seq_len = 2;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_ERR_TIMEOUT ||
+        m.flush_calls != 1 || m.reset_calls != 0)
+        fail("flush TIMEOUT must return immediately without reset or retry");
+    setup_dev(&dev, &ops, &m);
+    m.seq[0] = BLOCK_IO_ERR_PERMANENT;
+    m.seq_len = 1;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_ERR_PERMANENT ||
+        m.flush_calls != 1)
+        fail("flush PERMANENT must not retry");
+    setup_dev(&dev, &ops, &m);
+    m.seq[0] = BLOCK_IO_ERR_DEVICE_GONE;
+    m.seq_len = 1;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_ERR_DEVICE_GONE ||
+        m.flush_calls != 1)
+        fail("flush DEVICE_GONE must not retry");
+}
+
+static int legacy_flush(void *ctx) {
+    int *calls = (int *)ctx;
+    (*calls)++;
+    return 0;
+}
+
+static int legacy_flush_fail(void *ctx) {
+    int *calls = (int *)ctx;
+    (*calls)++;
+    return -1;
+}
+
+static void test_flush_absent_and_legacy_collapse(void) {
+    struct block_device dev;
+    struct block_device_ops ops;
+    int calls = 0;
+    memset(&ops, 0, sizeof(ops));
+    memset(&dev, 0, sizeof(dev));
+    dev.ctx = &calls;
+    dev.ops = &ops;
+    if (block_device_supports_flush(&dev) || block_device_flush(&dev) == 0 ||
+        block_device_flush_ex(&dev) != BLOCK_IO_ERR_PERMANENT)
+        fail("missing flush capability must fail closed");
+    ops.flush = legacy_flush;
+    if (!block_device_supports_flush(&dev) || block_device_flush(&dev) != 0 ||
+        calls != 1)
+        fail("legacy flush must collapse success to zero");
+    calls = 0;
+    ops.flush = legacy_flush_fail;
+    if (block_device_flush_ex(&dev) != BLOCK_IO_ERR_PERMANENT || calls != 1)
+        fail("legacy flush failure must classify permanent without retry");
+    if (block_device_flush(&dev) != -1 || calls != 2)
+        fail("legacy flush failure must collapse to minus one");
+}
+
 int run_block_retry_tests(void) {
     g_failures = 0;
     test_immediate_success();
@@ -313,6 +420,9 @@ int run_block_retry_tests(void) {
     test_write_path_applies_same_policy();
     test_invalid_input_is_permanent();
     test_legacy_driver_no_retry_overhead();
+    test_flush_success_and_transient_budget();
+    test_flush_timeout_and_terminal_errors_do_not_retry();
+    test_flush_absent_and_legacy_collapse();
     if (g_failures == 0) printf("[tests] block_retry OK\n");
     return g_failures;
 }

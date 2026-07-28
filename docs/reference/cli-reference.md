@@ -77,14 +77,14 @@ Contexto operacional atual:
 | `update-fetch` | `update-fetch` | Baixa o manifesto remoto configurado, valida trilha, versão nova, `payload_size`, `payload_sha256`, `payload_url` e `signature_ed25519`, e atualiza `/system/update/latest.ini`. |
 | `update-import-manifest` | `update-import-manifest <caminho>` | Importa um manifesto externo para `/system/update/latest.ini`, validando trilha, versão nova, tamanho/hash, URL e assinatura. |
 | `update-download-payload` | `update-download-payload` | Limita o buffer do agente por `payload_size`, valida tamanho/SHA-256, grava `/system/update/payload.bin` e valida novamente após readback. |
-| `update-prepare` | `update-prepare` | Reservado para o futuro staging A/B; retorna `-60` enquanto não houver boot slot persistente. |
+| `update-prepare` | `update-prepare` | Executa fetch + download + staging do catálogo verificado + arm da ativação numa única operação. |
 | `update-prepare-dry-run` | `update-prepare-dry-run` | Reabre e recalcula o cache que seria usado no preparo, sem staging, arm ou apply. |
 | `update-prepare-explain` | `update-prepare-explain` | Mostra os gates locais do preparo (`poll`, catálogo, repositório, versão, payload, assinatura, cache e `stage_safe`) sem efeitos persistentes. |
-| `update-stage` | `update-stage` | Reservado para staging atômico do slot inativo; retorna `-60` no estado atual. |
-| `update-arm` | `update-arm [on|off]` | `off` limpa estado legado; `on` retorna `-60` sem boot-control persistente. |
-| `update-apply` | `update-apply [payload_sha256]` | Revalida os bytes do cache, mas retorna `-60` até existir apply/rollback persistente. |
-| `update-confirm-health` | `update-confirm-health` | Scaffolding sobre slots em RAM; ainda não confirma uma atualização persistente. |
-| `update-rollback-check` | `update-rollback-check` | Scaffolding sobre slots em RAM; ainda não executa rollback após reboot. |
+| `update-stage` | `update-stage` | Promove o catálogo verificado para `/system/update/staged.ini` após re-hashear o payload em cache; não toca boot slot. |
+| `update-arm` | `update-arm [on|off]` | `on` arma a ativação do staged update (`-10` sem staged update); `off` desarma. Nenhum dos dois toca boot slot. |
+| `update-apply` | `update-apply [payload_sha256]` | Revalida os bytes do cache contra o manifesto assinado, grava o slot inativo (payload, flush, readback SHA-256, header por último) e arma exatamente uma tentativa de boot. |
+| `update-confirm-health` | `update-confirm-health` | Confirma de forma durável a tentativa registrada no token de handoff do boot atual e limpa o staged catalog. |
+| `update-rollback-check` | `update-rollback-check` | Reporta o resultado durável do boot atual: rollback já aplicado pelo loader (desarmando o staged update), tentativa pendente de confirmação ou nada pendente. |
 | `update-clear` | `update-clear` | Remove o manifesto staged e limpa o estado persistente de ativacao pendente. |
 | `update-channel` | `update-channel [list|show|stable|develop]` | Alterna entre a trilha estavel (`main`) e a trilha em desenvolvimento (`develop`), persistindo a escolha em `/system/config.ini` e `/system/update/repository.ini`. |
 | `service-target` | `service-target [show|list|apply <nome>]` | Mostra ou aplica o alvo ativo do supervisor de servicos (`core`, `network`, `maintenance`, `full`) e persiste a escolha em `/system/config.ini`. O boot pode degradar temporariamente o alvo ativo para `core` ou `maintenance` quando detectar falha estrutural. |
@@ -101,7 +101,7 @@ Contexto operacional atual:
 | `pkg-list` | `pkg-list [--installed\|--available]` | Lista pacotes Capy instalados e/ou disponiveis no catalogo do adaptador `capypkg`. |
 | `pkg-info` | `pkg-info <nome>` | Mostra metadados do pacote (versao, repo, SHA-256, assinatura, dependencias). |
 | `pkg-fetch` | `pkg-fetch` | Sincroniza o indice de pacotes em todos os repositorios configurados via HTTPS. |
-| `pkg-install` | `pkg-install <nome>` | Instala um pacote verificando SHA-256 do payload e assinatura sobre o descritor canonico (fail-closed quando assinatura e exigida e o verificador Ed25519 nao esta plugado). |
+| `pkg-install` | `pkg-install <nome>` | Instala pacote após SHA-256 e, para repo signed, assinatura Ed25519. O verifier está registrado desde alpha.276, mas produção permanece fail-closed sem trust anchor e KAT externo. |
 | `pkg-remove` | `pkg-remove <nome>` | Remove um pacote instalado e seu cache em `/var/capypkg`. |
 | `pkg-update` | `pkg-update [<nome>]` | Atualiza um pacote especifico ou todos os pacotes instalados. |
 | `pkg-source-list` | `pkg-source-list` | Lista repositorios `capypkg` configurados (nome, URL, pinned, signed). |
@@ -223,15 +223,30 @@ Contexto operacional atual:
 - `update-prepare-dry-run` revisa o catálogo local, reabre
   `/system/update/payload.bin` e recalcula tamanho/SHA-256 sem persistir
   staging, armar ativacao ou aplicar boot slot.
-- `update-prepare`, `update-stage`, `update-arm on` e `update-apply` permanecem
-  fail-closed com `UPDATE_AGENT_ERR_UNSUPPORTED` (`-60`) até existir escrita
-  atômica do slot inativo, readback do BOOT raw e rollback após reboot.
-- `update-apply [payload_sha256]` preserva a interface futura, mas um digest
-  informado ou salvo nunca substitui a releitura dos bytes do cache e não
-  habilita aplicação no estado atual.
-- `update-confirm-health` e `update-rollback-check` expõem o scaffolding do
-  gerenciador de slots em RAM; não representam confirmação/rollback persistente
-  enquanto o boot-control A/B não estiver implementado.
+- `update-apply [payload_sha256]` grava disco: um digest informado ou salvo
+  nunca substitui a releitura e o re-hash dos bytes do cache, e são esses mesmos
+  bytes verificados que chegam ao slot inativo.
+- `UPDATE_AGENT_ERR_UNSUPPORTED` (`-60`) significa que a transição persistente
+  não pôde ser provada: sem provider raw 512 registrado com read/write e flush
+  durável, binding ESP/BOOT/DATA não estrito, geração/lease divergente, payload
+  não verificado ou resultado de commit indeterminado. Um slot gravado e não
+  armado também é recusa, nunca sucesso.
+- Desde o `alpha.319` o motivo é legível em vez de opaco. `print-boot-slot`
+  imprime, depois da tabela de slots,
+  `Boot provider: ready=<yes|no> reason=<label>`, com `label` em
+  `ready`, `no-persistent-mount`, `no-raw-device`, `no-data-binding`,
+  `no-esp-binding`, `no-flush`, `no-control`, `control-unknown` ou
+  `token-mismatch`. Quando a capability não registra, o boot log também emite
+  `[boot] provider reason=<label>`. Todo boot com storage persistente registra
+  `[boot] A/B attempt slot=<n> state=<confirmed|pending|rollback> generation=<hex>`
+  a partir do token de handoff já validado — a decisão A/B do loader sai pela
+  console de firmware, que o contrato VMware mantém fora da COM1.
+- O ciclo é `update-apply` → reboot (o UEFI consome a única tentativa e publica o
+  token no handoff) → `update-confirm-health`. Se a confirmação não acontecer, o
+  boot seguinte já é o rollback aplicado pelo loader, e
+  `update-rollback-check` reporta esse estado e desarma o staged update.
+- Discos anteriores ao `alpha.317` com GUIDs duplicados entram por modo legado
+  validado apenas para mount e nunca recebem capability de update.
 - As operacoes `update-check`, `update-fetch`, `update-download-payload`,
   `update-import-manifest`, `update-prepare`, `update-stage`, `update-arm`,
   `update-apply`, `update-confirm-health`, `update-rollback-check`, `update-clear` e

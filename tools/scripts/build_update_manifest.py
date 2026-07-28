@@ -54,6 +54,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--allow-insecure-key", action="store_true")
+    parser.add_argument(
+        "--allow-lab-http-payload-url",
+        action="store_true",
+        help=(
+            "accept a plain-http payload_url; only a kernel built with "
+            "CAPYOS_UPDATE_LAB_TRUST_KEY_HEX consumes it (Etapa 8 A/B gate)"
+        ),
+    )
     parser.add_argument("--openssl", default=os.environ.get("OPENSSL", "openssl"))
     return parser.parse_args()
 
@@ -75,7 +83,7 @@ def main() -> int:
             "payload_size": str(size),
             "payload_sha256": digest,
         }
-        body = canonical_body(fields)
+        body = canonical_body(fields, allow_lab_http=args.allow_lab_http_payload_url)
         if args.unsigned:
             if args.private_key:
                 raise ManifestError("--unsigned must not receive or read a private key")

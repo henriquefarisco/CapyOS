@@ -50,34 +50,62 @@ assinados.
 
 ```bash
 update-channel show
+update-fetch
+update-download-payload
 update-prepare
 update-apply
+reboot
 update-confirm-health
 update-rollback-check
 ```
 
-O fluxo seguro atualmente termina no download autenticado:
-`update-fetch` importa o `latest.ini` assinado, `update-download-payload` limita
+`update-fetch` importa o `latest.ini` assinado. `update-download-payload` limita
 o buffer temporário próprio pelo `payload_size` assinado, confere tamanho e
 SHA-256, grava o cache, relê os bytes persistidos e repete a validação antes de
-salvar o estado.
-`update-prepare-dry-run` reabre e recalcula o cache em vez de confiar apenas no
-hash textual de `state.ini`. `update-prepare-explain` expõe o gate `persistence`
-depois que todos os gates criptográficos e de readback passam.
+salvar o estado. `update-prepare-dry-run` reabre e recalcula o cache em vez de
+confiar apenas no hash textual de `state.ini`; `update-prepare-explain` reporta
+`-` quando todos os gates passam.
 
-`update-prepare`, `update-stage`, `update-arm on` e `update-apply` retornam
-`UPDATE_AGENT_ERR_UNSUPPORTED` (`-60`). Isso é intencional: o payload ainda não
-é gravado em um slot de boot persistente e o antigo `boot_slot` era apenas
-metadado em RAM. Reportar sucesso nesse estado criaria uma falsa atualização.
-`update-arm off` e `update-clear` continuam disponíveis para limpar estado
-legado. A instalação da alpha atual deve ser feita pelo instalador oficial.
+`update-prepare` executa fetch + download + `update-stage` + `update-arm on`.
+`update-stage` promove o catálogo verificado para `staged.ini` (`-49` quando o
+cache não pode ser re-hasheado, `-5` sem catálogo mais novo) e `update-arm on`
+arma a ativação (`-10` sem staged update). Nenhum dos dois toca boot slot.
+
+`update-apply` é o único comando que grava disco. Ele reabre o payload em cache,
+recalcula o SHA-256 contra o manifesto assinado e, com os mesmos bytes
+verificados, grava o slot **inativo** (payload primeiro, flush, readback
+SHA-256 + padding, header por último) e então arma exatamente uma tentativa de
+boot vinculada à geração publicada pelo staging. Um slot gravado e não armado é
+recusa, nunca sucesso.
+
+No boot seguinte o UEFI seleciona o slot pendente, consome a tentativa com commit
+durável, revalida header/payload/SHA-256/padding e publica o token de tentativa
+no handoff v10. Já no sistema novo, `update-confirm-health` confirma a geração
+exata desse token e só então limpa o staged catalog. Se o sistema novo não
+confirmar e reiniciar de novo, o loader restaura o slot confirmado antes de
+entregar o controle; `update-rollback-check` reporta esse rollback e desarma o
+staged update. Sem reboot pendente ele reporta `pending` ou `nenhum rollback`.
+
+`-60` (`UPDATE_AGENT_ERR_UNSUPPORTED`) deixou de ser recusa incondicional. Ele
+significa exatamente que a transição persistente não pôde ser provada: nenhum
+provider raw 512 registrado com read/write e flush durável, binding
+ESP/BOOT/DATA não estrito, geração/lease divergente, payload não verificado ou
+resultado de commit indeterminado. `update-apply` sem digest permanece recusado
+por definição — o payload só alcança o slot inativo pelo caminho verificado.
+Discos anteriores ao `alpha.317` com GUIDs duplicados entram por modo legado
+validado apenas para mount e nunca recebem capability de update.
+
+`update-arm off` e `update-clear` continuam disponíveis para limpar estado.
+A instalação inicial da alpha atual deve ser feita pelo instalador oficial.
 
 ## Publicação do catálogo estável
 
 O workflow publica `capyos64.bin`, `manifest.bin`, checksums e
 `latest.unsigned.ini` como material de handoff. A chave privada permanece
-offline e nunca entra em GitHub Actions. Depois de baixar exatamente o payload
-da release, o operador gera e verifica o asset final:
+offline e nunca entra em GitHub Actions. O exemplo histórico abaixo usa
+`alpha.313`; adapte versão, data e URL à release realmente publicada antes de
+executar. Depois de baixar exatamente o payload, o operador gera e verifica o
+asset final:
 
 ```bash
 python3 tools/scripts/build_update_manifest.py \
@@ -121,13 +149,26 @@ assinatura na última linha e ausência de campos duplicados.
   staging é preservado sem o digest quando possível.
 - `payload sha256 mismatch; cache refused` — payload baixado não bate com
   `payload_sha256` do manifesto assinado.
-- `persistent update apply unsupported; verified download only` — staging,
-  arm ou apply foi recusado porque ainda não existe escrita persistente e
-  rollback real de boot slot.
+- `persistent slot staging refused; inactive slot not written` — `update-apply`
+  não conseguiu provar a gravação do slot inativo: sem provider registrado com
+  flush durável, geração/lease divergente ou plano de slot inválido.
+- `inactive slot staged but boot attempt not armed` — o payload chegou ao slot
+  inativo, mas a tentativa de boot não foi publicada; o loader continua bootando
+  o slot confirmado e o comando é recusado.
+- `inactive slot written and armed for one boot attempt` — apply concluído; o
+  próximo boot usa o slot novo e tem exatamente uma tentativa.
+- `persistent update apply unsupported; verified download only` — apply sem
+  digest (`update_agent_apply_boot_slot`), recusado por definição.
 - `prepare explain: catalog missing` — `update-prepare-explain` não encontrou
   catálogo local para diagnosticar.
 - `prepare explain: verified payload cache missing` — o gate `cache` de
   `update-prepare-explain` falhou antes de staging/arm.
+- `prepare explain: all prepare gates passed` — todos os gates passaram e o
+  staging é seguro.
+- `payload cache missing or unverified for staging` — `update-stage` recusou
+  porque o cache não pôde ser re-hasheado contra o manifesto assinado.
+- `no cached update available to stage` — `update-stage` sem catálogo mais novo.
+- `no staged update available to arm` — `update-arm on` sem `staged.ini`.
 - `no cached update available for prepare dry-run` — `update-prepare-dry-run`
   não encontrou catálogo local mais novo para revisar.
 - `prepare dry-run catalog invalid` — o catálogo local revisado pelo dry-run não
@@ -157,17 +198,23 @@ assinatura na última linha e ausência de campos duplicados.
 - `payload sha256 supplied is not a 64-char hex digest` — digest real malformado.
 - `payload sha256 mismatch; refusing to apply update` — payload local não bate
   com o manifesto assinado.
-- `persistent health confirmation unsupported; no update committed` — nenhum
-  boot-control A/B persistente existe; confirmar metadados apenas em RAM é
-  recusado com `-60`.
-- `boot rollback failed` — havia rollback pendente, mas a troca para o slot
-  anterior falhou.
+- `persistent health confirmation unavailable or token mismatch` — não há
+  provider persistente registrado ou o token de tentativa do handoff não
+  corresponde à geração comprometida; recusado com `-60`.
+- `persistent boot health confirmed` — a tentativa foi confirmada de forma
+  durável e o staged catalog foi limpo.
+- `persistent rollback unsupported; no boot control committed` — o check de
+  rollback é recusado com `-60` quando não há provider persistente registrado.
+- `boot rolled back to the confirmed slot; staged update disarmed` — o boot atual
+  é o rollback aplicado pelo loader depois de uma tentativa não confirmada.
+- `boot attempt pending confirmation; rollback still armed` — a tentativa foi
+  consumida e ainda espera `update-confirm-health`.
+- `no boot rollback pending` — nada pendente no metadata durável.
 
 ## Auditoria
 
-O shell registra `event=fetch`, `event=apply`, `event=confirm-health`,
-`event=rollback-check` e `event=rollback` em `/var/log/update-history.log`
-quando os comandos são aceitos. O histórico inclui `payload=` quando o catálogo ou o staged update possuem
+O shell registra eventos aceitos em `/var/log/update-history.log`. Comandos
+recusados com `-60` nunca geram um falso evento de sucesso. O histórico inclui `payload=` quando o catálogo ou o staged update possuem
 `payload_url`, e `payload_sha=` quando há cache validado ou staged digest. Falhas também geram logs `[audit] [update]` no
 `klog`.
 
@@ -181,9 +228,14 @@ quando os comandos são aceitos. O histórico inclui `payload=` quando o catálo
 - O cache ainda não usa temp + rename + flush transacional nem lock entre
   comandos concorrentes; o readback detecta divergência imediata, mas não
   substitui tolerância a queda de energia.
-- Staging/apply e `update-confirm-health` permanecem fail-closed até existir
-  bundle versionado, slot inativo persistente, readback do slot, troca atômica,
-  confirmação pós-reboot e rollback comprovado.
+- O lifecycle A/B (stage autorizado por geração, arm de tentativa única,
+  confirmação e rollback) está implementado e provado em host sobre um harness
+  provider-backed com GPT espelhado real. O que falta é a evidência externa: um
+  payload assinado publicado, aplicado e reiniciado em VMware UEFI/E1000, com
+  confirmação e rollback observados. Até esse gate rodar, o critério de update da
+  Etapa 8 permanece aberto.
+- Discos anteriores ao `alpha.317` com GUIDs duplicados precisam de migração de
+  identidade GPT antes de receberem capability de update.
 - Manifestos legados sem `payload_size` continuam aceitos para leitura, mas usam
   o teto de 8 MiB; novos manifestos gerados pelas ferramentas oficiais sempre
   assinam o tamanho exato.

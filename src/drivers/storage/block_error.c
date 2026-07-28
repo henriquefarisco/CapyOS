@@ -13,6 +13,7 @@
  * [7:0] STATUS register; bit 0 is ERR.
  * [15:8] ERROR register. */
 #define BLK_AHCI_TFD_STS_ERR (1u << 0)
+#define BLK_AHCI_TFD_STS_DF (1u << 5)
 #define BLK_AHCI_TFD_ERROR_SHIFT 8u
 #define BLK_AHCI_TFD_ERROR_MASK 0xFFu
 
@@ -76,9 +77,11 @@ enum block_io_error_class block_io_classify_ahci(uint32_t pxis, uint32_t pxtfd,
   }
   /* 3. No task-file error AND no IS.TFES → success. */
   if ((pxis & BLK_AHCI_IS_TFES) == 0u &&
-      (pxtfd & BLK_AHCI_TFD_STS_ERR) == 0u) {
+      (pxtfd & (BLK_AHCI_TFD_STS_ERR | BLK_AHCI_TFD_STS_DF)) == 0u) {
     return BLOCK_IO_OK;
   }
+  if ((pxtfd & BLK_AHCI_TFD_STS_DF) != 0u)
+    return BLOCK_IO_ERR_PERMANENT;
   err = (pxtfd >> BLK_AHCI_TFD_ERROR_SHIFT) & BLK_AHCI_TFD_ERROR_MASK;
   /* 4. Hard data errors — retrying will not change the outcome. */
   if (err & (BLK_ATA_ERR_UNC | BLK_ATA_ERR_IDNF | BLK_ATA_ERR_AMNF)) {

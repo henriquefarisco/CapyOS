@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "arch/x86_64/storage_runtime.h"
+#include "boot/gpt_identity.h"
 
 int x64_storage_runtime_compute_effective_data_count(
     uint64_t data_start, uint64_t data_count, uint64_t disk_last_lba,
@@ -11,6 +12,8 @@ int x64_storage_runtime_compute_effective_data_count(
 int x64_storage_runtime_find_data_partition_native(
     struct block_device *raw, void *probe_buf, uint32_t probe_buf_size,
     uint32_t *out_data_start, uint32_t *out_data_count,
+    int allow_legacy_identity, int *out_identity_strict,
+    struct capyos_gpt_identity *out_identity,
     const struct x64_storage_runtime_io *io);
 
 #endif /* X64_STORAGE_RUNTIME_GPT_H */

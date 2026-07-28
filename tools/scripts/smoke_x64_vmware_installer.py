@@ -237,6 +237,9 @@ class VmwareConsole:
             data = self._buffer[-max_bytes:]
         return data.decode("latin-1", errors="replace")
 
+    def text_since(self, start_at: int) -> str:
+        return self.text()[start_at:]
+
     def send_byte(self, value: int) -> None:
         if self._pipe is None or not 0 <= value <= 255:
             raise RuntimeError("VMware serial pipe is unavailable")
@@ -254,15 +257,38 @@ class VmwareConsole:
     def send_line(self, text: str) -> None:
         self.send_text(text, newline=True)
 
-    def wait_for(self, pattern: str, timeout: float, start_at: int = 0) -> None:
+    def send_firmware_line(self, text: str) -> None:
+        if self._pipe is None:
+            raise RuntimeError("VMware serial pipe is unavailable")
+        payload = text.encode("ascii", errors="ignore") + b"\n"
+        for index, value in enumerate(payload):
+            os.write(self._pipe, bytes([value]))
+            if index + 1 < len(payload):
+                time.sleep(SERIAL_CHAR_DELAY)
+
+    def wait_for(
+        self,
+        pattern: str,
+        timeout: float,
+        start_at: int = 0,
+        ignore_line_breaks: bool = False,
+    ) -> None:
+        def contains() -> bool:
+            text = self.text()[start_at:]
+            expected = pattern
+            if ignore_line_breaks:
+                text = text.replace("\r", "").replace("\n", "")
+                expected = expected.replace("\r", "").replace("\n", "")
+            return expected in text
+
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if pattern in self.text()[start_at:]:
+            if contains():
                 return
             if self.ended.is_set():
                 raise RuntimeError(f"VMware phase ended before pattern {pattern!r}")
             time.sleep(0.05)
-        if pattern in self.text()[start_at:]:
+        if contains():
             return
         raise TimeoutError(f"timeout waiting for pattern: {pattern!r}")
 
@@ -427,7 +453,13 @@ def main() -> int:
         if guard_after_install != guard_before:
             raise RuntimeError("VMware guard disk changed during installer") from installer_error
         if target_after_install == target_before:
-            raise RuntimeError("VMware target disk did not change during installer") from installer_error
+            detail = (
+                f": {type(installer_error).__name__}: {installer_error}"
+                if installer_error is not None else ""
+            )
+            raise RuntimeError(
+                "VMware target disk did not change during installer" + detail
+            ) from installer_error
         if installer_error is not None:
             raise installer_error
         eligible_count = installer_eligible_target_count(raw_installer)

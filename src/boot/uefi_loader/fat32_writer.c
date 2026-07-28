@@ -9,14 +9,16 @@ static BOOLEAN fat32_alloc_contig(UINT32 *fat, UINT32 fat_len,
   if (fat_len < 4 || bytes_per_cluster == 0)
     return FALSE;
 
-  UINTN need = (bytes_needed + bytes_per_cluster - 1U) / bytes_per_cluster;
+  UINTN need = bytes_needed / bytes_per_cluster;
+  if (bytes_needed % bytes_per_cluster != 0u)
+    need++;
   if (need == 0)
     need = 1;
 
   UINT64 start64 = (UINT64)(*next_free);
   if (start64 < 2ULL)
     start64 = 2ULL;
-  if (start64 + need > (UINT64)fat_len)
+  if (start64 > fat_len || need > (UINTN)((UINT64)fat_len - start64))
     return FALSE;
 
   UINT32 start = (UINT32)start64;
@@ -56,6 +58,7 @@ static __attribute__((always_inline)) inline VOID fat32_dirent83(
 }
 
 static EFI_STATUS fat32_write_cluster(EFI_BLOCK_IO_PROTOCOL *bio,
+                                      UINT32 expected_media_id,
                                       UINT64 data_start_lba, UINT8 spc,
                                       UINT32 bytes_per_cluster, UINT8 *scratch,
                                       UINT32 cluster, const UINT8 *data,
@@ -78,11 +81,12 @@ static EFI_STATUS fat32_write_cluster(EFI_BLOCK_IO_PROTOCOL *bio,
   }
 
   UINT64 lba = data_start_lba + (UINT64)(cluster - 2U) * (UINT64)spc;
-  return uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId, lba,
-                           bytes_per_cluster, scratch);
+  return uefi_block_io_write(bio, expected_media_id, lba,
+                             bytes_per_cluster, scratch);
 }
 
 static EFI_STATUS fat32_write_chain_contig(EFI_BLOCK_IO_PROTOCOL *bio,
+                                           UINT32 expected_media_id,
                                            UINT64 data_start_lba, UINT8 spc,
                                            UINT32 bytes_per_cluster,
                                            UINT8 *scratch, UINT32 start_cluster,
@@ -101,16 +105,54 @@ static EFI_STATUS fat32_write_chain_contig(EFI_BLOCK_IO_PROTOCOL *bio,
         len = bytes_per_cluster;
     }
     EFI_STATUS stt =
-        fat32_write_cluster(bio, data_start_lba, spc, bytes_per_cluster,
-                            scratch, start_cluster + i, ptr, len);
+        fat32_write_cluster(bio, expected_media_id, data_start_lba, spc,
+                            bytes_per_cluster, scratch, start_cluster + i,
+                            ptr, len);
     if (EFI_ERROR(stt))
       return stt;
   }
   return EFI_SUCCESS;
 }
 
+static EFI_STATUS fat32_verify_chain(
+    EFI_BLOCK_IO_PROTOCOL *bio, UINT32 expected_media_id,
+    UINT64 data_start_lba, UINT32 spc, UINT32 bytes_per_cluster,
+    UINT32 start_cluster, UINT32 cluster_count, const UINT8 *expected,
+    UINTN expected_size) {
+  UINTN bytes;
+  UINT64 lba;
+  VOID *allocation = NULL;
+  VOID *buffer = NULL;
+  EFI_STATUS status;
+  if (!bio || !expected || expected_size == 0u || start_cluster < 2u ||
+      cluster_count == 0u || bytes_per_cluster == 0u ||
+      cluster_count > ~(UINTN)0 / bytes_per_cluster)
+    return EFI_INVALID_PARAMETER;
+  bytes = (UINTN)cluster_count * bytes_per_cluster;
+  lba = data_start_lba + (UINT64)(start_cluster - 2u) * spc;
+  status = uefi_block_io_allocate_aligned(bio, bytes, &allocation, &buffer);
+  if (EFI_ERROR(status))
+    return status;
+  status = uefi_block_io_read(bio, expected_media_id, lba, bytes, buffer);
+  if (!EFI_ERROR(status)) {
+    for (UINTN i = 0u; i < expected_size; ++i) {
+      if (((UINT8 *)buffer)[i] != expected[i]) {
+        status = EFI_CRC_ERROR;
+        break;
+      }
+    }
+    for (UINTN i = expected_size; !EFI_ERROR(status) && i < bytes; ++i) {
+      if (((UINT8 *)buffer)[i] != 0u)
+        status = EFI_CRC_ERROR;
+    }
+  }
+  FreePool(allocation);
+  return status;
+}
+
 EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
-                                     UINT64 part_lba, UINT64 total_sectors,
+                              UINT32 expected_media_id,
+                              UINT64 part_lba, UINT64 total_sectors,
                                      const UINT8 *bootx64, UINTN bootx64_sz,
                                      const UINT8 *kernel, UINTN kernel_sz,
                                      const UINT8 *manifest, UINTN manifest_sz,
@@ -119,9 +161,16 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     return EFI_INVALID_PARAMETER;
   if (bio->Media->BlockSize != 512)
     return EFI_UNSUPPORTED;
-  if (total_sectors < 65536)
+  if (bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
+  if (total_sectors < 65536 || part_lba > bio->Media->LastBlock ||
+      total_sectors - 1u > bio->Media->LastBlock - part_lba)
     return EFI_INVALID_PARAMETER;
-  if (total_sectors > 0xFFFFFFFFULL)
+  if (total_sectors > 0xFFFFFFFFULL || bootx64_sz > UINT32_MAX ||
+      kernel_sz > UINT32_MAX || manifest_sz > UINT32_MAX ||
+      bootcfg_sz > UINT32_MAX || (!bootx64 && bootx64_sz != 0u) ||
+      (!kernel && kernel_sz != 0u) || (!manifest && manifest_sz != 0u) ||
+      (!bootcfg && bootcfg_sz != 0u))
     return EFI_UNSUPPORTED;
 
   const UINT8 spc = 8; // 8 sectors/cluster
@@ -131,18 +180,11 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   const UINT32 bytes_per_cluster = (UINT32)spc * 512U;
 
   // Compute FAT size iteratively.
-  UINT32 fat_size = 1;
-  UINT32 cluster_count = 0;
-  for (;;) {
-    UINT64 data_sectors =
-        total_sectors - reserved - (UINT64)num_fats * fat_size;
-    cluster_count = (UINT32)(data_sectors / spc);
-    UINT64 need_bytes = ((UINT64)cluster_count + 2ULL) * 4ULL;
-    UINT32 new_fat = (UINT32)((need_bytes + 511ULL) / 512ULL);
-    if (new_fat == fat_size)
-      break;
-    fat_size = new_fat;
-  }
+  UINT32 fat_size = 0u;
+  UINT32 cluster_count = 0u;
+  if (installer_disk_fat32_plan(total_sectors, spc, reserved, num_fats,
+                                &fat_size, &cluster_count) != 0)
+    return EFI_INVALID_PARAMETER;
   if (cluster_count < 65525) {
     Print(L"[UEFI] ESP muito pequena para FAT32 (clusters=%u)\r\n",
           cluster_count);
@@ -315,26 +357,22 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
   fsinfo[510] = 0x55;
   fsinfo[511] = 0xAA;
 
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          part_lba + 0, 512, bs);
+  stt = uefi_block_io_write(bio, expected_media_id, part_lba, sizeof(bs), bs);
   if (EFI_ERROR(stt)) {
     FreePool(fat);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          part_lba + 1, 512, fsinfo);
+  stt = uefi_block_io_write(bio, expected_media_id, part_lba + 1u, sizeof(fsinfo), fsinfo);
   if (EFI_ERROR(stt)) {
     FreePool(fat);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          part_lba + 6, 512, bs);
+  stt = uefi_block_io_write(bio, expected_media_id, part_lba + 6u, sizeof(bs), bs);
   if (EFI_ERROR(stt)) {
     FreePool(fat);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          part_lba + 7, 512, fsinfo);
+  stt = uefi_block_io_write(bio, expected_media_id, part_lba + 7u, sizeof(fsinfo), fsinfo);
   if (EFI_ERROR(stt)) {
     FreePool(fat);
     return stt;
@@ -360,24 +398,26 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     fatbuf[off + 3] = (UINT8)((v >> 24) & 0xFF);
   }
   FreePool(fat);
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          fat_start_lba, fat_bytes, fatbuf);
+  stt = uefi_block_io_write(bio, expected_media_id, fat_start_lba, fat_bytes, fatbuf);
   if (EFI_ERROR(stt)) {
     FreePool(fatbuf);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          fat_start_lba + fat_size, fat_bytes, fatbuf);
+  stt = uefi_block_io_write(bio, expected_media_id, fat_start_lba + fat_size, fat_bytes, fatbuf);
   FreePool(fatbuf);
   if (EFI_ERROR(stt))
     return stt;
 
-  UINT8 *scratch = AllocatePool(bytes_per_cluster);
-  if (!scratch) {
+  VOID *scratch_allocation = NULL;
+  VOID *scratch_buffer = NULL;
+  stt = uefi_block_io_allocate_aligned(bio, bytes_per_cluster,
+                                       &scratch_allocation, &scratch_buffer);
+  if (EFI_ERROR(stt)) {
     Print(L"[UEFI] FAT32 alloc failed: scratch bytes=%u\r\n",
           bytes_per_cluster);
-    return EFI_OUT_OF_RESOURCES;
+    return stt;
   }
+  UINT8 *scratch = (UINT8 *)scratch_buffer;
 
   UINT8 *root = AllocatePool(bytes_per_cluster);
   UINT8 *efi_dir = AllocatePool(bytes_per_cluster);
@@ -394,7 +434,7 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
       FreePool(efi_boot_dir);
     if (boot_dir)
       FreePool(boot_dir);
-    FreePool(scratch);
+    FreePool(scratch_allocation);
     return EFI_OUT_OF_RESOURCES;
   }
   for (UINTN i = 0; i < bytes_per_cluster; i++) {
@@ -431,55 +471,68 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
                    bootcfg_cl, (UINT32)bootcfg_sz);
   }
 
-  stt = fat32_write_cluster(bio, data_start_lba, spc, bytes_per_cluster,
+  stt = fat32_write_cluster(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                             scratch, root_cluster, root, bytes_per_cluster);
   if (!EFI_ERROR(stt))
-    stt = fat32_write_cluster(bio, data_start_lba, spc, bytes_per_cluster,
+    stt = fat32_write_cluster(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                               scratch, efi_cl, efi_dir, bytes_per_cluster);
   if (!EFI_ERROR(stt))
-    stt = fat32_write_cluster(bio, data_start_lba, spc, bytes_per_cluster,
+    stt = fat32_write_cluster(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                               scratch, efi_boot_cl, efi_boot_dir,
                               bytes_per_cluster);
   if (!EFI_ERROR(stt))
-    stt = fat32_write_cluster(bio, data_start_lba, spc, bytes_per_cluster,
+    stt = fat32_write_cluster(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                               scratch, bootdir_cl, boot_dir, bytes_per_cluster);
   FreePool(root);
   FreePool(efi_dir);
   FreePool(efi_boot_dir);
   FreePool(boot_dir);
   if (EFI_ERROR(stt)) {
-    FreePool(scratch);
+    FreePool(scratch_allocation);
     return stt;
   }
 
-  stt = fat32_write_chain_contig(bio, data_start_lba, spc, bytes_per_cluster,
+  stt = fat32_write_chain_contig(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                                  scratch, bootx64_cl, bootx64_need, bootx64,
                                  bootx64_sz);
   if (!EFI_ERROR(stt))
-    stt = fat32_write_chain_contig(bio, data_start_lba, spc, bytes_per_cluster,
+    stt = fat32_write_chain_contig(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                                    scratch, kernel_cl, kernel_need, kernel,
                                    kernel_sz);
   if (!EFI_ERROR(stt) && manifest && manifest_sz)
-    stt = fat32_write_chain_contig(bio, data_start_lba, spc, bytes_per_cluster,
+    stt = fat32_write_chain_contig(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                                    scratch, manifest_cl, manifest_need,
                                    manifest, manifest_sz);
   if (!EFI_ERROR(stt) && bootcfg && bootcfg_sz)
-    stt = fat32_write_chain_contig(bio, data_start_lba, spc, bytes_per_cluster,
+    stt = fat32_write_chain_contig(bio, expected_media_id, data_start_lba, spc, bytes_per_cluster,
                                    scratch, bootcfg_cl, bootcfg_need, bootcfg,
                                    bootcfg_sz);
+  if (!EFI_ERROR(stt))
+    stt = uefi_block_io_flush(bio, expected_media_id);
+  if (!EFI_ERROR(stt))
+    stt = fat32_verify_chain(bio, expected_media_id, data_start_lba, spc,
+                             bytes_per_cluster, bootx64_cl, bootx64_need,
+                             bootx64, bootx64_sz);
+  if (!EFI_ERROR(stt))
+    stt = fat32_verify_chain(bio, expected_media_id, data_start_lba, spc,
+                             bytes_per_cluster, kernel_cl, kernel_need,
+                             kernel, kernel_sz);
+  if (!EFI_ERROR(stt) && manifest && manifest_sz)
+    stt = fat32_verify_chain(bio, expected_media_id, data_start_lba, spc,
+                             bytes_per_cluster, manifest_cl, manifest_need,
+                             manifest, manifest_sz);
   if (!EFI_ERROR(stt) && bootcfg && bootcfg_sz) {
     UINTN verify_bytes = (UINTN)bootcfg_need * (UINTN)bytes_per_cluster;
     UINT8 *verify_buf = AllocatePool(verify_bytes);
     if (!verify_buf) {
       Print(L"[UEFI] FAT32 alloc failed: verify bytes=%lu\r\n",
             (UINT64)verify_bytes);
-      FreePool(scratch);
+      FreePool(scratch_allocation);
       return EFI_OUT_OF_RESOURCES;
     }
     UINT64 verify_lba =
         data_start_lba + (UINT64)(bootcfg_cl - 2U) * (UINT64)spc;
-    stt = uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId,
-                            verify_lba, verify_bytes, verify_buf);
+    stt = uefi_block_io_read(bio, expected_media_id, verify_lba, verify_bytes, verify_buf);
     if (!EFI_ERROR(stt)) {
       for (UINTN i = 0; i < bootcfg_sz; ++i) {
         if (verify_buf[i] != bootcfg[i]) {
@@ -490,15 +543,14 @@ EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
     }
     FreePool(verify_buf);
     if (EFI_ERROR(stt)) {
-      FreePool(scratch);
+      FreePool(scratch_allocation);
       return stt;
     }
   }
-  FreePool(scratch);
+  FreePool(scratch_allocation);
   if (EFI_ERROR(stt))
     return stt;
 
-  uefi_call_wrapper(bio->FlushBlocks, 1, bio);
-  return EFI_SUCCESS;
+  return uefi_block_io_flush(bio, expected_media_id);
 }
 

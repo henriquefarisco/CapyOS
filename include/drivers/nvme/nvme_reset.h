@@ -87,6 +87,8 @@ int nvme_reset_csts_rdy_set(uint32_t csts);
  * the upper retry loop immediately rather than burning the spin
  * budget. */
 int nvme_reset_csts_fatal(uint32_t csts);
+int nvme_io_completion_matches(uint16_t expected_cid, uint16_t expected_sqid,
+                               uint16_t actual_cid, uint16_t actual_sqid);
 
 /* Admin actions the host must issue AFTER stage 4 completes. The
  * enumeration is closed and ordered: a caller polling this planner

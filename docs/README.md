@@ -81,10 +81,9 @@ Escopo atual:
   - matriz autoritativa de versões pinadas e ABIs cross-repo
 - `reference/integration/capypkg-publisher-manifest-format.md`
   - formato canônico do manifest line-oriented consumido pelo adapter in-tree
-- `reference/integration/compatibility-audit-2026-06-11.md`
-  - auditoria estática cross-repo vigente (2026-06-11); os snapshots
-    anteriores (2026-05-19 … 2026-06-06) ficam no mesmo diretório como
-    histórico, encadeados por addendum
+- `reference/integration/compatibility-audit-2026-07-27-alpha318.md`
+  - auditoria cross-repo vigente para CapyOS alpha.318; snapshots anteriores
+    ficam no mesmo diretório como histórico encadeado
 - `operations/manual-module-deploy-runbook.md`
   - runbook de deploy manual de módulos remotos durante a instalação do core
 - `architecture/libcapy-net-http-hardening.md`

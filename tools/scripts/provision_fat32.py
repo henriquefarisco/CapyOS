@@ -112,6 +112,8 @@ def fat32_write_volume(
         nonlocal next_free
         need_clusters = max(1, (bytes_needed + cluster_bytes - 1) // cluster_bytes)
         start = next_free
+        if start + need_clusters > len(fat_entries):
+            raise SystemExit("[err] FAT32 files do not fit in ESP.")
         chain = list(range(start, start + need_clusters))
         next_free += need_clusters
         for idx, cluster in enumerate(chain):

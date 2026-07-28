@@ -75,6 +75,15 @@ int nvme_build_create_sq_cmd(struct nvme_sqe *cmd, void *sq_buffer,
   return 0;
 }
 
+int nvme_build_flush_cmd(struct nvme_sqe *cmd, uint32_t nsid) {
+  if (cmd == NULL || nsid == 0u)
+    return -1;
+  nvme_zero_sqe(cmd);
+  cmd->opcode = NVME_CMD_FLUSH;
+  cmd->nsid = nsid;
+  return 0;
+}
+
 int nvme_build_rw_cmd(struct nvme_sqe *cmd, uint8_t opcode, uint32_t nsid,
                       uint64_t lba, uint32_t block_count, void *data_buffer) {
   if (cmd == NULL || data_buffer == NULL || nsid == 0u) {
@@ -83,7 +92,7 @@ int nvme_build_rw_cmd(struct nvme_sqe *cmd, uint8_t opcode, uint32_t nsid,
   if (opcode != NVME_CMD_READ && opcode != NVME_CMD_WRITE) {
     return -1;
   }
-  if (block_count == 0u || block_count > 0x10000u) {
+  if (block_count != 1u) {
     return -1;
   }
   nvme_zero_sqe(cmd);

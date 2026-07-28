@@ -18,7 +18,7 @@
  * to `dbg_label_hex32` (alpha.248 introduced two call sites in
  * `nvme_controller_reset` that referenced ahci.c's local helper). */
 
-static inline void cpu_relax(void) { __asm__ volatile("pause"); }
+static inline void cpu_relax(void) { __asm__ volatile("pause" ::: "memory"); }
 
 /* Memory barrier */
 static inline void mb(void) { __asm__ volatile("mfence" ::: "memory"); }
@@ -101,8 +101,10 @@ static void nvme_ring_cq_doorbell(struct nvme_device *dev, int qid,
 /* Submit admin command and wait for completion */
 static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
                           struct nvme_cqe *cqe) {
+  uint16_t expected_cid;
   /* Set command ID */
-  cmd->cid = dev->next_cid++;
+  expected_cid = dev->next_cid++;
+  cmd->cid = expected_cid;
 
   /* Copy command to submission queue */
   dev->admin_sq[dev->admin_sq_tail] = *cmd;
@@ -114,11 +116,15 @@ static int nvme_admin_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
 
   /* Poll for completion */
   for (int i = 0; i < NVME_ADMIN_TIMEOUT_SPINS; i++) {
-    struct nvme_cqe *entry = &dev->admin_cq[dev->admin_cq_head];
+    volatile struct nvme_cqe *entry = &dev->admin_cq[dev->admin_cq_head];
     uint16_t status = entry->status;
     int phase = status & 1;
 
     if (phase == dev->admin_cq_phase) {
+      mb();
+      if (!nvme_io_completion_matches(expected_cid, 0u, entry->cid,
+                                      entry->sq_id))
+        return -1;
       /* Completion received */
       if (cqe)
         *cqe = *entry;
@@ -214,6 +220,11 @@ static int nvme_init_controller(struct nvme_device *dev, uint64_t bar_addr) {
 
   klog(KLOG_INFO, "[nvme] controller enabled");
   dev->next_cid = 1;
+  dev->abandoned_cid = 0u;
+  dev->io_queue_quarantined = 0u;
+  dev->flush_indeterminate = 0u;
+  dev->io_busy = 0;
+  dev->operation_busy = 0;
 
   return 0;
 }
@@ -259,9 +270,18 @@ static int nvme_identify_ns(struct nvme_device *dev, uint32_t nsid) {
   dev->lba_count = ns_data[0]; /* NSZE (offset 0) */
 
   /* Get LBA format (offset 0x1A) */
-  uint8_t flbas = g_identify_buf[26] & 0x0F;
-  uint32_t *lbaf = (uint32_t *)(g_identify_buf + 128 + flbas * 4);
-  uint8_t lba_ds = (*lbaf >> 16) & 0xFF; /* LBA Data Size as power of 2 */
+  uint8_t nlbaf = g_identify_buf[25];
+  uint8_t flbas_raw = g_identify_buf[26];
+  uint8_t flbas = flbas_raw & 0x0F;
+  uint32_t *lbaf;
+  uint8_t lba_ds;
+  if (dev->lba_count == 0u || dev->lba_count > UINT32_MAX || nlbaf > 15u ||
+      flbas > nlbaf || (flbas_raw & 0xF0u) != 0u)
+    return -1;
+  lbaf = (uint32_t *)(g_identify_buf + 128 + flbas * 4u);
+  lba_ds = (uint8_t)((*lbaf >> 16) & 0xFFu);
+  if ((*lbaf & 0xFFFFu) != 0u || lba_ds < 9u || lba_ds > 12u)
+    return -1;
   dev->block_size = 1u << lba_ds;
 
   dev->nsid = nsid;
@@ -320,7 +340,12 @@ static int nvme_create_io_sq(struct nvme_device *dev, uint16_t qid,
  * not been ported to the extended ABI yet. */
 static enum block_io_error_class nvme_io_cmd_classified(
     struct nvme_device *dev, struct nvme_sqe *cmd, struct nvme_cqe *cqe) {
-  cmd->cid = dev->next_cid++;
+  uint16_t expected_cid;
+  if (!dev || !cmd || dev->io_queue_quarantined ||
+      __sync_lock_test_and_set(&dev->io_busy, 1))
+    return BLOCK_IO_ERR_PERMANENT;
+  expected_cid = dev->next_cid++;
+  cmd->cid = expected_cid;
 
   dev->io_sq[dev->io_sq_tail] = *cmd;
   dev->io_sq_tail = (dev->io_sq_tail + 1) % NVME_QUEUE_DEPTH;
@@ -329,11 +354,21 @@ static enum block_io_error_class nvme_io_cmd_classified(
   nvme_ring_sq_doorbell(dev, 1, dev->io_sq_tail);
 
   for (int i = 0; i < NVME_IO_TIMEOUT_SPINS; i++) {
-    struct nvme_cqe *entry = &dev->io_cq[dev->io_cq_head];
+    volatile struct nvme_cqe *entry = &dev->io_cq[dev->io_cq_head];
     uint16_t status = entry->status;
     int phase = status & 1;
 
     if (phase == dev->io_cq_phase) {
+      mb();
+      if (!nvme_io_completion_matches(expected_cid, 1u, entry->cid,
+                                      entry->sq_id)) {
+        dev->io_queue_quarantined = 1u;
+        dev->abandoned_cid = expected_cid;
+        if (cmd->opcode == NVME_CMD_FLUSH)
+          dev->flush_indeterminate = 1u;
+        __sync_lock_release(&dev->io_busy);
+        return BLOCK_IO_ERR_TIMEOUT;
+      }
       if (cqe)
         *cqe = *entry;
 
@@ -351,6 +386,7 @@ static enum block_io_error_class nvme_io_cmd_classified(
         klog(KLOG_WARN, block_io_error_class_name(cls));
         klog_hex(KLOG_WARN, "[nvme] I/O cmd sc=", sc);
       }
+      __sync_lock_release(&dev->io_busy);
       return cls;
     }
     cpu_relax();
@@ -361,6 +397,9 @@ static enum block_io_error_class nvme_io_cmd_classified(
         block_io_classify_nvme(0, /*timed_out=*/1);
     klog(KLOG_WARN, "[nvme] I/O cmd timeout");
     klog(KLOG_WARN, block_io_error_class_name(cls));
+    dev->io_queue_quarantined = 1u;
+    dev->abandoned_cid = expected_cid;
+    __sync_lock_release(&dev->io_busy);
     return cls;
   }
 }
@@ -372,28 +411,37 @@ static int nvme_io_cmd(struct nvme_device *dev, struct nvme_sqe *cmd,
   return nvme_io_cmd_classified(dev, cmd, cqe) == BLOCK_IO_OK ? 0 : -1;
 }
 
+static int nvme_operation_begin(struct nvme_device *dev);
+static void nvme_operation_end(struct nvme_device *dev);
+
 /* Read blocks from NVMe */
 int nvme_read_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
                      void *buffer) {
   struct nvme_sqe cmd;
   struct nvme_cqe cqe;
+  int rc = 0;
+  if (!dev || !buffer || count == 0u || !nvme_operation_begin(dev))
+    return -1;
 
   /* For simplicity, read one block at a time using internal buffer */
   uint8_t *dst = (uint8_t *)buffer;
   for (uint32_t i = 0; i < count; i++) {
     if (nvme_build_rw_cmd(&cmd, NVME_CMD_READ, dev->nsid, lba + i, 1u,
                           g_io_buffer) != 0) {
-      return -1;
+      rc = -1;
+      break;
     }
 
     if (nvme_io_cmd(dev, &cmd, &cqe) != 0) {
       klog_hex(KLOG_WARN, "[nvme] read failed lba=", lba + i);
-      return -1;
+      rc = -1;
+      break;
     }
 
     __builtin_memcpy(dst + i * dev->block_size, g_io_buffer, dev->block_size);
   }
-  return 0;
+  nvme_operation_end(dev);
+  return rc;
 }
 
 /* Write blocks to NVMe */
@@ -401,6 +449,9 @@ int nvme_write_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
                       const void *buffer) {
   struct nvme_sqe cmd;
   struct nvme_cqe cqe;
+  int rc = 0;
+  if (!dev || !buffer || count == 0u || !nvme_operation_begin(dev))
+    return -1;
 
   const uint8_t *src = (const uint8_t *)buffer;
   for (uint32_t i = 0; i < count; i++) {
@@ -408,15 +459,18 @@ int nvme_write_blocks(struct nvme_device *dev, uint64_t lba, uint32_t count,
 
     if (nvme_build_rw_cmd(&cmd, NVME_CMD_WRITE, dev->nsid, lba + i, 1u,
                           g_io_buffer) != 0) {
-      return -1;
+      rc = -1;
+      break;
     }
 
     if (nvme_io_cmd(dev, &cmd, &cqe) != 0) {
       klog_hex(KLOG_WARN, "[nvme] write failed lba=", lba + i);
-      return -1;
+      rc = -1;
+      break;
     }
   }
-  return 0;
+  nvme_operation_end(dev);
+  return rc;
 }
 
 /* Block device interface */
@@ -443,6 +497,23 @@ static void nvme_smoke_signal_ok(void) {
   }
 }
 
+static int nvme_operation_begin(struct nvme_device *dev) {
+  if (!dev || dev->io_queue_quarantined)
+    return 0;
+  while (__sync_lock_test_and_set(&dev->operation_busy, 1))
+    cpu_relax();
+  if (dev->io_queue_quarantined) {
+    __sync_lock_release(&dev->operation_busy);
+    return 0;
+  }
+  return 1;
+}
+
+static void nvme_operation_end(struct nvme_device *dev) {
+  if (dev)
+    __sync_lock_release(&dev->operation_busy);
+}
+
 static enum block_io_error_class nvme_block_read_ex(void *opaque,
                                                     uint32_t block_no,
                                                     void *buffer) {
@@ -450,19 +521,23 @@ static enum block_io_error_class nvme_block_read_ex(void *opaque,
   struct nvme_sqe cmd;
   struct nvme_cqe cqe;
   enum block_io_error_class cls;
-  if (!dev || !buffer) {
+  if (!dev || !buffer || dev->io_queue_quarantined)
     return BLOCK_IO_ERR_PERMANENT;
-  }
+  if (!nvme_operation_begin(dev))
+    return BLOCK_IO_ERR_PERMANENT;
   if (nvme_build_rw_cmd(&cmd, NVME_CMD_READ, dev->nsid, (uint64_t)block_no,
                         1u, g_io_buffer) != 0) {
+    nvme_operation_end(dev);
     return BLOCK_IO_ERR_PERMANENT;
   }
   cls = nvme_io_cmd_classified(dev, &cmd, &cqe);
   if (cls != BLOCK_IO_OK) {
+    nvme_operation_end(dev);
     return cls;
   }
   __builtin_memcpy(buffer, g_io_buffer, dev->block_size);
   nvme_smoke_signal_ok();
+  nvme_operation_end(dev);
   return BLOCK_IO_OK;
 }
 
@@ -473,18 +548,39 @@ static enum block_io_error_class nvme_block_write_ex(void *opaque,
   struct nvme_sqe cmd;
   struct nvme_cqe cqe;
   enum block_io_error_class cls;
-  if (!dev || !buffer) {
+  if (!dev || !buffer || dev->io_queue_quarantined)
     return BLOCK_IO_ERR_PERMANENT;
-  }
+  if (!nvme_operation_begin(dev))
+    return BLOCK_IO_ERR_PERMANENT;
   __builtin_memcpy(g_io_buffer, buffer, dev->block_size);
   if (nvme_build_rw_cmd(&cmd, NVME_CMD_WRITE, dev->nsid, (uint64_t)block_no,
                         1u, g_io_buffer) != 0) {
+    nvme_operation_end(dev);
     return BLOCK_IO_ERR_PERMANENT;
   }
   cls = nvme_io_cmd_classified(dev, &cmd, &cqe);
-  if (cls == BLOCK_IO_OK) {
+  if (cls == BLOCK_IO_OK)
     nvme_smoke_signal_ok();
+  nvme_operation_end(dev);
+  return cls;
+}
+
+static enum block_io_error_class nvme_block_flush_ex(void *opaque) {
+  struct nvme_device *dev = (struct nvme_device *)opaque;
+  struct nvme_sqe cmd;
+  enum block_io_error_class cls;
+  if (!dev || dev->nsid == 0u || dev->io_queue_quarantined)
+    return BLOCK_IO_ERR_PERMANENT;
+  if (!nvme_operation_begin(dev))
+    return BLOCK_IO_ERR_PERMANENT;
+  if (nvme_build_flush_cmd(&cmd, dev->nsid) != 0) {
+    nvme_operation_end(dev);
+    return BLOCK_IO_ERR_PERMANENT;
   }
+  cls = nvme_io_cmd_classified(dev, &cmd, NULL);
+  if (cls == BLOCK_IO_ERR_TIMEOUT || dev->io_queue_quarantined)
+    dev->flush_indeterminate = 1u;
+  nvme_operation_end(dev);
   return cls;
 }
 
@@ -549,6 +645,19 @@ static int nvme_controller_reset(struct nvme_device *dev) {
     klog_hex(KLOG_ERROR, "[nvme] reset CSTS still RDY=", csts);
     return -1;
   }
+  for (uint32_t i = 0u; i < NVME_QUEUE_DEPTH; ++i) {
+    __builtin_memset(&g_admin_sq[i], 0, sizeof(g_admin_sq[i]));
+    __builtin_memset(&g_admin_cq[i], 0, sizeof(g_admin_cq[i]));
+  }
+  dev->admin_sq = g_admin_sq;
+  dev->admin_cq = g_admin_cq;
+  dev->admin_sq_tail = 0u;
+  dev->admin_cq_head = 0u;
+  dev->admin_cq_phase = 1u;
+  mmio_write32(dev->bar + NVME_AQA,
+               ((NVME_QUEUE_DEPTH - 1u) << 16) | (NVME_QUEUE_DEPTH - 1u));
+  mmio_write64(dev->bar + NVME_ASQ, (uint64_t)(uintptr_t)dev->admin_sq);
+  mmio_write64(dev->bar + NVME_ACQ, (uint64_t)(uintptr_t)dev->admin_cq);
   mmio_write32(dev->bar + NVME_CC, cc | NVME_CC_EN);
   /* Stage 4 spin: wait for CSTS.RDY=1 after CC.EN=1. Same CFS
    * early-exit applies; a controller that comes back with CFS=1
@@ -627,28 +736,32 @@ static int nvme_controller_reset(struct nvme_device *dev) {
 }
 
 static int nvme_reset_op(void *opaque) {
-  return nvme_controller_reset((struct nvme_device *)opaque);
-}
-
-static struct block_device_ops nvme_block_ops;
-static int nvme_block_ops_initialized = 0;
-
-static void nvme_init_block_ops(void) {
-  if (nvme_block_ops_initialized) {
-    return;
+  struct nvme_device *dev = (struct nvme_device *)opaque;
+  int rc;
+  if (!dev || dev->flush_indeterminate ||
+      __sync_lock_test_and_set(&dev->operation_busy, 1))
+    return -1;
+  rc = nvme_controller_reset(dev);
+  if (rc == 0) {
+    dev->io_queue_quarantined = 0u;
+    dev->abandoned_cid = 0u;
   }
-  nvme_block_ops.read_block = nvme_block_read;
-  nvme_block_ops.write_block = nvme_block_write;
-  nvme_block_ops.read_block_ex = nvme_block_read_ex;
-  nvme_block_ops.write_block_ex = nvme_block_write_ex;
-  nvme_block_ops.reset = nvme_reset_op;
-  nvme_block_ops_initialized = 1;
+  __sync_lock_release(&dev->operation_busy);
+  return rc;
 }
+
+static const struct block_device_ops nvme_block_ops = {
+    .read_block = nvme_block_read,
+    .write_block = nvme_block_write,
+    .read_block_ex = nvme_block_read_ex,
+    .write_block_ex = nvme_block_write_ex,
+    .reset = nvme_reset_op,
+    .flush_ex = nvme_block_flush_ex,
+};
 
 static struct block_device g_nvme_block_dev;
 
 int nvme_init(void) {
-  nvme_init_block_ops();
   struct pci_device pci_dev;
 
   klog(KLOG_INFO, "[nvme] scanning for NVMe controller...");

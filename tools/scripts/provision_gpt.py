@@ -10,8 +10,8 @@ This script writes:
       \\BOOT\\MANIFEST.BIN
       \\BOOT\\CAPYCFG.BIN (keyboard layout + optional lab-only volume key)
   - BOOT partition (raw):
-      LBA+0: manifest.bin (512 bytes)
-      LBA+1: kernel ELF (raw bytes)
+      slot A CAPYSLT0 header + kernel payload
+      redundant CAPYAB00 controls (generations 1/2)
   - DATA scrub (head/tail/mid) to avoid stale-volume false positives
 
 It can operate on:

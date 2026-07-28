@@ -9,6 +9,8 @@ struct mem_backend {
     uint32_t block_size;
     uint32_t block_count;
     uint8_t *data;
+    uint32_t flush_count;
+    enum block_io_error_class flush_result;
 };
 
 static int mem_read(void *ctx, uint32_t block_no, void *buffer) {
@@ -29,15 +31,29 @@ static int mem_write(void *ctx, uint32_t block_no, const void *buffer) {
     return 0;
 }
 
+static enum block_io_error_class mem_flush_ex(void *ctx) {
+    struct mem_backend *m = (struct mem_backend *)ctx;
+    m->flush_count++;
+    return m->flush_result;
+}
+
 static struct block_device_ops g_mem_ops = {
     .read_block = mem_read,
     .write_block = mem_write,
+};
+
+static struct block_device_ops g_mem_flush_ops = {
+    .read_block = mem_read,
+    .write_block = mem_write,
+    .flush_ex = mem_flush_ex,
 };
 
 static void mem_backend_init(struct mem_backend *m, uint32_t block_size, uint32_t block_count) {
     m->block_size = block_size;
     m->block_count = block_count;
     m->data = (uint8_t *)calloc(block_count, block_size);
+    m->flush_count = 0u;
+    m->flush_result = BLOCK_IO_OK;
 }
 
 static void mem_backend_free(struct mem_backend *m) {
@@ -167,6 +183,70 @@ static int test_chunk_offset_combo(void) {
     return 0;
 }
 
+static int test_wrappers_forward_flush_capability(void) {
+    struct mem_backend mem;
+    struct block_device base;
+    struct block_device *offset;
+    struct block_device *chunked;
+    mem_backend_init(&mem, 512, 16);
+    base = (struct block_device){.name = "mem", .block_size = 512,
+                                 .block_count = 16, .ctx = &mem,
+                                 .ops = &g_mem_flush_ops};
+    offset = block_offset_wrap(&base, 2, 8);
+    chunked = block_chunked_wrap(offset, 1024);
+    if (!offset || !chunked || !block_device_supports_flush(offset) ||
+        !block_device_supports_flush(chunked) || block_device_flush(chunked) != 0 ||
+        mem.flush_count != 1u) {
+        printf("[wrappers] flush capability/forwarding failed\n");
+        return 1;
+    }
+    mem.flush_count = 0u;
+    mem.flush_result = BLOCK_IO_ERR_TRANSIENT;
+    if (block_device_flush_ex(chunked) != BLOCK_IO_ERR_TRANSIENT ||
+        mem.flush_count != 4u) {
+        printf("[wrappers] transient flush retry budget multiplied\n");
+        return 1;
+    }
+    mem.flush_count = 0u;
+    mem.flush_result = BLOCK_IO_ERR_TIMEOUT;
+    if (block_device_flush_ex(chunked) != BLOCK_IO_ERR_TIMEOUT ||
+        mem.flush_count != 1u) {
+        printf("[wrappers] timeout flush retried\n");
+        return 1;
+    }
+    kfree(chunked->ctx);
+    kfree(chunked);
+    kfree(offset->ctx);
+    kfree(offset);
+    mem_backend_free(&mem);
+    return 0;
+}
+
+static int test_wrappers_hide_missing_flush(void) {
+    struct mem_backend mem;
+    struct block_device base;
+    struct block_device *offset;
+    struct block_device *chunked;
+    mem_backend_init(&mem, 512, 16);
+    base = (struct block_device){.name = "mem", .block_size = 512,
+                                 .block_count = 16, .ctx = &mem,
+                                 .ops = &g_mem_ops};
+    offset = block_offset_wrap(&base, 2, 8);
+    chunked = block_chunked_wrap(offset, 1024);
+    if (!offset || !chunked || block_device_supports_flush(offset) ||
+        block_device_supports_flush(chunked) || block_device_flush(chunked) == 0 ||
+        mem.flush_count != 0u) {
+        printf("[wrappers] missing flush capability leaked\n");
+        return 1;
+    }
+    kfree(chunked->ctx);
+    kfree(chunked);
+    kfree(offset->ctx);
+    kfree(offset);
+    mem_backend_free(&mem);
+    return 0;
+}
+
 static int test_offset_invalid_range(void) {
     struct mem_backend mem;
     mem_backend_init(&mem, 512, 16);
@@ -187,6 +267,8 @@ int run_block_wrapper_tests(void) {
     fails += test_offset_wrap_basic();
     fails += test_chunk_wrap_rw();
     fails += test_chunk_offset_combo();
+    fails += test_wrappers_forward_flush_capability();
+    fails += test_wrappers_hide_missing_flush();
     fails += test_offset_invalid_range();
     if (fails == 0) {
         printf("[tests] block_wrappers OK\n");

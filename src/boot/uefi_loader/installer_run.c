@@ -1,6 +1,7 @@
 #include "internal/uefi_loader_internal.h"
 
-static EFI_STATUS write_boot_partition_raw(EFI_BLOCK_IO_PROTOCOL *bio,
+static EFI_STATUS __attribute__((unused)) write_boot_partition_legacy(EFI_BLOCK_IO_PROTOCOL *bio,
+                                           UINT32 expected_media_id,
                                            UINT64 boot_lba, UINT64 boot_sectors,
                                            const struct boot_manifest *mf,
                                            const UINT8 *kernel,
@@ -9,10 +10,21 @@ static EFI_STATUS write_boot_partition_raw(EFI_BLOCK_IO_PROTOCOL *bio,
     return EFI_INVALID_PARAMETER;
   if (bio->Media->BlockSize != 512)
     return EFI_UNSUPPORTED;
+  if (bio->Media->MediaId != expected_media_id || boot_sectors == 0u ||
+      boot_lba > bio->Media->LastBlock ||
+      boot_sectors - 1u > bio->Media->LastBlock - boot_lba ||
+      boot_sectors > UINT64_MAX / 512ULL || kernel_sz == 0u ||
+      kernel_sz > UINT32_MAX || kernel_sz > ~(UINTN)0 - 511u)
+    return EFI_INVALID_PARAMETER;
   UINT64 total_bytes = boot_sectors * 512ULL;
-  UINT32 ksec = (UINT32)((kernel_sz + 511U) / 512U);
+  UINTN ksec_n = kernel_sz / 512u;
+  if (kernel_sz % 512u != 0u)
+    ksec_n++;
+  if (ksec_n == 0u || ksec_n > UINT32_MAX)
+    return EFI_INVALID_PARAMETER;
+  UINT32 ksec = (UINT32)ksec_n;
   UINT64 needed = 512ULL + (UINT64)ksec * 512ULL;
-  if (needed > total_bytes)
+  if (needed > total_bytes || boot_lba == UINT64_MAX)
     return EFI_OUT_OF_RESOURCES;
 
   UINT8 mfs[512];
@@ -21,27 +33,157 @@ static EFI_STATUS write_boot_partition_raw(EFI_BLOCK_IO_PROTOCOL *bio,
   const UINT8 *mfb = (const UINT8 *)mf;
   for (UINTN i = 0; i < sizeof(struct boot_manifest) && i < 512; i++)
     mfs[i] = mfb[i];
-  EFI_STATUS stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio,
-                                     bio->Media->MediaId, boot_lba, 512, mfs);
+  EFI_STATUS stt = uefi_block_io_write(bio, expected_media_id, boot_lba, sizeof(mfs), mfs);
   if (EFI_ERROR(stt))
     return stt;
 
   UINTN kbytes = (UINTN)ksec * 512U;
-  UINT8 *kbuf = AllocatePool(kbytes);
-  if (!kbuf)
-    return EFI_OUT_OF_RESOURCES;
+  VOID *kallocation = NULL;
+  VOID *kbuffer = NULL;
+  stt = uefi_block_io_allocate_aligned(bio, kbytes, &kallocation, &kbuffer);
+  if (EFI_ERROR(stt))
+    return stt;
+  UINT8 *kbuf = (UINT8 *)kbuffer;
   for (UINTN i = 0; i < kbytes; i++)
     kbuf[i] = 0;
   for (UINTN i = 0; i < kernel_sz; i++)
     kbuf[i] = kernel[i];
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          boot_lba + 1ULL, kbytes, kbuf);
-  FreePool(kbuf);
+  stt = uefi_block_io_write(bio, expected_media_id, boot_lba + 1ULL, kbytes, kbuf);
+  FreePool(kallocation);
   if (EFI_ERROR(stt))
     return stt;
+  return uefi_block_io_flush(bio, expected_media_id);
+}
 
-  uefi_call_wrapper(bio->FlushBlocks, 1, bio);
+static EFI_STATUS write_boot_partition_raw(EFI_BLOCK_IO_PROTOCOL *bio,
+                                          UINT32 expected_media_id,
+                                          UINT64 boot_lba,
+                                          UINT64 boot_sectors,
+                                          const UINT8 *kernel,
+                                          UINTN kernel_sz) {
+  struct boot_slot_layout layout;
+  struct boot_slot_image image;
+  struct boot_slot_store store;
+  struct boot_slot_manager manager;
+  struct uefi_boot_store_context ctx;
+  UINT8 header[BOOT_SLOT_STORE_SECTOR_SIZE];
+  UINT8 readback[BOOT_SLOT_STORE_SECTOR_SIZE];
+  VOID *allocation = NULL;
+  VOID *buffer = NULL;
+  UINTN rounded;
+  UINT32 sectors;
+  EFI_STATUS status;
+  if (!bio || !bio->Media || !kernel || bio->Media->BlockSize != 512u ||
+      bio->Media->MediaId != expected_media_id || boot_sectors == 0u ||
+      boot_sectors > UINT32_MAX || boot_lba > bio->Media->LastBlock ||
+      boot_sectors - 1u > bio->Media->LastBlock - boot_lba ||
+      kernel_sz == 0u || kernel_sz > UINT32_MAX ||
+      kernel_sz > ~(UINTN)0 - 511u)
+    return EFI_INVALID_PARAMETER;
+  if (boot_slot_layout_plan((UINT32)boot_sectors, &layout) != 0 ||
+      validate_kernel_buffer((VOID *)kernel, kernel_sz) != EFI_SUCCESS)
+    return EFI_UNSUPPORTED;
+  sectors = (UINT32)((kernel_sz + 511u) / 512u);
+  if (sectors == 0u || sectors > layout.slots[0].payload_capacity_sectors)
+    return EFI_OUT_OF_RESOURCES;
+  rounded = (UINTN)sectors * 512u;
+  for (UINTN i = 0u; i < sizeof(image); ++i)
+    ((UINT8 *)&image)[i] = 0u;
+  for (UINTN i = 0u; i + 1u < sizeof(image.version) && CAPYOS_VERSION_FULL[i];
+       ++i)
+    image.version[i] = CAPYOS_VERSION_FULL[i];
+  image.payload_size = (UINT32)kernel_sz;
+  sha256_hash(kernel, kernel_sz, image.payload_sha256);
+  status = uefi_block_io_allocate_aligned(bio, rounded, &allocation, &buffer);
+  if (EFI_ERROR(status))
+    return status;
+  for (UINTN i = 0u; i < rounded; ++i)
+    ((UINT8 *)buffer)[i] = i < kernel_sz ? kernel[i] : 0u;
+  status = uefi_block_io_write(bio, expected_media_id,
+                               boot_lba + layout.slots[0].payload_lba,
+                               rounded, buffer);
+  if (!EFI_ERROR(status))
+    status = uefi_block_io_flush(bio, expected_media_id);
+  if (!EFI_ERROR(status)) {
+    for (UINTN i = 0u; i < rounded; ++i)
+      ((UINT8 *)buffer)[i] = 0u;
+    status = uefi_block_io_read(bio, expected_media_id,
+                                boot_lba + layout.slots[0].payload_lba,
+                                rounded, buffer);
+  }
+  if (!EFI_ERROR(status)) {
+    UINT8 digest[SHA256_DIGEST_SIZE];
+    sha256_hash(buffer, kernel_sz, digest);
+    if (!uefi_slot_bytes_equal(digest, image.payload_sha256,
+                               SHA256_DIGEST_SIZE))
+      status = EFI_CRC_ERROR;
+    for (UINTN i = kernel_sz; !EFI_ERROR(status) && i < rounded; ++i) {
+      if (((UINT8 *)buffer)[i] != 0u)
+        status = EFI_CRC_ERROR;
+    }
+  }
+  FreePool(allocation);
+  if (EFI_ERROR(status))
+    return status;
+  if (boot_slot_store_encode_header(&layout, 0u, &image, header) != 0)
+    return EFI_COMPROMISED_DATA;
+  status = uefi_block_io_write(bio, expected_media_id,
+                               boot_lba + layout.slots[0].header_lba,
+                               sizeof(header), header);
+  if (!EFI_ERROR(status))
+    status = uefi_block_io_flush(bio, expected_media_id);
+  if (!EFI_ERROR(status))
+    status = uefi_block_io_read(bio, expected_media_id,
+                                boot_lba + layout.slots[0].header_lba,
+                                sizeof(readback), readback);
+  if (EFI_ERROR(status) ||
+      !uefi_slot_bytes_equal(header, readback, sizeof(header)))
+    return EFI_ERROR(status) ? status : EFI_CRC_ERROR;
+  ctx.bio = bio;
+  ctx.media_id = expected_media_id;
+  ctx.boot_lba = boot_lba;
+  ctx.boot_sectors = (UINT32)boot_sectors;
+  if (boot_slot_init() != 0 ||
+      boot_slot_store_init(&store, &layout, uefi_boot_store_read,
+                           uefi_boot_store_write, uefi_boot_store_flush,
+                           &ctx) != 0 ||
+      boot_slot_store_bind_control(&store, 0u) != BOOT_SLOT_PERSIST_EMPTY ||
+      boot_slot_store_initialize_persistent(&store, 0u, &image) != 0 ||
+      boot_slot_manager_get(&manager) != 0 || manager.active_slot != 0u ||
+      manager.confirmed_slot != 0u || manager.pending_slot != BOOT_SLOT_NONE ||
+      boot_slot_persistence_generation() != 2u)
+    return EFI_COMPROMISED_DATA;
   return EFI_SUCCESS;
+}
+
+static UINT32 installer_get_u32(const UINT8 *data) {
+  return (UINT32)data[0] | ((UINT32)data[1] << 8) |
+         ((UINT32)data[2] << 16) | ((UINT32)data[3] << 24);
+}
+
+static int installer_bootx64_valid(const UINT8 *data, UINTN size) {
+  UINT32 pe_offset;
+  if (!data || size < 0x40u || data[0] != 'M' || data[1] != 'Z')
+    return 0;
+  pe_offset = installer_get_u32(data + 0x3Cu);
+  if (pe_offset > size || size - pe_offset < 26u ||
+      data[pe_offset] != 'P' || data[pe_offset + 1u] != 'E' ||
+      data[pe_offset + 2u] != 0u || data[pe_offset + 3u] != 0u ||
+      data[pe_offset + 4u] != 0x64u || data[pe_offset + 5u] != 0x86u ||
+      data[pe_offset + 24u] != 0x0Bu || data[pe_offset + 25u] != 0x02u)
+    return 0;
+  return 1;
+}
+
+static EFI_STATUS installer_release(EFI_FILE_HANDLE root, VOID *bootx64_buf,
+                                    VOID *kernel_buf, EFI_STATUS status) {
+  if (root)
+    uefi_call_wrapper(root->Close, 1, root);
+  if (bootx64_buf)
+    FreePool(bootx64_buf);
+  if (kernel_buf)
+    FreePool(kernel_buf);
+  return status;
 }
 
 EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
@@ -62,7 +204,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     Print(
         L"[UEFI] Instalador: BOOTX64.EFI n\u00E3o encontrado no volume: %r\r\n",
         stt);
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
   stt = read_file(root, L"BOOT\\CAPYOS64.BIN", &kernel_buf, &kernel_sz);
@@ -88,7 +230,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   if (EFI_ERROR(stt)) {
     Print(L"[UEFI] Instalador: kernel n\u00E3o encontrado no volume: %r\r\n",
           stt);
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
   installer_disk_target_t target;
@@ -104,11 +246,12 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   stt = choose_target_disk(st, &target);
   if (stt == EFI_ABORTED) {
     Print(L"\r\n[UEFI] Installation cancelled.\r\n");
-    return EFI_ABORTED;
+    return installer_release(root, bootx64_buf, kernel_buf, EFI_ABORTED);
   }
   if (EFI_ERROR(stt) || !target.bio || !target.bio->Media) {
     Print(L"[UEFI] Installer: no eligible writable disk found: %r\r\n", stt);
-    return EFI_ERROR(stt) ? stt : EFI_NOT_FOUND;
+    return installer_release(root, bootx64_buf, kernel_buf,
+                             EFI_ERROR(stt) ? stt : EFI_NOT_FOUND);
   }
   disk = target.bio;
 
@@ -127,7 +270,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   if (uefi_installer_read_key(st, &key) != 0 ||
       (key.UnicodeChar != L'I' && key.UnicodeChar != L'i')) {
     Print(L"\r\n[UEFI] Installation cancelled.\r\n");
-    return EFI_ABORTED;
+    return installer_release(root, bootx64_buf, kernel_buf, EFI_ABORTED);
   }
   Print(L"\r\n\r\n");
 
@@ -394,7 +537,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   if (normalize_key_char16(recovery_key, recovery_key_norm,
                            sizeof(recovery_key_norm)) != 0) {
     Print(L"[UEFI] Falha ao gerar chave de volume.\r\n");
-    return EFI_DEVICE_ERROR;
+    return installer_release(root, bootx64_buf, kernel_buf, EFI_DEVICE_ERROR);
   }
   /* alpha.241: minimal volume-key disclosure and confirmation.
    *
@@ -423,14 +566,30 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   char16_to_ascii(confirm_ascii, sizeof(confirm_ascii), confirm);
   if (!installer_disk_confirmation_valid(confirm_ascii)) {
     Print(L"[UEFI] Installation cancelled: confirmation did not match.\r\n");
-    return EFI_ABORTED;
+    return installer_release(root, bootx64_buf, kernel_buf, EFI_ABORTED);
   }
   stt = installer_revalidate_target(st, &target);
   if (EFI_ERROR(stt)) {
     Print(L"[UEFI] Target disk changed or failed preflight: %r\r\n", stt);
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
   Print(L"\r\n");
+  {
+    struct boot_slot_layout preflight_layout;
+    UINTN preflight_sectors = (kernel_sz + 511u) / 512u;
+    if (!installer_bootx64_valid(bootx64_buf, bootx64_sz) ||
+        kernel_sz == 0u || kernel_sz > UINT32_MAX ||
+        kernel_sz > ~(UINTN)0 - 511u ||
+        target.layout.boot_sectors > UINT32_MAX || preflight_sectors == 0u ||
+        boot_slot_layout_plan((UINT32)target.layout.boot_sectors,
+                              &preflight_layout) != 0 ||
+        preflight_sectors > preflight_layout.slots[0].payload_capacity_sectors ||
+        validate_kernel_buffer(kernel_buf, kernel_sz) != EFI_SUCCESS) {
+      Print(L"[UEFI] Kernel/BOOT A/B preflight failed before erase.\r\n");
+      return installer_release(root, bootx64_buf, kernel_buf,
+                               EFI_LOAD_ERROR);
+    }
+  }
 
   // Clean install policy: wipe entire target disk before creating a new GPT.
   UINT64 full_disk_sectors = target.layout.total_sectors;
@@ -441,7 +600,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   } else {
     Print(L"[UEFI] Wiping the full disk...\r\n");
   }
-  stt = wipe_blocks(disk, 0, full_disk_sectors);
+  stt = wipe_blocks(disk, target.media_id, 0, full_disk_sectors);
   if (EFI_ERROR(stt)) {
     if (install_language == INSTALLER_LANG_PT_BR) {
       Print(L"[UEFI] Falha ao limpar disco: %r\r\n", stt);
@@ -450,12 +609,12 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     } else {
       Print(L"[UEFI] Failed to wipe the disk: %r\r\n", stt);
     }
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
   stt = installer_revalidate_target(st, &target);
   if (EFI_ERROR(stt)) {
     Print(L"[UEFI] Target disk changed after wipe: %r\r\n", stt);
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
   UINT64 esp_lba = 0, esp_secs = 0, boot_lba = 0, boot_secs = 0;
@@ -467,7 +626,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   } else {
     Print(L"[UEFI] Writing GPT...\r\n");
   }
-  stt = gpt_write_layout(st, disk, &target.layout, &esp_lba, &esp_secs,
+  stt = gpt_write_layout(st, disk, target.media_id, &target.layout, &esp_lba, &esp_secs,
                          &boot_lba, &boot_secs, &data_lba, &data_secs);
   if (EFI_ERROR(stt)) {
     if (install_language == INSTALLER_LANG_PT_BR) {
@@ -477,7 +636,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     } else {
       Print(L"[UEFI] GPT failed: %r\r\n", stt);
     }
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
   if (install_language == INSTALLER_LANG_PT_BR) {
@@ -487,7 +646,8 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   } else {
     Print(L"[UEFI] Preparing DATA partition for first boot...\r\n");
   }
-  stt = scrub_data_partition_for_first_boot(disk, data_lba, data_secs);
+  stt = scrub_data_partition_for_first_boot(disk, target.media_id, data_lba,
+                                             data_secs);
   if (EFI_ERROR(stt)) {
     if (install_language == INSTALLER_LANG_PT_BR) {
       Print(L"[UEFI] Falha ao preparar DATA: %r\r\n", stt);
@@ -496,12 +656,22 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     } else {
       Print(L"[UEFI] Failed to prepare DATA: %r\r\n", stt);
     }
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
   // Build manifest for BOOT partition: manifest@0, kernel@+1
   struct boot_manifest mf;
-  UINT32 ksec = (UINT32)((kernel_sz + 511U) / 512U);
+  if (kernel_sz == 0u || kernel_sz > UINT32_MAX ||
+      kernel_sz > ~(UINTN)0 - 511u)
+    return installer_release(root, bootx64_buf, kernel_buf,
+                             EFI_INVALID_PARAMETER);
+  UINTN manifest_ksec = kernel_sz / 512u;
+  if (kernel_sz % 512u != 0u)
+    manifest_ksec++;
+  if (manifest_ksec == 0u || manifest_ksec > UINT32_MAX)
+    return installer_release(root, bootx64_buf, kernel_buf,
+                             EFI_INVALID_PARAMETER);
+  UINT32 ksec = (UINT32)manifest_ksec;
   UINT32 cksum = checksum32_words((const UINT8 *)kernel_buf, kernel_sz);
   build_manifest(&mf, 1, ksec, cksum);
 
@@ -553,10 +723,10 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
       persisted_len != key_len ||
       !ascii_streq(boot_cfg.volume_key, recovery_key_norm)) {
     Print(L"[UEFI] ERRO: chave de volume nao persistivel no BOOT config.\r\n");
-    return EFI_CRC_ERROR;
+    return installer_release(root, bootx64_buf, kernel_buf, EFI_CRC_ERROR);
   }
 
-  stt = fat32_write_volume(disk, esp_lba, esp_secs, (const UINT8 *)bootx64_buf,
+  stt = fat32_write_volume(disk, target.media_id, esp_lba, esp_secs, (const UINT8 *)bootx64_buf,
                            bootx64_sz, (const UINT8 *)kernel_buf, kernel_sz,
                            (const UINT8 *)&mf, sizeof(mf),
                            (const UINT8 *)&boot_cfg, sizeof(boot_cfg));
@@ -571,7 +741,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     } else {
       Print(L"[UEFI] FAT32/ESP failed: %r\r\n", stt);
     }
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
   if (install_language == INSTALLER_LANG_PT_BR) {
@@ -581,7 +751,7 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   } else {
     Print(L"[UEFI] Writing BOOT (manifest+kernel)...\r\n");
   }
-  stt = write_boot_partition_raw(disk, boot_lba, boot_secs, &mf,
+  stt = write_boot_partition_raw(disk, target.media_id, boot_lba, boot_secs,
                                  (const UINT8 *)kernel_buf, kernel_sz);
   if (EFI_ERROR(stt)) {
     if (install_language == INSTALLER_LANG_PT_BR) {
@@ -591,10 +761,25 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     } else {
       Print(L"[UEFI] BOOT raw failed: %r\r\n", stt);
     }
-    return stt;
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
   }
 
-  uefi_call_wrapper(disk->FlushBlocks, 1, disk);
+  stt = uefi_block_io_flush(disk, target.media_id);
+  if (EFI_ERROR(stt)) {
+    Print(L"[UEFI] Final disk flush failed: %r\r\n", stt);
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
+  }
+  stt = installer_revalidate_target(st, &target);
+  if (EFI_ERROR(stt)) {
+    Print(L"[UEFI] Target disk changed before reboot: %r\r\n", stt);
+    return installer_release(root, bootx64_buf, kernel_buf, stt);
+  }
+  if (!st->RuntimeServices || !st->RuntimeServices->ResetSystem)
+    return installer_release(root, bootx64_buf, kernel_buf, EFI_UNSUPPORTED);
+  (void)installer_release(root, bootx64_buf, kernel_buf, EFI_SUCCESS);
+  root = NULL;
+  bootx64_buf = NULL;
+  kernel_buf = NULL;
 
   if (install_language == INSTALLER_LANG_PT_BR) {
     Print(L"[UEFI] Instalacao concluida. Reiniciando...\r\n");
@@ -606,6 +791,6 @@ EFI_STATUS installer_run(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
   uefi_installer_serial_write("[UEFI] Installation complete. Rebooting...\r\n");
   uefi_call_wrapper(st->RuntimeServices->ResetSystem, 4, EfiResetCold,
                     EFI_SUCCESS, 0, NULL);
-  return EFI_SUCCESS;
+  return EFI_DEVICE_ERROR;
 }
 

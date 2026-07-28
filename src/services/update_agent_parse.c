@@ -181,6 +181,30 @@ static const uint8_t update_agent_release_public_key[ED25519_PUBLIC_KEY_SIZE] = 
     0xc9, 0xac, 0xf3, 0x86, 0x6f, 0xb4, 0x86, 0x33,
     0xf4, 0xd2, 0x9e, 0x49, 0xde, 0x69, 0xae, 0x6d};
 
+#if defined(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)
+/* Lab-only trust anchor (Etapa 8 signed A/B gate). The production private key
+ * is offline and can never enter an automated gate, so a build gated by this
+ * macro verifies manifests against a throwaway key generated per run. The macro
+ * is never set by any official build: `iso-uefi` refuses a kernel carrying the
+ * banner below unless the caller is a smoke target, and the macro simultaneously
+ * relaxes `payload_url` to plain http:// so a hermetic host server can serve the
+ * payload. Malformed hex fails closed: never falls back to the release key. */
+const char *const update_agent_lab_trust_anchor_banner =
+    "[lab] update trust anchor overridden; kernel not for production\n";
+
+static const char update_agent_lab_trust_key_hex[] =
+    CAPYOS_UPDATE_LAB_TRUST_KEY_HEX;
+
+static int update_agent_lab_trust_key(uint8_t out[ED25519_PUBLIC_KEY_SIZE]) {
+  if (!update_agent_local_hex_string_valid(update_agent_lab_trust_key_hex,
+                                           ED25519_PUBLIC_KEY_SIZE * 2u)) {
+    return -1;
+  }
+  return update_agent_local_hex_to_bytes(update_agent_lab_trust_key_hex, out,
+                                         ED25519_PUBLIC_KEY_SIZE);
+}
+#endif
+
 int update_agent_manifest_payload_sha256_valid(
     const struct update_manifest_view *view) {
   return view &&
@@ -208,6 +232,14 @@ int update_agent_manifest_payload_url_valid(
     if (update_agent_local_equal(url, "https://")) {
       return 0;
     }
+#if defined(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)
+  } else if (update_agent_local_starts_with(url, "http://")) {
+    /* Lab gate only: a hermetic host server cannot present a publicly trusted
+     * certificate to the kernel TLS stack, which always verifies the peer. */
+    if (update_agent_local_equal(url, "http://")) {
+      return 0;
+    }
+#endif
   } else if (update_agent_local_starts_with(url, "/system/update/")) {
     if (update_agent_local_equal(url, "/system/update/")) {
       return 0;
@@ -262,9 +294,18 @@ int update_agent_manifest_signature_ed25519_valid(
    * `g_update_manifest_verifier` para fixture-based testing sem
    * precisar gerar assinaturas reais.
    */
-  return ed25519_verify(signature, (const uint8_t *)view->signed_text,
-                        view->signed_len,
-                        update_agent_release_public_key) == 0;
+  {
+    const uint8_t *trust_key = update_agent_release_public_key;
+#if defined(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)
+    uint8_t lab_key[ED25519_PUBLIC_KEY_SIZE];
+    if (update_agent_lab_trust_key(lab_key) != 0) {
+      return 0;
+    }
+    trust_key = lab_key;
+#endif
+    return ed25519_verify(signature, (const uint8_t *)view->signed_text,
+                          view->signed_len, trust_key) == 0;
+  }
 }
 
 int update_agent_manifest_compare_current(

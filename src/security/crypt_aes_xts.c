@@ -65,6 +65,7 @@ struct crypt_device {
   struct aes_ctx tweak_ctx;
   // Scratch buffer to avoid large stack allocations (kernel stack is small)
   uint8_t scratch[CRYPT_MAX_BLOCK_SIZE];
+  volatile int operation_busy;
 };
 
 static const uint8_t sbox[256] = {
@@ -388,18 +389,29 @@ static void xts_crypt(const struct crypt_device *crypt, uint32_t block_no,
   crypt_secure_clear(tweak, sizeof(tweak));
 }
 
+static int crypt_operation_begin(struct crypt_device *crypt) {
+  if (!crypt)
+    return 0;
+  while (__sync_lock_test_and_set(&crypt->operation_busy, 1))
+    __asm__ volatile("pause" ::: "memory");
+  return 1;
+}
+
+static void crypt_operation_end(struct crypt_device *crypt) {
+  if (crypt)
+    __sync_lock_release(&crypt->operation_busy);
+}
+
 static int crypt_read_block(void *ctx, uint32_t block_no, void *buffer) {
   struct crypt_device *crypt = (struct crypt_device *)ctx;
-  if (!crypt || !buffer) {
+  if (!crypt || !buffer || crypt->dev.block_size != CRYPT_MAX_BLOCK_SIZE ||
+      !crypt_operation_begin(crypt))
     return -1;
-  }
-  if (crypt->dev.block_size != CRYPT_MAX_BLOCK_SIZE) {
-    return -1;
-  }
   uint8_t *temp = crypt->scratch;
   if (block_device_read(crypt->lower, block_no, temp) != 0) {
     klog_hex(KLOG_ERROR, "[crypt] lower read fail blk=", (uint64_t)block_no);
     crypt_secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
+    crypt_operation_end(crypt);
     return -1;
   }
   if (block_no == 0) {
@@ -422,17 +434,15 @@ static int crypt_read_block(void *ctx, uint32_t block_no, void *buffer) {
              (uint64_t)crypt_be32((const uint8_t *)buffer + 4));
   }
   crypt_secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
+  crypt_operation_end(crypt);
   return 0;
 }
 
 static int crypt_write_block(void *ctx, uint32_t block_no, const void *buffer) {
   struct crypt_device *crypt = (struct crypt_device *)ctx;
-  if (!crypt || !buffer) {
+  if (!crypt || !buffer || crypt->dev.block_size != CRYPT_MAX_BLOCK_SIZE ||
+      !crypt_operation_begin(crypt))
     return -1;
-  }
-  if (crypt->dev.block_size != CRYPT_MAX_BLOCK_SIZE) {
-    return -1;
-  }
   uint8_t *temp = crypt->scratch;
   if (block_no == 0) {
     /* Slice 3E.4.C audit: plaintext snapshot of block 0 before XTS
@@ -458,25 +468,34 @@ static int crypt_write_block(void *ctx, uint32_t block_no, const void *buffer) {
     klog_hex(KLOG_ERROR, "[crypt] lower write fail blk=", (uint64_t)block_no);
   }
   crypt_secure_clear(temp, CRYPT_MAX_BLOCK_SIZE);
+  crypt_operation_end(crypt);
   return result;
 }
 
-static struct block_device_ops crypt_ops;
-static int crypt_ops_initialized = 0;
-
-static void crypt_init_ops(void) {
-  if (crypt_ops_initialized) {
-    return;
-  }
-  crypt_ops.read_block = crypt_read_block;
-  crypt_ops.write_block = crypt_write_block;
-  crypt_ops_initialized = 1;
+static enum block_io_error_class crypt_flush_ex(void *ctx) {
+  struct crypt_device *crypt = (struct crypt_device *)ctx;
+  enum block_io_error_class cls;
+  if (!crypt || !crypt->lower || !crypt_operation_begin(crypt))
+    return BLOCK_IO_ERR_PERMANENT;
+  cls = block_device_flush_once_ex(crypt->lower);
+  crypt_operation_end(crypt);
+  return cls;
 }
+
+static const struct block_device_ops crypt_ops = {
+    .read_block = crypt_read_block,
+    .write_block = crypt_write_block,
+};
+
+static const struct block_device_ops crypt_flush_ops = {
+    .read_block = crypt_read_block,
+    .write_block = crypt_write_block,
+    .flush_ex = crypt_flush_ex,
+};
 
 struct block_device *crypt_init(struct block_device *lower,
                                 const uint8_t key1[CRYPT_KEY_SIZE],
                                 const uint8_t key2[CRYPT_KEY_SIZE]) {
-  crypt_init_ops();
   if (!lower || !key1 || !key2) {
     return NULL;
   }
@@ -501,17 +520,20 @@ struct block_device *crypt_init(struct block_device *lower,
   crypt->dev.block_size = lower->block_size;
   crypt->dev.block_count = lower->block_count;
   crypt->dev.ctx = crypt;
-  crypt->dev.ops = &crypt_ops;
+  crypt->dev.ops = block_device_supports_flush(lower) ? &crypt_flush_ops
+                                                       : &crypt_ops;
 
   return &crypt->dev;
 }
 
 void crypt_free(struct block_device *dev) {
-  if (!dev || dev->ops != &crypt_ops) {
+  if (!dev || (dev->ops != &crypt_ops && dev->ops != &crypt_flush_ops)) {
     return;
   }
   // dev->ctx points to the start of struct crypt_device
   struct crypt_device *crypt = (struct crypt_device *)dev->ctx;
+  if (!crypt_operation_begin(crypt))
+    return;
 
   // Clear sensitive data before freeing
   crypt_secure_clear((uint8_t *)crypt, sizeof(struct crypt_device));

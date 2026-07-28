@@ -257,7 +257,24 @@ def _validate_ascii_value(key: str, value: str) -> None:
         )
 
 
-def validate_fields(fields: dict[str, str], require_signature: bool) -> None:
+def payload_url_prefixes(allow_lab_http: bool) -> tuple[str, ...]:
+    """Mirror update_agent_manifest_payload_url_valid().
+
+    `allow_lab_http` mirrors the kernel's CAPYOS_UPDATE_LAB_TRUST_KEY_HEX build,
+    which is the only configuration that accepts a plain-http payload URL. It
+    exists so the hermetic Etapa 8 A/B gate can sign a manifest the lab kernel
+    accepts; production manifests must never be built with it.
+    """
+    prefixes = ("https://", "/system/update/")
+    return (prefixes + ("http://",)) if allow_lab_http else prefixes
+
+
+def validate_fields(
+    fields: dict[str, str],
+    require_signature: bool,
+    *,
+    allow_lab_http: bool = False,
+) -> None:
     required = set(LEGACY_FIELD_ORDER)
     if require_signature:
         required.add("signature_ed25519")
@@ -282,11 +299,10 @@ def validate_fields(fields: dict[str, str], require_signature: bool) -> None:
     if parsed_date.isoformat() != fields["published_at"]:
         raise ManifestError("published_at must use canonical YYYY-MM-DD")
     url = fields["payload_url"]
-    if not (url.startswith("https://") or url.startswith("/system/update/")):
-        raise ManifestError("payload_url must use https:// or /system/update/")
-    if url in ("https://", "/system/update/") or ".." in url or any(
-        char.isspace() for char in url
-    ):
+    prefixes = payload_url_prefixes(allow_lab_http)
+    if not url.startswith(prefixes):
+        raise ManifestError(f"payload_url must use {' or '.join(prefixes)}")
+    if url in prefixes or ".." in url or any(char.isspace() for char in url):
         raise ManifestError("payload_url is malformed")
     if "payload_size" in fields:
         if not re.fullmatch(r"[1-9][0-9]*", fields["payload_size"]):
@@ -302,8 +318,8 @@ def validate_fields(fields: dict[str, str], require_signature: bool) -> None:
         raise ManifestError("signature_ed25519 must be exactly hex128")
 
 
-def canonical_body(fields: dict[str, str]) -> bytes:
-    validate_fields(fields, require_signature=False)
+def canonical_body(fields: dict[str, str], *, allow_lab_http: bool = False) -> bytes:
+    validate_fields(fields, require_signature=False, allow_lab_http=allow_lab_http)
     order = FIELD_ORDER if "payload_size" in fields else LEGACY_FIELD_ORDER
     return "".join(f"{key}={fields[key]}\n" for key in order).encode("ascii")
 
@@ -332,7 +348,9 @@ def capture_runtime_signed_text(raw: bytes) -> tuple[bytes, list[str]]:
     return bytes(signed), signatures
 
 
-def parse_manifest(raw: bytes) -> tuple[dict[str, str], bytes]:
+def parse_manifest(
+    raw: bytes, *, allow_lab_http: bool = False
+) -> tuple[dict[str, str], bytes]:
     if not raw or len(raw) > MANIFEST_MAX_BYTES:
         raise ManifestError(
             f"manifest size must be 1..{MANIFEST_MAX_BYTES} bytes"
@@ -356,8 +374,8 @@ def parse_manifest(raw: bytes) -> tuple[dict[str, str], bytes]:
         if key in fields:
             raise ManifestError(f"duplicate manifest field: {key}")
         fields[key] = value
-    validate_fields(fields, require_signature=True)
-    canonical = canonical_body(fields)
+    validate_fields(fields, require_signature=True, allow_lab_http=allow_lab_http)
+    canonical = canonical_body(fields, allow_lab_http=allow_lab_http)
     canonical_manifest = canonical + (
         f"signature_ed25519={fields['signature_ed25519'].lower()}\n".encode("ascii")
     )

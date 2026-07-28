@@ -15,6 +15,7 @@
 #include "fs/capyfs.h"
 #include "fs/ramdisk.h"
 #include "fs/vfs.h"
+#include "services/update_agent.h"
 
 static void io_print(const struct x64_kernel_shell_runtime_io *io,
                      const char *message) {
@@ -247,7 +248,49 @@ static int shell_bootstrap_filesystem(
   }
 
   if (data_dev && ops->mount_encrypted_data_volume(data_dev) == 0) {
+    struct boot_slot_disk_binding boot_binding = {0};
     *state->shell_persistent_storage = 1;
+    if (x64_storage_boot_provider_binding_from_handoff(
+            state->handoff, &boot_binding) != 0)
+      boot_binding = (struct boot_slot_disk_binding){0};
+    if (x64_storage_runtime_register_boot_provider(
+            1, &boot_binding, NULL) != 0) {
+      struct x64_storage_boot_provider_status provider_status = {0};
+      io_print(io, "[boot] provider A/B persistente indisponivel; health/apply bloqueados.\n");
+      /* Without this label a `-60` on the official platform is indistinguishable
+       * from a missing flush, an unbound ESP range or a legacy-identity disk. */
+      if (x64_storage_runtime_boot_provider_status(&provider_status) == 0) {
+        io_print(io, "[boot] provider reason=");
+        io_print(io, x64_storage_boot_provider_reason_label(
+                         provider_status.reason));
+        io_print(io, "\n");
+      }
+    }
+    {
+      /* Which slot is running, and does it still owe a health confirmation?
+       * The loader announces its A/B decision through the firmware console,
+       * which the official VMware contract keeps off COM1, so the kernel
+       * restates the validated token on the boot log it owns. */
+      struct boot_slot_attempt_handoff attempt = {0};
+      if (x64_storage_runtime_current_boot_attempt(&attempt) == 0 &&
+          (attempt.flags & BOOT_HANDOFF_SLOT_ATTEMPT_VALID) != 0u) {
+        const char *state = "confirmed";
+        if ((attempt.flags & BOOT_HANDOFF_SLOT_ATTEMPT_PENDING) != 0u)
+          state = "pending";
+        else if ((attempt.flags & BOOT_HANDOFF_SLOT_ATTEMPT_ROLLBACK) != 0u)
+          state = "rollback";
+        io_print(io, "[boot] A/B attempt slot=");
+        io_putc(io, (char)('0' + (attempt.slot & 1u)));
+        io_print(io, " state=");
+        io_print(io, state);
+        io_print(io, " generation=");
+        io_print_hex(io, attempt.generation);
+        io_print(io, "\n");
+      }
+    }
+#if defined(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)
+    io_print(io, update_agent_lab_trust_anchor_banner);
+#endif
     int is_first_boot = (system_detect_first_boot() != 0);
     if (is_first_boot) {
       io_print(io,

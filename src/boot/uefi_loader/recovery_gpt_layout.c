@@ -2,6 +2,130 @@
 
 #define INSTALLER_COM1_BASE 0x3F8u
 
+static EFI_STATUS uefi_block_io_alignment(EFI_BLOCK_IO_PROTOCOL *bio,
+                                           UINTN *out_alignment) {
+  UINTN alignment;
+  if (!bio || !bio->Media || !out_alignment)
+    return EFI_INVALID_PARAMETER;
+  alignment = bio->Media->IoAlign;
+  if (!installer_disk_io_alignment_valid((uint32_t)alignment))
+    return EFI_INVALID_PARAMETER;
+  if (alignment <= 1u)
+    alignment = 1u;
+  *out_alignment = alignment;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS uefi_block_io_allocate_aligned(EFI_BLOCK_IO_PROTOCOL *bio,
+                                          UINTN bytes,
+                                          VOID **out_allocation,
+                                          VOID **out_buffer) {
+  UINTN alignment;
+  UINTN extra;
+  VOID *allocation;
+  EFI_STATUS status;
+  if (out_allocation)
+    *out_allocation = NULL;
+  if (out_buffer)
+    *out_buffer = NULL;
+  if (!out_allocation || !out_buffer || bytes == 0u)
+    return EFI_INVALID_PARAMETER;
+  status = uefi_block_io_alignment(bio, &alignment);
+  if (EFI_ERROR(status))
+    return status;
+  extra = alignment - 1u;
+  if (bytes > ~(UINTN)0 - extra)
+    return EFI_OUT_OF_RESOURCES;
+  allocation = AllocatePool(bytes + extra);
+  if (!allocation)
+    return EFI_OUT_OF_RESOURCES;
+  *out_allocation = allocation;
+  *out_buffer = (VOID *)(((UINTN)allocation + extra) & ~extra);
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS uefi_block_io_transfer_valid(EFI_BLOCK_IO_PROTOCOL *bio,
+                                                UINT64 lba, UINTN bytes,
+                                                UINTN *out_alignment) {
+  UINT64 blocks;
+  EFI_STATUS status = uefi_block_io_alignment(bio, out_alignment);
+  if (EFI_ERROR(status) || !bio->Media || bio->Media->BlockSize == 0u ||
+      bytes == 0u || bytes % bio->Media->BlockSize != 0u)
+    return EFI_INVALID_PARAMETER;
+  blocks = (UINT64)(bytes / bio->Media->BlockSize);
+  if (blocks == 0u || lba > bio->Media->LastBlock ||
+      blocks - 1u > bio->Media->LastBlock - lba)
+    return EFI_INVALID_PARAMETER;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS uefi_block_io_read(EFI_BLOCK_IO_PROTOCOL *bio,
+                              UINT32 expected_media_id, UINT64 lba,
+                              UINTN bytes, VOID *buffer) {
+  UINTN alignment;
+  VOID *allocation = NULL;
+  VOID *aligned = NULL;
+  EFI_STATUS status;
+  if (!buffer || !bio || !bio->ReadBlocks)
+    return EFI_INVALID_PARAMETER;
+  if (!bio->Media || bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
+  status = uefi_block_io_transfer_valid(bio, lba, bytes, &alignment);
+  if (EFI_ERROR(status))
+    return status;
+  if (((UINTN)buffer & (alignment - 1u)) == 0u)
+    return uefi_call_wrapper(bio->ReadBlocks, 5, bio, expected_media_id,
+                             lba, bytes, buffer);
+  status = uefi_block_io_allocate_aligned(bio, bytes, &allocation, &aligned);
+  if (EFI_ERROR(status))
+    return status;
+  status = uefi_call_wrapper(bio->ReadBlocks, 5, bio, expected_media_id,
+                             lba, bytes, aligned);
+  if (!EFI_ERROR(status)) {
+    for (UINTN i = 0u; i < bytes; ++i)
+      ((UINT8 *)buffer)[i] = ((UINT8 *)aligned)[i];
+  }
+  FreePool(allocation);
+  return status;
+}
+
+EFI_STATUS uefi_block_io_write(EFI_BLOCK_IO_PROTOCOL *bio,
+                               UINT32 expected_media_id, UINT64 lba,
+                               UINTN bytes, const VOID *buffer) {
+  UINTN alignment;
+  VOID *allocation = NULL;
+  VOID *aligned = NULL;
+  EFI_STATUS status;
+  if (!buffer || !bio || !bio->WriteBlocks)
+    return EFI_INVALID_PARAMETER;
+  if (!bio->Media || bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
+  status = uefi_block_io_transfer_valid(bio, lba, bytes, &alignment);
+  if (EFI_ERROR(status))
+    return status;
+  if (((UINTN)buffer & (alignment - 1u)) == 0u)
+    return uefi_call_wrapper(bio->WriteBlocks, 5, bio, expected_media_id,
+                             lba, bytes, (VOID *)buffer);
+  status = uefi_block_io_allocate_aligned(bio, bytes, &allocation, &aligned);
+  if (EFI_ERROR(status))
+    return status;
+  for (UINTN i = 0u; i < bytes; ++i)
+    ((UINT8 *)aligned)[i] = ((const UINT8 *)buffer)[i];
+  status = uefi_call_wrapper(bio->WriteBlocks, 5, bio, expected_media_id,
+                             lba, bytes, aligned);
+  FreePool(allocation);
+  return status;
+}
+
+EFI_STATUS uefi_block_io_flush(EFI_BLOCK_IO_PROTOCOL *bio,
+                               UINT32 expected_media_id) {
+  if (!bio || !bio->Media || !bio->FlushBlocks)
+    return EFI_INVALID_PARAMETER;
+  if (bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
+  return uefi_call_wrapper(bio->FlushBlocks, 1, bio);
+}
+
 enum {
   INSTALLER_INPUT_UNKNOWN = 0,
   INSTALLER_INPUT_CONIN = 1,
@@ -76,7 +200,7 @@ int uefi_installer_read_key(EFI_SYSTEM_TABLE *st, EFI_INPUT_KEY *key) {
       g_installer_input_source = INSTALLER_INPUT_COM1;
       return 0;
     }
-    uefi_call_wrapper(st->BootServices->Stall, 2, 1000u);
+    uefi_call_wrapper(st->BootServices->Stall, 1, 1000u);
   }
 }
 
@@ -207,8 +331,8 @@ void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,
   }
 }
 
-EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
-                              UINT64 sectors) {
+EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT32 expected_media_id,
+                       UINT64 start_lba, UINT64 sectors) {
   if (!bio || !bio->Media)
     return EFI_INVALID_PARAMETER;
   UINTN bsz = bio->Media->BlockSize;
@@ -219,33 +343,38 @@ EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
   if (start_lba > bio->Media->LastBlock)
     return EFI_INVALID_PARAMETER;
   UINT64 max = (UINT64)bio->Media->LastBlock - start_lba + 1ULL;
+  if (bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
   if (sectors > max)
-    sectors = max;
+    return EFI_INVALID_PARAMETER;
 
   const UINTN chunk_sectors = 128;
-  UINTN chunk_bytes = chunk_sectors * bsz;
-  VOID *buf = AllocatePool(chunk_bytes);
-  if (!buf)
+  VOID *allocation = NULL;
+  VOID *buf = NULL;
+  EFI_STATUS stt;
+  UINT64 done = 0;
+  if (bsz > ~(UINTN)0 / chunk_sectors)
     return EFI_OUT_OF_RESOURCES;
+  UINTN chunk_bytes = chunk_sectors * bsz;
+  stt = uefi_block_io_allocate_aligned(bio, chunk_bytes, &allocation, &buf);
+  if (EFI_ERROR(stt))
+    return stt;
   for (UINTN i = 0; i < chunk_bytes; i++)
     ((UINT8 *)buf)[i] = 0;
 
-  EFI_STATUS stt = EFI_SUCCESS;
-  UINT64 done = 0;
   while (done < sectors) {
     UINTN nsec = (UINTN)((sectors - done) > chunk_sectors ? chunk_sectors
                                                           : (sectors - done));
     UINTN nbytes = nsec * bsz;
-    stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                            start_lba + done, nbytes, buf);
+    stt = uefi_block_io_write(bio, expected_media_id, start_lba + done,
+                              nbytes, buf);
     if (EFI_ERROR(stt))
       break;
     done += nsec;
   }
-  FreePool(buf);
-  if (!EFI_ERROR(stt)) {
-    uefi_call_wrapper(bio->FlushBlocks, 1, bio);
-  }
+  FreePool(allocation);
+  if (!EFI_ERROR(stt))
+    stt = uefi_block_io_flush(bio, expected_media_id);
   return stt;
 }
 
@@ -258,8 +387,12 @@ EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
  * as an existing encrypted volume.
  */
 EFI_STATUS scrub_data_partition_for_first_boot(
-    EFI_BLOCK_IO_PROTOCOL *bio, UINT64 data_lba, UINT64 data_sectors) {
-  if (!bio || !bio->Media || data_sectors == 0) {
+    EFI_BLOCK_IO_PROTOCOL *bio, UINT32 expected_media_id,
+    UINT64 data_lba, UINT64 data_sectors) {
+  if (!bio || !bio->Media || bio->Media->BlockSize == 0u ||
+      bio->Media->MediaId != expected_media_id || data_sectors == 0u ||
+      data_lba > bio->Media->LastBlock ||
+      data_sectors - 1u > bio->Media->LastBlock - data_lba) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -271,14 +404,14 @@ EFI_STATUS scrub_data_partition_for_first_boot(
   const UINT64 mid_span =
       (probe_span_secs * 8ULL > 16ULL) ? (probe_span_secs * 8ULL) : 16ULL;
   UINT64 head_secs = (data_sectors < edge_span) ? data_sectors : edge_span;
-  EFI_STATUS st = wipe_blocks(bio, data_lba, head_secs);
+  EFI_STATUS st = wipe_blocks(bio, expected_media_id, data_lba, head_secs);
   if (EFI_ERROR(st)) {
     return st;
   }
 
   if (data_sectors > head_secs) {
     UINT64 tail_start = data_lba + data_sectors - head_secs;
-    st = wipe_blocks(bio, tail_start, head_secs);
+    st = wipe_blocks(bio, expected_media_id, tail_start, head_secs);
     if (EFI_ERROR(st)) {
       return st;
     }
@@ -296,7 +429,7 @@ EFI_STATUS scrub_data_partition_for_first_boot(
         mid_rel -= (mid_rel % probe_span_secs);
       }
     }
-    st = wipe_blocks(bio, data_lba + mid_rel, mid_span);
+    st = wipe_blocks(bio, expected_media_id, data_lba + mid_rel, mid_span);
     if (EFI_ERROR(st)) {
       return st;
     }
@@ -305,28 +438,37 @@ EFI_STATUS scrub_data_partition_for_first_boot(
   return EFI_SUCCESS;
 }
 
-static VOID fill_guid(UINT8 out[16], EFI_SYSTEM_TABLE *st) {
-  // Pseudo-random: time + pointer mix. Good enough for VM install IDs.
+static EFI_STATUS fill_guid(UINT8 out[16], EFI_SYSTEM_TABLE *st) {
+  static UINT64 sequence = 0;
+  EFI_GUID rng_guid = EFI_RNG_PROTOCOL_GUID;
+  EFI_RNG_PROTOCOL *rng = NULL;
+  EFI_STATUS rng_st = EFI_NOT_FOUND;
+  UINT64 seed = 0;
+  UINT64 local_sequence = ++sequence;
+  if (!out || !st || !st->BootServices)
+    return EFI_INVALID_PARAMETER;
   for (UINTN i = 0; i < 16; i++)
     out[i] = 0;
-  if (!st || !st->RuntimeServices)
-    return;
-  EFI_TIME t;
-  EFI_STATUS stt = uefi_call_wrapper(st->RuntimeServices->GetTime, 2, &t, NULL);
-  if (EFI_ERROR(stt))
-    return;
-  UINT64 seed = ((UINT64)t.Year << 48) ^ ((UINT64)t.Month << 40) ^
-                ((UINT64)t.Day << 32) ^ ((UINT64)t.Hour << 24) ^
-                ((UINT64)t.Minute << 16) ^ ((UINT64)t.Second << 8) ^
-                (UINT64)(UINTN)&t;
-  for (UINTN i = 0; i < 16; i++) {
-    seed ^= seed << 13;
-    seed ^= seed >> 7;
-    seed ^= seed << 17;
-    out[i] = (UINT8)(seed & 0xFF);
+  rng_st = uefi_call_wrapper(st->BootServices->LocateProtocol, 3, &rng_guid,
+                             NULL, (VOID **)&rng);
+  if (!EFI_ERROR(rng_st) && rng && rng->GetRNG)
+    rng_st = uefi_call_wrapper(rng->GetRNG, 4, rng, NULL, 16, out);
+  if (EFI_ERROR(rng_st)) {
+    __asm__ volatile("rdtsc" : "=A"(seed));
+    seed ^= (UINT64)(UINTN)st ^ (UINT64)(UINTN)out ^
+            (local_sequence * 0x9E3779B97F4A7C15ULL);
+    for (UINTN i = 0; i < 16; i++) {
+      seed ^= seed << 13;
+      seed ^= seed >> 7;
+      seed ^= seed << 17;
+      out[i] = (UINT8)(seed & 0xFFu);
+    }
   }
-  // Ensure it's not all-zero.
-  out[0] |= 1;
+  for (UINTN i = 0; i < 8; ++i)
+    out[8 + i] ^= (UINT8)(local_sequence >> (i * 8u));
+  out[6] = (UINT8)((out[6] & 0x0Fu) | 0x40u);
+  out[8] = (UINT8)((out[8] & 0x3Fu) | 0x80u);
+  return EFI_SUCCESS;
 }
 
 static VOID gpt_set_name(UINT8 name_bytes[72], const CHAR16 *s) {
@@ -342,6 +484,7 @@ static VOID gpt_set_name(UINT8 name_bytes[72], const CHAR16 *s) {
 }
 
 static EFI_STATUS write_protective_mbr(EFI_BLOCK_IO_PROTOCOL *bio,
+                                       UINT32 expected_media_id,
                                        UINT64 total_sectors) {
   if (!bio || !bio->Media)
     return EFI_INVALID_PARAMETER;
@@ -376,12 +519,12 @@ static EFI_STATUS write_protective_mbr(EFI_BLOCK_IO_PROTOCOL *bio,
   mbr[510] = 0x55;
   mbr[511] = 0xAA;
 
-  return uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId, 0,
-                           512, mbr);
+  return uefi_block_io_write(bio, expected_media_id, 0u, sizeof(mbr), mbr);
 }
 
 EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
                             EFI_BLOCK_IO_PROTOCOL *bio,
+                            UINT32 expected_media_id,
                             const struct installer_disk_layout *layout,
                             UINT64 *out_esp_lba,
                             UINT64 *out_esp_sectors,
@@ -395,6 +538,14 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
     return EFI_INVALID_PARAMETER;
   if (bio->Media->BlockSize != INSTALLER_DISK_BLOCK_SIZE)
     return EFI_UNSUPPORTED;
+  if (bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
+  *out_esp_lba = 0u;
+  *out_esp_sectors = 0u;
+  *out_boot_lba = 0u;
+  *out_boot_sectors = 0u;
+  *out_data_lba = 0u;
+  *out_data_sectors = 0u;
 
   UINT64 total_sectors = bio->Media->LastBlock == UINT64_MAX
                              ? 0u
@@ -407,16 +558,24 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
   UINT64 last_usable_lba = layout->last_usable_lba;
   UINT64 esp_sectors = layout->esp_sectors;
   UINT64 boot_sectors = layout->boot_sectors;
+  UINT64 data_sectors = layout->data_sectors;
   UINT64 esp_start = layout->esp_lba;
-  UINT64 esp_end = esp_start + esp_sectors - 1ULL;
   UINT64 boot_start = layout->boot_lba;
-  UINT64 boot_end = boot_start + boot_sectors - 1ULL;
   UINT64 data_start = layout->data_lba;
-  UINT64 data_end = data_start + layout->data_sectors - 1ULL;
+  if (last_lba < (UINT64)GPT_ENTRIES_SECTORS || esp_sectors == 0u ||
+      boot_sectors == 0u || data_sectors == 0u || esp_start > last_lba ||
+      boot_start > last_lba || data_start > last_lba ||
+      esp_sectors - 1u > last_lba - esp_start ||
+      boot_sectors - 1u > last_lba - boot_start ||
+      data_sectors - 1u > last_lba - data_start)
+    return EFI_INVALID_PARAMETER;
+  UINT64 esp_end = esp_start + esp_sectors - 1ULL;
+  UINT64 boot_end = boot_start + boot_sectors - 1ULL;
+  UINT64 data_end = data_start + data_sectors - 1ULL;
 
-  if (layout->total_sectors != total_sectors || total_sectors == 0u ||
+  if (layout->total_sectors != total_sectors ||
       backup_entries_lba != last_lba - (UINT64)GPT_ENTRIES_SECTORS ||
-      last_usable_lba != backup_entries_lba - 1ULL ||
+      backup_entries_lba == 0u || last_usable_lba != backup_entries_lba - 1ULL ||
       first_usable_lba != 34ULL || esp_start < first_usable_lba ||
       esp_end >= boot_start || boot_end >= data_start ||
       data_end != last_usable_lba || data_start <= boot_end ||
@@ -437,12 +596,23 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
   UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
   UINT8 linux_guid[16] = EFI_PART_TYPE_LINUX_FS;
   UINT8 disk_guid[16];
-  fill_guid(disk_guid, st);
+  if (EFI_ERROR(fill_guid(disk_guid, st)) ||
+      EFI_ERROR(fill_guid(e[0].uniq_guid, st)) ||
+      EFI_ERROR(fill_guid(e[1].uniq_guid, st)) ||
+      EFI_ERROR(fill_guid(e[2].uniq_guid, st)) ||
+      guid_eq(disk_guid, e[0].uniq_guid) ||
+      guid_eq(disk_guid, e[1].uniq_guid) ||
+      guid_eq(disk_guid, e[2].uniq_guid) ||
+      guid_eq(e[0].uniq_guid, e[1].uniq_guid) ||
+      guid_eq(e[0].uniq_guid, e[2].uniq_guid) ||
+      guid_eq(e[1].uniq_guid, e[2].uniq_guid)) {
+    FreePool(entries);
+    return EFI_DEVICE_ERROR;
+  }
 
   // ESP
   for (UINTN i = 0; i < 16; i++)
     e[0].part_type_guid[i] = esp_guid[i];
-  fill_guid(e[0].uniq_guid, st);
   e[0].first_lba = esp_start;
   e[0].last_lba = esp_end;
   e[0].attrs = 0;
@@ -451,7 +621,6 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
   // BOOT (CapyOS)
   for (UINTN i = 0; i < 16; i++)
     e[1].part_type_guid[i] = boot_guid[i];
-  fill_guid(e[1].uniq_guid, st);
   e[1].first_lba = boot_start;
   e[1].last_lba = boot_end;
   e[1].attrs = 0;
@@ -460,7 +629,6 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
   // DATA
   for (UINTN i = 0; i < 16; i++)
     e[2].part_type_guid[i] = linux_guid[i];
-  fill_guid(e[2].uniq_guid, st);
   e[2].first_lba = data_start;
   e[2].last_lba = data_end;
   e[2].attrs = 0;
@@ -534,36 +702,33 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st,
   bkp->header_crc32 = bkp_crc;
 
   // Write MBR + GPT primary + entries + backup entries + backup GPT.
-  stt = write_protective_mbr(bio, total_sectors);
+  stt = write_protective_mbr(bio, expected_media_id, total_sectors);
   if (EFI_ERROR(stt)) {
     FreePool(entries);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId, 1, 512,
-                          hdr_sector);
+  stt = uefi_block_io_write(bio, expected_media_id, 1u, sizeof(hdr_sector), hdr_sector);
   if (EFI_ERROR(stt)) {
     FreePool(entries);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          GPT_ENTRIES_LBA, entries_bytes, entries);
+  stt = uefi_block_io_write(bio, expected_media_id, GPT_ENTRIES_LBA, entries_bytes, entries);
   if (EFI_ERROR(stt)) {
     FreePool(entries);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          backup_entries_lba, entries_bytes, entries);
+  stt = uefi_block_io_write(bio, expected_media_id, backup_entries_lba, entries_bytes, entries);
   if (EFI_ERROR(stt)) {
     FreePool(entries);
     return stt;
   }
-  stt = uefi_call_wrapper(bio->WriteBlocks, 5, bio, bio->Media->MediaId,
-                          last_lba, 512, bkp_sector);
+  stt = uefi_block_io_write(bio, expected_media_id, last_lba, sizeof(bkp_sector), bkp_sector);
   FreePool(entries);
   if (EFI_ERROR(stt))
     return stt;
-
-  uefi_call_wrapper(bio->FlushBlocks, 1, bio);
+  stt = uefi_block_io_flush(bio, expected_media_id);
+  if (EFI_ERROR(stt))
+    return stt;
 
   if (out_esp_lba)
     *out_esp_lba = esp_start;

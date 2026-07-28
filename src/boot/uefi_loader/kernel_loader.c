@@ -312,6 +312,18 @@ EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
         kernel_release_load_pages(st, load_base, plan.pages);
         return read_st;
       }
+      /* Source vs destination head, per segment, on the debug port only (no
+       * BootServices call, so this cannot perturb the memory-map handshake).
+       * A segment whose read reports success while the destination stays zero
+       * is a silently dropped copy, and the `Copiando seg` line above cannot
+       * tell that apart from a good one. */
+      UINT64 src_head = 0;
+      (void)reader(ctx, ph->p_offset, &src_head, sizeof(src_head));
+      dbgcon_putc('c');
+      dbgcon_hex64(src_head);
+      dbgcon_putc('/');
+      dbgcon_hex64(*(const volatile UINT64 *)(UINTN)dst_pa);
+      dbgcon_putc('>');
     }
   }
 
@@ -320,7 +332,40 @@ EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
   return EFI_SUCCESS;
 }
 
+EFI_STATUS validate_kernel_buffer(VOID *kernel_buf, UINTN kernel_size) {
+  struct kernel_buffer_reader reader;
+  Elf64_Ehdr eh;
+  Elf64_Phdr phdrs[KERNEL_MAX_PHDRS];
+  struct kernel_load_plan plan;
+  EFI_STATUS status;
+  if (!kernel_buf || kernel_size == 0u)
+    return EFI_INVALID_PARAMETER;
+  reader.base = (const UINT8 *)kernel_buf;
+  reader.size = kernel_size;
+  status = kernel_read_from_memory(&reader, 0u, &eh, sizeof(eh));
+  if (EFI_ERROR(status) || eh.e_phnum > KERNEL_MAX_PHDRS ||
+      eh.e_phentsize != sizeof(Elf64_Phdr))
+    return EFI_LOAD_ERROR;
+  status = kernel_read_from_memory(
+      &reader, eh.e_phoff, phdrs, (UINTN)eh.e_phnum * sizeof(Elf64_Phdr));
+  if (EFI_ERROR(status))
+    return status;
+  return kernel_plan_from_headers(&eh, phdrs, kernel_size, &plan);
+}
+
 EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
+                                   UINTN kernel_size,
+                                   EFI_PHYSICAL_ADDRESS *entry_out) {
+  struct kernel_buffer_reader reader;
+  if (!kernel_buf || kernel_size == 0u)
+    return EFI_INVALID_PARAMETER;
+  reader.base = (const UINT8 *)kernel_buf;
+  reader.size = kernel_size;
+  return load_kernel_from_reader(st, kernel_read_from_memory, &reader,
+                                 kernel_size, entry_out);
+}
+
+static EFI_STATUS __attribute__((unused)) load_kernel_from_buffer_legacy(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
                                    UINTN kernel_size,
                                    EFI_PHYSICAL_ADDRESS *entry_out) {
   if (kernel_size < sizeof(Elf64_Ehdr)) {

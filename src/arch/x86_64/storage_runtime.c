@@ -18,6 +18,28 @@ static int g_storage_has_device = 0;
 static int g_storage_candidates_initialized = 0;
 static struct x64_storage_native_candidate_state g_storage_native;
 static struct x64_storage_hyperv_runtime_state g_storage_hyperv_runtime;
+extern int boot_slot_block_provider_init_from_block_device(
+    struct boot_slot_block_provider *provider, struct block_device *raw,
+    const struct boot_slot_disk_binding *binding,
+    uint64_t *out_registration_epoch);
+
+static struct boot_slot_block_provider g_runtime_boot_provider;
+static struct boot_slot_store g_runtime_boot_store;
+static uint64_t g_runtime_boot_registration_epoch;
+static uint64_t g_runtime_boot_lease_epoch;
+
+static struct x64_storage_boot_provider_status g_boot_provider_status = {
+    .provider_ready = 0u,
+    .reason = X64_STORAGE_BOOT_PROVIDER_NO_PERSISTENT_MOUNT,
+};
+
+static void storage_zero_bytes(void *ptr, size_t len) {
+  uint8_t *bytes = ptr;
+  if (!bytes)
+    return;
+  for (size_t i = 0u; i < len; ++i)
+    bytes[i] = 0u;
+}
 
 /* Slice 3E.4.C (2026-05-25) — local `dbg_putc`/`dbg_puts`/`dbg_hex32`
  * helpers removed. The storage-runtime decision trace now routes
@@ -427,6 +449,213 @@ int x64_storage_runtime_has_native_candidate(void) {
 }
 
 int x64_storage_runtime_has_device(void) { return g_storage_has_device; }
+
+struct block_device *x64_storage_runtime_raw_device(void) {
+  return g_storage_backend != X64_STORAGE_BACKEND_EFI_BLOCK_IO &&
+                 g_storage_native.ready
+             ? g_storage_native.raw_device
+             : NULL;
+}
+
+int x64_storage_runtime_data_binding(uint32_t *out_lba,
+                                     uint32_t *out_sectors) {
+  if (out_lba)
+    *out_lba = 0u;
+  if (out_sectors)
+    *out_sectors = 0u;
+  if (!out_lba || !out_sectors ||
+      g_storage_backend == X64_STORAGE_BACKEND_EFI_BLOCK_IO ||
+      !g_storage_native.ready || !g_storage_native.raw_device ||
+      !g_storage_native.data_binding_verified ||
+      g_storage_native.data_sectors == 0u)
+    return -1;
+  *out_lba = g_storage_native.data_lba;
+  *out_sectors = g_storage_native.data_sectors;
+  return 0;
+}
+
+int x64_storage_runtime_boot_provider_status(
+    struct x64_storage_boot_provider_status *out) {
+  if (!out)
+    return -1;
+  *out = g_boot_provider_status;
+  return 0;
+}
+
+/* Map a store result onto the runtime capability. An indeterminate commit
+ * invalidates the capability for the rest of the boot: the durable metadata is
+ * no longer known, so no further staging or arming may be authorized. */
+static int boot_store_result(int rc) {
+  if (rc == 0)
+    return 0;
+  if (rc == BOOT_SLOT_STORE_ERR_COMMIT_UNKNOWN) {
+    g_boot_provider_status.provider_ready = 0u;
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_CONTROL_UNKNOWN;
+  } else {
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_TOKEN_MISMATCH;
+  }
+  return -1;
+}
+
+int x64_storage_runtime_stage_boot_payload_sha256(
+    const char *version, const uint8_t *payload, size_t payload_len,
+    const uint8_t expected_sha256[BOOT_SLOT_SHA256_SIZE], uint32_t *out_slot,
+    uint64_t *out_generation) {
+  struct boot_slot_snapshot snapshot;
+  struct x64_storage_boot_stage_plan plan;
+  if (out_slot)
+    *out_slot = BOOT_SLOT_NONE;
+  if (out_generation)
+    *out_generation = 0u;
+  if (!g_boot_provider_status.provider_ready || !out_slot || !out_generation ||
+      !payload || payload_len == 0u || payload_len > (size_t)UINT32_MAX)
+    return -1;
+  if (boot_slot_snapshot_get(&snapshot) != 0) {
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_CONTROL_UNKNOWN;
+    return -1;
+  }
+  if (x64_storage_boot_provider_plan_stage(&snapshot, version,
+                                          (uint32_t)payload_len,
+                                          expected_sha256, &plan) != 0)
+    return -1;
+  if (boot_store_result(boot_slot_store_stage_inactive_authorized(
+          &g_runtime_boot_store, g_runtime_boot_lease_epoch, &snapshot,
+          plan.slot, &plan.image, payload, payload_len, out_generation)) != 0)
+    return -1;
+  *out_slot = plan.slot;
+  return 0;
+}
+
+int x64_storage_runtime_arm_boot_slot(uint32_t slot,
+                                     uint64_t expected_generation,
+                                     uint64_t *out_generation) {
+  if (out_generation)
+    *out_generation = 0u;
+  if (!g_boot_provider_status.provider_ready || !out_generation ||
+      slot >= BOOT_SLOT_COUNT || expected_generation == 0u)
+    return -1;
+  return boot_store_result(
+      boot_slot_store_arm(&g_runtime_boot_store, g_runtime_boot_lease_epoch,
+                          slot, expected_generation, out_generation));
+}
+
+int x64_storage_runtime_boot_rollback_check(
+    const struct boot_slot_attempt_handoff *attempt) {
+  int pending;
+  if (!attempt || !g_boot_provider_status.provider_ready ||
+      (attempt->flags & BOOT_HANDOFF_SLOT_ATTEMPT_VALID) == 0u ||
+      attempt->slot >= BOOT_SLOT_COUNT || attempt->generation == 0u)
+    return -1;
+  if ((attempt->flags & BOOT_HANDOFF_SLOT_ATTEMPT_ROLLBACK) != 0u)
+    return 2;
+  pending = boot_slot_needs_rollback();
+  if (pending < 0) {
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_CONTROL_UNKNOWN;
+    return -1;
+  }
+  return pending ? 1 : 0;
+}
+
+int x64_storage_runtime_confirm_boot_health(
+    const struct boot_slot_attempt_handoff *attempt) {
+  if (!attempt || !g_boot_provider_status.provider_ready ||
+      attempt->flags != (BOOT_HANDOFF_SLOT_ATTEMPT_VALID |
+                         BOOT_HANDOFF_SLOT_ATTEMPT_PENDING) ||
+      attempt->slot >= BOOT_SLOT_COUNT || attempt->generation == 0u)
+    return -1;
+  {
+    int rc = boot_slot_store_confirm_health(
+        &g_runtime_boot_store, g_runtime_boot_lease_epoch, attempt->slot,
+        attempt->generation);
+    if (rc == BOOT_SLOT_ERR_COMMIT_UNKNOWN) {
+      g_boot_provider_status.provider_ready = 0u;
+      g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_CONTROL_UNKNOWN;
+    } else if (rc != 0) {
+      g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_TOKEN_MISMATCH;
+    }
+    return rc;
+  }
+}
+
+int x64_storage_runtime_register_boot_provider(
+    int persistent_mount_ready, const struct boot_slot_disk_binding *binding,
+    struct boot_slot_block_provider *provider) {
+  struct x64_storage_boot_provider_runtime_snapshot snapshot = {0};
+  struct block_device *raw = x64_storage_runtime_raw_device();
+  uint32_t data_lba = 0u;
+  uint32_t data_sectors = 0u;
+  storage_zero_bytes(provider, provider ? sizeof(*provider) : 0u);
+  if (g_boot_provider_status.provider_ready)
+    return 0;
+  snapshot.persistent_mount_ready = persistent_mount_ready ? 1u : 0u;
+  snapshot.active_native_backend =
+      g_storage_backend != X64_STORAGE_BACKEND_EFI_BLOCK_IO &&
+              g_storage_backend != X64_STORAGE_BACKEND_NONE
+          ? 1u
+          : 0u;
+  snapshot.storage_device_ready = g_storage_has_device ? 1u : 0u;
+  snapshot.raw_block_size = raw ? raw->block_size : 0u;
+  snapshot.raw_read_ready =
+      raw && raw->ops && (raw->ops->read_block || raw->ops->read_block_ex)
+          ? 1u
+          : 0u;
+  snapshot.raw_write_ready =
+      raw && raw->ops && (raw->ops->write_block || raw->ops->write_block_ex)
+          ? 1u
+          : 0u;
+  snapshot.data_binding_verified =
+      x64_storage_runtime_data_binding(&data_lba, &data_sectors) == 0 && binding &&
+              binding->data_lba == data_lba &&
+              binding->data_sectors == data_sectors
+          ? 1u
+          : 0u;
+  snapshot.esp_binding_verified =
+      binding && g_storage_native.data_binding_verified &&
+              binding->esp_lba == g_storage_native.identity.esp.lba &&
+              binding->esp_sectors == g_storage_native.identity.esp.sectors &&
+              binding->boot_lba == g_storage_native.identity.boot.lba &&
+              binding->boot_sectors == g_storage_native.identity.boot.sectors
+          ? 1u
+          : 0u;
+  snapshot.flush_ready = block_device_supports_flush(raw) ? 1u : 0u;
+  x64_storage_boot_provider_evaluate_runtime(&snapshot,
+                                             &g_boot_provider_status);
+  if (!g_boot_provider_status.provider_ready)
+    return -1;
+  g_boot_provider_status.provider_ready = 0u;
+  if (boot_slot_block_provider_init_from_block_device(
+          &g_runtime_boot_provider, raw, binding,
+          &g_runtime_boot_registration_epoch) != 0) {
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_NO_FLUSH;
+    return -1;
+  }
+  if (boot_slot_block_provider_open_store(
+          &g_runtime_boot_provider, g_runtime_boot_registration_epoch,
+          &g_runtime_boot_store, &g_runtime_boot_lease_epoch) != 0) {
+    (void)boot_slot_block_provider_unregister(
+        &g_runtime_boot_provider, g_runtime_boot_registration_epoch);
+    g_runtime_boot_registration_epoch = 0u;
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_NO_FLUSH;
+    return -1;
+  }
+  if (boot_slot_store_bind_control(&g_runtime_boot_store,
+                                   g_runtime_boot_lease_epoch) != 0) {
+    (void)boot_slot_block_provider_close_store(
+        &g_runtime_boot_provider, g_runtime_boot_registration_epoch,
+        &g_runtime_boot_store, g_runtime_boot_lease_epoch);
+    (void)boot_slot_block_provider_unregister(
+        &g_runtime_boot_provider, g_runtime_boot_registration_epoch);
+    g_runtime_boot_registration_epoch = 0u;
+    g_runtime_boot_lease_epoch = 0u;
+    g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_NO_CONTROL;
+    return -1;
+  }
+  g_boot_provider_status.provider_ready = 1u;
+  g_boot_provider_status.reason = X64_STORAGE_BOOT_PROVIDER_READY;
+  if (provider)
+    *provider = g_runtime_boot_provider;
+  return 0;
+}
 
 int x64_storage_runtime_hyperv_present(void) {
   return x64_storage_hyperv_runtime_present(&g_storage_hyperv_runtime);

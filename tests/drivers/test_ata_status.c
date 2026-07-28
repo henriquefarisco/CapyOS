@@ -92,6 +92,66 @@ static void test_full_status_byte(void) {
   if (!ata_status_is_fatal(0xFFu)) fail("0xFF must report fatal");
 }
 
+static void test_flush_poll_class(void) {
+  if (ata_flush_poll_class(0xFFu, 0) != BLOCK_IO_ERR_DEVICE_GONE)
+    fail("flush floating bus must classify device gone");
+  if (ata_flush_poll_class(ATA_STATUS_BSY, 1) != BLOCK_IO_ERR_TIMEOUT)
+    fail("flush exhausted busy poll must classify timeout");
+  if (ata_flush_poll_class(ATA_STATUS_BSY, 0) != BLOCK_IO_ERR_TRANSIENT)
+    fail("flush busy poll must remain transient in-loop");
+  if (ata_flush_poll_class(ATA_STATUS_ERR, 0) != BLOCK_IO_ERR_PERMANENT)
+    fail("flush ERR must classify permanent");
+  if (ata_flush_poll_class(ATA_STATUS_DRDY, 0) != BLOCK_IO_OK)
+    fail("flush ready status must classify OK");
+  if (ata_flush_poll_class(ATA_STATUS_DRQ, 0) != BLOCK_IO_ERR_PERMANENT)
+    fail("flush DRQ must not classify durable success");
+  if (ata_flush_poll_class(0u, 0) != BLOCK_IO_ERR_PERMANENT)
+    fail("flush zero status must not classify durable success");
+  if (ata_flush_poll_class(ATA_STATUS_BSY | ATA_STATUS_ERR, 0) !=
+      BLOCK_IO_ERR_TRANSIENT)
+    fail("flush BSY must take precedence over stale ERR");
+}
+
+static void test_identify_lba48_dma(void) {
+  uint16_t identify[256] = {0};
+  if (ata_identify_supports_lba48_dma(NULL))
+    fail("NULL identify must reject LBA48 DMA");
+  identify[83] = 0x4000u | (1u << 10);
+  if (ata_identify_supports_lba48_dma(identify))
+    fail("LBA48 without DMA must be rejected");
+  identify[49] = 1u << 8;
+  if (!ata_identify_supports_lba48_dma(identify))
+    fail("valid LBA48 plus DMA must be accepted");
+  identify[83] = 0x8000u | (1u << 10);
+  if (ata_identify_supports_lba48_dma(identify))
+    fail("invalid word 83 must reject LBA48 DMA");
+}
+
+static void test_identify_flush_command(void) {
+  uint16_t identify[256] = {0};
+  if (ata_identify_flush_command(NULL) != ATA_FLUSH_NONE)
+    fail("NULL identify must not advertise flush");
+  identify[83] = 0x8000u | (1u << 13) | (1u << 12);
+  if (ata_identify_flush_command(identify) != ATA_FLUSH_NONE)
+    fail("invalid word 83 validity bits must reject flush");
+  identify[83] = 0x4000u;
+  if (ata_identify_flush_command(identify) != ATA_FLUSH_NONE)
+    fail("missing flush bits must reject flush");
+  identify[82] = 1u << 5;
+  identify[85] = 1u << 5;
+  if (ata_identify_flush_command(identify) != ATA_FLUSH_NONE)
+    fail("write-cache bits alone must not advertise flush");
+  identify[83] = 0x4000u | (1u << 13);
+  if (ata_identify_flush_command(identify) != ATA_FLUSH_CACHE_EXT)
+    fail("word 83 bit 13 alone must select FLUSH CACHE EXT");
+  identify[83] = 0x4000u | (1u << 12);
+  if (ata_identify_flush_command(identify) != ATA_FLUSH_CACHE)
+    fail("word 83 bit 12 must select FLUSH CACHE");
+  identify[83] = 0x4000u | (1u << 13) | (1u << 12);
+  if (ata_identify_flush_command(identify) != ATA_FLUSH_CACHE_EXT)
+    fail("FLUSH CACHE EXT must be preferred when supported");
+}
+
 int run_ata_status_tests(void) {
   g_failures = 0;
   test_fatal_clear_when_zero();
@@ -105,6 +165,9 @@ int run_ata_status_tests(void) {
   test_busy_predicate();
   test_drq_predicate();
   test_full_status_byte();
+  test_flush_poll_class();
+  test_identify_lba48_dma();
+  test_identify_flush_command();
   if (g_failures == 0) printf("[tests] ata_status OK\n");
   return g_failures;
 }

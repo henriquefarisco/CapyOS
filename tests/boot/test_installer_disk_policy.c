@@ -1,6 +1,9 @@
 #include "boot/installer_disk_policy.h"
 
 #include <stdint.h>
+#include <string.h>
+
+#include "boot/boot_manifest.h"
 #include <stdio.h>
 
 static int expect_int(int actual, int expected, const char *name) {
@@ -131,9 +134,33 @@ static int test_plan_rejects_ineligible_media(void) {
   fails += expect_int(installer_disk_plan(&geometry, &layout),
                       INSTALLER_DISK_PREFLIGHT_BLOCK_SIZE,
                       "unsupported block size");
+  fails += expect_int(installer_disk_io_alignment_valid(0u), 1,
+                      "zero I/O alignment accepted");
+  fails += expect_int(installer_disk_io_alignment_valid(1u), 1,
+                      "unit I/O alignment accepted");
+  fails += expect_int(installer_disk_io_alignment_valid(4096u), 1,
+                      "power-of-two I/O alignment accepted");
+  fails += expect_int(installer_disk_io_alignment_valid(3u), 0,
+                      "non-power-of-two I/O alignment rejected");
+  fails += expect_int(installer_disk_runtime_fallback_allowed(0, 1), 0,
+                      "CD-ROM runtime fallback rejected");
+  fails += expect_int(installer_disk_runtime_fallback_allowed(1, 1), 0,
+                      "partial disk hint fallback rejected");
+  fails += expect_int(installer_disk_runtime_fallback_allowed(0, 0), 0,
+                      "unbound non-CD fallback rejected");
+  fails += expect_int(installer_disk_runtime_binding_matches(1, 1, 1), 1,
+                      "complete runtime binding accepted");
+  fails += expect_int(installer_disk_runtime_binding_matches(1, 1, 0), 0,
+                      "cloned runtime path rejected");
+  fails += expect_int(installer_disk_runtime_binding_matches(1, 0, 1), 0,
+                      "runtime GUID mismatch rejected");
   geometry = valid_geometry(2097152ull);
   fails += expect_int(installer_disk_plan(&geometry, &layout),
                       INSTALLER_DISK_PREFLIGHT_TOO_SMALL, "undersized disk");
+  geometry = valid_geometry((uint64_t)UINT32_MAX + 1u);
+  fails += expect_int(installer_disk_plan(&geometry, &layout),
+                      INSTALLER_DISK_PREFLIGHT_OVERFLOW,
+                      "block ABI overflow");
   geometry = valid_geometry(UINT64_MAX);
   fails += expect_int(installer_disk_plan(&geometry, &layout),
                       INSTALLER_DISK_PREFLIGHT_OVERFLOW, "byte overflow");
@@ -179,6 +206,135 @@ static int test_selection_parser(void) {
   return fails;
 }
 
+static int test_boot_manifest_policy(void) {
+  struct boot_manifest manifest;
+  int fails = 0;
+
+  memset(&manifest, 0, sizeof(manifest));
+  manifest.magic = BOOT_MANIFEST_MAGIC;
+  manifest.version = BOOT_MANIFEST_VERSION;
+  manifest.entry_count = 1u;
+  manifest.entries[0].type = BOOT_ENTRY_NORMAL;
+  manifest.entries[0].lba_start = 1u;
+  manifest.entries[0].sector_count = 10u;
+  manifest.entries[0].checksum32 = 0x12345678u;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 1,
+                      "canonical BOOT manifest accepted");
+  fails += expect_int(installer_disk_boot_manifest_valid(NULL, 20u), 0,
+                      "null BOOT manifest rejected");
+  manifest.version++;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "BOOT manifest version rejected");
+  manifest.version = BOOT_MANIFEST_VERSION;
+  manifest.entry_count = 5u;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "BOOT manifest entry overflow rejected");
+  manifest.entry_count = 1u;
+  manifest.entries[0].sector_count = 20u;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "BOOT manifest range rejected");
+  manifest.entries[0].sector_count = 10u;
+  manifest.entries[1].checksum32 = 1u;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "BOOT manifest trailing entry rejected");
+  memset(&manifest.entries[1], 0, sizeof(manifest.entries[1]));
+  manifest.entry_count = 2u;
+  manifest.entries[1].type = BOOT_ENTRY_RECOVERY;
+  manifest.entries[1].lba_start = 10u;
+  manifest.entries[1].sector_count = 2u;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "BOOT manifest overlap rejected");
+  manifest.entries[1].lba_start = 11u;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 1,
+                      "disjoint recovery entry accepted");
+  manifest.entries[1].type = BOOT_ENTRY_NORMAL;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "duplicate normal entry rejected");
+  manifest.entries[0].type = BOOT_ENTRY_RECOVERY;
+  manifest.entries[1].type = BOOT_ENTRY_RECOVERY;
+  fails += expect_int(installer_disk_boot_manifest_valid(&manifest, 20u), 0,
+                      "missing normal entry rejected");
+  return fails;
+}
+
+static int test_device_path_parent_binding(void) {
+  uint8_t parent[16] = {0};
+  uint8_t partition[58] = {0};
+  int fails = 0;
+
+  parent[0] = 0x01u;
+  parent[1] = 0x01u;
+  parent[2] = 0x06u;
+  parent[4] = 0x10u;
+  parent[5] = 0x20u;
+  parent[6] = 0x03u;
+  parent[7] = 0x12u;
+  parent[8] = 0x06u;
+  parent[10] = 0x30u;
+  parent[11] = 0x40u;
+  parent[12] = 0x7Fu;
+  parent[13] = 0xFFu;
+  parent[14] = 0x04u;
+  memcpy(partition, parent, 12u);
+  partition[12] = 0x04u;
+  partition[13] = 0x01u;
+  partition[14] = 0x2Au;
+  partition[54] = 0x7Fu;
+  partition[55] = 0xFFu;
+  partition[56] = 0x04u;
+  fails += expect_int(
+      installer_disk_device_path_parent_matches(parent, partition), 1,
+      "physical Device Path parent accepted");
+  partition[11] ^= 1u;
+  fails += expect_int(
+      installer_disk_device_path_parent_matches(parent, partition), 0,
+      "cloned GUID on different physical path rejected");
+  partition[11] ^= 1u;
+  partition[12] = 0x7Fu;
+  partition[13] = 0xFFu;
+  partition[14] = 0x04u;
+  partition[15] = 0u;
+  fails += expect_int(
+      installer_disk_device_path_parent_matches(parent, partition), 0,
+      "partition path without HD node rejected");
+  partition[12] = 0x04u;
+  partition[13] = 0x01u;
+  partition[14] = 0x2Au;
+  parent[2] = 0x03u;
+  fails += expect_int(
+      installer_disk_device_path_parent_matches(parent, partition), 0,
+      "malformed parent path rejected");
+  fails += expect_int(
+      installer_disk_device_path_parent_matches(NULL, partition), 0,
+      "null parent path rejected");
+  return fails;
+}
+
+static int test_fat32_plan_converges(void) {
+  uint32_t fat_sectors = 0u;
+  uint32_t cluster_count = 0u;
+  int fails = 0;
+
+  fails += expect_int(
+      installer_disk_fat32_plan(525336u, 8u, 32u, 2u, &fat_sectors,
+                                &cluster_count),
+      0, "oscillating FAT geometry converges");
+  fails += expect_u64(fat_sectors, 513u, "conservative FAT span");
+  fails += expect_u64(cluster_count, 65534u, "conservative cluster count");
+  fails += expect_int(
+      installer_disk_fat32_plan(1048576u, 8u, 32u, 2u, &fat_sectors,
+                                &cluster_count),
+      0, "official ESP FAT geometry");
+  fails += expect_u64(fat_sectors, 1024u, "official ESP FAT span");
+  fails += expect_int(
+      installer_disk_fat32_plan(10u, 8u, 32u, 2u, &fat_sectors,
+                                &cluster_count),
+      -1, "undersized FAT geometry rejected");
+  fails += expect_int(fat_sectors == 0u && cluster_count == 0u, 1,
+                      "failed FAT plan clears outputs");
+  return fails;
+}
+
 static int test_confirmation_token(void) {
   int fails = 0;
   fails += expect_int(installer_disk_confirmation_valid("ERASE"), 1,
@@ -200,6 +356,9 @@ int run_installer_disk_policy_tests(void) {
   fails += test_plan_accepts_exact_minimum();
   fails += test_plan_rejects_ineligible_media();
   fails += test_selection_parser();
+  fails += test_boot_manifest_policy();
+  fails += test_device_path_parent_binding();
+  fails += test_fat32_plan_converges();
   fails += test_confirmation_token();
   if (fails == 0) {
     printf("[OK] installer_disk_policy\n");

@@ -152,17 +152,30 @@ BOOLEAN boot_volume_has_marker(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
 static BOOLEAN device_path_has_cdrom_node(VOID *dp_raw) {
   dp_node_hdr_t *node = (dp_node_hdr_t *)dp_raw;
-  while (node) {
+  UINTN total = 0u;
+  for (UINTN guard = 0u; node && guard < 128u; ++guard) {
     UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
-    if (len < sizeof(dp_node_hdr_t)) {
+    if (len < sizeof(dp_node_hdr_t) || len > 65536u - total)
       return FALSE;
-    }
-    if (node->Type == DP_TYPE_END) {
+    if (node->Type == DP_TYPE_END)
       return FALSE;
-    }
-    if (node->Type == DP_TYPE_MEDIA && node->SubType == DP_SUBTYPE_CDROM) {
+    if (node->Type == DP_TYPE_MEDIA && node->SubType == DP_SUBTYPE_CDROM)
       return TRUE;
-    }
+    total += len;
+    node = (dp_node_hdr_t *)((UINT8 *)node + len);
+  }
+  return FALSE;
+}
+
+static BOOLEAN device_path_has_harddrive_node(VOID *dp_raw) {
+  dp_node_hdr_t *node = (dp_node_hdr_t *)dp_raw;
+  for (UINTN guard = 0u; node && guard < 128u; ++guard) {
+    UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
+    if (len < sizeof(dp_node_hdr_t) || node->Type == DP_TYPE_END)
+      return FALSE;
+    if (node->Type == DP_TYPE_MEDIA &&
+        node->SubType == DP_SUBTYPE_HARDDRIVE && len >= sizeof(dp_hd_node_t))
+      return TRUE;
     node = (dp_node_hdr_t *)((UINT8 *)node + len);
   }
   return FALSE;
@@ -455,15 +468,41 @@ static UINTN dp_node_len(const dp_node_hdr_t *node) {
   return (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
 }
 
+static int device_path_parent_matches(EFI_SYSTEM_TABLE *st,
+                                      EFI_HANDLE parent_handle,
+                                      EFI_HANDLE partition_handle) {
+  VOID *parent_path = NULL;
+  VOID *partition_path = NULL;
+  EFI_STATUS status;
+  if (!st || !st->BootServices || !parent_handle || !partition_handle)
+    return 0;
+  status = uefi_call_wrapper(st->BootServices->HandleProtocol, 3, parent_handle,
+                             &DevicePathProtocol, &parent_path);
+  if (EFI_ERROR(status) || !parent_path)
+    return 0;
+  status = uefi_call_wrapper(st->BootServices->HandleProtocol, 3,
+                             partition_handle, &DevicePathProtocol,
+                             &partition_path);
+  if (EFI_ERROR(status) || !partition_path)
+    return 0;
+  return installer_disk_device_path_parent_matches(
+      (const uint8_t *)parent_path, (const uint8_t *)partition_path);
+}
+
 static int get_partition_hint_from_handle(EFI_SYSTEM_TABLE *st,
                                           EFI_HANDLE handle,
                                           UINT64 *out_start,
-                                          UINT64 *out_count) {
+                                          UINT64 *out_count,
+                                          UINT8 out_guid[16]) {
   if (out_start) {
     *out_start = 0;
   }
   if (out_count) {
     *out_count = 0;
+  }
+  if (out_guid) {
+    for (UINTN i = 0; i < 16; ++i)
+      out_guid[i] = 0;
   }
   if (!st || !st->BootServices || !handle) {
     return -1;
@@ -497,6 +536,10 @@ static int get_partition_hint_from_handle(EFI_SYSTEM_TABLE *st,
         if (out_count) {
           *out_count = hd->PartitionSize;
         }
+        if (out_guid && hd->MBRType == 0x02u && hd->SignatureType == 0x02u) {
+          for (UINTN i = 0; i < 16; ++i)
+            out_guid[i] = hd->Signature[i];
+        }
         return 0;
       }
     }
@@ -507,14 +550,18 @@ static int get_partition_hint_from_handle(EFI_SYSTEM_TABLE *st,
 }
 
 static int get_boot_partition_hint(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
-                                   UINT64 *out_start, UINT64 *out_count) {
+                                   UINT64 *out_start, UINT64 *out_count,
+                                   UINT8 out_guid[16],
+                                   EFI_HANDLE *out_device_handle) {
   if (out_start) {
     *out_start = 0;
   }
   if (out_count) {
     *out_count = 0;
   }
-  if (!image || !st || !st->BootServices) {
+  if (out_device_handle)
+    *out_device_handle = NULL;
+  if (!image || !st || !st->BootServices || !out_device_handle) {
     return -1;
   }
 
@@ -524,15 +571,35 @@ static int get_boot_partition_hint(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   if (EFI_ERROR(stt) || !li || !li->DeviceHandle) {
     return -1;
   }
+  *out_device_handle = li->DeviceHandle;
   return get_partition_hint_from_handle(st, li->DeviceHandle, out_start,
-                                        out_count);
+                                        out_count, out_guid);
+}
+
+struct uefi_gpt_read_context {
+  EFI_BLOCK_IO_PROTOCOL *bio;
+  UINT32 media_id;
+};
+
+static int uefi_gpt_read(void *ctx, uint32_t lba,
+                         uint8_t sector[CAPYOS_GPT_IDENTITY_SECTOR_SIZE]) {
+  struct uefi_gpt_read_context *read_ctx =
+      (struct uefi_gpt_read_context *)ctx;
+  EFI_BLOCK_IO_PROTOCOL *bio = read_ctx ? read_ctx->bio : NULL;
+  if (!bio || !bio->Media || !sector || bio->Media->BlockSize != 512u)
+    return -1;
+  return EFI_ERROR(
+             uefi_block_io_read(bio, read_ctx->media_id, lba, 512u, sector))
+             ? -1
+             : 0;
 }
 
 EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
                                                  UINT64 *out_data_start,
                                                  UINT64 *out_data_count,
                                                  UINT64 *out_esp_start,
-                                                 UINT64 *out_esp_count) {
+                                                 UINT64 *out_esp_count,
+                                                 struct boot_disk_identity *out_identity) {
   if (!bio || !bio->Media || !out_data_start || !out_data_count) {
     return EFI_INVALID_PARAMETER;
   }
@@ -544,129 +611,87 @@ EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
   if (out_esp_count) {
     *out_esp_count = 0;
   }
-
-  UINT32 bsz = bio->Media->BlockSize;
-  if (bsz == 0) {
-    return EFI_INVALID_PARAMETER;
+  if (out_identity) {
+    for (UINTN i = 0; i < sizeof(*out_identity); ++i)
+      ((UINT8 *)out_identity)[i] = 0;
   }
 
-  VOID *hdr_buf = AllocatePool(bsz);
-  if (!hdr_buf) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-  EFI_STATUS st = uefi_call_wrapper(bio->ReadBlocks, 5, bio,
-                                    bio->Media->MediaId, GPT_HEADER_LBA, bsz,
-                                    hdr_buf);
-  if (EFI_ERROR(st)) {
-    FreePool(hdr_buf);
-    return st;
-  }
-
-  gpt_header_t *hdr = (gpt_header_t *)hdr_buf;
-  if (hdr->signature != GPT_SIG || hdr->part_entry_size == 0 ||
-      hdr->num_part_entries == 0 || hdr->part_entry_size > bsz) {
-    FreePool(hdr_buf);
-    return EFI_NOT_FOUND;
-  }
-
-  UINT32 entsz = hdr->part_entry_size;
-  UINT32 entcnt = hdr->num_part_entries;
-  UINT64 ent_lba = hdr->part_entry_lba;
-  FreePool(hdr_buf);
-
-  UINT8 esp_guid[16] = EFI_PART_TYPE_ESP;
-  UINT8 boot_guid[16] = EFI_PART_TYPE_CAPYOS_BOOT;
-  UINT8 data_guid[16] = EFI_PART_TYPE_LINUX_FS;
-
-  UINTN ents_per_block = bsz / entsz;
-  UINTN read_entries = 0;
-  UINT64 cur_lba = ent_lba;
-
-  UINT64 esp_start = 0;
-  UINT64 esp_count = 0;
-  UINT64 boot_part_lba = 0;
-  UINT64 data_start = 0;
-  UINT64 data_count = 0;
-
-  VOID *ent_buf = AllocatePool(bsz);
-  if (!ent_buf) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-
-  while (read_entries < entcnt) {
-    st = uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId,
-                           cur_lba, bsz, ent_buf);
-    if (EFI_ERROR(st)) {
-      FreePool(ent_buf);
-      return st;
+  {
+    struct capyos_gpt_identity identity;
+    struct boot_manifest manifest __attribute__((unused));
+    struct uefi_gpt_read_context read_ctx;
+    UINT8 manifest_sector[512];
+    int identity_valid = 1;
+    int ab_header_valid = 0;
+    read_ctx.bio = bio;
+    read_ctx.media_id = bio->Media->MediaId;
+    if (bio->Media->BlockSize != 512u || bio->Media->LastBlock >= UINT32_MAX)
+      return EFI_NOT_FOUND;
+    if (capyos_gpt_identity_read(uefi_gpt_read, &read_ctx,
+                                 bio->Media->BlockSize,
+                                 (uint32_t)bio->Media->LastBlock + 1u,
+                                 &identity) != 0) {
+      identity_valid = 0;
+      if (capyos_gpt_identity_read_legacy(
+              uefi_gpt_read, &read_ctx, bio->Media->BlockSize,
+              (uint32_t)bio->Media->LastBlock + 1u, &identity) != 0)
+        return EFI_NOT_FOUND;
     }
-    UINTN max_in_block = (entcnt - read_entries) < ents_per_block
-                             ? (entcnt - read_entries)
-                             : ents_per_block;
-    for (UINTN i = 0; i < max_in_block; i++) {
-      UINT8 *ptr = (UINT8 *)ent_buf + i * entsz;
-      gpt_entry_t *e = (gpt_entry_t *)ptr;
-      if (e->first_lba == 0 || e->last_lba < e->first_lba) {
-        continue;
-      }
-      if (guid_eq(e->part_type_guid, esp_guid)) {
-        esp_start = e->first_lba;
-        esp_count = (e->last_lba - e->first_lba) + 1ULL;
-      } else if (guid_eq(e->part_type_guid, boot_guid)) {
-        boot_part_lba = e->first_lba;
-      } else if (guid_eq(e->part_type_guid, data_guid)) {
-        data_start = e->first_lba;
-        data_count = (e->last_lba - e->first_lba) + 1ULL;
+    if (uefi_gpt_read(&read_ctx, identity.boot.lba, manifest_sector) != 0)
+      return EFI_NOT_FOUND;
+    ab_header_valid = manifest_sector[0] == 'C' && manifest_sector[1] == 'A' &&
+                      manifest_sector[2] == 'P' && manifest_sector[3] == 'Y' &&
+                      manifest_sector[4] == 'S' && manifest_sector[5] == 'L' &&
+                      manifest_sector[6] == 'T' && manifest_sector[7] == '0';
+    if (!ab_header_valid)
+      for (UINTN i = 0u; i < sizeof(manifest); ++i)
+      ((UINT8 *)&manifest)[i] = manifest_sector[i];
+    if (!ab_header_valid &&
+        !installer_disk_boot_manifest_valid(&manifest, identity.boot.sectors))
+      return EFI_NOT_FOUND;
+    if (ab_header_valid && !identity_valid)
+      return EFI_NOT_FOUND;
+    *out_data_start = identity.data.lba;
+    *out_data_count = identity.data.sectors;
+    if (out_esp_start)
+      *out_esp_start = identity.esp.lba;
+    if (out_esp_count)
+      *out_esp_count = identity.esp.sectors;
+    if (out_identity) {
+      out_identity->esp_lba_start = identity.esp.lba;
+      out_identity->esp_lba_count = identity.esp.sectors;
+      out_identity->boot_lba_start = identity.boot.lba;
+      out_identity->boot_lba_count = identity.boot.sectors;
+      out_identity->data_lba_start = identity.data.lba;
+      out_identity->data_lba_count = identity.data.sectors;
+      out_identity->flags = identity_valid
+                                ? BOOT_HANDOFF_DISK_IDENTITY_VALID
+                                : BOOT_HANDOFF_DISK_IDENTITY_LEGACY_VALID;
+      for (UINTN i = 0; i < 16u; ++i) {
+        out_identity->disk_guid[i] = identity.disk_guid[i];
+        out_identity->esp_partition_guid[i] = identity.esp.guid[i];
+        out_identity->boot_partition_guid[i] = identity.boot.guid[i];
+        out_identity->data_partition_guid[i] = identity.data.guid[i];
       }
     }
-    read_entries += max_in_block;
-    cur_lba++;
-  }
-  FreePool(ent_buf);
-
-  if (boot_part_lba == 0 || data_start == 0 || data_count == 0) {
-    return EFI_NOT_FOUND;
+    return EFI_SUCCESS;
   }
 
-  VOID *mf_buf = AllocatePool(bsz);
-  if (!mf_buf) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-  st = uefi_call_wrapper(bio->ReadBlocks, 5, bio, bio->Media->MediaId,
-                         boot_part_lba, bsz, mf_buf);
-  if (EFI_ERROR(st)) {
-    FreePool(mf_buf);
-    return st;
-  }
-  struct boot_manifest *mf = (struct boot_manifest *)mf_buf;
-  if (mf->magic != BOOT_MANIFEST_MAGIC || mf->entry_count == 0) {
-    FreePool(mf_buf);
-    return EFI_NOT_FOUND;
-  }
-  FreePool(mf_buf);
-
-  *out_data_start = data_start;
-  *out_data_count = data_count;
-  if (out_esp_start) {
-    *out_esp_start = esp_start;
-  }
-  if (out_esp_count) {
-    *out_esp_count = esp_count;
-  }
-  return EFI_SUCCESS;
 }
 
 EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
+                                                UINT32 *out_raw_media_id,
                                                 EFI_SYSTEM_TABLE *st,
                                                 EFI_BLOCK_IO_PROTOCOL **out_bio,
                                                 UINT64 *out_data_start,
                                                 UINT64 *out_data_count,
                                                 EFI_BLOCK_IO_PROTOCOL **out_raw_bio,
                                                 UINT64 *out_raw_data_start,
-                                                UINT64 *out_raw_data_count) {
+                                                UINT64 *out_raw_data_count,
+                                                struct boot_disk_identity *out_identity) {
   if (!image || !st || !st->BootServices || !out_bio || !out_data_start ||
       !out_data_count || !out_raw_bio || !out_raw_data_start ||
-      !out_raw_data_count) {
+      !out_raw_data_count || !out_raw_media_id || !out_identity) {
     return EFI_INVALID_PARAMETER;
   }
   *out_bio = NULL;
@@ -675,13 +700,41 @@ EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
   *out_raw_bio = NULL;
   *out_raw_data_start = 0;
   *out_raw_data_count = 0;
+  *out_raw_media_id = 0u;
+  for (UINTN i = 0; i < sizeof(*out_identity); ++i)
+    ((UINT8 *)out_identity)[i] = 0;
 
   UINT64 boot_part_hint_start = 0;
   UINT64 boot_part_hint_count = 0;
-  int has_boot_part_hint =
-      (get_boot_partition_hint(image, st, &boot_part_hint_start,
-                               &boot_part_hint_count) == 0 &&
-       boot_part_hint_start != 0 && boot_part_hint_count != 0);
+  UINT8 boot_part_hint_guid[16] = {0};
+  EFI_HANDLE boot_device_handle = NULL;
+  int boot_part_hint_guid_present = 0;
+  int has_boot_part_hint = 0;
+  if (get_boot_partition_hint(image, st, &boot_part_hint_start,
+                              &boot_part_hint_count, boot_part_hint_guid,
+                              &boot_device_handle) == 0) {
+    for (UINTN i = 0; i < 16u; ++i)
+      boot_part_hint_guid_present |= boot_part_hint_guid[i];
+    has_boot_part_hint = boot_part_hint_start != 0 &&
+                                 boot_part_hint_count != 0 &&
+                                 boot_part_hint_guid_present
+                             ? 1
+                             : 0;
+  }
+  int boot_has_partition_node = 0;
+  if (boot_device_handle) {
+    VOID *boot_path = NULL;
+    EFI_STATUS path_status = uefi_call_wrapper(
+        st->BootServices->HandleProtocol, 3, boot_device_handle,
+        &DevicePathProtocol, &boot_path);
+    if (!EFI_ERROR(path_status) && boot_path)
+      boot_has_partition_node = device_path_has_harddrive_node(boot_path) ? 1 : 0;
+  }
+  int allow_unbound_fallback = 0;
+  (void)installer_disk_runtime_fallback_allowed(
+      boot_has_partition_node, boot_device_is_cdrom(image, st) ? 1 : 0);
+  if (!has_boot_part_hint || !boot_has_partition_node || allow_unbound_fallback)
+    return EFI_NOT_FOUND;
 
   EFI_HANDLE *handles = NULL;
   UINTN count = 0;
@@ -693,9 +746,14 @@ EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
   }
 
   EFI_BLOCK_IO_PROTOCOL *best = NULL;
-  UINT64 best_blocks = 0;
+  EFI_HANDLE best_handle = NULL;
+  UINTN candidate_count = 0;
+  UINTN exact_match_count = 0;
   UINT64 best_data_start = 0;
   UINT64 best_data_count = 0;
+  struct boot_disk_identity best_identity;
+  for (UINTN i = 0; i < sizeof(best_identity); ++i)
+    ((UINT8 *)&best_identity)[i] = 0;
 
   for (UINTN i = 0; i < count; i++) {
     EFI_BLOCK_IO_PROTOCOL *bio = NULL;
@@ -713,31 +771,47 @@ EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
     UINT64 data_count = 0;
     UINT64 esp_start = 0;
     UINT64 esp_count = 0;
-    if (EFI_ERROR(gpt_find_capyos_data_partition(bio, &data_start, &data_count,
-                                                 &esp_start, &esp_count))) {
+    struct boot_disk_identity candidate_identity;
+    if (EFI_ERROR(gpt_find_capyos_data_partition(
+            bio, &data_start, &data_count, &esp_start, &esp_count,
+            &candidate_identity))) {
       continue;
     }
 
-    if (has_boot_part_hint && esp_start == boot_part_hint_start &&
-        esp_count == boot_part_hint_count) {
-      best = bio;
-      best_data_start = data_start;
-      best_data_count = data_count;
-      break;
+    if (has_boot_part_hint &&
+        installer_disk_runtime_binding_matches(
+            esp_start == boot_part_hint_start &&
+                esp_count == boot_part_hint_count,
+            guid_eq(candidate_identity.esp_partition_guid,
+                    boot_part_hint_guid),
+            device_path_parent_matches(st, handles[i], boot_device_handle))) {
+      exact_match_count++;
+      if (!best) {
+        best = bio;
+        best_handle = handles[i];
+        best_data_start = data_start;
+        best_data_count = data_count;
+        best_identity = candidate_identity;
+      }
     }
 
-    UINT64 blocks = (UINT64)bio->Media->LastBlock + 1ULL;
-    if (!best || blocks > best_blocks) {
-      best = bio;
-      best_blocks = blocks;
-      best_data_start = data_start;
-      best_data_count = data_count;
+    if (!has_boot_part_hint) {
+      candidate_count++;
+      if (!best) {
+        best = bio;
+        best_handle = handles[i];
+        best_data_start = data_start;
+        best_data_count = data_count;
+        best_identity = candidate_identity;
+      }
     }
   }
 
   FreePool(handles);
 
-  if (!best) {
+  if (!best || !best_handle ||
+      (has_boot_part_hint && exact_match_count != 1u) ||
+      (!has_boot_part_hint && candidate_count != 1u)) {
     return EFI_NOT_FOUND;
   }
 
@@ -746,7 +820,9 @@ EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
    * high LBAs during runtime and return EFI_DEVICE_ERROR for otherwise valid
    * sectors. Using the partition handle keeps LBA addressing local to DATA. */
   EFI_HANDLE *logical_handles = NULL;
+  EFI_BLOCK_IO_PROTOCOL *logical_match = NULL;
   UINTN logical_count = 0;
+  UINTN logical_match_count = 0;
   stt = uefi_call_wrapper(st->BootServices->LocateHandleBuffer, 5, ByProtocol,
                           &BlockIoProtocol, NULL, &logical_count,
                           &logical_handles);
@@ -766,30 +842,43 @@ EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
 
       UINT64 part_start = 0;
       UINT64 part_count = 0;
+      UINT8 part_guid[16] = {0};
       if (get_partition_hint_from_handle(st, logical_handles[i], &part_start,
-                                         &part_count) != 0) {
+                                         &part_count, part_guid) != 0) {
         continue;
       }
-      if (part_start == best_data_start && part_count == best_data_count) {
-        FreePool(logical_handles);
-        *out_bio = bio;
-        *out_data_start = 0;
-        *out_data_count = best_data_count;
-        *out_raw_bio = best;
-        *out_raw_data_start = best_data_start;
-        *out_raw_data_count = best_data_count;
-        return EFI_SUCCESS;
+      if (installer_disk_runtime_binding_matches(
+              part_start == best_data_start && part_count == best_data_count,
+              guid_eq(part_guid, best_identity.data_partition_guid),
+              device_path_parent_matches(st, best_handle,
+                                         logical_handles[i]))) {
+        logical_match_count++;
+        if (!logical_match)
+          logical_match = bio;
       }
     }
     FreePool(logical_handles);
   }
+  if (logical_match_count == 1u && logical_match) {
+    *out_bio = logical_match;
+    *out_data_start = 0;
+    *out_data_count = best_data_count;
+    *out_raw_bio = best;
+    *out_raw_media_id = best->Media->MediaId;
+    *out_raw_data_start = best_data_start;
+    *out_raw_data_count = best_data_count;
+    *out_identity = best_identity;
+    return EFI_SUCCESS;
+  }
 
   *out_bio = best;
+  *out_raw_media_id = best->Media->MediaId;
   *out_data_start = best_data_start;
   *out_data_count = best_data_count;
   *out_raw_bio = best;
   *out_raw_data_start = best_data_start;
   *out_raw_data_count = best_data_count;
+  *out_identity = best_identity;
   return EFI_SUCCESS;
 }
 

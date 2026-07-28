@@ -38,6 +38,20 @@ static enum block_io_error_class block_call_write(struct block_device *dev,
                : BLOCK_IO_ERR_PERMANENT;
 }
 
+enum block_io_error_class block_device_flush_once_ex(struct block_device *dev) {
+    if (!dev || !dev->ops) {
+        return BLOCK_IO_ERR_PERMANENT;
+    }
+    if (dev->ops->flush_ex) {
+        return dev->ops->flush_ex(dev->ctx);
+    }
+    if (!dev->ops->flush) {
+        return BLOCK_IO_ERR_PERMANENT;
+    }
+    return dev->ops->flush(dev->ctx) == 0 ? BLOCK_IO_OK
+                                          : BLOCK_IO_ERR_PERMANENT;
+}
+
 /* Apply the unified retry policy. `is_write` selects which of the
  * two buffer slots is active; we keep the policy code flat (instead
  * of templating via callbacks) because the call sites are exactly
@@ -104,6 +118,27 @@ enum block_io_error_class block_device_write_ex(struct block_device *dev,
     }
     cls = block_call_write(dev, block_no, buffer);
     return block_retry_loop(dev, cls, /*is_write=*/1, block_no, NULL, buffer);
+}
+
+int block_device_supports_flush(const struct block_device *dev) {
+    return dev && dev->ops && (dev->ops->flush_ex || dev->ops->flush);
+}
+
+enum block_io_error_class block_device_flush_ex(struct block_device *dev) {
+    enum block_io_error_class cls;
+    int budget = BLOCK_RETRY_BUDGET_TRANSIENT;
+    if (!block_device_supports_flush(dev)) {
+        return BLOCK_IO_ERR_PERMANENT;
+    }
+    cls = block_device_flush_once_ex(dev);
+    while (cls == BLOCK_IO_ERR_TRANSIENT && budget-- > 0) {
+        cls = block_device_flush_once_ex(dev);
+    }
+    return cls;
+}
+
+int block_device_flush(struct block_device *dev) {
+    return block_device_flush_ex(dev) == BLOCK_IO_OK ? 0 : -1;
 }
 
 int block_device_read(struct block_device *dev, uint32_t block_no, void *buffer) {

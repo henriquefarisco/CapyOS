@@ -78,16 +78,18 @@ def _inspect_disk(img_path: Path, args) -> tuple[int, dict | None]:
             return _ls_esp(mm, args.ls_esp), None
 
         inspect_mbr(mm)
-        boot_part_lba = inspect_gpt(mm)
-        if boot_part_lba:
-            inspect_gpt_boot(handle, boot_part_lba)
+        boot_part = inspect_gpt(mm)
+        if boot_part:
+            boot_part_lba, boot_part_last = boot_part
+            inspect_gpt_boot(handle, boot_part_lba, boot_part_last)
             return 0, None
 
         boot_lba = struct.unpack("<I", read_lba(mm, 0)[454:458])[0]
-        if boot_lba == 0:
-            log("Boot partition starts at 0? Fishy.")
-            return 0, None
-        info = inspect_stage2(handle, boot_lba)
+        if not boot_part:
+            log("[erro] Canonical GPT/A/B BOOT partition not found.")
+            return 1, None
+        log("[erro] Legacy non-A/B boot media is unsupported by the v10 loader.")
+        return 1, None
     return 0, info
 
 

@@ -2,10 +2,13 @@
 #ifndef BOOT_HANDOFF_H
 #define BOOT_HANDOFF_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define BOOT_HANDOFF_MAGIC 0x48464F4E /* "NOFH" */
-#define BOOT_HANDOFF_VERSION 8
+#define BOOT_HANDOFF_VERSION 10
+#define BOOT_HANDOFF_DISK_IDENTITY_VALID 0x00000001u
+#define BOOT_HANDOFF_DISK_IDENTITY_LEGACY_VALID 0x00000002u
 
 #define BOOT_HANDOFF_RUNTIME_BOOT_SERVICES_ACTIVE 0x00000001u
 #define BOOT_HANDOFF_RUNTIME_FIRMWARE_INPUT 0x00000002u
@@ -22,6 +25,31 @@
 #define BOOT_MODE_NORMAL    0
 #define BOOT_MODE_RECOVERY  1
 #define BOOT_MODE_DIAG      2
+
+struct boot_disk_identity {
+  uint32_t flags;
+  uint32_t reserved;
+  uint64_t esp_lba_start;
+  uint64_t esp_lba_count;
+  uint64_t boot_lba_start;
+  uint64_t boot_lba_count;
+  uint64_t data_lba_start;
+  uint64_t data_lba_count;
+  uint8_t disk_guid[16];
+  uint8_t esp_partition_guid[16];
+  uint8_t boot_partition_guid[16];
+  uint8_t data_partition_guid[16];
+};
+
+#define BOOT_HANDOFF_SLOT_ATTEMPT_VALID 0x00000001u
+#define BOOT_HANDOFF_SLOT_ATTEMPT_PENDING 0x00000002u
+#define BOOT_HANDOFF_SLOT_ATTEMPT_ROLLBACK 0x00000004u
+
+struct boot_slot_attempt_handoff {
+  uint32_t flags;
+  uint32_t slot;
+  uint64_t generation;
+};
 
 struct boot_handoff_fb {
   uint64_t base;
@@ -69,6 +97,22 @@ struct boot_handoff {
   uint8_t boot_media;
   uint8_t boot_mode;
   uint8_t _reserved_pad[5];
+  struct boot_disk_identity disk_identity;
+  struct boot_slot_attempt_handoff slot_attempt;
 };
+
+#define BOOT_HANDOFF_V8_SIZE 440u
+#define BOOT_HANDOFF_V9_SIZE 560u
+#define BOOT_HANDOFF_V10_SIZE 576u
+typedef char boot_handoff_v8_prefix_size_must_stay_440[
+    offsetof(struct boot_handoff, disk_identity) == BOOT_HANDOFF_V8_SIZE ? 1 : -1];
+typedef char boot_disk_identity_size_must_stay_120[
+    sizeof(struct boot_disk_identity) == 120u ? 1 : -1];
+typedef char boot_handoff_v9_prefix_size_must_stay_560[
+    offsetof(struct boot_handoff, slot_attempt) == BOOT_HANDOFF_V9_SIZE ? 1 : -1];
+typedef char boot_slot_attempt_handoff_size_must_stay_16[
+    sizeof(struct boot_slot_attempt_handoff) == 16u ? 1 : -1];
+typedef char boot_handoff_v10_size_must_stay_576[
+    sizeof(struct boot_handoff) == BOOT_HANDOFF_V10_SIZE ? 1 : -1];
 
 #endif // BOOT_HANDOFF_H

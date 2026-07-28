@@ -11,6 +11,8 @@
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/apic.h"
 #include "arch/x86_64/kernel_shell_dispatch.h"
+#include "arch/x86_64/storage_boot_provider_policy.h"
+#include "arch/x86_64/storage_runtime.h"
 #include "drivers/gpu/gpu_core.h"
 #include "drivers/rtc/rtc.h"
 #include "drivers/timer/pit.h"
@@ -261,8 +263,20 @@ static int cmd_print_last_tls(struct shell_context *ctx, int argc, char **argv) 
 
 /* --- print-boot-slot: show A/B slot status --- */
 static int cmd_print_boot_slot(struct shell_context *ctx, int argc, char **argv) {
+  struct x64_storage_boot_provider_status provider;
   (void)ctx; (void)argc; (void)argv;
   boot_slot_status(print_adapter);
+  /* The persistent A/B capability is what turns `update-apply` from -60 into a
+   * real transition, so its verdict belongs next to the slot table. */
+  if (x64_storage_runtime_boot_provider_status(&provider) != 0) {
+    fbcon_print("Boot provider: ready=no reason=unavailable\n");
+    return 0;
+  }
+  fbcon_print("Boot provider: ready=");
+  fbcon_print(provider.provider_ready ? "yes" : "no");
+  fbcon_print(" reason=");
+  fbcon_print(x64_storage_boot_provider_reason_label(provider.reason));
+  fbcon_putc('\n');
   return 0;
 }
 

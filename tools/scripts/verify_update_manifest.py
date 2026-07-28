@@ -42,6 +42,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-branch")
     parser.add_argument("--expected-source")
     parser.add_argument("--expected-payload-url")
+    parser.add_argument(
+        "--allow-lab-http-payload-url",
+        action="store_true",
+        help=(
+            "accept a plain-http payload_url; only a kernel built with "
+            "CAPYOS_UPDATE_LAB_TRUST_KEY_HEX consumes it (Etapa 8 A/B gate)"
+        ),
+    )
     parser.add_argument("--openssl", default=os.environ.get("OPENSSL", "openssl"))
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
@@ -154,7 +162,9 @@ def main() -> int:
             normalize_public_key_hex(args.expected_public_key_hex)
         )
         raw = args.manifest.read_bytes()
-        fields, signed = parse_manifest(raw)
+        fields, signed = parse_manifest(
+            raw, allow_lab_http=args.allow_lab_http_payload_url
+        )
         actual_public = expected_public
         if args.public_key:
             ensure_regular_file(args.public_key, "public key")

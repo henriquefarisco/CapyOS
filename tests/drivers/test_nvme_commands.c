@@ -134,6 +134,23 @@ static void test_create_sq_layout(void) {
     }
 }
 
+static void test_flush_command(void) {
+    struct nvme_sqe cmd;
+    if (nvme_build_flush_cmd(NULL, 1u) != -1 ||
+        nvme_build_flush_cmd(&cmd, 0u) != -1)
+        fail("flush must reject NULL command and namespace zero");
+    zero_cmd(&cmd);
+    if (nvme_build_flush_cmd(&cmd, 0x42u) != 0)
+        fail("flush must accept a valid namespace");
+    if (cmd.opcode != NVME_CMD_FLUSH || cmd.nsid != 0x42u || cmd.cid != 0u)
+        fail("flush opcode and namespace must be exact");
+    if (cmd.flags != 0u || cmd.rsvd1 != 0u || cmd.mptr != 0u ||
+        cmd.prp1 != 0u || cmd.prp2 != 0u || cmd.cdw10 != 0u ||
+        cmd.cdw11 != 0u || cmd.cdw12 != 0u || cmd.cdw13 != 0u ||
+        cmd.cdw14 != 0u || cmd.cdw15 != 0u)
+        fail("flush data and reserved fields must be zero");
+}
+
 static void test_rw_rejects_invalid(void) {
     struct nvme_sqe cmd;
     uint8_t buf[16];
@@ -156,7 +173,7 @@ static void test_rw_layout_read(void) {
     uint8_t buf[4096];
     uint64_t lba = 0x0000ABCD12345678ull;
     zero_cmd(&cmd);
-    if (nvme_build_rw_cmd(&cmd, NVME_CMD_READ, 0x42u, lba, 8u, buf) != 0) {
+    if (nvme_build_rw_cmd(&cmd, NVME_CMD_READ, 0x42u, lba, 1u, buf) != 0) {
         fail("rw must succeed on valid READ");
         return;
     }
@@ -167,22 +184,14 @@ static void test_rw_layout_read(void) {
     }
     if (cmd.cdw10 != 0x12345678u) fail("cdw10 must hold LBA[31:0]");
     if (cmd.cdw11 != 0x0000ABCDu) fail("cdw11 must hold LBA[63:32]");
-    /* block_count=8 → NLB=7. */
-    if ((cmd.cdw12 & 0xFFFFu) != 7u) fail("cdw12[15:0] must hold NLB (count-1)");
+    if ((cmd.cdw12 & 0xFFFFu) != 0u) fail("single-block NLB must be zero");
 }
 
-static void test_rw_layout_write_max_count(void) {
+static void test_rw_rejects_multi_block_without_prp_list(void) {
     struct nvme_sqe cmd;
     uint8_t buf[4096];
-    if (nvme_build_rw_cmd(&cmd, NVME_CMD_WRITE, 1, 0, 0x10000u, buf) != 0) {
-        fail("rw must accept block_count == 65536");
-        return;
-    }
-    if (cmd.opcode != NVME_CMD_WRITE) fail("opcode must be WRITE");
-    /* NLB encoding for 65536 blocks is 0xFFFF (count - 1 truncated to 16). */
-    if ((cmd.cdw12 & 0xFFFFu) != 0xFFFFu) {
-        fail("NLB must wrap to 0xFFFF for block_count == 65536");
-    }
+    if (nvme_build_rw_cmd(&cmd, NVME_CMD_WRITE, 1, 0, 2u, buf) != -1)
+        fail("rw must reject multi-block transfer without PRP2/list support");
 }
 
 int run_nvme_commands_tests(void) {
@@ -194,9 +203,10 @@ int run_nvme_commands_tests(void) {
     test_create_cq_rejects_invalid();
     test_create_cq_layout();
     test_create_sq_layout();
+    test_flush_command();
     test_rw_rejects_invalid();
     test_rw_layout_read();
-    test_rw_layout_write_max_count();
+    test_rw_rejects_multi_block_without_prp_list();
     if (g_failures == 0) printf("[tests] nvme_commands OK\n");
     return g_failures;
 }

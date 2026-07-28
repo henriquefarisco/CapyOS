@@ -411,4 +411,213 @@ EFI_STATUS load_kernel_streaming(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
   uefi_call_wrapper(root->Close, 1, root);
   return lkst;
 }
-
+
+static int uefi_ab_gpt_read(
+    void *opaque, uint32_t lba,
+    uint8_t sector[CAPYOS_GPT_IDENTITY_SECTOR_SIZE]) {
+  struct uefi_boot_store_context *ctx = opaque;
+  if (!ctx || !ctx->bio || !sector)
+    return -1;
+  return EFI_ERROR(uefi_block_io_read(ctx->bio, ctx->media_id, lba,
+                                      CAPYOS_GPT_IDENTITY_SECTOR_SIZE,
+                                      sector))
+             ? -1
+             : 0;
+}
+
+static int uefi_ab_identity_matches(
+    const struct capyos_gpt_identity *identity,
+    const struct boot_disk_identity *expected) {
+  return identity && expected &&
+         expected->flags == BOOT_HANDOFF_DISK_IDENTITY_VALID &&
+         expected->esp_lba_start == identity->esp.lba &&
+         expected->esp_lba_count == identity->esp.sectors &&
+         expected->boot_lba_start == identity->boot.lba &&
+         expected->boot_lba_count == identity->boot.sectors &&
+         expected->data_lba_start == identity->data.lba &&
+         expected->data_lba_count == identity->data.sectors &&
+         uefi_slot_bytes_equal(expected->disk_guid, identity->disk_guid, 16u) &&
+         uefi_slot_bytes_equal(expected->esp_partition_guid, identity->esp.guid,
+                               16u) &&
+         uefi_slot_bytes_equal(expected->boot_partition_guid,
+                               identity->boot.guid, 16u) &&
+         uefi_slot_bytes_equal(expected->data_partition_guid,
+                               identity->data.guid, 16u);
+}
+
+int uefi_boot_store_read(void *opaque, uint32_t lba,
+                                uint8_t sector[BOOT_SLOT_STORE_SECTOR_SIZE]) {
+  struct uefi_boot_store_context *ctx = opaque;
+  if (!ctx || !ctx->bio || !sector || lba >= ctx->boot_sectors ||
+      ctx->boot_lba > UINT64_MAX - lba)
+    return -1;
+  return EFI_ERROR(uefi_block_io_read(ctx->bio, ctx->media_id,
+                                      ctx->boot_lba + lba,
+                                      BOOT_SLOT_STORE_SECTOR_SIZE, sector))
+             ? -1
+             : 0;
+}
+
+int uefi_boot_store_write(
+    void *opaque, uint32_t lba,
+    const uint8_t sector[BOOT_SLOT_STORE_SECTOR_SIZE]) {
+  struct uefi_boot_store_context *ctx = opaque;
+  if (!ctx || !ctx->bio || !sector || lba >= ctx->boot_sectors ||
+      ctx->boot_lba > UINT64_MAX - lba)
+    return -1;
+  return EFI_ERROR(uefi_block_io_write(ctx->bio, ctx->media_id,
+                                       ctx->boot_lba + lba,
+                                       BOOT_SLOT_STORE_SECTOR_SIZE, sector))
+             ? -1
+             : 0;
+}
+
+int uefi_boot_store_flush(void *opaque) {
+  struct uefi_boot_store_context *ctx = opaque;
+  return !ctx || !ctx->bio ||
+                 EFI_ERROR(uefi_block_io_flush(ctx->bio, ctx->media_id))
+             ? -1
+             : 0;
+}
+
+int uefi_slot_bytes_equal(const UINT8 *a, const UINT8 *b, UINTN len) {
+  UINT8 diff = 0u;
+  if (!a || !b)
+    return 0;
+  for (UINTN i = 0u; i < len; ++i)
+    diff |= (UINT8)(a[i] ^ b[i]);
+  return diff == 0u;
+}
+
+static EFI_STATUS uefi_load_selected_slot(
+    EFI_SYSTEM_TABLE *st, struct uefi_boot_store_context *ctx,
+    struct boot_slot_store *store, uint32_t slot,
+    EFI_PHYSICAL_ADDRESS *entry_out) {
+  struct boot_slot_manager manager;
+  struct boot_slot_image image;
+  struct sha256_ctx sha;
+  UINT8 digest[SHA256_DIGEST_SIZE];
+  VOID *allocation = NULL;
+  VOID *buffer = NULL;
+  UINTN rounded;
+  UINT32 sectors;
+  EFI_STATUS status;
+  if (!st || !ctx || !store || !entry_out || slot >= BOOT_SLOT_COUNT ||
+      boot_slot_manager_get(&manager) != 0 || manager.active_slot != slot ||
+      manager.slots[slot].state != BOOT_SLOT_ACTIVE ||
+      boot_slot_store_read_header(store, 0u, slot, &image) != 0 ||
+      manager.slots[slot].payload_size != image.payload_size ||
+      !uefi_slot_bytes_equal((const UINT8 *)manager.slots[slot].version,
+                             (const UINT8 *)image.version,
+                             BOOT_SLOT_VERSION_MAX) ||
+      !uefi_slot_bytes_equal(manager.slots[slot].payload_sha256,
+                             image.payload_sha256, BOOT_SLOT_SHA256_SIZE))
+    return EFI_COMPROMISED_DATA;
+  sectors = image.payload_size / BOOT_SLOT_STORE_SECTOR_SIZE;
+  if ((image.payload_size % BOOT_SLOT_STORE_SECTOR_SIZE) != 0u)
+    sectors++;
+  if (sectors == 0u ||
+      sectors > manager.slots[slot].payload_capacity_sectors ||
+      sectors > (~(UINTN)0 / BOOT_SLOT_STORE_SECTOR_SIZE))
+    return EFI_COMPROMISED_DATA;
+  rounded = (UINTN)sectors * BOOT_SLOT_STORE_SECTOR_SIZE;
+  status = uefi_block_io_allocate_aligned(ctx->bio, rounded, &allocation,
+                                          &buffer);
+  if (EFI_ERROR(status))
+    return status;
+  status = uefi_block_io_read(
+      ctx->bio, ctx->media_id,
+      ctx->boot_lba + manager.slots[slot].payload_lba, rounded, buffer);
+  if (EFI_ERROR(status)) {
+    FreePool(allocation);
+    return status;
+  }
+  for (UINTN i = image.payload_size; i < rounded; ++i) {
+    if (((UINT8 *)buffer)[i] != 0u) {
+      FreePool(allocation);
+      return EFI_COMPROMISED_DATA;
+    }
+  }
+  sha256_init(&sha);
+  sha256_update(&sha, buffer, image.payload_size);
+  sha256_final(&sha, digest);
+  sha256_clear(&sha);
+  if (!uefi_slot_bytes_equal(digest, image.payload_sha256,
+                             SHA256_DIGEST_SIZE)) {
+    FreePool(allocation);
+    return EFI_SECURITY_VIOLATION;
+  }
+  status = load_kernel_from_buffer(st, buffer, image.payload_size, entry_out);
+  FreePool(allocation);
+  return status;
+}
+
+EFI_STATUS load_kernel_from_ab_store(
+    EFI_SYSTEM_TABLE *st, EFI_BLOCK_IO_PROTOCOL *bio,
+    UINT32 expected_media_id,
+    const struct boot_disk_identity *identity, EFI_PHYSICAL_ADDRESS *entry_out,
+    struct boot_slot_attempt_handoff *out_attempt) {
+  static struct uefi_boot_store_context ctx;
+  static struct boot_slot_store store;
+  struct boot_slot_layout layout;
+  uint32_t slot = BOOT_SLOT_NONE;
+  uint64_t generation = 0u;
+  int selection;
+  EFI_STATUS status;
+  if (out_attempt)
+    *out_attempt = (struct boot_slot_attempt_handoff){0};
+  if (!st || !bio || !bio->Media || !identity || !entry_out || !out_attempt ||
+      bio->Media->BlockSize != BOOT_SLOT_STORE_SECTOR_SIZE ||
+      identity->flags != BOOT_HANDOFF_DISK_IDENTITY_VALID ||
+      identity->boot_lba_count == 0u || identity->boot_lba_count > UINT32_MAX ||
+      identity->boot_lba_start > bio->Media->LastBlock ||
+      identity->boot_lba_count - 1u >
+          bio->Media->LastBlock - identity->boot_lba_start)
+    return EFI_INVALID_PARAMETER;
+  ctx.bio = bio;
+  if (bio->Media->MediaId != expected_media_id)
+    return EFI_MEDIA_CHANGED;
+  ctx.media_id = expected_media_id;
+  ctx.boot_lba = identity->boot_lba_start;
+  ctx.boot_sectors = (UINT32)identity->boot_lba_count;
+  {
+    struct capyos_gpt_identity current_identity;
+    if (bio->Media->LastBlock >= UINT32_MAX ||
+        capyos_gpt_identity_read(uefi_ab_gpt_read, &ctx,
+                                 bio->Media->BlockSize,
+                                 (UINT32)bio->Media->LastBlock + 1u,
+                                 &current_identity) != 0 ||
+        !uefi_ab_identity_matches(&current_identity, identity))
+      return EFI_MEDIA_CHANGED;
+  }
+  if (boot_slot_layout_plan(ctx.boot_sectors, &layout) != 0 ||
+      boot_slot_init() != 0 ||
+      boot_slot_store_init(&store, &layout, uefi_boot_store_read,
+                           uefi_boot_store_write, uefi_boot_store_flush,
+                           &ctx) != 0 ||
+      boot_slot_store_bind_control(&store, 0u) != 0)
+    return EFI_COMPROMISED_DATA;
+  selection = boot_slot_select_for_boot(&slot, &generation);
+  if (selection < 0 || slot >= BOOT_SLOT_COUNT || generation == 0u)
+    return EFI_COMPROMISED_DATA;
+  status = uefi_load_selected_slot(st, &ctx, &store, slot, entry_out);
+  if (EFI_ERROR(status) && selection == 1) {
+    selection = boot_slot_select_for_boot(&slot, &generation);
+    if (selection != 2 || slot >= BOOT_SLOT_COUNT || generation == 0u)
+      return EFI_COMPROMISED_DATA;
+    status = uefi_load_selected_slot(st, &ctx, &store, slot, entry_out);
+  }
+  if (EFI_ERROR(status))
+    return status;
+  out_attempt->flags = BOOT_HANDOFF_SLOT_ATTEMPT_VALID;
+  if (selection == 1)
+    out_attempt->flags |= BOOT_HANDOFF_SLOT_ATTEMPT_PENDING;
+  else if (selection == 2)
+    out_attempt->flags |= BOOT_HANDOFF_SLOT_ATTEMPT_ROLLBACK;
+  out_attempt->slot = slot;
+  out_attempt->generation = generation;
+  return EFI_SUCCESS;
+}
+
+
+

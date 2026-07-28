@@ -7,7 +7,8 @@
  *   - `update_agent_download_payload`
  *   - `update_agent_prepare_dry_run` / `_explain` /
  *     `_prepare_staged_update`
- *   - fail-closed stage/arm entry points (unsupported until persistent slots)
+ *   - `update_agent_stage_latest` (catalog staging only; the persistent
+ *     boot-slot write lives in `update_agent_transact.c`)
  *   - `update_agent_clear_stage`
  *   - `update_agent_set_pending_activation`
  *
@@ -93,8 +94,13 @@ static int invalidate_payload_cache_state(void) {
   return rc;
 }
 
-int update_agent_verify_cached_payload(
-    const struct update_manifest_view *manifest) {
+void update_agent_payload_release(uint8_t *buffer) {
+  payload_buffer_release(buffer);
+}
+
+int update_agent_payload_load_verified(
+    const struct update_manifest_view *manifest, uint8_t **out_buffer,
+    size_t *out_len) {
   update_agent_read_bytes_fn reader = update_agent_active_bytes_reader();
   uint8_t digest[SHA256_DIGEST_SIZE];
   char digest_hex[UPDATE_AGENT_SHA256_HEX_MAX];
@@ -103,6 +109,12 @@ int update_agent_verify_cached_payload(
   uint8_t *payload_buffer = NULL;
   int valid = 0;
 
+  if (out_buffer) {
+    *out_buffer = NULL;
+  }
+  if (out_len) {
+    *out_len = 0u;
+  }
   if (!manifest || !reader ||
       !update_agent_manifest_payload_sha256_valid(manifest) ||
       !update_agent_manifest_payload_size_valid(manifest)) {
@@ -125,8 +137,23 @@ int update_agent_verify_cached_payload(
     valid = update_agent_local_hex_equal_fixed(
         digest_hex, manifest->payload_sha256, UPDATE_AGENT_SHA256_HEX_LEN);
   }
-  payload_buffer_release(payload_buffer);
-  return valid ? 0 : -1;
+  if (!valid || !out_buffer || !out_len) {
+    payload_buffer_release(payload_buffer);
+    return -1;
+  }
+  *out_buffer = payload_buffer;
+  *out_len = payload_len;
+  return 0;
+}
+
+int update_agent_verify_cached_payload(
+    const struct update_manifest_view *manifest) {
+  uint8_t *payload_buffer = NULL;
+  size_t payload_len = 0u;
+  int rc = update_agent_payload_load_verified(manifest, &payload_buffer,
+                                              &payload_len);
+  update_agent_payload_release(payload_buffer);
+  return rc;
 }
 
 static int write_state_file(int pending_activation,
@@ -157,18 +184,6 @@ static int write_state_file(int pending_activation,
     update_agent_local_append(text, sizeof(text), "\n");
   }
   return writer(UPDATE_AGENT_STATE_PATH, text);
-}
-
-static int update_agent_persistent_apply_unsupported(const char *operation) {
-  update_agent_init(NULL);
-  update_agent_g_status.last_result = UPDATE_AGENT_ERR_UNSUPPORTED;
-  update_agent_local_copy(
-      update_agent_g_status.summary, sizeof(update_agent_g_status.summary),
-      "persistent update apply unsupported; verified download only");
-  if (operation) {
-    klog(KLOG_WARN, operation);
-  }
-  return UPDATE_AGENT_ERR_UNSUPPORTED;
 }
 
 int update_agent_fetch_remote_manifest(void) {
@@ -469,7 +484,7 @@ int update_agent_prepare_dry_run(void) {
   update_agent_g_status.last_result = 0;
   update_agent_local_copy(update_agent_g_status.summary,
                           sizeof(update_agent_g_status.summary),
-                          "dry-run passed; verified download ready, apply unsupported");
+                          "dry-run passed; verified payload ready to apply");
   klog(KLOG_INFO, "[audit] [update] prepare dry-run passed");
   return 0;
 }
@@ -579,20 +594,106 @@ int update_agent_prepare_explain(struct update_prepare_explain *out) {
                                   update_agent_g_status.summary);
   }
 
-  out->stage_safe = 0u;
-  return prepare_explain_finish(
-      out, UPDATE_AGENT_ERR_UNSUPPORTED, "persistence",
-      "prepare explain: verified download ready, apply unsupported");
+  return prepare_explain_finish(out, 0, "-",
+                                "prepare explain: all prepare gates passed");
 }
 
 int update_agent_prepare_staged_update(void) {
-  return update_agent_persistent_apply_unsupported(
-      "[audit] [update] prepare refused: persistent boot-slot writer unavailable");
+  int rc = update_agent_fetch_remote_manifest();
+
+  if (rc < 0) {
+    return rc;
+  }
+  rc = update_agent_download_payload();
+  if (rc < 0) {
+    return rc;
+  }
+  rc = update_agent_stage_latest();
+  if (rc < 0) {
+    return rc;
+  }
+  rc = update_agent_set_pending_activation(1);
+  if (rc < 0) {
+    return rc;
+  }
+  update_agent_g_status.last_result = 0;
+  update_agent_local_copy(update_agent_g_status.summary,
+                          sizeof(update_agent_g_status.summary),
+                          "update prepared and armed for activation");
+  klog(KLOG_INFO, "[audit] [update] update prepared and armed");
+  return 0;
 }
 
+/* Catalog staging. This promotes the verified local catalog to
+ * `staged.ini`; the persistent boot-slot write happens later, in
+ * update_agent_apply_boot_slot_verified(), so a staged catalog alone never
+ * changes what the loader boots. */
 int update_agent_stage_latest(void) {
-  return update_agent_persistent_apply_unsupported(
-      "[audit] [update] stage refused: persistent boot-slot writer unavailable");
+  char buffer[UPDATE_AGENT_MANIFEST_TEXT_MAX];
+  size_t read_len = 0u;
+  struct update_manifest_view manifest;
+  update_agent_read_file_fn reader = update_agent_active_reader();
+  update_agent_write_file_fn writer = update_agent_active_writer();
+  int rc = update_agent_poll();
+
+  if (rc < 0) {
+    return rc;
+  }
+  if (!update_agent_g_status.catalog_present ||
+      !update_agent_g_status.update_available) {
+    update_agent_g_status.last_result = -5;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "no cached update available to stage");
+    return -5;
+  }
+  if (!writer || !reader) {
+    update_agent_g_status.last_result = -6;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "update staging writer unavailable");
+    return -6;
+  }
+  update_agent_manifest_view_reset(&manifest);
+  if (reader(update_agent_g_status.manifest_path, buffer, sizeof(buffer),
+             &read_len) != 0 ||
+      read_len == 0u ||
+      update_agent_manifest_capture_signed_text(buffer, read_len, &manifest) !=
+          0) {
+    update_agent_g_status.last_result = -7;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "failed to read cached manifest for staging");
+    return -7;
+  }
+  update_agent_parse_buffer(buffer, read_len, 1, &manifest);
+  if (!update_agent_g_status.payload_cache_sha256[0] ||
+      !update_agent_manifest_payload_sha256_valid(&manifest) ||
+      !update_agent_manifest_payload_size_valid(&manifest) ||
+      !update_agent_manifest_payload_url_valid(&manifest) ||
+      !update_agent_manifest_signature_ed25519_valid(&manifest) ||
+      !update_agent_local_hex_equal_fixed(
+          update_agent_g_status.payload_cache_sha256, manifest.payload_sha256,
+          UPDATE_AGENT_SHA256_HEX_LEN) ||
+      update_agent_verify_cached_payload(&manifest) != 0) {
+    update_agent_g_status.last_result = -49;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "payload cache missing or unverified for staging");
+    klog(KLOG_WARN, "[audit] [update] staging refused: payload cache unverified");
+    return -49;
+  }
+  if (writer(update_agent_g_status.staged_manifest_path, buffer) != 0 ||
+      write_state_file(0, update_agent_g_status.staged_manifest_path) != 0) {
+    update_agent_g_status.last_result = -9;
+    update_agent_local_copy(update_agent_g_status.summary,
+                            sizeof(update_agent_g_status.summary),
+                            "failed to persist staged update");
+    klog(KLOG_WARN, "[update] Failed to persist staged update.");
+    return -9;
+  }
+  klog(KLOG_INFO, "[audit] [update] verified catalog staged");
+  return update_agent_poll();
 }
 
 int update_agent_clear_stage(void) {
@@ -600,13 +701,19 @@ int update_agent_clear_stage(void) {
 
   update_agent_init(NULL);
   if (remover) {
-    (void)remover(update_agent_g_status.staged_manifest_path[0]
-                      ? update_agent_g_status.staged_manifest_path
-                      : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH);
-    (void)remover(update_agent_g_status.payload_cache_path[0]
-                      ? update_agent_g_status.payload_cache_path
-                      : UPDATE_AGENT_PAYLOAD_CACHE_PATH);
-    (void)remover(UPDATE_AGENT_STATE_PATH);
+    int remove_rc = 0;
+    if (remover(update_agent_g_status.staged_manifest_path[0]
+                    ? update_agent_g_status.staged_manifest_path
+                    : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH) != 0)
+      remove_rc = -1;
+    if (remover(update_agent_g_status.payload_cache_path[0]
+                    ? update_agent_g_status.payload_cache_path
+                    : UPDATE_AGENT_PAYLOAD_CACHE_PATH) != 0)
+      remove_rc = -1;
+    if (remover(UPDATE_AGENT_STATE_PATH) != 0)
+      remove_rc = -1;
+    if (remove_rc != 0)
+      return -13;
   }
   klog(KLOG_INFO, "[update] Staged update cleared.");
   return update_agent_poll();
@@ -619,8 +726,22 @@ int update_agent_set_pending_activation(int enabled) {
     return rc;
   }
   if (enabled) {
-    return update_agent_persistent_apply_unsupported(
-        "[audit] [update] arm refused: persistent boot-slot writer unavailable");
+    if (!update_agent_g_status.stage_ready) {
+      update_agent_g_status.last_result = -10;
+      update_agent_local_copy(update_agent_g_status.summary,
+                              sizeof(update_agent_g_status.summary),
+                              "no staged update available to arm");
+      return -10;
+    }
+    if (write_state_file(1, update_agent_g_status.staged_manifest_path) != 0) {
+      update_agent_g_status.last_result = -11;
+      update_agent_local_copy(update_agent_g_status.summary,
+                              sizeof(update_agent_g_status.summary),
+                              "failed to arm staged update");
+      klog(KLOG_WARN, "[update] Failed to arm staged update.");
+      return -11;
+    }
+    klog(KLOG_INFO, "[update] Update armed for activation.");
   } else if (update_agent_g_status.stage_ready) {
     if (write_state_file(0, update_agent_g_status.staged_manifest_path) != 0) {
       update_agent_g_status.last_result = -12;

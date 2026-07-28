@@ -44,6 +44,12 @@ static void test_ahci_timeout(void) {
     }
 }
 
+static void test_ahci_df_is_permanent(void) {
+    enum block_io_error_class c =
+        block_io_classify_ahci(0u, 0x20u, 0, 1);
+    if (c != BLOCK_IO_ERR_PERMANENT) fail("DF must classify as PERMANENT");
+}
+
 static void test_ahci_unc_is_permanent(void) {
     uint32_t tfd = AHCI_TFD_MAKE(0x40u /*UNC*/, AHCI_TFD_ERR_BIT);
     enum block_io_error_class c =
@@ -243,6 +249,7 @@ int run_block_error_tests(void) {
     test_ahci_ok_clean();
     test_ahci_device_gone_wins();
     test_ahci_timeout();
+    test_ahci_df_is_permanent();
     test_ahci_unc_is_permanent();
     test_ahci_abrt_is_permanent();
     test_ahci_icrc_is_transient();

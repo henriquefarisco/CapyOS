@@ -35,6 +35,11 @@ int nvme_reset_csts_fatal(uint32_t csts) {
   return (csts & NVME_RESET_CSTS_CFS_MASK) != 0u ? 1 : 0;
 }
 
+int nvme_io_completion_matches(uint16_t expected_cid, uint16_t expected_sqid,
+                               uint16_t actual_cid, uint16_t actual_sqid) {
+  return expected_cid == actual_cid && expected_sqid == actual_sqid;
+}
+
 enum nvme_reset_admin_action nvme_reset_next_admin_action(
     const struct nvme_reset_progress *p) {
   if (!p) {

@@ -28,6 +28,7 @@
 int http_build_request(const struct http_request *req, char *buf,
                        size_t buf_size);
 int http_parse_status_line(const char *line, int *status_code);
+int http_parse_ipv4_literal(const char *host, uint32_t *out_ip);
 size_t http_parse_content_length(const char *value);
 int http_request_wants_keepalive(const struct http_request *req);
 int http_connection_should_pool(const struct http_request *req,
@@ -443,6 +444,43 @@ static void test_parse_accepts_max_port(void) {
     CHECK(rc == 0 && port == 65535, "max valid port 65535 accepted");
 }
 
+static void test_ipv4_literal_accepts_dotted_quad(void) {
+    uint32_t ip = 0u;
+    /* Canonical host order, the same convention as NET_IPV4_ADDR: the SLIRP
+     * gateway 10.0.2.2 must reach the transport without any DNS query. */
+    CHECK(http_parse_ipv4_literal("10.0.2.2", &ip) == 0 && ip == 0x0A000202u,
+          "SLIRP gateway literal resolves without DNS");
+    ip = 0u;
+    CHECK(http_parse_ipv4_literal("255.255.255.255", &ip) == 0 &&
+              ip == 0xFFFFFFFFu,
+          "broadcast literal parses to all ones");
+    ip = 0xDEADBEEFu;
+    CHECK(http_parse_ipv4_literal("0.0.0.0", &ip) == 0 && ip == 0u,
+          "single zero octets are valid");
+}
+
+static void test_ipv4_literal_rejects_hostnames_and_malformed(void) {
+    uint32_t ip = 0u;
+    /* Anything that is not exactly four decimal octets must keep going through
+     * the resolver instead of being silently mapped to a wrong address. */
+    CHECK(http_parse_ipv4_literal("example.com", &ip) != 0,
+          "hostname must not be treated as a literal");
+    CHECK(http_parse_ipv4_literal("10.0.2", &ip) != 0, "three octets rejected");
+    CHECK(http_parse_ipv4_literal("10.0.2.2.2", &ip) != 0,
+          "five octets rejected");
+    CHECK(http_parse_ipv4_literal("10.0.2.256", &ip) != 0,
+          "octet above 255 rejected");
+    CHECK(http_parse_ipv4_literal("10.0.2.02", &ip) != 0,
+          "leading zero rejected (no octal ambiguity)");
+    CHECK(http_parse_ipv4_literal("10.0.2.2:80", &ip) != 0,
+          "trailing bytes rejected");
+    CHECK(http_parse_ipv4_literal("10.0..2", &ip) != 0, "empty octet rejected");
+    CHECK(http_parse_ipv4_literal("10.0.2.1234", &ip) != 0,
+          "four-digit octet rejected");
+    CHECK(http_parse_ipv4_literal(NULL, &ip) != 0, "NULL host rejected");
+    CHECK(http_parse_ipv4_literal("10.0.2.2", NULL) != 0, "NULL out rejected");
+}
+
 int run_http_url_tests(void) {
     g_failures = 0;
     test_parse_https_with_path();
@@ -470,6 +508,8 @@ int run_http_url_tests(void) {
     test_default_close_is_never_pooled();
     test_pool_requires_explicit_opt_in_from_both_peers();
     test_critical_headers_survive_generic_header_cap();
+    test_ipv4_literal_accepts_dotted_quad();
+    test_ipv4_literal_rejects_hostnames_and_malformed();
     if (g_failures == 0) printf("[PASS] http_url\n");
     return g_failures;
 }

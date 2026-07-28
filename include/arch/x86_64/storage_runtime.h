@@ -1,9 +1,12 @@
 #ifndef ARCH_X86_64_STORAGE_RUNTIME_H
 #define ARCH_X86_64_STORAGE_RUNTIME_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "boot/handoff.h"
+#include "boot/boot_slot_block_provider.h"
+#include "arch/x86_64/storage_boot_provider_policy.h"
 #include "drivers/storage/efi_block.h"
 #include "drivers/storage/storvsc_runtime.h"
 #include "fs/block.h"
@@ -37,6 +40,43 @@ const char *x64_storage_runtime_native_data_path(void);
 int x64_storage_runtime_uses_firmware(void);
 int x64_storage_runtime_has_native_candidate(void);
 int x64_storage_runtime_has_device(void);
+struct block_device *x64_storage_runtime_raw_device(void);
+int x64_storage_runtime_data_binding(uint32_t *out_lba,
+                                     uint32_t *out_sectors);
+int x64_storage_runtime_boot_provider_status(
+    struct x64_storage_boot_provider_status *out);
+#if 0
+int x64_storage_runtime_stage_boot_payload(
+    const char *version, const uint8_t *payload, size_t payload_len,
+    uint64_t *out_generation);
+#endif
+int x64_storage_runtime_stage_boot_payload_sha256(
+    const char *version, const uint8_t *payload, size_t payload_len,
+    const uint8_t expected_sha256[BOOT_SLOT_SHA256_SIZE], uint32_t *out_slot,
+    uint64_t *out_generation);
+int x64_storage_runtime_arm_boot_slot(uint32_t slot,
+                                     uint64_t expected_generation,
+                                     uint64_t *out_generation);
+int x64_storage_runtime_confirm_boot_health(
+    const struct boot_slot_attempt_handoff *attempt);
+int x64_storage_runtime_confirm_current_boot_health(void);
+/* Durable rollback observation. Returns 2 when the running boot is itself the
+ * loader-applied rollback, 1 when the metadata still carries a pending
+ * rollback, 0 when nothing is pending and -1 when the persistent provider is
+ * unavailable. */
+int x64_storage_runtime_boot_rollback_check(
+    const struct boot_slot_attempt_handoff *attempt);
+int x64_storage_runtime_current_boot_rollback_check(void);
+/* Copy of the attempt token the loader published for the running boot, already
+ * validated by x64_storage_boot_attempt_from_handoff. Exposed so the boot log
+ * can state which slot is running and whether it still owes a confirmation --
+ * the loader's own message goes through the firmware console, which the official
+ * VMware contract deliberately keeps off COM1. */
+int x64_storage_runtime_current_boot_attempt(
+    struct boot_slot_attempt_handoff *out);
+int x64_storage_runtime_register_boot_provider(
+    int persistent_mount_ready, const struct boot_slot_disk_binding *binding,
+    struct boot_slot_block_provider *provider);
 int x64_storage_runtime_hyperv_present(void);
 int x64_storage_runtime_hyperv_bus_prepared(void);
 int x64_storage_runtime_hyperv_bus_connected(void);

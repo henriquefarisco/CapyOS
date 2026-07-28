@@ -4,12 +4,18 @@
 #include <stdint.h>
 
 #include "arch/x86_64/storage_runtime.h"
+#include "boot/gpt_identity.h"
 
 struct x64_storage_native_candidate_state {
   enum x64_storage_backend backend;
   const char *data_path;
   int ready;
   struct block_device *device;
+  struct block_device *raw_device;
+  uint32_t data_lba;
+  uint32_t data_sectors;
+  struct capyos_gpt_identity identity;
+  int data_binding_verified;
 };
 
 void x64_storage_runtime_native_reset(

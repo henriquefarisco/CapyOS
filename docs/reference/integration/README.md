@@ -10,7 +10,10 @@ O plano mestre continua definindo quando uma integração pode entrar no sistema
 
 - [`compatibility-matrix.md`](compatibility-matrix.md) — matriz de versões pinadas e ABIs por repositório
 - [`capypkg-publisher-manifest-format.md`](capypkg-publisher-manifest-format.md) — formato canônico do manifest line-oriented que o adapter consome
-- [`compatibility-audit-2026-07-15.md`](compatibility-audit-2026-07-15.md) — auditoria cross-repo vigente (CapyOS alpha.315 / CapyUI 2.24.1 / CapyAI 0.2.0)
+- [`compatibility-audit-2026-07-27-alpha318.md`](compatibility-audit-2026-07-27-alpha318.md) — auditoria cross-repo vigente (CapyOS alpha.318 / CapyUI 2.24.1 / CapyAI 0.2.1)
+- [`compatibility-audit-2026-07-20-alpha317.md`](compatibility-audit-2026-07-20-alpha317.md) — auditoria histórica da alpha.317, corrigida pela auditoria alpha.318
+- [`compatibility-audit-2026-07-20.md`](compatibility-audit-2026-07-20.md) — auditoria histórica da alpha.316
+- [`compatibility-audit-2026-07-15.md`](compatibility-audit-2026-07-15.md) — auditoria histórica da alpha.315
 - [`compatibility-audit-2026-06-11.md`](compatibility-audit-2026-06-11.md) — auditoria cross-repo histórica (CapyOS alpha.265 / CapyBrowser 0.6.0)
 - [`compatibility-audit-2026-06-06.md`](compatibility-audit-2026-06-06.md) ? auditoria cross-repo historica (CapyOS alpha.264 via addendum / CapyBrowser 0.5.0)
 - [`compatibility-audit-2026-06-02.md`](compatibility-audit-2026-06-02.md) ? auditoria cross-repo hist?rica (lote de 7 repos: CapyOS alpha.262 / CapyUI 2.22.0 / CapyCodecs 0.0.7 image v2 / CapyLang 0.1.8 / CapyBrowser 0.3.0 / CapyAgent 0.0.7 signer publicado / CapyBenchmark 0.0.7)

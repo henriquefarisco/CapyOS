@@ -40,6 +40,7 @@
 struct mem_block_device {
   struct block_device dev;
   uint8_t data[TEST_BLOCK_COUNT][TEST_BLOCK_SIZE];
+  uint32_t flush_count;
 };
 
 static int mem_read_block(void *ctx, uint32_t block_no, void *buffer) {
@@ -60,9 +61,18 @@ static int mem_write_block(void *ctx, uint32_t block_no, const void *buffer) {
   return 0;
 }
 
+static enum block_io_error_class mem_flush_ex(void *ctx) {
+  struct mem_block_device *mem = (struct mem_block_device *)ctx;
+  if (!mem)
+    return BLOCK_IO_ERR_PERMANENT;
+  mem->flush_count++;
+  return BLOCK_IO_OK;
+}
+
 static const struct block_device_ops k_mem_block_ops = {
     .read_block = mem_read_block,
     .write_block = mem_write_block,
+    .flush_ex = mem_flush_ex,
 };
 
 struct mem_lba_device {
@@ -247,6 +257,11 @@ static int test_aes_xts_vector(void) {
   }
   if (memcmp(plain, roundtrip, sizeof(plain)) != 0) {
     printf("[crypt_vectors] XTS roundtrip mismatch\n");
+    fails++;
+  }
+  if (!block_device_supports_flush(crypt_dev) ||
+      block_device_flush(crypt_dev) != 0 || mem.flush_count != 1u) {
+    printf("[crypt_vectors] XTS flush forwarding failed\n");
     fails++;
   }
 

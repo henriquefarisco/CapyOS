@@ -194,6 +194,7 @@ void http_transport_close(struct http_transport *transport);
 void http_set_header_value(struct http_response *resp, const char *name,
                            const char *value);
 
+int http_parse_ipv4_literal(const char *host, uint32_t *out_ip);
 int http_resolve_location(const struct http_request *base, const char *location,
                           char *out, size_t out_size);
 int http_status_is_redirect(int status);

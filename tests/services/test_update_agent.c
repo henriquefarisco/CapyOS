@@ -356,18 +356,20 @@ int run_update_agent_tests(void) {
                   "pending_activation=0\nstaged_manifest=/system/update/staged.ini\n"
                   "payload_cache=/system/update/payload.bin\npayload_cache_sha256="
                   UPDATE_AGENT_GOOD_SHA256 "\n");
-    fails += expect_true(update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
-                         "staging must fail closed until persistent slots exist");
+    /* The state file declares a cache digest that no cached bytes can produce,
+     * so staging must refuse: only a re-hashed payload may be promoted. */
+    fails += expect_true(update_agent_stage_latest() == -49,
+                         "staging must refuse an unverifiable payload cache");
     update_agent_status_get(&status);
     fails += expect_true(status.stage_ready == 0u,
-                         "unsupported staging must not create staged state");
+                         "refused staging must not create staged state");
     fails += expect_true(status.pending_activation == 0u,
-                         "unsupported staging must not arm activation");
+                         "refused staging must not arm activation");
     fails += expect_true(strcmp(status.summary,
-                                "persistent update apply unsupported; verified download only") == 0,
-                         "unsupported staging summary mismatch");
+                                "payload cache missing or unverified for staging") == 0,
+                         "refused staging summary mismatch");
     fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0,
-                         "unsupported staging must not write a staged manifest");
+                         "refused staging must not write a staged manifest");
     fails += expect_true(find_file(UPDATE_AGENT_STATE_PATH)->present == 1,
                          "pre-existing verified cache state should remain intact");
 
@@ -375,15 +377,14 @@ int run_update_agent_tests(void) {
                   find_file(UPDATE_AGENT_CACHE_PATH)->text);
     fails += expect_true(update_agent_poll() == 0,
                          "manually seeded legacy stage should remain inspectable");
-    fails += expect_true(update_agent_set_pending_activation(1) ==
-                             UPDATE_AGENT_ERR_UNSUPPORTED,
-                         "arming must fail closed until persistent slots exist");
+    fails += expect_true(update_agent_set_pending_activation(1) == 0,
+                         "arming a staged catalog should succeed");
     update_agent_status_get(&status);
-    fails += expect_true(status.pending_activation == 0u,
-                         "unsupported arm must not set pending activation");
+    fails += expect_true(status.pending_activation == 1u,
+                         "arm should set pending activation");
     fails += expect_true(strcmp(status.summary,
-                                "persistent update apply unsupported; verified download only") == 0,
-                         "unsupported arm summary mismatch");
+                                "staged update armed for activation") == 0,
+                         "armed summary mismatch");
 
     fails += expect_true(update_agent_set_pending_activation(0) == 0,
                          "disarming a staged update should succeed");
@@ -408,12 +409,12 @@ int run_update_agent_tests(void) {
                          "state file should be removed");
     fails += expect_true(strcmp(status.summary, "update available in local catalog") == 0,
                          "clear should fall back to catalog summary");
-    fails += expect_true(update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
-                         "staging remains unsupported without a payload cache");
+    fails += expect_true(update_agent_stage_latest() == -49,
+                         "staging is refused without a payload cache");
     update_agent_status_get(&status);
     fails += expect_true(strcmp(status.summary,
-                                "persistent update apply unsupported; verified download only") == 0,
-                         "unsupported stage summary mismatch");
+                                "payload cache missing or unverified for staging") == 0,
+                         "missing cache stage summary mismatch");
 
     set_file_text(UPDATE_AGENT_CACHE_PATH,
                   "available_version=0.8.0-alpha.0+20260305\npublished_at=2026-04-08\n");
@@ -424,12 +425,12 @@ int run_update_agent_tests(void) {
                          "catalog should remain present");
     fails += expect_true(status.update_available == 0u,
                          "matching version should not signal update");
-    fails += expect_true(update_agent_stage_latest() == UPDATE_AGENT_ERR_UNSUPPORTED,
-                         "staging remains unsupported without a newer catalog");
+    fails += expect_true(update_agent_stage_latest() == -5,
+                         "staging is refused without a newer catalog");
     update_agent_status_get(&status);
     fails += expect_true(strcmp(status.summary,
-                                "persistent update apply unsupported; verified download only") == 0,
-                         "unsupported stage refusal summary mismatch");
+                                "no cached update available to stage") == 0,
+                         "no-update stage refusal summary mismatch");
 
     set_file_text(UPDATE_AGENT_REPOSITORY_PATH,
                   "channel=stable\nbranch=main\nsource=github:test/CapyOS\n");
@@ -496,7 +497,7 @@ int run_update_agent_tests(void) {
     fails += expect_true(strcmp(status.available_version, "1.0.0-alpha.2") == 0,
                          "prepare dry-run available version mismatch");
     fails += expect_true(strcmp(status.summary,
-                                "dry-run passed; verified download ready, apply unsupported") == 0,
+                                "dry-run passed; verified payload ready to apply") == 0,
                          "prepare dry-run summary mismatch");
     fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0,
                          "prepare dry-run should not persist staged manifest");
@@ -504,9 +505,8 @@ int run_update_agent_tests(void) {
                          "prepare dry-run should not fetch remote manifest");
     fails += expect_true(g_last_payload_url[0] == '\0',
                          "prepare dry-run should not download payload");
-    fails += expect_true(update_agent_prepare_explain(&explain) ==
-                             UPDATE_AGENT_ERR_UNSUPPORTED,
-                         "prepare explain should expose missing persistent apply");
+    fails += expect_true(update_agent_prepare_explain(&explain) == 0,
+                         "prepare explain should pass once every gate is met");
     fails += expect_true(explain.poll_ready == 1u && explain.catalog_ready == 1u &&
                              explain.repository_ready == 1u && explain.version_ready == 1u,
                          "prepare explain primary gates should pass");
@@ -514,10 +514,10 @@ int run_update_agent_tests(void) {
                              explain.payload_url_ready == 1u &&
                              explain.signature_ready == 1u && explain.cache_ready == 1u,
                          "prepare explain payload gates should pass");
-    fails += expect_true(explain.stage_safe == 0u,
-                         "prepare explain must not advertise persistent staging");
-    fails += expect_true(strcmp(explain.failing_gate, "persistence") == 0,
-                         "prepare explain persistence gate mismatch");
+    fails += expect_true(explain.stage_safe == 1u,
+                         "prepare explain should advertise a safe stage");
+    fails += expect_true(strcmp(explain.failing_gate, "-") == 0,
+                         "prepare explain passing gate mismatch");
     set_file_text(UPDATE_AGENT_PAYLOAD_CACHE_PATH, NULL);
     fails += expect_true(update_agent_prepare_dry_run() == -53,
                          "prepare dry-run should reject state without cached payload bytes");
@@ -549,26 +549,32 @@ int run_update_agent_tests(void) {
     g_payload_rc = 0;
     g_payload_bytes = (const uint8_t *)"abc";
     g_payload_len = 3u;
-    fails += expect_true(update_agent_prepare_staged_update() ==
-                             UPDATE_AGENT_ERR_UNSUPPORTED,
-                         "mutating prepare must fail closed without persistent slots");
+    /* One-shot prepare: fetch the signed manifest, download and re-hash the
+     * payload, promote the catalog and arm activation. */
+    fails += expect_true(update_agent_prepare_staged_update() == 0,
+                         "prepare should fetch, verify, stage and arm");
     update_agent_status_get(&status);
-    fails += expect_true(status.stage_ready == 0u,
-                         "unsupported prepare must not leave staged state");
-    fails += expect_true(status.pending_activation == 0u,
-                         "unsupported prepare must not arm activation");
+    fails += expect_true(status.stage_ready == 1u,
+                         "prepare should leave a staged update");
+    fails += expect_true(status.pending_activation == 1u,
+                         "prepare should arm activation");
     fails += expect_true(strcmp(status.summary,
-                                "persistent update apply unsupported; verified download only") == 0,
-                         "unsupported prepare summary mismatch");
-    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0,
-                         "unsupported prepare must not persist staged manifest");
-    fails += expect_true(find_file(UPDATE_AGENT_STATE_PATH)->present == 0,
-                         "unsupported prepare must not persist activation state");
-    fails += expect_true(g_last_fetch_url[0] == '\0' &&
-                             g_last_payload_url[0] == '\0',
-                         "unsupported prepare must not perform network side effects");
+                                "update prepared and armed for activation") == 0,
+                         "prepare summary mismatch");
+    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 1,
+                         "prepare should persist the staged manifest");
+    fails += expect_true(find_file(UPDATE_AGENT_STATE_PATH)->present == 1,
+                         "prepare should persist activation state");
+    fails += expect_true(g_last_fetch_url[0] != '\0' &&
+                             g_last_payload_url[0] != '\0',
+                         "prepare must fetch the manifest and the payload");
     fails += expect_true(find_file(UPDATE_AGENT_FETCHED_PATH)->present == 0,
                          "prepare should remove fetched temporary manifest");
+    fails += expect_true(update_agent_clear_stage() == 0,
+                         "clearing the prepared update should succeed");
+    fails += expect_true(find_file(UPDATE_AGENT_STAGE_PATH)->present == 0 &&
+                             find_file(UPDATE_AGENT_STATE_PATH)->present == 0,
+                         "clear should drop staged manifest and state");
 
     set_file_text(UPDATE_AGENT_CACHE_PATH,
                   "available_version=1.0.0-alpha.4\nchannel=stable\nbranch=main\nsource=github:test/CapyOS\npublished_at=2026-04-09\n"

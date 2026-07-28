@@ -68,5 +68,6 @@ int nvme_build_create_sq_cmd(struct nvme_sqe *cmd, void *sq_buffer,
  * > 65536 which exceeds the 16-bit NLB encoding). */
 int nvme_build_rw_cmd(struct nvme_sqe *cmd, uint8_t opcode, uint32_t nsid,
                       uint64_t lba, uint32_t block_count, void *data_buffer);
+int nvme_build_flush_cmd(struct nvme_sqe *cmd, uint32_t nsid);
 
 #endif /* DRIVERS_NVME_NVME_COMMANDS_H */

@@ -31,6 +31,8 @@ typedef enum block_io_error_class (*block_write_ex_fn)(void *ctx,
  * the driver has no reset path; in that case TIMEOUT will not be
  * retried. */
 typedef int (*block_reset_fn)(void *ctx);
+typedef int (*block_flush_fn)(void *ctx);
+typedef enum block_io_error_class (*block_flush_ex_fn)(void *ctx);
 
 struct block_device_ops {
     block_read_fn  read_block;
@@ -38,6 +40,8 @@ struct block_device_ops {
     block_read_ex_fn  read_block_ex;   /* optional */
     block_write_ex_fn write_block_ex;  /* optional */
     block_reset_fn    reset;           /* optional */
+    block_flush_fn    flush;
+    block_flush_ex_fn flush_ex;
 };
 
 struct block_device {
@@ -50,6 +54,10 @@ struct block_device {
 
 int block_device_read(struct block_device *dev, uint32_t block_no, void *buffer);
 int block_device_write(struct block_device *dev, uint32_t block_no, const void *buffer);
+int block_device_supports_flush(const struct block_device *dev);
+int block_device_flush(struct block_device *dev);
+enum block_io_error_class block_device_flush_once_ex(struct block_device *dev);
+enum block_io_error_class block_device_flush_ex(struct block_device *dev);
 
 /* Extended I/O with classifier-driven retry policy (Slice 3E.2.B).
  *

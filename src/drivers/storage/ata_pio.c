@@ -41,7 +41,15 @@ enum ata_identify_result {
 struct ata_ctx {
   uint16_t io_base;  // e.g., 0x1F0 or 0x170
   uint8_t drive_sel; // 0xE0 master, 0xF0 slave (with LBA bits)
+  enum ata_flush_command flush_command;
 };
+
+static uint8_t g_ata_channel_quarantined[2];
+static volatile int g_ata_channel_busy[2];
+
+static uint32_t ata_channel_index(uint16_t io) {
+  return io == 0x1F0u ? 0u : 1u;
+}
 
 static inline uint16_t REG_DATA(uint16_t io) { return io + 0; }
 static inline uint16_t REG_SECCNT(uint16_t io) { return io + 2; }
@@ -160,12 +168,23 @@ static int ata_wait_ready(uint16_t io) {
   return -1;
 }
 
+static enum block_io_error_class ata_wait_failure_class(uint16_t io) {
+  uint8_t status = inb(REG_STATUS(io));
+  if (status == 0xFFu)
+    return BLOCK_IO_ERR_DEVICE_GONE;
+  if (!ata_status_busy(status) && ata_status_is_fatal(status))
+    return BLOCK_IO_ERR_PERMANENT;
+  return BLOCK_IO_ERR_TIMEOUT;
+}
+
 static int ata_wait_drq(uint16_t io) {
   for (uint32_t i = 0; i < ATA_POLL_MAX; ++i) {
     uint8_t st = inb(REG_STATUS(io));
     if (st == 0xFF) {
       return -1;
     }
+    if (ata_status_busy(st))
+      continue;
     if (ata_status_is_fatal(st)) {
       ata_log_status("erro aguardando DRQ (DF/ERR)", io, st);
       return -1;
@@ -242,7 +261,8 @@ ata_identify_retry(uint16_t io, uint8_t drive_sel, uint16_t *buf) {
 static int ata_pio_read_sector_ctx(const struct ata_ctx *ctx, uint32_t lba,
                                    void *buffer) {
   uint16_t io = ctx->io_base;
-  if (ata_wait_ready(io) != 0)
+  if (g_ata_channel_quarantined[ata_channel_index(io)] ||
+      ata_wait_ready(io) != 0)
     return -1;
   outb(REG_DRIVE(io), (uint8_t)(ctx->drive_sel | ((lba >> 24) & 0x0F)));
   outb(REG_SECCNT(io), 1);
@@ -263,7 +283,8 @@ static int ata_pio_read_sector_ctx(const struct ata_ctx *ctx, uint32_t lba,
 static int ata_pio_write_sector_ctx(const struct ata_ctx *ctx, uint32_t lba,
                                     const void *buffer) {
   uint16_t io = ctx->io_base;
-  if (ata_wait_ready(io) != 0)
+  if (g_ata_channel_quarantined[ata_channel_index(io)] ||
+      ata_wait_ready(io) != 0)
     return -1;
   outb(REG_DRIVE(io), (uint8_t)(ctx->drive_sel | ((lba >> 24) & 0x0F)));
   outb(REG_SECCNT(io), 1);
@@ -286,25 +307,106 @@ static int ata_pio_write_sector_ctx(const struct ata_ctx *ctx, uint32_t lba,
 }
 
 // Expose as 512B block device
+static enum block_io_error_class ata_flush_command_ex(void *opaque) {
+  struct ata_ctx *ctx = (struct ata_ctx *)opaque;
+  uint16_t io;
+  uint32_t channel;
+  if (!ctx || ctx->flush_command == ATA_FLUSH_NONE)
+    return BLOCK_IO_ERR_PERMANENT;
+  io = ctx->io_base;
+  channel = ata_channel_index(io);
+  if (g_ata_channel_quarantined[channel])
+    return BLOCK_IO_ERR_PERMANENT;
+  if (ata_wait_ready(io) != 0) {
+    enum block_io_error_class cls = ata_wait_failure_class(io);
+    if (cls == BLOCK_IO_ERR_TIMEOUT)
+      g_ata_channel_quarantined[channel] = 1u;
+    return cls;
+  }
+  outb(REG_DRIVE(io), (uint8_t)(ctx->drive_sel & (uint8_t)~0x40u));
+  ata_wait_400ns(io);
+  if (ata_wait_ready(io) != 0) {
+    enum block_io_error_class cls = ata_wait_failure_class(io);
+    if (cls == BLOCK_IO_ERR_TIMEOUT)
+      g_ata_channel_quarantined[channel] = 1u;
+    return cls;
+  }
+  outb(REG_CMD(io), (uint8_t)ctx->flush_command);
+  ata_wait_400ns(io);
+  for (uint32_t i = 0u; i < ATA_POLL_MAX; ++i) {
+    enum block_io_error_class cls =
+        ata_flush_poll_class(inb(REG_STATUS(io)), 0);
+    if (cls != BLOCK_IO_ERR_TRANSIENT)
+      return cls;
+  }
+  g_ata_channel_quarantined[channel] = 1u;
+  return ata_flush_poll_class(inb(REG_STATUS(io)), 1);
+}
+
+static int ata_channel_begin(const struct ata_ctx *ctx) {
+  uint32_t channel;
+  if (!ctx)
+    return 0;
+  channel = ata_channel_index(ctx->io_base);
+  if (g_ata_channel_quarantined[channel])
+    return 0;
+  while (__sync_lock_test_and_set(&g_ata_channel_busy[channel], 1))
+    __asm__ volatile("pause" ::: "memory");
+  if (g_ata_channel_quarantined[channel]) {
+    __sync_lock_release(&g_ata_channel_busy[channel]);
+    return 0;
+  }
+  return 1;
+}
+
+static void ata_channel_end(const struct ata_ctx *ctx) {
+  if (ctx)
+    __sync_lock_release(&g_ata_channel_busy[ata_channel_index(ctx->io_base)]);
+}
+
+static enum block_io_error_class ata_flush_ex(void *opaque) {
+  struct ata_ctx *ctx = (struct ata_ctx *)opaque;
+  enum block_io_error_class cls;
+  if (!ctx || ctx->flush_command == ATA_FLUSH_NONE)
+    return BLOCK_IO_ERR_PERMANENT;
+  if (!ata_channel_begin(ctx))
+    return g_ata_channel_quarantined[ata_channel_index(ctx->io_base)]
+               ? BLOCK_IO_ERR_PERMANENT
+               : BLOCK_IO_ERR_TRANSIENT;
+  cls = ata_flush_command_ex(ctx);
+  ata_channel_end(ctx);
+  return cls;
+}
+
 static int ata_read_block(void *ctx, uint32_t block_no, void *buffer) {
-  return ata_pio_read_sector_ctx((const struct ata_ctx *)ctx, block_no, buffer);
+  const struct ata_ctx *ata = (const struct ata_ctx *)ctx;
+  int rc;
+  if (!ata_channel_begin(ata))
+    return -1;
+  rc = ata_pio_read_sector_ctx(ata, block_no, buffer);
+  ata_channel_end(ata);
+  return rc;
 }
 static int ata_write_block(void *ctx, uint32_t block_no, const void *buffer) {
-  return ata_pio_write_sector_ctx((const struct ata_ctx *)ctx, block_no,
-                                  buffer);
+  const struct ata_ctx *ata = (const struct ata_ctx *)ctx;
+  int rc;
+  if (!ata_channel_begin(ata))
+    return -1;
+  rc = ata_pio_write_sector_ctx(ata, block_no, buffer);
+  ata_channel_end(ata);
+  return rc;
 }
 
-static struct block_device_ops ata_ops;
-static int ata_ops_initialized = 0;
+static const struct block_device_ops ata_ops = {
+    .read_block = ata_read_block,
+    .write_block = ata_write_block,
+};
 
-static void ata_init_ops(void) {
-  if (ata_ops_initialized) {
-    return;
-  }
-  ata_ops.read_block = ata_read_block;
-  ata_ops.write_block = ata_write_block;
-  ata_ops_initialized = 1;
-}
+static const struct block_device_ops ata_flush_ops = {
+    .read_block = ata_read_block,
+    .write_block = ata_write_block,
+    .flush_ex = ata_flush_ex,
+};
 
 #define MAX_ATA_DEV 4
 static struct block_device g_ata_devs[MAX_ATA_DEV];
@@ -378,9 +480,12 @@ static int ata_drive_present(uint16_t io, uint8_t drive_sel) {
 }
 
 void ata_init(void) {
-  ata_init_ops();
   ata_log(ATA_LOG_INFO, "inicializando controlador ATA PIO");
   g_ata_count = 0;
+  g_ata_channel_quarantined[0] = 0u;
+  g_ata_channel_quarantined[1] = 0u;
+  g_ata_channel_busy[0] = 0;
+  g_ata_channel_busy[1] = 0;
 
   for (int ch = 0; ch < 2 && g_ata_count < MAX_ATA_DEV; ++ch) {
     uint16_t io = g_channels[ch];
@@ -446,13 +551,15 @@ void ata_init(void) {
       struct ata_ctx *ctx = &g_ata_ctx[g_ata_count];
       ctx->io_base = io;
       ctx->drive_sel = sel;
+      ctx->flush_command = ata_identify_flush_command(id);
 
       struct block_device *dev = &g_ata_devs[g_ata_count];
       dev->name = dev_name;
       dev->block_size = 512;
       dev->block_count = lba_sectors;
       dev->ctx = ctx;
-      dev->ops = &ata_ops;
+      dev->ops = ctx->flush_command == ATA_FLUSH_NONE ? &ata_ops
+                                                       : &ata_flush_ops;
       g_ata_count++;
 
       // Log device info with size

@@ -136,6 +136,15 @@ static void test_csts_fatal_msb_clear_does_not_imply(void) {
 
 /* === Admin-action planner ========================================== */
 
+static void test_io_completion_identity(void) {
+  if (!nvme_io_completion_matches(7u, 1u, 7u, 1u))
+    fail("matching CID and SQID must be accepted");
+  if (nvme_io_completion_matches(7u, 1u, 8u, 1u))
+    fail("wrong CID must be rejected");
+  if (nvme_io_completion_matches(7u, 1u, 7u, 0u))
+    fail("wrong SQID must be rejected");
+}
+
 static void test_planner_null_progress_returns_done(void) {
   if (nvme_reset_next_admin_action(NULL) != NVME_RESET_ADMIN_DONE) {
     fail("NULL progress must return DONE so the loop terminates");
@@ -241,6 +250,7 @@ int run_nvme_controller_reset_tests(void) {
   test_csts_fatal_independent_of_rdy();
   test_csts_fatal_ignores_other_bits();
   test_csts_fatal_msb_clear_does_not_imply();
+  test_io_completion_identity();
   test_planner_null_progress_returns_done();
   test_planner_empty_returns_create_io_cq();
   test_planner_after_cq_returns_create_io_sq();

@@ -37,6 +37,7 @@
 #include "boot/boot_menu.h"
 #include "boot/boot_ui.h"
 #include "boot/handoff.h"
+#include "boot/boot_slot.h"
 #include "boot/boot_metrics.h"
 #include "core/kcon.h"
 #include "core/system_init.h"
@@ -113,6 +114,23 @@ static uint8_t g_syscall_kernel_stack[16 * 1024]
 /* ── globals owned by this TU ────────────────────────────────────────── */
 
 const struct boot_handoff *g_h = NULL;
+struct boot_slot_attempt_handoff g_boot_slot_attempt;
+
+int x64_storage_runtime_confirm_current_boot_health(void) {
+  return x64_storage_runtime_confirm_boot_health(&g_boot_slot_attempt);
+}
+
+int x64_storage_runtime_current_boot_rollback_check(void) {
+  return x64_storage_runtime_boot_rollback_check(&g_boot_slot_attempt);
+}
+
+int x64_storage_runtime_current_boot_attempt(
+    struct boot_slot_attempt_handoff *out) {
+  if (!out)
+    return -1;
+  *out = g_boot_slot_attempt;
+  return 0;
+}
 struct x64_input_runtime g_input_runtime;
 int g_exit_boot_services_attempted = 0;
 int g_exit_boot_services_done = 0;
@@ -242,7 +260,14 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('K');
 
   g_h = h;
-  if (!h || h->magic != BOOT_HANDOFF_MAGIC) {
+  /* Single source of truth for the attempt token: the same pure validator the
+   * host tests exercise. It enforces handoff v10, one canonical flag
+   * combination, a bounded slot, a non-zero generation and a strict disk
+   * identity, so an unauthenticated or downgraded handoff never reaches the
+   * boot-slot capability. */
+  if (!h || h->magic != BOOT_HANDOFF_MAGIC ||
+      h->version != BOOT_HANDOFF_VERSION ||
+      x64_storage_boot_attempt_from_handoff(h, &g_boot_slot_attempt) != 0) {
     dbgcon_putc('!');
     for (;;)
       cpu_relax();

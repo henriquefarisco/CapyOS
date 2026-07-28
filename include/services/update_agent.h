@@ -19,9 +19,10 @@
 #define UPDATE_AGENT_ED25519_SIGNATURE_HEX_LEN 128u
 #define UPDATE_AGENT_ED25519_SIGNATURE_HEX_MAX \
   (UPDATE_AGENT_ED25519_SIGNATURE_HEX_LEN + 1u)
-/* Persistent boot-slot writes and rollback metadata are not implemented yet.
- * Mutating prepare/stage/arm/apply entry points fail with this stable code
- * instead of reporting a RAM-only boot-slot transition as a real update. */
+/* Stable refusal code for any persistent boot-slot transition that cannot be
+ * proven durable: no registered provider with durable flush, a stale
+ * generation/lease, an unverified payload, or an indeterminate commit. It is
+ * never returned after a slot write has been durably published. */
 #define UPDATE_AGENT_ERR_UNSUPPORTED (-60)
 
 struct update_prepare_explain {
@@ -39,12 +40,24 @@ struct update_prepare_explain {
   char summary[UPDATE_AGENT_SUMMARY_MAX];
 };
 
+#if defined(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)
+/* Boot banner emitted by a lab-gated kernel whose update trust anchor was
+ * replaced at build time. `iso-uefi` greps the ELF for this literal and refuses
+ * to produce an official ISO that carries it. */
+extern const char *const update_agent_lab_trust_anchor_banner;
+#endif
+
 struct system_update_status {
   uint8_t configured;
   uint8_t catalog_present;
   uint8_t update_available;
   uint8_t stage_ready;
   uint8_t pending_activation;
+  /* Set by update_agent_check_rollback() when the running boot is itself the
+   * rollback the loader applied after an unconfirmed attempt. The rc stays 0
+   * (an observed rollback is a valid outcome, not a failure), so callers need
+   * this flag to distinguish it from "nothing pending". */
+  uint8_t rollback_applied;
   int32_t last_result;
   char channel[UPDATE_AGENT_CHANNEL_MAX];
   char branch[UPDATE_AGENT_BRANCH_MAX];
@@ -113,18 +126,27 @@ int update_agent_clear_stage(void);
 int update_agent_set_pending_activation(int enabled);
 void update_agent_status_get(struct system_update_status *out);
 
-/* Persistent boot-slot application is intentionally unavailable until the
- * updater can write and verify an inactive on-disk slot atomically. */
+/* Digest-less application stays refused on purpose: an update may only reach
+ * the inactive slot through update_agent_apply_boot_slot_verified(), which
+ * proves the payload against the signed manifest first. */
 int update_agent_apply_boot_slot(void);
+/* Durably confirms the boot attempt recorded in the handoff token and then
+ * clears the staged catalog. Returns -60 while no persistent provider is
+ * registered or when the token does not match the committed metadata. */
 int update_agent_confirm_health(void);
+/* Reports the durable rollback outcome of the running boot; the loader is the
+ * component that restores the confirmed slot when the attempt is spent. */
 int update_agent_check_rollback(void);
 
 /* Apply the staged boot slot only if the supplied payload SHA-256 hex
  * digest matches the value declared by the staged manifest's
  * `payload_sha256=` field.
  *
+ * On success the verified bytes are written to the inactive slot, read back,
+ * re-hashed and published, and the slot is armed for exactly one boot attempt.
+ *
  * Returns:
- *  -60         persistent boot-slot application is not implemented
+ *  -60         the durable slot write or the arm step could not be proven
  *  -30         staged digest missing, or caller passed NULL/empty
  *  -31         payload digest mismatch (refused; logged as [audit] [update])
  *  -32         payload digest declared but invalid length (must be 64 hex)

@@ -67,8 +67,38 @@ e pulada quando o desktop inicia: o harness retorna ao CLI para gravar/sincroniz
 o marker e, se o setup reiniciar antes do login, insere um boot adicional antes
 da releitura. O retorno desktop→TTY usa o sentinel real de `CTRL+ALT+F1`, nao um
 comando de terminal. A recovery key e redigida do log persistido. O gate QEMU e
-o full install networked passaram no host em 2026-07-17; ainda assim, esse
-preflight nao substitui nem fecha o gate oficial VMware multi-disco.
+o full install networked da `alpha.316` passaram no host em 2026-07-17; o rerun
+networked da `alpha.318` permanece bloqueado até os assets serem publicados. O
+preflight QEMU nao substitui nem fecha o gate oficial VMware multi-disco.
+
+### 1.1.1 Ciclo A/B assinado (Etapa 8, `alpha.319`)
+
+```bash
+make update-ab-selftest              # contrato host, tambem dentro de release-check
+make smoke-x64-qemu-update-ab        # preflight de desenvolvimento
+make smoke-x64-vmware-update-ab      # aceite oficial VMware + UEFI + E1000
+```
+
+Os dois gates instalam a ISO oficial num disco vazio e conduzem dois ciclos
+completos em quatro power cycles: manifesto Ed25519 buscado por HTTP, payload
+verificado por tamanho declarado + SHA-256, escrita no slot inativo com
+autorizacao geracional e flush duravel, consumo da unica tentativa pelo loader,
+confirmacao de saude persistente e, no segundo ciclo deixado sem confirmar,
+rollback aplicado pelo loader e reportado por `update-rollback-check`.
+
+Cada execucao gera um par Ed25519 descartavel e recompila o kernel com
+`CAPYOS_UPDATE_LAB_TRUST_KEY_HEX` + `CAPYOS_UPDATE_LAB_MANIFEST_URL`, porque a
+chave de release e offline-only. Esse kernel nao e publicavel: imprime
+`[lab] update trust anchor overridden`, e recusado por `iso-uefi` fora do target
+de smoke e reprovado por `release-check`. Detalhes, restricoes de ordem
+(`update-confirm-health` precisa ser a primeira mutacao de boot slot do seu boot)
+e o passo de operador com a chave de producao ficam em
+[`../operations/etapa-8-signed-update-playbook.md`](../operations/etapa-8-signed-update-playbook.md).
+
+Asserts por boot: `Boot provider: ready=yes reason=ready` em `print-boot-slot` e
+`[boot] A/B attempt slot=<n> state=<confirmed|pending|rollback>` no boot log. O
+gate emite manifesto de evidencia em `build/ci/` e, quando promovido, uma copia
+sanitizada em [`../releases/evidence/`](../releases/evidence/).
 
 ### 1.2 First boot e desktop
 
@@ -212,7 +242,9 @@ make test
 
 - o preflight QEMU e o gate VMware dedicado multi-disco provam selecao
   explicita, lifecycle persistente e guard intacto; a evidência VMware oficial
-  de `alpha.316` está publicada junto da nota de release;
+  mais recente é a de `alpha.317`, junto da nota de release; o ciclo de update
+  assinado A/B (apply, reboot, confirmação e rollback) continua sem evidência
+  externa desde a implementação do lifecycle em `alpha.318`;
 - falhas apos o reboot pelo HDD instalado devem ser tratadas como problemas do
   runtime instalado, nao como ausencia do instalador;
 - USB HID/XHCI da Etapa 3 permanece como gate regressivo; a validacao externa

@@ -111,10 +111,45 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     }
   }
 
+  EFI_BLOCK_IO_PROTOCOL *runtime_disk = NULL;
+  UINT64 runtime_data_lba = 0;
+  UINT64 runtime_data_count = 0;
+  EFI_BLOCK_IO_PROTOCOL *runtime_disk_raw = NULL;
+  UINT64 runtime_data_lba_raw = 0;
+  UINT64 runtime_data_count_raw = 0;
+  UINT32 runtime_block_size = 0;
+  UINT32 runtime_media_id = 0;
+  UINT64 runtime_last_lba = 0;
+  UINT32 runtime_media_id_raw = 0;
+  UINT64 runtime_last_lba_raw = 0;
+  struct boot_disk_identity runtime_identity = {0};
+  struct boot_slot_attempt_handoff boot_attempt = {0};
+  EFI_STATUS runtime_st = choose_runtime_disk_with_data(
+      image, &runtime_media_id_raw, systab, &runtime_disk, &runtime_data_lba, &runtime_data_count,
+      &runtime_disk_raw, &runtime_data_lba_raw, &runtime_data_count_raw,
+      &runtime_identity);
   EFI_PHYSICAL_ADDRESS entry = 0;
-  EFI_STATUS st = load_kernel_streaming(image, systab, &entry);
+  EFI_STATUS st = EFI_ERROR(runtime_st) || !runtime_disk_raw
+                      ? EFI_NOT_FOUND
+                      : load_kernel_from_ab_store(
+                            systab, runtime_disk_raw, runtime_media_id_raw,
+                            &runtime_identity, &entry,
+                            &boot_attempt);
   if (EFI_ERROR(st)) {
-    Print(L"[UEFI] Falha ao carregar kernel: %r\r\n", st);
+    Print(L"[UEFI] Falha A/B autoritativa: %r\r\n", st);
+    /* `%r` alone cannot be acted on. EFI_SECURITY_VIOLATION means the payload
+     * read from the slot did not hash to the digest in its header; anything else
+     * is a state/geometry refusal. Say which slot was selected so the operator
+     * can tell a corrupted payload apart from a loader built against a different
+     * slot layout (see the build-variant guard: a loader linked from objects of
+     * another generation refuses perfectly good slots). */
+    if (st == EFI_SECURITY_VIOLATION) {
+      Print(L"[UEFI] slot=%u geracao=%lu: payload nao casa com o SHA-256 do "
+            L"header do slot.\r\n",
+            boot_attempt.slot, boot_attempt.generation);
+      Print(L"[UEFI] Reinstale a partir de uma ISO construida com este mesmo "
+            L"loader; ESP e DATA nao foram alterados.\r\n");
+    }
     // NÃƒÂ£o retorne ao firmware em caso de erro: isso vira "boot loader failed"
     // no Hyper-V. Mantemos a tela para facilitar debug.
     uefi_call_wrapper(systab->BootServices->Stall, 1, 5 * 1000 * 1000);
@@ -122,7 +157,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
       uefi_call_wrapper(systab->BootServices->Stall, 1, 1000 * 1000);
     }
   }
-  Print(L"[UEFI] Kernel carregado @ 0x%lx\r\n", entry);
+  Print(L"[UEFI] Kernel A/B slot=%u generation=%lu @ 0x%lx\r\n",
+        boot_attempt.slot, boot_attempt.generation, entry);
   dbgcon_putc('L');
 
   // Captura RSDP e framebuffer antes de sair do BootServices
@@ -191,24 +227,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     Print(L"[UEFI] AVISO: GOP indisponivel; kernel sem framebuffer.\r\n");
   }
 
-  EFI_BLOCK_IO_PROTOCOL *runtime_disk = NULL;
-  UINT64 runtime_data_lba = 0;
-  UINT64 runtime_data_count = 0;
-  EFI_BLOCK_IO_PROTOCOL *runtime_disk_raw = NULL;
-  UINT64 runtime_data_lba_raw = 0;
-  UINT64 runtime_data_count_raw = 0;
-  UINT32 runtime_block_size = 0;
-  UINT32 runtime_media_id = 0;
-  UINT64 runtime_last_lba = 0;
-  UINT32 runtime_media_id_raw = 0;
-  UINT64 runtime_last_lba_raw = 0;
   BOOLEAN hyperv_hybrid_requested = FALSE;
   BOOLEAN boot_services_kept_active = FALSE;
-  EFI_STATUS runtime_st =
-      choose_runtime_disk_with_data(image, systab, &runtime_disk,
-                                    &runtime_data_lba, &runtime_data_count,
-                                    &runtime_disk_raw, &runtime_data_lba_raw,
-                                    &runtime_data_count_raw);
+
   if (!EFI_ERROR(runtime_st) && runtime_disk && runtime_disk->Media) {
     runtime_block_size = runtime_disk->Media->BlockSize;
     runtime_media_id = runtime_disk->Media->MediaId;
@@ -309,6 +330,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
     return st;
   }
   handoff = (struct boot_handoff *)(UINTN)max_low;
+  for (UINTN i = 0; i < sizeof(*handoff); ++i)
+    ((UINT8 *)handoff)[i] = 0;
   handoff->magic = BOOT_HANDOFF_MAGIC;
   handoff->version = BOOT_HANDOFF_VERSION;
   handoff->rsdp = rsdp_ok ? rsdp : 0;
@@ -559,9 +582,23 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   handoff->data_lba_start_raw = runtime_data_lba_raw;
   handoff->data_lba_count_raw = runtime_data_count_raw;
   handoff->efi_media_id_raw = runtime_media_id_raw;
+  handoff->disk_identity = runtime_identity;
+  handoff->slot_attempt = boot_attempt;
   dbgcon_putc('h');
 
   dbgcon_putc('J');
+  /* The jump target is the last thing that can still be wrong before the kernel
+   * owns the CPU, and after ExitBootServices there is no console left to print
+   * it. Trace it on the debug port so a boot that dies before `_start` emits its
+   * own 'S' marker still says WHERE it jumped. */
+  dbgcon_hex64((UINT64)entry);
+  dbgcon_putc('>');
+  /* And the first quadword actually present at that address: `_start` begins
+   * with `mov r15, rdi; cli`, so a zero here means the text segment is not in
+   * memory even though the copy reported success, which is a completely
+   * different failure from jumping somewhere else. */
+  dbgcon_hex64(*(const volatile UINT64 *)(UINTN)entry);
+  dbgcon_putc('>');
   __asm__ __volatile__(
       "mov %0, %%rdi\n\t"
       "jmp *%1\n\t"

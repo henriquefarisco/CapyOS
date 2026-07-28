@@ -111,6 +111,11 @@ struct nvme_device {
   uint32_t block_size;
 
   uint16_t next_cid; /* Next command ID */
+  uint16_t abandoned_cid;
+  uint8_t io_queue_quarantined;
+  uint8_t flush_indeterminate;
+  volatile int io_busy;
+  volatile int operation_busy;
 };
 
 /* Initialize NVMe subsystem. Returns 0 on success. */

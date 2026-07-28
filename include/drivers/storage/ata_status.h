@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "drivers/storage/block_error.h"
+
 /*
  * ATA Status register (port io_base+7) bit definitions and pure,
  * host-testable predicates. Single source of truth shared by the live
@@ -43,5 +45,15 @@ int ata_status_busy(uint8_t status);
 
 /* Nonzero when DRQ is set (device ready to transfer a data word). Pure. */
 int ata_status_drq_ready(uint8_t status);
+
+enum ata_flush_command {
+  ATA_FLUSH_NONE = 0,
+  ATA_FLUSH_CACHE = 0xE7,
+  ATA_FLUSH_CACHE_EXT = 0xEA,
+};
+
+enum ata_flush_command ata_identify_flush_command(const uint16_t identify[256]);
+enum block_io_error_class ata_flush_poll_class(uint8_t status, int timed_out);
+int ata_identify_supports_lba48_dma(const uint16_t identify[256]);
 
 #endif /* DRIVERS_STORAGE_ATA_STATUS_H */

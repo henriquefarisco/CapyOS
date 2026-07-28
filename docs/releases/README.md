@@ -4,11 +4,22 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.318+20260727.md`
+  - Apply A/B persistente habilitado: staging autorizado por geracao no slot
+    inativo, arm de exatamente uma tentativa duravel, confirmacao de saude pelo
+    token de handoff v10 e rollback observado; `-60` passa a significar apenas
+    transicao persistente nao comprovavel.
+
+## Historico recente
+
+- `capyos-0.8.0-alpha.317+20260720.md`
+  - Handoff interno v9 append-only e fundacao A/B fail-closed: identidade GPT
+    estrita/legada, selecao multi-disco por GUID, store inativo transacional e
+    capability bloqueada ate existir flush duravel e consumo UEFI.
+
 - `capyos-0.8.0-alpha.316+20260720.md`
   - Evidência fail-closed multi-disco do instalador, contrato VMware UEFI/E1000,
     índice compatível e release coordenada CapyAI 0.2.1.
-
-## Historico recente
 
 - `capyos-0.8.0-alpha.315+20260715.md`
   - Instalador seguro, first boot autoritativo, desktop/session worker hardening,

@@ -76,6 +76,44 @@ int http_parse_url(const char *url, char *host, size_t host_len,
   return 0;
 }
 
+/* Dotted-quad host fast path. Without this, `http_get` sent every host through
+ * the DNS resolver, so a URL naming a bare IPv4 address (a LAN update server, a
+ * self-hosted mirror, the SLIRP gateway used by the Etapa 8 A/B gate) failed
+ * with HTTP_ERR_DNS even though no name resolution was needed. Emits the
+ * canonical host-order form used by NET_IPV4_ADDR and net_dns_parse_first_a.
+ * Strict: exactly four decimal octets, each 1..3 digits without leading zeros,
+ * no trailing bytes. Returns 0 on success. */
+int http_parse_ipv4_literal(const char *host, uint32_t *out_ip) {
+  uint32_t address = 0u;
+  size_t i = 0u;
+
+  if (!host || !out_ip) {
+    return -1;
+  }
+  for (int octet = 0; octet < 4; ++octet) {
+    uint32_t value = 0u;
+    size_t digits = 0u;
+    if (octet > 0) {
+      if (host[i] != '.') return -1;
+      ++i;
+    }
+    while (host[i] >= '0' && host[i] <= '9') {
+      if (digits >= 3u) return -1;
+      value = value * 10u + (uint32_t)(host[i] - '0');
+      ++digits;
+      ++i;
+    }
+    if (digits == 0u || value > 255u) return -1;
+    if (digits > 1u && host[i - digits] == '0') return -1;
+    address = (address << 8) | value;
+  }
+  if (host[i] != '\0') {
+    return -1;
+  }
+  *out_ip = address;
+  return 0;
+}
+
 int http_build_request(const struct http_request *req, char *buf, size_t buf_size) {
   const char *method_str = "GET";
   size_t pos = 0;

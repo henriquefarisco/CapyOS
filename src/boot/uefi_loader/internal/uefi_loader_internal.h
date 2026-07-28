@@ -3,8 +3,14 @@
 
 #include "boot/boot_config.h"
 #include "boot/boot_manifest.h"
+#include "boot/boot_slot.h"
+#include "boot/boot_slot_store.h"
 #include "boot/handoff.h"
+#include "core/version.h"
+#include "security/sha256.h"
 #include "boot/installer_disk_policy.h"
+#include "boot/gpt_types.h"
+#include "boot/gpt_identity.h"
 
 #include <efi.h>
 #include <efilib.h>
@@ -21,15 +27,9 @@
 
 #define GPT_HEADER_LBA 1
 #define GPT_SIG 0x5452415020494645ULL
-#define EFI_PART_TYPE_ESP                                                      \
-  {0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,                             \
-   0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B}
-#define EFI_PART_TYPE_CAPYOS_BOOT                                              \
-  {0x76, 0x0b, 0x98, 0x04, 0x42, 0x10, 0x4c, 0x9b,                             \
-   0x86, 0x1f, 0x11, 0xe0, 0x29, 0xea, 0xc1, 0x01}
-#define EFI_PART_TYPE_LINUX_FS                                                 \
-  {0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,                             \
-   0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4}
+#define EFI_PART_TYPE_ESP CAPYOS_GPT_TYPE_ESP_BYTES
+#define EFI_PART_TYPE_CAPYOS_BOOT CAPYOS_GPT_TYPE_BOOT_BYTES
+#define EFI_PART_TYPE_LINUX_FS CAPYOS_GPT_TYPE_DATA_BYTES
 
 #define DP_TYPE_MEDIA 0x04
 #define DP_SUBTYPE_HARDDRIVE 0x01
@@ -156,6 +156,21 @@ struct kernel_buffer_reader {
   UINT64 size;
 };
 
+struct uefi_boot_store_context {
+  EFI_BLOCK_IO_PROTOCOL *bio;
+  UINT32 media_id;
+  UINT64 boot_lba;
+  UINT32 boot_sectors;
+};
+
+int uefi_boot_store_read(void *opaque, uint32_t lba,
+                         uint8_t sector[BOOT_SLOT_STORE_SECTOR_SIZE]);
+int uefi_boot_store_write(
+    void *opaque, uint32_t lba,
+    const uint8_t sector[BOOT_SLOT_STORE_SECTOR_SIZE]);
+int uefi_boot_store_flush(void *opaque);
+int uefi_slot_bytes_equal(const UINT8 *a, const UINT8 *b, UINTN len);
+
 struct kernel_block_reader {
   EFI_BLOCK_IO_PROTOCOL *bio;
   UINT64 base_lba;
@@ -185,6 +200,16 @@ static inline void dbgcon_putc(UINT8 c) {
   __asm__ __volatile__("outb %0, %1" : : "a"(c), "Nd"((UINT16)DEBUGCON_PORT));
 }
 
+/* Post-ExitBootServices tracing: `Print` needs BootServices, so the only way to
+ * observe a value in the window between the memory-map handoff and the kernel's
+ * first instruction is the debug console port. Emits 16 upper-case nibbles. */
+static inline void dbgcon_hex64(UINT64 value) {
+  for (int shift = 60; shift >= 0; shift -= 4) {
+    UINT8 nibble = (UINT8)((value >> shift) & 0xFu);
+    dbgcon_putc((UINT8)(nibble < 10u ? ('0' + nibble) : ('A' + (nibble - 10u))));
+  }
+}
+
 extern struct boot_config_sector g_runtime_boot_cfg;
 extern BOOLEAN g_runtime_boot_cfg_valid;
 extern EFI_PHYSICAL_ADDRESS g_kernel_reserved_base;
@@ -201,6 +226,18 @@ int normalize_key_char16(const CHAR16 *in, char *out, UINTN out_len);
 EFI_STATUS load_boot_config_from_root(EFI_FILE_HANDLE root);
 EFI_STATUS open_file_read(EFI_FILE_HANDLE root, CHAR16 *path,
                           EFI_FILE_HANDLE *out, UINTN *size);
+EFI_STATUS uefi_block_io_allocate_aligned(EFI_BLOCK_IO_PROTOCOL *bio,
+                                          UINTN bytes,
+                                          VOID **out_allocation,
+                                          VOID **out_buffer);
+EFI_STATUS uefi_block_io_read(EFI_BLOCK_IO_PROTOCOL *bio,
+                              UINT32 expected_media_id, UINT64 lba,
+                              UINTN bytes, VOID *buffer);
+EFI_STATUS uefi_block_io_write(EFI_BLOCK_IO_PROTOCOL *bio,
+                               UINT32 expected_media_id, UINT64 lba,
+                               UINTN bytes, const VOID *buffer);
+EFI_STATUS uefi_block_io_flush(EFI_BLOCK_IO_PROTOCOL *bio,
+                               UINT32 expected_media_id);
 
 EFI_STATUS kernel_read_from_blocks(void *ctx, UINT64 offset, VOID *buf,
                                    UINTN len);
@@ -211,12 +248,18 @@ void kernel_release_fixed_window(EFI_SYSTEM_TABLE *st);
 EFI_STATUS load_kernel_from_reader(EFI_SYSTEM_TABLE *st,
                                    kernel_read_fn_t reader, void *ctx,
                                    UINTN size, EFI_PHYSICAL_ADDRESS *entry);
+EFI_STATUS validate_kernel_buffer(VOID *kernel_buf, UINTN kernel_size);
 EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
                                    UINTN kernel_size,
                                    EFI_PHYSICAL_ADDRESS *entry);
 
 EFI_STATUS load_kernel_streaming(EFI_HANDLE image, EFI_SYSTEM_TABLE *st,
                                  EFI_PHYSICAL_ADDRESS *entry_out);
+EFI_STATUS load_kernel_from_ab_store(
+    EFI_SYSTEM_TABLE *st, EFI_BLOCK_IO_PROTOCOL *bio,
+    UINT32 expected_media_id, const struct boot_disk_identity *identity,
+    EFI_PHYSICAL_ADDRESS *entry_out,
+    struct boot_slot_attempt_handoff *out_attempt);
 
 const CHAR16 *installer_language_code(installer_language_t language);
 const CHAR16 *installer_language_name(installer_language_t language);
@@ -238,15 +281,18 @@ EFI_STATUS gpt_find_capyos_data_partition(EFI_BLOCK_IO_PROTOCOL *bio,
                                           UINT64 *out_data_start,
                                           UINT64 *out_data_count,
                                           UINT64 *out_esp_start,
-                                          UINT64 *out_esp_count);
+                                          UINT64 *out_esp_count,
+                                          struct boot_disk_identity *out_identity);
 EFI_STATUS choose_runtime_disk_with_data(EFI_HANDLE image,
+                                         UINT32 *out_raw_media_id,
                                          EFI_SYSTEM_TABLE *st,
                                          EFI_BLOCK_IO_PROTOCOL **bio_out,
                                          UINT64 *out_data_start,
                                          UINT64 *out_data_count,
                                          EFI_BLOCK_IO_PROTOCOL **out_raw_bio,
                                          UINT64 *out_raw_data_start,
-                                         UINT64 *out_raw_data_count);
+                                         UINT64 *out_raw_data_count,
+                                         struct boot_disk_identity *out_identity);
 
 void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st);
 void uefi_installer_serial_init(void);
@@ -257,12 +303,14 @@ UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
                     BOOLEAN hidden);
 void generate_recovery_key(EFI_SYSTEM_TABLE *st, CHAR16 *key_out,
                            UINTN key_chars);
-EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
-                       UINT64 count);
+EFI_STATUS wipe_blocks(EFI_BLOCK_IO_PROTOCOL *bio, UINT32 expected_media_id,
+                       UINT64 start_lba, UINT64 count);
 EFI_STATUS scrub_data_partition_for_first_boot(EFI_BLOCK_IO_PROTOCOL *bio,
+                                               UINT32 expected_media_id,
                                                UINT64 data_start,
-                                               UINT64 data_last);
+                                               UINT64 data_sectors);
 EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st, EFI_BLOCK_IO_PROTOCOL *bio,
+                            UINT32 expected_media_id,
                             const struct installer_disk_layout *layout,
                             UINT64 *out_esp_lba,
                             UINT64 *out_esp_sectors,
@@ -271,7 +319,8 @@ EFI_STATUS gpt_write_layout(EFI_SYSTEM_TABLE *st, EFI_BLOCK_IO_PROTOCOL *bio,
                             UINT64 *out_data_lba,
                             UINT64 *out_data_sectors);
 
-EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio, UINT64 start_lba,
+EFI_STATUS fat32_write_volume(EFI_BLOCK_IO_PROTOCOL *bio,
+                              UINT32 expected_media_id, UINT64 start_lba,
                               UINT64 total_sectors, const UINT8 *efi_payload,
                               UINTN efi_size, const UINT8 *kernel_payload,
                               UINTN kernel_size, const UINT8 *manifest,

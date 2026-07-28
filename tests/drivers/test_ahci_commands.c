@@ -6,6 +6,7 @@
  */
 
 #include "drivers/storage/ahci_commands.h"
+#include "drivers/storage/ata_status.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -85,6 +86,23 @@ static void test_h2d_fis_truncates_lba_to_48_bits(void) {
         cfis[8] != 0xFFu || cfis[9] != 0xFFu || cfis[10] != 0xFFu) {
         fail("LBA48 bytes must all be 0xFF when bits 0..47 are set");
     }
+}
+
+static void test_flush_fis_and_header(void) {
+    uint8_t cfis[64];
+    struct ahci_cmd_header hdr;
+    memset(cfis, 0xAA, sizeof(cfis));
+    memset(&hdr, 0xAA, sizeof(hdr));
+    if (ahci_build_h2d_fis(cfis, ATA_FLUSH_CACHE, 0u, 0u) != 0 ||
+        cfis[2] != ATA_FLUSH_CACHE || cfis[12] != 0u || cfis[13] != 0u)
+        fail("FLUSH CACHE FIS must encode E7 with zero count");
+    if (ahci_build_h2d_fis(cfis, ATA_FLUSH_CACHE_EXT, 0u, 0u) != 0 ||
+        cfis[2] != ATA_FLUSH_CACHE_EXT)
+        fail("FLUSH CACHE EXT FIS must encode EA");
+    if (ahci_build_command_header(&hdr, 0x1000u, AHCI_H2D_FIS_LEN_DW,
+                                  0u, 0) != 0 || hdr.prdtl != 0u ||
+        (hdr.flags & AHCI_CMD_HEADER_FLAG_WRITE) != 0u)
+        fail("flush command header must have PRDTL=0 and W clear");
 }
 
 static void test_command_header_rejects_invalid(void) {
@@ -190,6 +208,7 @@ int run_ahci_commands_tests(void) {
     test_h2d_fis_basic_read();
     test_h2d_fis_lba48_high_bits();
     test_h2d_fis_truncates_lba_to_48_bits();
+    test_flush_fis_and_header();
     test_command_header_rejects_invalid();
     test_command_header_read_path();
     test_command_header_write_flag();

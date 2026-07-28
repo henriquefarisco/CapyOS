@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import mmap
+import zlib
 import struct
 from pathlib import Path
 
@@ -72,7 +74,7 @@ def inspect_gpt(img: mmap.mmap):
             if ptype == BOOT_GUID:
                 tag = "BOOT"
                 if boot_part_lba is None:
-                    boot_part_lba = first_lba
+                    boot_part_lba = (first_lba, last_lba)
             log(f"    GPT[{idx:02d}] {tag}: LBA={first_lba}..{last_lba}")
             idx += 1
             seen += 1
@@ -152,8 +154,57 @@ def pick_kernel(entries, header_lba: int, header_sec: int):
     return header_lba, header_sec, "header/fallback"
 
 
-def inspect_gpt_boot(handle, boot_part_lba: int):
+def inspect_ab_boot(handle, boot_part_lba: int, header: bytes) -> None:
+    if len(header) != 512 or header[:8] != b"CAPYSLT0":
+        raise SystemExit("[err] Invalid slot A header.")
+    if u32(header, 8) != 0 or u32(header, 12) != 512 or u32(header, 16) != 0:
+        raise SystemExit("[err] Unsupported slot A header format.")
+    if zlib.crc32(header[:508]) & 0xFFFFFFFF != u32(header, 508):
+        raise SystemExit("[err] Slot A header CRC mismatch.")
+    boot_sectors = u32(header, 20)
+    header_lba = u32(header, 24)
+    payload_lba = u32(header, 28)
+    capacity = u32(header, 32)
+    payload_size = u32(header, 36)
+    digest = header[80:112]
+    if header_lba != 0 or payload_lba != 1 or payload_size == 0 or not any(digest):
+        raise SystemExit("[err] Invalid slot A identity.")
+    sectors = (payload_size + 511) // 512
+    if sectors == 0 or sectors > capacity:
+        raise SystemExit("[err] Slot A payload exceeds capacity.")
+    handle.seek((boot_part_lba + payload_lba) * 512)
+    payload = handle.read(sectors * 512)
+    if len(payload) != sectors * 512 or any(payload[payload_size:]):
+        raise SystemExit("[err] Slot A payload/padding readback mismatch.")
+    if hashlib.sha256(payload[:payload_size]).digest() != digest:
+        raise SystemExit("[err] Slot A payload SHA-256 mismatch.")
+    generations = []
+    for rel in (boot_sectors - 2, boot_sectors - 1):
+        handle.seek((boot_part_lba + rel) * 512)
+        control = handle.read(512)
+        if control[:8] != b"CAPYAB00" or u32(control, 8) != 0 or u32(control, 12) != 512:
+            raise SystemExit("[err] Invalid A/B control record.")
+        if zlib.crc32(control[:508]) & 0xFFFFFFFF != u32(control, 508):
+            raise SystemExit("[err] A/B control CRC mismatch.")
+        generations.append(struct.unpack_from("<Q", control, 16)[0])
+    if any(g == 0 for g in generations) or generations[0] == generations[1]:
+        raise SystemExit(f"[err] Invalid A/B control generations: {generations}")
+    kmagic = struct.unpack_from("<I", payload, 0)[0]
+    if kmagic != 0x464C457F:
+        raise SystemExit("[err] Slot A payload is not an ELF kernel.")
+    log(f"[*] A/B BOOT: slot=A bytes={payload_size} generations={generations}")
+
+
+def inspect_gpt_boot(handle, boot_part_lba: int, boot_part_last: int):
     log(f"\n[*] Inspecting GPT BOOT partition @ LBA {boot_part_lba}...")
+    handle.seek(boot_part_lba * 512)
+    first_sector = handle.read(512)
+    if first_sector[:8] == b"CAPYSLT0":
+        if u32(first_sector, 20) != boot_part_last - boot_part_lba + 1:
+            raise SystemExit("[err] Slot header BOOT extent mismatches GPT.")
+        inspect_ab_boot(handle, boot_part_lba, first_sector)
+        return
+    raise SystemExit("[err] Legacy manifest BOOT is unsupported by v10.")
     entries = inspect_manifest(handle, boot_part_lba)
     if not entries:
         log("    [!] No manifest entries found at BOOT start")
