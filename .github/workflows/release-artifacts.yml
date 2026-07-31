@@ -236,13 +236,13 @@ jobs:
           TAG="${{ steps.release.outputs.tag }}"
           LOOKUP_ERROR="build/release-lookup.err"
           if EXISTING_DRAFT="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
-            --jq '.draft' 2>"$LOOKUP_ERROR")"; then
+            "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.tag_name == \"${TAG}\") | .draft" 2>"$LOOKUP_ERROR")" && [ -n "$EXISTING_DRAFT" ]; then
             if [ "$EXISTING_DRAFT" != "true" ]; then
               echo "Refusing to replace already-published release $TAG"
               exit 1
             fi
-          elif ! grep -Fq 'HTTP 404' "$LOOKUP_ERROR"; then
+          elif [ -f "$LOOKUP_ERROR" ] && ! grep -Fq 'HTTP 404' "$LOOKUP_ERROR"; then
             cat "$LOOKUP_ERROR" >&2
             exit 1
           fi
@@ -270,8 +270,9 @@ jobs:
           STAGE_DIR="${{ steps.release_stage.outputs.stage_dir }}"
           DRAFT_DIR="build/release-draft-download"
 
-          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
-            --jq '.draft')" != "true" ]; then
+          DRAFT_STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.tag_name == \"${TAG}\") | .draft")"
+          if [ "$DRAFT_STATUS" != "true" ]; then
             echo "Release is not an unpublished draft"
             exit 1
           fi
@@ -328,7 +329,8 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.release.outputs.tag }}"
           RELEASE_ID="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.id')"
+            "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.tag_name == \"${TAG}\") | .id")"
           gh api --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             -F draft=false \
