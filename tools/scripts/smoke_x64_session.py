@@ -20,6 +20,21 @@ OVMF_CANDIDATES = (
 SERIAL_CHAR_DELAY = 0.002
 
 
+def qemu_accelerator() -> str:
+    """Return the explicitly selected, allowlisted QEMU accelerator.
+
+    TCG remains the portable CI default. Local release gates may opt into KVM
+    with CAPYOS_QEMU_ACCEL=kvm when /dev/kvm is available.
+    """
+    accelerator = os.environ.get("CAPYOS_QEMU_ACCEL", "tcg").strip().lower()
+    if accelerator not in {"tcg", "kvm"}:
+        raise ValueError(
+            "CAPYOS_QEMU_ACCEL must be one of: tcg, kvm; "
+            f"got {accelerator!r}"
+        )
+    return accelerator
+
+
 def reset_capture_file(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb"):
@@ -392,7 +407,7 @@ def make_qemu_cmd(
     cmd = [
         qemu_bin,
         "-machine",
-        "q35,accel=tcg",
+        f"q35,accel={qemu_accelerator()}",
         "-m",
         str(memory_mb),
         "-boot",

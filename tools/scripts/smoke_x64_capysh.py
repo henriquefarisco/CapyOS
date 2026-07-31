@@ -56,7 +56,7 @@ from smoke_x64_common import (  # noqa: E402
     resolve_ovmf_or_raise,
     resolve_qemu_binary,
 )
-from smoke_x64_session import choose_free_port  # noqa: E402
+from smoke_x64_session import choose_free_port, qemu_accelerator  # noqa: E402
 
 SUCCESS_MARKERS = (
     "[capysh] CapyOS interactive shell",
@@ -170,7 +170,7 @@ def make_qemu_cmd_with_monitor(
     the harness can drive sendkey commands. """
     cmd = [
         qemu_bin,
-        "-machine", "q35,accel=tcg",
+        "-machine", f"q35,accel={qemu_accelerator()}",
         "-m", str(memory_mb),
         "-boot", "c",
         "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",

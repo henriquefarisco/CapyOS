@@ -66,6 +66,7 @@ from smoke_x64_update_ab_contract import (  # noqa: E402
     validate_evidence,
 )
 from smoke_x64_update_ab_flow import (  # noqa: E402
+    assert_armed_attempt_state,
     assert_attempt_pending,
     assert_provider_ready,
     assert_rollback_reported,
@@ -259,7 +260,7 @@ def run_first_boot(args, qemu_bin, ovmf_code, ovmf_vars, disk, log_base, volume_
             expect_ignore_line_breaks=True,
         )
         stage_and_arm_update(session, args.step_timeout, expect_version=version)
-        assert_slot_state(session, args.step_timeout, "state=valid")
+        assert_armed_attempt_state(session, args.step_timeout)
         run_cmd(session, "do-sync", args.step_timeout, expect_optional=True)
         if not trigger_reboot(session, args.step_timeout * 2):
             raise RuntimeError("shutdown-reboot did not terminate the VM")
@@ -292,6 +293,7 @@ def run_setup_completion_boot(args, qemu_bin, ovmf_code, ovmf_vars, disk, log_ba
         require_boot_attempt(session.text(), 0, "confirmed")
         assert_provider_ready(session, args.step_timeout)
         stage_and_arm_update(session, args.step_timeout, expect_version=version)
+        assert_armed_attempt_state(session, args.step_timeout)
         run_cmd(session, "do-sync", args.step_timeout, expect_optional=True)
         if not trigger_reboot(session, args.step_timeout * 2):
             raise RuntimeError("shutdown-reboot did not terminate the VM")
@@ -312,6 +314,7 @@ def run_confirm_boot(args, qemu_bin, ovmf_code, ovmf_vars, disk, log_base,
         confirm_boot_health(session, args.step_timeout)
         assert_slot_state(session, args.step_timeout, "health=confirmed [ACTIVE]")
         restage_and_arm_update(session, args.step_timeout, expect_version=version)
+        assert_armed_attempt_state(session, args.step_timeout)
         run_cmd(session, "do-sync", args.step_timeout, expect_optional=True)
         if not trigger_reboot(session, args.step_timeout * 2):
             raise RuntimeError("shutdown-reboot did not terminate the VM")

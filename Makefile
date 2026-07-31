@@ -227,7 +227,10 @@ EFI_LIB_DIR := $(EFI_PREFIX)/lib
 EFI_CC ?= $(HOST_CC)
 EFI_LD ?= x86_64-linux-gnu-ld
 EFI_OBJCOPY ?= x86_64-linux-gnu-objcopy
-EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
+# UEFI runs with firmware interrupts enabled. SysV's 128-byte red zone is not
+# preserved by hardware interrupt frames, so leaf helpers (SHA/copy included)
+# must own real stack storage or their locals are corrupted nondeterministically.
+EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
 EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L$(EFI_LIB_DIR) -T $(EFI_LIB_DIR)/elf_x86_64_efi.lds
 EFI_LIBS := $(EFI_LIB_DIR)/crt0-efi-x86_64.o -lefi -lgnuefi
 
@@ -2676,12 +2679,22 @@ $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ disk
 
-test: $(TEST_BIN) test-capyai test-browser-shell
+test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
 	@$(MAKE) --no-print-directory test-browser-pipeline
 endif
+
+.PHONY: test-modules-index-assets
+test-modules-index-assets:
+	@echo "Validando o gate de integridade dos modulos publicados..."
+	python3 -m unittest tools.scripts.test_verify_modules_index_assets
+
+.PHONY: test-smoke-path-safety
+test-smoke-path-safety:
+	@echo "Validando os limites destrutivos dos discos de smoke..."
+	python3 -m unittest tools.scripts.test_smoke_x64_iso_install_paths
 
 TEST_CAPYAI_BIN := $(BUILD)/tests/test_capyai_standalone
 TEST_CAPYAI_POLICY_BIN := $(BUILD)/tests/test_capyai_policy
@@ -2938,7 +2951,7 @@ $(TEST_CAPYGFX_TOOLBAR_BIN): $(TEST_CAPYGFX_TOOLBAR_SRCS) | $(BUILD)
 test-browser-shell: test-capygfx-toolbar
 endif
 
-.PHONY: modules-index
+.PHONY: modules-index verify-modules-index-assets
 # modules-index: aggregate per-repo capypkg manifests (produced by
 # `make package` in each sibling repository) into a single index file
 # the CapyOS in-tree adapter consumes. Output:
@@ -2948,6 +2961,11 @@ modules-index:
 	@echo "Agregando manifests dos repositorios externos..."
 	python3 tools/scripts/build_modules_index.py \
 	  --output build/capypkg/modules-index.txt
+
+verify-modules-index-assets:
+	@echo "Verificando todos os payloads referenciados pelo indice de modulos..."
+	python3 tools/scripts/verify_modules_index_assets.py \
+	  --index build/capypkg/modules-index.txt
 
 .PHONY: local-modules-index
 local-modules-index:
@@ -4022,7 +4040,7 @@ smoke-x64-vmware-update-ab:
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.318+20260727/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.320+20260730/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)

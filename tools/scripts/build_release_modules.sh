@@ -36,6 +36,7 @@ mkdir -p "$repo_root/build/capypkg"
 
 python3 "$script_dir/build_modules_index.py" \
   --workspace "$workspace" \
+  --release-tag "$release_tag" \
   --output "$repo_root/build/capypkg/modules-index.txt"
 
 cp "$workspace/CapyAI/build/capypkg/org.capyos.ai.assistant-$capyai_version.bin" \
@@ -44,14 +45,6 @@ cp "$workspace/CapyAI/build/capypkg/org.capyos.ai.assistant-$capyai_version.bin"
 index="$repo_root/build/capypkg/modules-index.txt"
 ai_bin="$repo_root/build/capypkg/org.capyos.ai.assistant-$capyai_version.bin"
 ai_manifest="$workspace/CapyAI/build/capypkg/org.capyos.ai.assistant.manifest"
-expected_ai_url="$capyos_asset_base/org.capyos.ai.assistant-$capyai_version.bin"
-
-entry_count="$(grep -c '^name=' "$index")"
-unique_count="$(grep '^name=' "$index" | sort -u | wc -l | tr -d '[:space:]')"
-[[ "$entry_count" = 9 ]] || fail "module index must contain exactly 9 entries (got $entry_count)"
-[[ "$unique_count" = 9 ]] || fail "module index contains duplicate module names"
-grep -Fqx "payload_url=$expected_ai_url" "$index" || \
-  fail "CapyAI payload_url is not the public asset for $release_tag"
 
 manifest_sha="$(sed -n 's/^payload_sha256=//p' "$ai_manifest" | tr -d '\r')"
 manifest_size="$(sed -n 's/^payload_size=//p' "$ai_manifest" | tr -d '\r')"
@@ -59,6 +52,14 @@ actual_sha="$(sha256sum "$ai_bin" | awk '{print $1}')"
 actual_size="$(wc -c < "$ai_bin" | tr -d '[:space:]')"
 [[ "$manifest_sha" = "$actual_sha" ]] || fail "CapyAI manifest SHA-256 mismatch"
 [[ "$manifest_size" = "$actual_size" ]] || fail "CapyAI manifest size mismatch"
+
+python3 "$script_dir/verify_modules_index_assets.py" \
+  --index "$index" \
+  --release-tag "$release_tag" \
+  --local-payload-dir "$repo_root/build/capypkg" \
+  --attempts 5 \
+  --backoff-seconds 1 \
+  --timeout 45
 
 (
   cd "$repo_root/build/capypkg"

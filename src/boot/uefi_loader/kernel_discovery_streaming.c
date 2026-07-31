@@ -525,6 +525,9 @@ static EFI_STATUS uefi_load_selected_slot(
                                           &buffer);
   if (EFI_ERROR(status))
     return status;
+  /* Headless phase markers: block read, padding validation and payload hash.
+   * They use debugcon only and do not alter the BootServices memory map. */
+  dbgcon_putc('R');
   status = uefi_block_io_read(
       ctx->bio, ctx->media_id,
       ctx->boot_lba + manager.slots[slot].payload_lba, rounded, buffer);
@@ -532,18 +535,24 @@ static EFI_STATUS uefi_load_selected_slot(
     FreePool(allocation);
     return status;
   }
+  dbgcon_putc('r');
   for (UINTN i = image.payload_size; i < rounded; ++i) {
     if (((UINT8 *)buffer)[i] != 0u) {
       FreePool(allocation);
       return EFI_COMPROMISED_DATA;
     }
   }
+  dbgcon_putc('p');
   sha256_init(&sha);
   sha256_update(&sha, buffer, image.payload_size);
   sha256_final(&sha, digest);
   sha256_clear(&sha);
+  dbgcon_putc('v');
   if (!uefi_slot_bytes_equal(digest, image.payload_sha256,
                              SHA256_DIGEST_SIZE)) {
+    dbgcon_putc('!');
+    Print(L"[UEFI] Integridade do kernel A/B falhou: SHA-256 divergente; "
+          L"boot recusado\r\n");
     FreePool(allocation);
     return EFI_SECURITY_VIOLATION;
   }
@@ -618,6 +627,4 @@ EFI_STATUS load_kernel_from_ab_store(
   out_attempt->generation = generation;
   return EFI_SUCCESS;
 }
-
-
 

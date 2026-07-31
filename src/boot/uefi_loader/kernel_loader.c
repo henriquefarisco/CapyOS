@@ -3,16 +3,83 @@
 static void kernel_copy_bytes(VOID *dst, const VOID *src, UINTN len) {
   UINT8 *d = (UINT8 *)dst;
   const UINT8 *s = (const UINT8 *)src;
+#if defined(__x86_64__)
+  UINTN words = len / sizeof(UINT64);
+  UINTN tail = len % sizeof(UINT64);
+  /*
+   * The UEFI objects intentionally do not depend on a hosted libc.  Keep the
+   * copy self-contained, but use the architectural string operation so a
+   * multi-megabyte kernel does not become millions of -O0 loop iterations.
+   * The caller rejects overlapping source/destination ranges.
+   */
+  __asm__ volatile("cld\n\trep movsq"
+                   : "+D"(d), "+S"(s), "+c"(words)
+                   :
+                   : "memory", "cc");
+  __asm__ volatile("rep movsb"
+                   : "+D"(d), "+S"(s), "+c"(tail)
+                   :
+                   : "memory", "cc");
+#else
   for (UINTN i = 0; i < len; ++i) {
     d[i] = s[i];
   }
+#endif
+}
+
+static BOOLEAN kernel_bytes_equal(const VOID *left, const VOID *right,
+                                   UINTN len) {
+  const volatile UINT8 *a = (const volatile UINT8 *)left;
+  const volatile UINT8 *b = (const volatile UINT8 *)right;
+#if defined(__x86_64__)
+  UINTN words = len / sizeof(UINT64);
+  UINTN tail = len % sizeof(UINT64);
+  UINT8 equal = 1u;
+  if (words != 0u) {
+    __asm__ volatile("cld\n\trepe cmpsq\n\tsete %0"
+                     : "=qm"(equal), "+D"(a), "+S"(b), "+c"(words)
+                     :
+                     : "memory", "cc");
+    if (!equal) {
+      return FALSE;
+    }
+  }
+  if (tail != 0u) {
+    __asm__ volatile("cld\n\trepe cmpsb\n\tsete %0"
+                     : "=qm"(equal), "+D"(a), "+S"(b), "+c"(tail)
+                     :
+                     : "memory", "cc");
+  }
+  return equal ? TRUE : FALSE;
+#else
+  for (UINTN i = 0; i < len; ++i) {
+    if (a[i] != b[i]) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+#endif
 }
 
 static void kernel_zero_bytes(VOID *dst, UINTN len) {
   UINT8 *d = (UINT8 *)dst;
+#if defined(__x86_64__)
+  UINTN words = len / sizeof(UINT64);
+  UINTN tail = len % sizeof(UINT64);
+  UINT64 zero = 0u;
+  __asm__ volatile("cld\n\trep stosq"
+                   : "+D"(d), "+c"(words)
+                   : "a"(zero)
+                   : "memory", "cc");
+  __asm__ volatile("rep stosb"
+                   : "+D"(d), "+c"(tail)
+                   : "a"(zero)
+                   : "memory", "cc");
+#else
   for (UINTN i = 0; i < len; ++i) {
     d[i] = 0;
   }
+#endif
 }
 
 static EFI_STATUS kernel_read_from_memory(void *ctx, UINT64 offset, VOID *buf,
@@ -356,18 +423,14 @@ EFI_STATUS validate_kernel_buffer(VOID *kernel_buf, UINTN kernel_size) {
 EFI_STATUS load_kernel_from_buffer(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
                                    UINTN kernel_size,
                                    EFI_PHYSICAL_ADDRESS *entry_out) {
-  struct kernel_buffer_reader reader;
-  if (!kernel_buf || kernel_size == 0u)
+  EFI_STATUS validation_status;
+  if (!st || !kernel_buf || !entry_out) {
     return EFI_INVALID_PARAMETER;
-  reader.base = (const UINT8 *)kernel_buf;
-  reader.size = kernel_size;
-  return load_kernel_from_reader(st, kernel_read_from_memory, &reader,
-                                 kernel_size, entry_out);
-}
-
-static EFI_STATUS __attribute__((unused)) load_kernel_from_buffer_legacy(EFI_SYSTEM_TABLE *st, VOID *kernel_buf,
-                                   UINTN kernel_size,
-                                   EFI_PHYSICAL_ADDRESS *entry_out) {
+  }
+  validation_status = validate_kernel_buffer(kernel_buf, kernel_size);
+  if (EFI_ERROR(validation_status)) {
+    return validation_status;
+  }
   if (kernel_size < sizeof(Elf64_Ehdr)) {
     Print(L"[UEFI] kernel muito pequeno\r\n");
     return EFI_LOAD_ERROR;
@@ -468,9 +531,33 @@ static EFI_STATUS __attribute__((unused)) load_kernel_from_buffer_legacy(EFI_SYS
           (UINT32)i, (UINT64)((UINTN)kernel_buf + ph->p_offset), dst_pa,
           (UINT64)ph->p_filesz, (UINT64)ph->p_memsz);
     if (ph->p_filesz > 0) {
-      kernel_copy_bytes((VOID *)(UINTN)dst_pa,
-                        (UINT8 *)kernel_buf + ph->p_offset,
-                        (UINTN)ph->p_filesz);
+      const UINT8 *src = (const UINT8 *)kernel_buf + ph->p_offset;
+      UINT8 *dst = (UINT8 *)(UINTN)dst_pa;
+      UINTN copy_size = (UINTN)ph->p_filesz;
+      UINTN src_addr = (UINTN)src;
+      UINTN dst_addr = (UINTN)dst;
+
+      /* A buffered A/B payload must never overlap its fixed kernel load
+       * window.  A forward byte copy over overlapping ranges can silently
+       * mutate the source while it is still being consumed and still return
+       * EFI_SUCCESS, leaving an executable segment only partially valid. */
+      if ((src_addr < dst_addr + copy_size &&
+           dst_addr < src_addr + copy_size) ||
+          src_addr + copy_size < src_addr ||
+          dst_addr + copy_size < dst_addr) {
+        Print(L"[UEFI] Segmento %u sobrepoe o payload fonte; recusando boot\r\n",
+              (UINT32)i);
+        kernel_release_load_pages(st, load_base, pages);
+        return EFI_COMPROMISED_DATA;
+      }
+
+      kernel_copy_bytes(dst, src, copy_size);
+      if (!kernel_bytes_equal(dst, src, copy_size)) {
+        Print(L"[UEFI] Verificacao pos-copia falhou no segmento %u\r\n",
+              (UINT32)i);
+        kernel_release_load_pages(st, load_base, pages);
+        return EFI_COMPROMISED_DATA;
+      }
     }
     /* NAO zerar o BSS aqui: o entry64.S faz a zeragem defensiva antes de
      * chamar o C, fora da janela critica do firmware. */

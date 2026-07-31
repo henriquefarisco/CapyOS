@@ -67,11 +67,13 @@ e pulada quando o desktop inicia: o harness retorna ao CLI para gravar/sincroniz
 o marker e, se o setup reiniciar antes do login, insere um boot adicional antes
 da releitura. O retorno desktop→TTY usa o sentinel real de `CTRL+ALT+F1`, nao um
 comando de terminal. A recovery key e redigida do log persistido. O gate QEMU e
-o full install networked da `alpha.316` passaram no host em 2026-07-17; o rerun
-networked da `alpha.318` permanece bloqueado até os assets serem publicados. O
-preflight QEMU nao substitui nem fecha o gate oficial VMware multi-disco.
+o full install networked da `alpha.316` passaram no host em 2026-07-17. Na
+`alpha.320`, o índice imutável declara exatamente nove módulos; o rerun
+networked e a validação remota de URL, tamanho e SHA-256 permanecem pendentes
+até a tag e os assets serem publicados. O preflight QEMU nao substitui nem
+fecha o gate oficial VMware multi-disco.
 
-### 1.1.1 Ciclo A/B assinado (Etapa 8, `alpha.319`)
+### 1.1.1 Ciclo A/B assinado (Etapa 8, gate introduzido na `alpha.319`, candidato `alpha.320`)
 
 ```bash
 make update-ab-selftest              # contrato host, tambem dentro de release-check
@@ -240,11 +242,15 @@ make test
 
 ## 7. Lacunas atuais
 
-- o preflight QEMU e o gate VMware dedicado multi-disco provam selecao
-  explicita, lifecycle persistente e guard intacto; a evidência VMware oficial
-  mais recente é a de `alpha.317`, junto da nota de release; o ciclo de update
-  assinado A/B (apply, reboot, confirmação e rollback) continua sem evidência
-  externa desde a implementação do lifecycle em `alpha.318`;
+- a regressão de boot/instalação está corrigida na `alpha.320`: dois ciclos KVM
+  focados passaram (quatro boots com persistência) e o smoke oficial ISO KVM
+  passou em três boots, incluindo `marker:persist-ok`;
+- o smoke CLI TCG passou em 86,2 s, com dois boots e persistência;
+- o smoke oficial ISO TCG ainda não foi executado;
+- o preflight do ciclo update A/B e o aceite VMware oficial (apply, reboot,
+  confirmação e rollback) ainda não foram executados e mantêm a Etapa 8 aberta;
+- o índice imutável possui nove entradas, mas a verificação remota
+  pós-publicação depende da tag e dos assets;
 - falhas apos o reboot pelo HDD instalado devem ser tratadas como problemas do
   runtime instalado, nao como ausencia do instalador;
 - USB HID/XHCI da Etapa 3 permanece como gate regressivo; a validacao externa

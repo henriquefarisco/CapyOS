@@ -4,13 +4,26 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.8.0-alpha.320+20260730.md`
+  - Restaura boot e instalacao UEFI com loader sem red zone, pilha real,
+    validacao/copia verificada do ELF e recarga da GDT. Dois ciclos KVM
+    focados (quatro boots), o smoke oficial ISO KVM e o smoke CLI TCG
+    (86,2 s, dois boots com persistencia) passaram; ISO TCG oficial, update A/B,
+    VMware e a verificacao remota do indice de nove modulos seguem pendentes.
+    Coordena CapyUI 2.24.2 como patch supply-chain-only, sem bump das ABIs UI.
+
+## Historico recente
+
+- `capyos-0.8.0-alpha.319+20260728.md`
+  - Entregou o gate automatizado do ciclo A/B, mas nao foi promovida: a primeira
+    execucao revelou a regressao de boot corrigida na `alpha.320`. A Etapa 8
+    permaneceu aberta.
+
 - `capyos-0.8.0-alpha.318+20260727.md`
   - Apply A/B persistente habilitado: staging autorizado por geracao no slot
     inativo, arm de exatamente uma tentativa duravel, confirmacao de saude pelo
     token de handoff v10 e rollback observado; `-60` passa a significar apenas
     transicao persistente nao comprovavel.
-
-## Historico recente
 
 - `capyos-0.8.0-alpha.317+20260720.md`
   - Handoff interno v9 append-only e fundacao A/B fail-closed: identidade GPT

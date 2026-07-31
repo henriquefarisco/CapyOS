@@ -58,6 +58,7 @@ from smoke_x64_update_ab_contract import (  # noqa: E402
     validate_evidence,
 )
 from smoke_x64_update_ab_flow import (  # noqa: E402
+    assert_armed_attempt_state,
     assert_attempt_pending,
     assert_provider_ready,
     assert_rollback_reported,
@@ -247,7 +248,7 @@ def main() -> int:
                 stage_and_arm_update(
                     console, args.step_timeout, expect_version=version
                 )
-                assert_slot_state(console, args.step_timeout, "state=valid")
+                assert_armed_attempt_state(console, args.step_timeout)
                 sync_and_reboot(args, console)
                 armed = True
             finally:
@@ -270,6 +271,7 @@ def main() -> int:
                 console, args.step_timeout, "health=confirmed [ACTIVE]"
             )
             restage_and_arm_update(console, args.step_timeout, expect_version=version)
+            assert_armed_attempt_state(console, args.step_timeout)
             sync_and_reboot(args, console)
         finally:
             console.stop()

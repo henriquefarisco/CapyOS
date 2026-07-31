@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -165,14 +166,52 @@ def attached_disks(guard_disk: Path | None) -> tuple[Path, ...]:
     return (guard_disk,) if guard_disk is not None else ()
 
 
+def safe_disk_roots(repo_root: Path) -> tuple[Path, ...]:
+    """Directories a destructive smoke image may live in.
+
+    `build/ci` is always allowed. On a workspace mounted from Windows the repo
+    (and therefore `build/ci`) sits on `/mnt/c`, where multi-megabyte smoke disk
+    I/O has substantially more latency and jitter than a native Linux filesystem.
+    `CAPYOS_SMOKE_SCRATCH` lets the operator use a native filesystem for stable
+    gate timing.
+
+    The opt-in is deliberately narrow, because everything under these roots gets
+    written destructively: the path must be absolute and its final component must
+    be exactly `capyos-smoke-scratch`, so a typo or an inherited stray value
+    cannot aim the harness at a home directory.
+    """
+    roots = [(repo_root / "build/ci").resolve()]
+    scratch = os.environ.get("CAPYOS_SMOKE_SCRATCH", "").strip()
+    if scratch:
+        candidate = Path(scratch)
+        if not candidate.is_absolute():
+            raise ValueError(
+                "CAPYOS_SMOKE_SCRATCH must be an absolute path ending in "
+                f"'capyos-smoke-scratch'; got {scratch!r}"
+            )
+        resolved_candidate = candidate.resolve()
+        if resolved_candidate.name != "capyos-smoke-scratch":
+            raise ValueError(
+                "CAPYOS_SMOKE_SCRATCH must resolve to an absolute directory "
+                f"named 'capyos-smoke-scratch'; got {resolved_candidate}"
+            )
+        roots.append(resolved_candidate)
+    return tuple(roots)
+
+
 def require_safe_disk_path(repo_root: Path, path: Path) -> None:
-    safe_root = (repo_root / "build/ci").resolve()
-    try:
-        path.relative_to(safe_root)
-    except ValueError as exc:
-        raise ValueError(f"destructive smoke disk must stay under {safe_root}") from exc
-    if path == safe_root:
-        raise ValueError("destructive smoke disk must name a file under build/ci")
+    roots = safe_disk_roots(repo_root)
+    resolved_path = path.resolve()
+    for safe_root in roots:
+        try:
+            resolved_path.relative_to(safe_root)
+        except ValueError:
+            continue
+        if resolved_path == safe_root:
+            raise ValueError("destructive smoke disk must name a file, not the root")
+        return
+    allowed = " or ".join(str(root) for root in roots)
+    raise ValueError(f"destructive smoke disk must stay under {allowed}")
 
 
 def run_installer_boot(

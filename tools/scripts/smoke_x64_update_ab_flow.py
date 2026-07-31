@@ -33,6 +33,7 @@ from smoke_x64_helpers import run_cmd
 from smoke_x64_update_ab_contract import (
     APPLY_OK,
     APPLY_SUMMARY,
+    ARMED_ATTEMPT_EXPECTATIONS,
     ATTEMPT_PENDING_SUMMARY,
     CONFIRM_OK,
     CONFIRM_SUMMARY,
@@ -90,6 +91,27 @@ def assert_provider_ready(session, timeout: float) -> None:
     run_cmd(session, "print-boot-slot", timeout, expect=PROVIDER_READY_LINE)
 
 
+def assert_armed_attempt_state(session, timeout: float) -> None:
+    """Prove the durable post-apply lifecycle in one slot-manager snapshot.
+
+    Arming is not merely a staged/valid payload state. The boot-slot lifecycle
+    immediately makes the candidate active, leaves its health unconfirmed and
+    keeps rollback armed until a later boot is explicitly confirmed healthy.
+    All three facts must come from the same ``print-boot-slot`` invocation so a
+    stale line from an earlier command cannot satisfy the gate.
+    """
+    marker = session.marker()
+    session.send_line("print-boot-slot")
+    for expected in ARMED_ATTEMPT_EXPECTATIONS:
+        session.wait_for(
+            expected,
+            timeout=timeout,
+            start_at=marker,
+            ignore_line_breaks=True,
+        )
+    session.wait_for("> ", timeout=timeout, start_at=marker)
+
+
 def stage_and_arm_update(session, timeout: float, *, expect_version: str) -> None:
     """fetch -> download -> preflight -> prepare -> apply on the inactive slot."""
     run_cmd(session, "update-fetch", timeout * 4, expect=FETCH_OK)
@@ -141,4 +163,12 @@ def assert_rollback_reported(session, timeout: float) -> None:
 
 
 def assert_slot_state(session, timeout: float, expect: str) -> None:
-    run_cmd(session, "print-boot-slot", timeout, expect=expect)
+    # Slot-status rows wrap at the console width (including in debugcon), so
+    # lifecycle tokens must be matched after removing CR/LF boundaries.
+    run_cmd(
+        session,
+        "print-boot-slot",
+        timeout,
+        expect=expect,
+        expect_ignore_line_breaks=True,
+    )

@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 import sys
+import tempfile
 from pathlib import Path
 
 from smoke_x64_session import (
@@ -52,19 +54,37 @@ def resolve_ovmf_or_raise(ovmf_path: str | None) -> tuple[str, str]:
 
 
 def create_runtime_ovmf_vars(log_base: Path, ovmf_vars_template: str) -> Path:
-    ovmf_vars_runtime = log_base.with_name(log_base.stem + ".OVMF_VARS.runtime.fd")
-    ovmf_vars_runtime.parent.mkdir(parents=True, exist_ok=True)
-    created = False
+    """Create a run-private writable OVMF variable store.
+
+    A fixed runtime filename made every later smoke fail after an interrupted
+    QEMU process left that file behind.  A unique file keeps concurrent or
+    restarted gates isolated without deleting a store that another VM may
+    still be using.  The caller remains responsible for cleanup.
+    """
+    parent = log_base.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd = -1
+    ovmf_vars_runtime: Path | None = None
     try:
-        with open(ovmf_vars_template, "rb") as source, ovmf_vars_runtime.open(
-            "xb"
+        fd, runtime_name = tempfile.mkstemp(
+            dir=parent,
+            prefix=log_base.stem + ".OVMF_VARS.",
+            suffix=".runtime.fd",
+        )
+        ovmf_vars_runtime = Path(runtime_name)
+        with open(ovmf_vars_template, "rb") as source, os.fdopen(
+            fd, "wb"
         ) as target:
-            created = True
+            fd = -1
             shutil.copyfileobj(source, target)
     except BaseException:
-        if created:
+        if fd >= 0:
+            os.close(fd)
+        if ovmf_vars_runtime is not None:
             ovmf_vars_runtime.unlink(missing_ok=True)
         raise
+    if ovmf_vars_runtime is None:
+        raise RuntimeError("failed to allocate OVMF runtime path")
     return ovmf_vars_runtime
 
 

@@ -73,9 +73,17 @@ review/edit. WSL para `make`, cmd para `git`/`gh`.
 4. CI verde em `develop` (CI + CodeQL).
 5. Fast-forward `main` ← `develop`, push `main`.
 6. Tag `v<extended>` (ex.: `v0.8.0-alpha.283+20260617`), push da tag.
-7. O workflow **Release Artifacts** cria o GitHub Release (ISO + sha256);
-   `gh release edit <tag> --title "CapyOS <extended>" --notes-file <release-note>
-   --latest` para o título + corpo + marcação Latest.
-8. Confirmar os 4 workflows do tag/main verdes (Release Artifacts, CI,
-   CodeQL, Security Hardening).
-9. Restaurar host em `develop`, limpar temporários.
+7. O workflow **Release Artifacts** cria o GitHub Release (ISO, checksum,
+   `modules-index.txt` e payloads aplicáveis).
+8. Executar o aceite pós-publicação: baixar novamente o índice pela URL
+   imutável da tag, comparar byte a byte com o arquivo gerado, exigir exatamente
+   nove entradas HTTPS únicas e validar tamanho + SHA-256 de cada payload.
+   Retries são limitados a falhas transitórias; HTTP 404, tamanho ou hash
+   divergente falham sem promoção.
+9. Confirmar os workflows do tag/main verdes (Release Artifacts, CI, CodeQL,
+   Security Hardening e qualquer gate QEMU/VMware obrigatório da release).
+10. Somente após 8-9 verdes, executar
+    `gh release edit <tag> --title "CapyOS <extended>" --notes-file <release-note>
+    --latest` para o título, corpo e marcação GitHub Latest. `latest` é estado da
+    Release, não uma tag rolante nem uma URL usada pelo runtime.
+11. Restaurar host em `develop`, limpar temporários.

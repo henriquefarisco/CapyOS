@@ -33,7 +33,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
           fetch-depth: 0
@@ -80,7 +80,7 @@ jobs:
         run: bash tools/scripts/checkout_release_siblings.sh
 
       - name: Setup Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.x"
 
@@ -164,37 +164,245 @@ jobs:
             echo "verify latest.ini with verify_update_manifest.py, then upload latest.ini separately."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stage exact GitHub Release asset set
+        id: release_stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE_DIR="build/release-stage"
+          ISO_PATH="${{ steps.iso.outputs.iso_path }}"
+          rm -rf "$STAGE_DIR"
+          mkdir -p "$STAGE_DIR"
+
+          mapfile -d '' AI_ASSETS < <(
+            find build/capypkg -maxdepth 1 -type f \
+              -name 'org.capyos.ai.assistant-*.bin' -print0
+          )
+          if [ "${#AI_ASSETS[@]}" -ne 1 ]; then
+            echo "Expected exactly one CapyAI payload, got ${#AI_ASSETS[@]}"
+            exit 1
+          fi
+
+          SOURCES=(
+            "$ISO_PATH"
+            build/capyos64.bin
+            build/manifest.bin
+            build/capypkg/modules-index.txt
+            "${AI_ASSETS[0]}"
+            build/capypkg/modules.sha256
+          )
+          for source in "${SOURCES[@]}"; do
+            if [ ! -f "$source" ] || [ -L "$source" ]; then
+              echo "Invalid release asset source: $source"
+              exit 1
+            fi
+            cp -- "$source" "$STAGE_DIR/$(basename "$source")"
+          done
+
+          (
+            cd "$STAGE_DIR"
+            mapfile -t PAYLOADS < <(
+              find . -maxdepth 1 -type f ! -name release-artifacts.sha256 \
+                -printf '%f\n' | LC_ALL=C sort
+            )
+            if [ "${#PAYLOADS[@]}" -ne 6 ]; then
+              echo "Expected exactly six payload assets, got ${#PAYLOADS[@]}"
+              exit 1
+            fi
+            sha256sum -c modules.sha256
+            sha256sum "${PAYLOADS[@]}" > release-artifacts.sha256
+            sha256sum -c release-artifacts.sha256
+          )
+
+          echo "stage_dir=$STAGE_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Upload ISO and offline update inputs as workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: capyos-iso-${{ github.run_id }}
           path: |
-            ${{ steps.iso.outputs.iso_path }}
-            build/capyos64.bin
-            build/manifest.bin
-            build/release-artifacts.sha256
+            build/release-stage/*
             build/CapyOS-Installer-UEFI.last-built.txt
             build/update/latest.unsigned.ini
-            build/capypkg/modules-index.txt
-            build/capypkg/org.capyos.ai.assistant-*.bin
-            build/capypkg/modules.sha256
           if-no-files-found: error
 
-      - name: Publish GitHub Release assets
+      - name: Refuse to mutate an already-published release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          LOOKUP_ERROR="build/release-lookup.err"
+          if EXISTING_DRAFT="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq '.draft' 2>"$LOOKUP_ERROR")"; then
+            if [ "$EXISTING_DRAFT" != "true" ]; then
+              echo "Refusing to replace already-published release $TAG"
+              exit 1
+            fi
+          elif ! grep -Fq 'HTTP 404' "$LOOKUP_ERROR"; then
+            cat "$LOOKUP_ERROR" >&2
+            exit 1
+          fi
+
+      - name: Upload GitHub Release assets as a draft
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.release.outputs.tag }}
-          files: |
-            ${{ steps.iso.outputs.iso_path }}
-            build/capyos64.bin
-            build/manifest.bin
-            build/release-artifacts.sha256
-            build/capypkg/modules-index.txt
-            build/capypkg/org.capyos.ai.assistant-*.bin
-            build/capypkg/modules.sha256
+          files: build/release-stage/*
           generate_release_notes: true
           fail_on_unmatched_files: true
-          draft: false
+          draft: true
           prerelease: false
-          make_latest: true
+          make_latest: false
+
+      - name: Re-download and verify the authenticated draft
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          STAGE_DIR="${{ steps.release_stage.outputs.stage_dir }}"
+          DRAFT_DIR="build/release-draft-download"
+
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq '.draft')" != "true" ]; then
+            echo "Release is not an unpublished draft"
+            exit 1
+          fi
+
+          draft_downloaded=false
+          for attempt in 1 2 3 4 5; do
+            rm -rf "$DRAFT_DIR"
+            mkdir -p "$DRAFT_DIR"
+            if gh release download "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$DRAFT_DIR" \
+              --clobber; then
+              draft_downloaded=true
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep "$((attempt * 2))"
+            fi
+          done
+          if [ "$draft_downloaded" != true ]; then
+            echo "Unable to download the authenticated draft after bounded retries"
+            exit 1
+          fi
+
+          find "$STAGE_DIR" -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort > build/release-stage-assets.txt
+          find "$DRAFT_DIR" -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort > build/release-draft-assets.txt
+          diff -u build/release-stage-assets.txt build/release-draft-assets.txt
+
+          while IFS= read -r asset; do
+            cmp --silent "$STAGE_DIR/$asset" "$DRAFT_DIR/$asset"
+          done < build/release-stage-assets.txt
+          (
+            cd "$DRAFT_DIR"
+            sha256sum -c modules.sha256
+            sha256sum -c release-artifacts.sha256
+          )
+
+          python3 tools/scripts/verify_modules_index_assets.py \
+            --index "$DRAFT_DIR/modules-index.txt" \
+            --release-tag "$TAG" \
+            --local-payload-dir "$DRAFT_DIR" \
+            --attempts 5 \
+            --backoff-seconds 1 \
+            --timeout 45
+
+      - name: Promote the verified draft to latest
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          RELEASE_ID="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.id')"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            -F prerelease=false \
+            -f make_latest=true > build/release-promoted.json
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            --jq '.draft')" != "false" ]; then
+            echo "Release remained a draft after promotion"
+            exit 1
+          fi
+
+      - name: Verify public latest release and all nine module payloads
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          STAGE_DIR="${{ steps.release_stage.outputs.stage_dir }}"
+          PUBLIC_DIR="build/release-public-download"
+          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          rm -rf "$PUBLIC_DIR"
+          mkdir -p "$PUBLIC_DIR"
+
+          latest_verified=false
+          for attempt in 1 2 3 4 5; do
+            LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+              --jq '.tag_name' 2>/dev/null || true)"
+            if [ "$LATEST_TAG" = "$TAG" ]; then
+              latest_verified=true
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep "$((attempt * 2))"
+            fi
+          done
+          if [ "$latest_verified" != true ]; then
+            echo "Latest release did not converge to $TAG"
+            exit 1
+          fi
+
+          while IFS= read -r asset; do
+            downloaded=false
+            for attempt in 1 2 3 4 5; do
+              rm -f "$PUBLIC_DIR/$asset.partial"
+              if curl --fail --location --silent --show-error \
+                --connect-timeout 10 --max-time 90 \
+                --output "$PUBLIC_DIR/$asset.partial" \
+                "$BASE_URL/$asset"; then
+                mv "$PUBLIC_DIR/$asset.partial" "$PUBLIC_DIR/$asset"
+                downloaded=true
+                break
+              fi
+              if [ "$attempt" -lt 5 ]; then
+                sleep "$((attempt * 2))"
+              fi
+            done
+            if [ "$downloaded" != true ]; then
+              echo "Public asset unavailable after bounded retries: $asset"
+              exit 1
+            fi
+            cmp --silent "$STAGE_DIR/$asset" "$PUBLIC_DIR/$asset"
+          done < build/release-stage-assets.txt
+
+          (
+            cd "$PUBLIC_DIR"
+            sha256sum -c modules.sha256
+            sha256sum -c release-artifacts.sha256
+          )
+          python3 tools/scripts/verify_modules_index_assets.py \
+            --index "$PUBLIC_DIR/modules-index.txt" \
+            --release-tag "$TAG" \
+            --attempts 5 \
+            --backoff-seconds 1 \
+            --timeout 45 \
+            --retry-404

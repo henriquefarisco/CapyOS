@@ -1,5 +1,11 @@
 # Compatibility audit — 2026-07-28 — alpha.319
 
+> **Correção posterior:** este snapshot preserva o estado observado na
+> `alpha.319`, mas sua interpretação de transferência para `.rodata` foi
+> descartada. A causa real era a red zone no loader UEFI. A correção e as
+> evidências atuais estão na auditoria
+> [`alpha.320`](compatibility-audit-2026-07-30-alpha320.md).
+
 ## Snapshot
 
 | Repository | Release | Contract consumed by CapyOS |

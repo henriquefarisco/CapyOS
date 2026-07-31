@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-07-27 (rev. `alpha.318`)
-**Versão atual:** `0.8.0-alpha.318+20260727`
+**Data de referência:** 2026-07-30 (rev. `alpha.320`)
+**Versão atual:** `0.8.0-alpha.320+20260730`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -705,12 +705,15 @@ tentativa, confirmação durável e rollback de tentativa não confirmada — é
 provado em host sobre o harness provider-backed com GPT espelhado real. O que
 falta é evidência externa: um payload assinado publicado, aplicado e reiniciado
 em VMware UEFI/E1000, com confirmação e rollback observados no hardware oficial.
-`release-check` prova build, testes e checksums; não prova update assinado. O
-índice local contém nove módulos e o gate networked segue bloqueado pelo asset
-`alpha.318` ainda não publicado (HTTP 404).
+`release-check` prova build, testes e checksums; não prova update assinado. Na
+`alpha.320`, o índice imutável contém exatamente nove módulos HTTPS únicos, com
+tamanho e SHA-256. O gate networked e a comparação byte a byte do índice remoto
+seguem pendentes até a tag e os assets serem publicados. O conjunto coordenado
+usa CapyUI `2.24.2`, patch de supply chain sobre `2.24.1`, sem alterar
+`capy-ui-widget` v2.22, desktop-session v1 ou display-list schema 7.
 
 **Entregue em `alpha.319` — gate do ciclo A/B assinado implementado; Etapa 8
-segue ABERTA por regressão de boot:** o critério de update deixa de depender de
+segue ABERTA:** o critério de update deixa de depender de
 execução manual no nível de ferramenta. `make smoke-x64-vmware-update-ab` (aceite
 oficial) e `make smoke-x64-qemu-update-ab` (preflight) instalam a ISO oficial num
 disco vazio e conduzem dois ciclos completos em quatro power cycles: manifesto
@@ -719,28 +722,21 @@ slot inativo com autorização geracional e flush durável, consumo da única
 tentativa pelo loader UEFI, confirmação de saúde persistente e — no segundo ciclo
 deixado sem confirmar — rollback aplicado pelo loader e reportado pelo updater.
 
-**O gate não passou em runtime e por isso não fecha o critério.** Na primeira
-execução real ele expôs uma regressão de boot do kernel que antecede qualquer
-lógica de update: o loader completa `ExitBootServices` e entrega o controle
-(último marker debugcon `J` em `efi_main.c`), mas o kernel morre com
-`#UD - Invalid Opcode` **antes do primeiro `dbgcon_putc('H')` de
-`kernel_main64`**, com `RIP` dentro do segmento `.rodata` recém-copiado
-(`.rodata + 0x1B7`; segmentos observados: `.text` `0x10000000+0x175B42`,
-`.rodata` `0x10176000+0x103A10`, `.data/.bss` `0x1027A000`). Ou seja: `_start`
-transfere execução para dados em vez de chamar `kernel_main64`.
+Historicamente, a primeira execução na `alpha.319` não passou porque expôs uma
+regressão anterior à lógica de update. A investigação inicial atribuiu o fault a
+uma transferência para `.rodata`; essa leitura estava errada e não deve ser
+usada como diagnóstico atual.
 
-A regressão **não** vem do gate nem da âncora de laboratório: `make smoke-x64-cli`
-com a build oficial (sem nenhum flag de laboratório) falha exatamente igual, sem
-nunca emitir marker de kernel. Isso é consistente com o registro do `alpha.318`,
-que declara explicitamente "não reexecutados: gates de instalador QEMU/VMware" —
-aquela release trocou o loader para A/B autoritativo (handoff v10, token de
-tentativa, `boot_slot_store_arm`) e nunca teve um boot de kernel validado em
-runtime. O `alpha.317`, que foi o último a passar QEMU/VMware, ainda bootava.
-
-Ação bloqueante, nesta ordem: (1) bissectar o boot entre `alpha.317` e o trabalho
-in-tree do `alpha.318` com `make smoke-x64-cli`; (2) resolver o endereço faltoso
-com `objdump`/`nm` na build exata que falhou; (3) rodar o gate A/B assinado e só
-então marcar o critério.
+**Corrigido na `alpha.320`:** a causa raiz era o uso da red zone SysV no loader
+UEFI. Firmware e interrupções podem sobrescrever os 128 bytes abaixo de `RSP`,
+corrompendo o frame antes da entrada do kernel. O loader agora usa uma pilha real
+sem red zone, confirmada por `objdump`, valida o ELF, copia e compara cada
+segmento e recarrega integralmente a GDT. Dois ciclos KVM focados passaram
+(quatro boots com persistência). O smoke oficial ISO KVM também passou:
+instalação pela ISO, boot do disco instalado e reboot persistente com
+`marker:persist-ok`. O smoke CLI TCG passou em 86,2 s, com dois boots e
+persistência. O smoke oficial ISO TCG, o update A/B e os gates VMware ainda não
+foram executados e precisam produzir as evidências restantes.
 
 Como a chave de release é offline-only e nunca entra em runner automatizado, cada
 execução gera um par Ed25519 descartável e compila o kernel com
@@ -779,11 +775,10 @@ desatualizados desde o `alpha.318`.
   ciclo pós-reboot comprova health confirmation e rollback.
   *(Implementação completa e host-provada em `alpha.318`; o gate automatizado que
   produz a evidência existe desde `alpha.319`
-  (`smoke-x64-vmware-update-ab` + `smoke-x64-qemu-update-ab`), mas a primeira
-  execução real esbarrou numa regressão de boot do kernel — `#UD` antes do
-  primeiro marker de `kernel_main64` — que também reprova `make smoke-x64-cli` na
-  build oficial. Enquanto o boot não voltar, o gate não pode produzir evidência e
-  este critério permanece aberto.)*
+  (`smoke-x64-vmware-update-ab` + `smoke-x64-qemu-update-ab`). A regressão de
+  boot foi corrigida na `alpha.320` e quatro boots KVM mais o smoke oficial ISO
+  KVM e o smoke CLI TCG de dois boots passaram; o critério permanece aberto até
+  o ciclo A/B oficial VMware comprovar apply, health confirmation e rollback.)*
 - [x] Evidência pública permite auditoria sem chave privada.
 - [x] Instalador wizard completa fresh install + reboot + login + persistência.
 
@@ -809,10 +804,10 @@ de módulos, independente daquele fix pontual:
 
 - O índice default do first-boot continua sendo um **pin de release explícito em
   C** (`CAPYOS_DEFAULT_MODULES_INDEX_URL` em
-  `src/config/first_boot/modules.c`), hoje alinhado a `alpha.318`; o
-  `version-audit` impede drift entre `VERSION.yaml`, Makefile e runtime. A
-  publicação dos assets dessa tag e a resolução futura por token ABI ainda são
-  passos externos obrigatórios.
+  `src/config/first_boot/modules.c`), agora alinhado à `alpha.320`; o
+  `version-audit` impede drift entre `VERSION.yaml`, Makefile e runtime. O
+  contrato gerado possui exatamente nove entradas HTTPS únicas, com tamanho e
+  SHA-256. A publicação dos assets e a verificação remota continuam obrigatórias.
 - O caminho real de download de módulos (DNS + TLS + redirect GitHub ->
   release-assets) **não é exercido pela CI** (`smoke-x64-iso` usa `profile=basic`
   + SLIRP `restrict=on`), então uma quebra de transporte passa verde — foi
@@ -1166,7 +1161,7 @@ A promoção de "host-provado" → "integrado" só ocorre por **adaptador CapyOS
 pequeno e versionado + gate externo aprovado** na Etapa em que o módulo é aceito
 (§5 da matriz de compatibilidade).
 
-### 20.1 CapyOS (core) — `0.8.0-alpha.318+20260727`
+### 20.1 CapyOS (core) — `0.8.0-alpha.320+20260730`
 
 **Papel:** base do sistema (boot, kernel, drivers, storage, rede/TLS,
 compositor, input, timers, sandbox, package install real, APIs nativas, gates de
@@ -1198,7 +1193,7 @@ bloqueante de Etapas 1-16 (§3-§19). Etapas 1-7 concluídas; Etapa 8 em andamen
 
 **Critérios de aceite:** os de cada Etapa (§4-§19).
 
-### 20.2 CapyUI — `2.24.1` (ABIs `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1)
+### 20.2 CapyUI — `2.24.2` (ABIs `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1)
 
 **Papel:** dono do modelo de widget retido portátil e da sessão de desktop
 (window manager + apps básicos). Publica `org.capyos.ui.widget-core` e
@@ -1220,6 +1215,9 @@ bloqueante de Etapas 1-16 (§3-§19). Etapas 1-7 concluídas; Etapa 8 em andamen
 - **Entregue (Etapa 7 fechada):** launcher, browser gráfico estático e chat
   CapyAI assíncrono foram integrados; regressões de dispatcher/session continuam
   exigindo teste, bump e matriz quando alterarem contrato.
+- **Entregue (`2.24.2`):** hardening de supply chain no workflow de release,
+  com referência/tag/`VERSION`/`PUBLISH_TAG` coerentes e actions pinadas; nenhum
+  código C ou ABI do payload mudou desde `2.24.1`.
 - **Planejado (por contrato):** focus, text-edit, animation, theme-tokens,
   accessibility, locale/RTL, theme-serialization, transforms, plugin-ABI.
 
@@ -1315,15 +1313,16 @@ CapyUI possuem os adapters de kernel, capability e UI; o pacote publicado é
   aplicativo e energia, chat gráfico assíncrono e modelo fixed-point embutível.
 - **Entregue em 0.2.1:** split sem leakage e campanha massiva de comando/risco
   promovida a gate de release, sem mudança do artifact v0.
-- **Pendente na Etapa 8:** publicação coordenada no índice alpha.318 e rerun do
-  gate networked após os assets existirem.
+- **Pendente na Etapa 8:** publicação coordenada no índice imutável
+  `alpha.320` e rerun do gate networked após os nove assets existirem.
 
 **Critérios de aceite do módulo:**
 
 - [x] Modelo/pacote reproduzíveis e ABI artifact v0 preservada.
 - [x] Ações passam por grants, confirmação e audit; capabilities ausentes falham
       fechadas.
-- [ ] Asset alpha.318 publicado e consumido pelo gate networked oficial.
+- [ ] Índice alpha.320 e seus nove assets publicados e consumidos pelo gate
+      networked oficial, com URL, tamanho e SHA-256 validados.
 
 ### 20.7 CapyLang — `0.1.12` (ABI `capy-lang-host` v0, roadmap-blocked)
 
@@ -1373,27 +1372,26 @@ de release. Integração gated pelas **Etapas 15-16**.
 ## 21. Próximo comando esperado
 
 Etapas 1-7 estão fechadas e a Etapa 8 permanece ativa com **um** critério aberto.
-O `alpha.319` entregou o gate que produz a evidência desse critério, e a primeira
-execução real do gate encontrou o bloqueador atual.
+O `alpha.319` entregou o gate que produz essa evidência. A `alpha.320` removeu o
+bloqueador de boot: o loader usa pilha real sem red zone, valida/copia/compara o
+ELF e recarrega a GDT; dois ciclos KVM focados (quatro boots) e o smoke oficial
+ISO KVM passaram com persistência. O smoke CLI TCG também passou em 86,2 s,
+com dois boots e persistência.
 
-**Ação bloqueante: consertar o boot do kernel.** O loader entrega o controle
-(marker debugcon `J`) e o kernel morre com `#UD` antes do primeiro
-`dbgcon_putc('H')` de `kernel_main64`, com `RIP` dentro de `.rodata`. Reproduz na
-build oficial, sem flags de laboratório, por `make smoke-x64-cli`. O `alpha.317`
-foi a última release com QEMU/VMware verdes; o trabalho in-tree do `alpha.318`
-tornou o loader A/B autoritativo e nunca teve boot validado em runtime. Roteiro:
-bissectar com `make smoke-x64-cli`, resolver o endereço com `objdump`/`nm` na
-build exata, corrigir, e só então rodar `make smoke-x64-qemu-update-ab` e
-`make smoke-x64-vmware-update-ab` para fechar o critério e a Etapa 8.
+**Próxima ação bloqueante:** executar o smoke oficial ISO TCG, o ciclo update
+A/B e `make smoke-x64-vmware-update-ab` no track oficial
+VMware + UEFI + E1000. A Etapa 8 só fecha quando o gate A/B comprovar download
+e validação do payload, apply no slot inativo, consumo da tentativa, confirmação
+de saúde e rollback. Depois da publicação, o índice remoto também deve ser
+comparado byte a byte e os nove payloads validados por tamanho e SHA-256.
 
-Nenhuma tag deve ser publicada antes disso: um kernel que não boota não é
-promovível, independentemente de `make test`, `layout-audit`, `version-audit` e
-`update-ab-selftest` estarem verdes.
+Nenhuma tag deve ser promovida como Latest antes de todos os gates obrigatórios
+terminarem verdes e a verificação pós-publicação aceitar os artefatos.
 
 Depois do fecho, a próxima ação pertence à Etapa 9 (§12): promover a fronteira
 alpha do `capypkg` a package manager com SDK e ABI estável, começando pelo
 `resolve-at-publish` desenhado na §11 (índice assinado endereçado por token de
 ABI + guarda anti-drift no `version-audit`), que elimina o pin manual de versão do
-first boot. Dois passos de operador seguem abertos e não bloqueiam a Etapa 9:
-publicar os assets da tag (o gate networked de módulos segue em HTTP 404) e
-repetir o ciclo de update assinado com a chave offline de produção.
+first boot. Dois passos de operador seguem abertos: publicar e validar os nove
+assets da tag e repetir o ciclo de update assinado com a chave offline de
+produção. A Etapa 9 continua bloqueada até o fechamento integral da Etapa 8.

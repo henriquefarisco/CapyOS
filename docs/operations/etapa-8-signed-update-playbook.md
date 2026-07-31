@@ -1,11 +1,13 @@
 # Playbook — gate do ciclo A/B assinado (Etapa 8)
 
-> **Estado em `alpha.319`:** o gate existe e seus contratos host estão verdes, mas
-> a primeira execução real parou numa regressão de boot do kernel (`#UD` antes do
-> primeiro marker de `kernel_main64`), reproduzida também por
-> `make smoke-x64-cli` na build oficial. Enquanto o boot não voltar, o gate não
-> produz evidência e o critério da Etapa 8 permanece aberto. Ver a seção
-> Bloqueador da release note `capyos-0.8.0-alpha.319+20260728.md`.
+> **Estado em `alpha.320`:** a regressão de boot foi corrigida no loader UEFI
+> (pilha real sem red zone, ELF validado/copiado/comparado e GDT recarregada).
+> Dois ciclos KVM focados passaram, com quatro boots e persistência; o smoke
+> oficial ISO KVM também passou com instalação, boot do disco e
+> `marker:persist-ok`. O smoke CLI TCG passou em 86,2 s, com dois boots e
+> persistência. O smoke ISO TCG oficial, o update A/B e os gates VMware ainda
+> não foram executados. A Etapa 8 permanece aberta em 7/16 até o ciclo A/B
+> VMware produzir evidência completa.
 
 Este playbook cobre o gate que fecha o critério de update da Etapa 8: um
 manifesto Ed25519 é buscado por HTTP, o payload é verificado, gravado no slot

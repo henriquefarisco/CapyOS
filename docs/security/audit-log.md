@@ -4,6 +4,38 @@ Registro datado das rodadas de auditoria. Mais recente primeiro. Inventário +
 status corrente: [`attack-surface.md`](attack-surface.md). Critérios:
 [`audit-playbook.md`](audit-playbook.md).
 
+## 2026-07-30 — supply chain da CI e triagem dos alertas GitHub
+
+**Escopo:** workflows GitHub Actions, fixture de regressão do CodeQL e
+classificação dos avisos Scorecard ainda abertos.
+
+### Hardening aplicado
+
+As actions externas estão pinadas a commits imutáveis, mantendo a versão humana
+ao lado do SHA:
+
+| Action | Versão | SHA |
+|---|---|---|
+| `actions/checkout` | 7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| `actions/setup-python` | 7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` |
+| `github/codeql-action` | 4.37.3 | `e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81` |
+| `ossf/scorecard-action` | 2.4.4 | `2d1146689b8cda280b9bc96326124645441f03bc` |
+| `softprops/action-gh-release` | 3.0.2 | `3d0d9888cb7fd7b750713d6e236d1fcb99157228` |
+
+O alerta CodeQL #121 é um achado acionável. A entrada sintética que o disparava
+foi transformada em fixture de regressão local; o alerta só pode ser declarado
+fechado depois que o scan remoto analisar o commit publicado.
+
+### Alertas de governança, não defeitos de código
+
+- Scorecard #50 (`CodeReviewID`) mede política/evidência de revisão.
+- Scorecard #49 (`CIIBestPracticesID`) depende de adesão externa ao programa CII
+  Best Practices.
+
+Esses dois alertas não são corrigidos por alteração local de código e permanecem
+abertos até a governança do repositório satisfazer os critérios externos. Não
+devem ser agrupados com o fechamento técnico do CodeQL #121.
+
 ## 2026-06-17 — rodada P0 + parsers de rede + ELF loader
 
 **Escopo:** assinatura de pacote capypkg (verifier Ed25519 + gate de install +

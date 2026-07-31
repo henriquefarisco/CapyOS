@@ -57,6 +57,11 @@ PREPARE_EXPLAIN_CLEAN = "failing=-"
 PREPARE_OK = "[ok] verified update prepared and armed for activation"
 APPLY_OK = "[ok] staged update verified and boot slot armed"
 APPLY_SUMMARY = "inactive slot written and armed for one boot attempt"
+ARMED_ATTEMPT_EXPECTATIONS = (
+    "state=active",
+    "health=pending [ACTIVE]",
+    "Rollback pending: yes",
+)
 CONFIRM_OK = "[ok] boot health confirmed"
 CONFIRM_SUMMARY = "persistent boot health confirmed"
 ATTEMPT_PENDING_SUMMARY = "boot attempt pending confirmation; rollback still armed"
@@ -298,6 +303,7 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
 __all__ = [
     "APPLY_OK",
     "APPLY_SUMMARY",
+    "ARMED_ATTEMPT_EXPECTATIONS",
     "ATTEMPT_PENDING_SUMMARY",
     "CONFIRM_OK",
     "CONFIRM_SUMMARY",

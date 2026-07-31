@@ -4,12 +4,15 @@
 **Canal:** alpha (experimental)
 **Versao:** `0.8.0-alpha.319+20260728`
 **Plataforma oficial:** VMware + UEFI + E1000 (inalterada)
-**Tipo:** gate externo novo + observabilidade + fixes (NAO promovivel: ver §Bloqueador)
+**Tipo:** gate externo novo + observabilidade + fixes (candidata não promovida)
 
-> **Bloqueador: esta versao nao deve ser taggeada.** O gate entregue aqui
-> encontrou, na sua primeira execucao real, uma regressao de boot do kernel que
-> antecede qualquer logica de update. A Etapa 8 **continua aberta**. Detalhes na
-> secao [Bloqueador](#bloqueador-regressao-de-boot-do-kernel).
+> **Resultado histórico:** esta candidata não foi promovida. O gate entregue
+> aqui encontrou, na sua primeira execução real, uma regressão de boot anterior
+> à lógica de update e a Etapa 8 continuou aberta. A interpretação inicial de
+> execução em `.rodata` foi posteriormente descartada: a auditoria
+> [`alpha.320`](../reference/integration/compatibility-audit-2026-07-30-alpha320.md)
+> registra a causa real (red zone no loader UEFI), a correção e os boots KVM
+> confirmados.
 
 ## Resumo executivo
 
@@ -158,7 +161,7 @@ TU.
 **Documentacao**
 
 - `docs/operations/etapa-8-signed-update-playbook.md` (novo).
-- `docs/plans/active/capyos-master-plan.md` -- Etapa 8 fechada, §21 aponta a
+- `docs/plans/active/capyos-master-plan.md` -- Etapa 8 aberta; §21 aponta a
   Etapa 9, correcao do texto de slot `VALID`.
 - `docs/plans/STATUS.md`, `docs/reference/integration/compatibility-matrix.md`,
   `docs/reference/integration/compatibility-audit-2026-07-28-alpha319.md`,

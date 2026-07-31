@@ -146,10 +146,12 @@ def main() -> int:
         ("history insert", sub_count(hist_anchor, hist_new), 1),
     ])
 
-    # --- include/core/version.h --- (EXTENDED/FULL/ALPHA share "0.8.0-alpha.N";
-    # PRERELEASE is the bare "alpha.N")
+    # --- include/core/version.h ---
+    # Match the dated FULL macro independently. Replacing only the prerelease
+    # prefix would keep the previous build date when --date changes.
     ed.edit(REPO / "include/core/version.h", [
-        ("0.8.0-alpha.N x3", sub_count(cur, new), 3),
+        ("EXTENDED/ALPHA", sub_count(f'"{cur}"', f'"{new}"'), 2),
+        ("FULL", sub_count(f'"{cur_ext}"', f'"{new_ext}"'), 1),
         ("PRERELEASE", sub_count(f'"alpha.{cur_num}"', f'"alpha.{args.to}"'), 1),
     ])
 

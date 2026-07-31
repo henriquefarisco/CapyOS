@@ -1,12 +1,28 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo; **auditoria atual:** 2026-07-28, CapyOS
-`0.8.0-alpha.319+20260728`, com CapyAI `0.2.1` e os demais contratos ABI
-inalterados. O histórico técnico permanece nos snapshots datados abaixo.
+**Status:** autoritativo; **auditoria atual:** 2026-07-30, CapyOS
+`0.8.0-alpha.320+20260730`, com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
+ABI inalterados. O histórico técnico permanece nos snapshots datados abaixo.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
+**Atualizacao alpha.320 (2026-07-30):** CapyOS
+`0.8.0-alpha.320+20260730` preserva `capyos-base` v3,
+`capyos-package-apply` v1 e handoff interno v10. O pin CapyUI avança de `2.24.1`
+para `2.24.2` como patch exclusivo de supply chain, sem alteração de
+`capy-ui-widget` v2.22, desktop-session v1 ou schema 7; os demais pins externos
+permanecem inalterados. A
+regressao de boot da `alpha.319` foi causada pela red zone no loader UEFI; a
+correcao usa uma pilha real sem red zone, valida/copia/compara o ELF e recarrega
+a GDT. Dois ciclos KVM focados passaram (quatro boots com persistencia) e o smoke
+oficial ISO KVM passou com instalacao, boot do disco e persistencia
+(`marker:persist-ok`). O smoke CLI TCG tambem passou em 86,2 s, com dois boots e
+persistencia. O smoke ISO TCG oficial, o update A/B e os gates VMware ainda nao
+foram executados; a Etapa 8 continua aberta em 7/16. O indice imutavel da release
+declara exatamente nove modulos; a verificacao remota de URL, tamanho e SHA-256
+fica pendente ate a publicacao dos assets. Ver
+[`compatibility-audit-2026-07-30-alpha320.md`](compatibility-audit-2026-07-30-alpha320.md).
 **Atualizacao alpha.319 (2026-07-28):** CapyOS
-`0.8.0-alpha.319+20260728` **nao e promovivel**: entrega o gate do ciclo A/B
-assinado, mas a primeira execucao real do gate expos uma regressao de boot do
+`0.8.0-alpha.319+20260728` foi mantida como candidato **nao promovido**:
+entregou o gate do ciclo A/B assinado, mas a primeira execucao real expos uma regressao de boot do
 kernel (`#UD` antes do primeiro marker de `kernel_main64`), reproduzida tambem por
 `make smoke-x64-cli` na build oficial. A Etapa 8 continua aberta; ver
 [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md).
@@ -48,7 +64,8 @@ preflight antes do wipe; first boot e desktop foram endurecidos; workers nao
 herdam principal; o updater autenticado continua fail-closed para apply; as
 ABIs `capy-ui-widget` 2.22, desktop-session v1 e `capy-ai-core` artifact v0
 permanecem inalteradas.
-**Última auditoria datada (`alpha.319`):** [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md).
+**Última auditoria datada (`alpha.320`):** [`compatibility-audit-2026-07-30-alpha320.md`](compatibility-audit-2026-07-30-alpha320.md).
+**Auditoria anterior (`alpha.319`):** [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md).
 **Auditoria anterior (`alpha.318`):** [`compatibility-audit-2026-07-27-alpha318.md`](compatibility-audit-2026-07-27-alpha318.md).
 **Auditoria anterior (`alpha.317`):** [`compatibility-audit-2026-07-20-alpha317.md`](compatibility-audit-2026-07-20-alpha317.md). Corrigida pela auditoria `alpha.318` nos pontos de flush durável e consumo UEFI.
 **Auditoria anterior (`alpha.316`):** [`compatibility-audit-2026-07-20.md`](compatibility-audit-2026-07-20.md).
@@ -65,11 +82,11 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.319+20260728` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.8.0-alpha.320+20260730` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.0.10` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276), fail-closed ate o trust anchor de producao; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.10` | `0.0.10` |
 | `CapyBrowser` | `0.6.7` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.7` | `0.6.7` |
 | `CapyCodecs` | `0.0.12` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.12` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.12` |
-| `CapyUI` | `2.24.1` | `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1; logout/session/worker hardening, launcher/browser e chat CapyAI assincrono | `2.24.1` | `2.24.1` |
+| `CapyUI` | `2.24.2` | `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1; logout/session/worker hardening, launcher/browser, chat CapyAI assincrono e release supply-chain fail-closed | `2.24.2` | `2.24.2` |
 | `CapyAI` | `0.2.1` | `capy-ai-core` artifact v0; orquestrador governado, modelo fixed-point reproduzivel, split sem leakage, gate massivo de risco e pacote `org.capyos.ai.assistant` | `0.2.1` | `0.2.1` |
 | `CapyLang` | `0.1.12` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes de array 0x60-0x6A incl. push/pop/insert/remove, traps V0017-V0019, 43 opcodes congelados; metodos de array no frontend S10 (a.push/pop/insert/remove/get/set/len, E0022); host-only no sister) | n/a (roadmap-blocked) | n/a |
 | `CapyBenchmark` | `0.0.11` | `capy-benchmark-report` v1 (planejada; serialização report/eval/replay + thresholds derivadas de baseline) | n/a (roadmap-blocked) | n/a |
@@ -108,7 +125,7 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.317+20260720` (alpha extended) | `v0.<major>.<minor>-alpha.<n>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
+| `CapyOS` | `0.8.0-alpha.320+20260730` (alpha extended) | `v0.<major>.<minor>-alpha.<n>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
 | `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276) e KAT host-validado, fail-closed ate o trust anchor de producao; KAT externo do signer pendente** |
 | `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
@@ -197,7 +214,8 @@ versão correspondente do `VERSION.yaml`.
 
 ## 9. Referência cruzada
 
-- [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md) (atual; alpha.319 + fecho da Etapa 8, pins externos inalterados)
+- [`compatibility-audit-2026-07-30-alpha320.md`](compatibility-audit-2026-07-30-alpha320.md) (atual; alpha.320 restaura boot/instalacao; Etapa 8 segue aberta)
+- [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md) (historico; alpha.319 implementou o gate A/B, mas nao foi promovida)
 - [`compatibility-audit-2026-07-27-alpha318.md`](compatibility-audit-2026-07-27-alpha318.md) (histórico; alpha.318 + apply A/B persistente)
 - [`compatibility-audit-2026-07-20-alpha317.md`](compatibility-audit-2026-07-20-alpha317.md) (histórico; alpha.317 + fundação A/B/handoff v9 internos, pins externos inalterados)
 - [`compatibility-audit-2026-07-20.md`](compatibility-audit-2026-07-20.md) (histórico; alpha.316 + CapyAI 0.2.1)

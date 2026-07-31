@@ -10,7 +10,9 @@ O plano mestre continua definindo quando uma integração pode entrar no sistema
 
 - [`compatibility-matrix.md`](compatibility-matrix.md) — matriz de versões pinadas e ABIs por repositório
 - [`capypkg-publisher-manifest-format.md`](capypkg-publisher-manifest-format.md) — formato canônico do manifest line-oriented que o adapter consome
-- [`compatibility-audit-2026-07-27-alpha318.md`](compatibility-audit-2026-07-27-alpha318.md) — auditoria cross-repo vigente (CapyOS alpha.318 / CapyUI 2.24.1 / CapyAI 0.2.1)
+- [`compatibility-audit-2026-07-30-alpha320.md`](compatibility-audit-2026-07-30-alpha320.md) — auditoria cross-repo vigente (CapyOS alpha.320 / CapyUI 2.24.2 / CapyAI 0.2.1)
+- [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md) — auditoria histórica da candidata não promovida alpha.319
+- [`compatibility-audit-2026-07-27-alpha318.md`](compatibility-audit-2026-07-27-alpha318.md) — auditoria histórica da alpha.318
 - [`compatibility-audit-2026-07-20-alpha317.md`](compatibility-audit-2026-07-20-alpha317.md) — auditoria histórica da alpha.317, corrigida pela auditoria alpha.318
 - [`compatibility-audit-2026-07-20.md`](compatibility-audit-2026-07-20.md) — auditoria histórica da alpha.316
 - [`compatibility-audit-2026-07-15.md`](compatibility-audit-2026-07-15.md) — auditoria histórica da alpha.315

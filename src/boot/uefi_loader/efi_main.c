@@ -44,7 +44,7 @@ static BOOLEAN uefi_loader_running_on_hyperv(void) {
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   InitializeLib(image, systab);
-  Print(L"CapyOS UEFI loader: iniciando [DBG-BUILD-V2]\r\n");
+  Print(L"CapyOS UEFI loader: iniciando\r\n");
   disable_uefi_watchdog(systab);
 
   {

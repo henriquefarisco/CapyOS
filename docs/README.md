@@ -81,9 +81,11 @@ Escopo atual:
   - matriz autoritativa de versões pinadas e ABIs cross-repo
 - `reference/integration/capypkg-publisher-manifest-format.md`
   - formato canônico do manifest line-oriented consumido pelo adapter in-tree
-- `reference/integration/compatibility-audit-2026-07-27-alpha318.md`
-  - auditoria cross-repo vigente para CapyOS alpha.318; snapshots anteriores
-    ficam no mesmo diretório como histórico encadeado
+- `reference/integration/compatibility-audit-2026-07-30-alpha320.md`
+  - auditoria cross-repo vigente para CapyOS alpha.320; boot/instalacao KVM
+    e smoke CLI TCG confirmados, Etapa 8 ainda aberta e gates ISO TCG
+    oficial/VMware/publicacao pendentes; snapshots anteriores ficam no mesmo
+    diretório como histórico encadeado
 - `operations/manual-module-deploy-runbook.md`
   - runbook de deploy manual de módulos remotos durante a instalação do core
 - `architecture/libcapy-net-http-hardening.md`

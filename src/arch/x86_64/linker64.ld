@@ -14,7 +14,10 @@ SECTIONS
     .text : ALIGN(4K) {
         *(.text)
         *(.text.*)
-    }
+        /* Fail closed if control flow ever falls through the end of executable
+         * text. GNU ld emits the big-endian fill value 0x0F0B as repeated UD2. */
+        . = ALIGN(4K);
+    } = 0x0F0B
 
     .rodata : ALIGN(4K) {
         *(.rodata)

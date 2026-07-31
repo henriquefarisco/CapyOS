@@ -96,21 +96,31 @@ O aggregator (`tools/scripts/build_modules_index.py`) busca cada
 `install_root` dentro de `/var/capypkg` ou `/opt/`, etc.) e concatena
 com separadores `---` no arquivo único.
 
-Publicar então:
+O contrato de publicação é imutável por release. Para
+`0.8.0-alpha.320+20260730`:
 
-1. Cada `<repo>/build/capypkg/<name>.bin` no canal `latest` do
-   GitHub Release do repo publicador. O `payload_url` gerado pelo
-   Makefile do CapyUI já aponta para esse canal estável:
-   `https://github.com/<owner>/<repo>/releases/latest/download/<name>.bin`.
-2. `modules-index.txt` no mesmo canal `latest`:
-   `https://github.com/<owner>/<repo>/releases/latest/download/modules-index.txt`.
+```bash
+make modules-index
+make verify-modules-index-assets
+```
 
-O canal `latest` é mantido por `.github/workflows/release-artifacts.yml`
-em cada repo publicador: todo push em `main` reconstroi os pacotes, move
-a tag `latest` para o novo commit e republica a Release `latest` com
-`make_latest: true`. O CapyOS não precisa saber qual semver é o atual;
-o redirect `/releases/latest/download/` sempre serve o último artefato
-validado.
+O índice final deve conter **exatamente nove** descritores, com nomes e URLs
+HTTPS únicos, tamanho esperado e SHA-256 por payload. Publique
+`build/capypkg/modules-index.txt` e os nove payloads como assets da tag
+`v0.8.0-alpha.320+20260730` do CapyOS; não mova uma tag rolante `latest` e não
+use `/releases/latest/download/` como identidade do contrato.
+
+Depois da publicação, o workflow deve:
+
+1. baixar o índice pela URL imutável da tag;
+2. compará-lo byte a byte com o arquivo gerado;
+3. exigir exatamente nove entradas HTTPS únicas;
+4. baixar cada payload com retry transitório limitado e backoff;
+5. validar tamanho e SHA-256 antes de aceitar a release.
+
+HTTP 404, divergência do índice, tamanho incorreto ou hash inválido falham
+imediatamente. Na `alpha.320`, essa prova pós-publicação permanece pendente até
+a tag e os assets existirem.
 
 A URL do índice será referenciada em `profile.ini`. Não use a URL de
 um `.manifest` individual como `bootstrap_repo_url`: o adapter in-tree
@@ -209,8 +219,9 @@ sistema instalado, via TUI no framebuffer:
    - Etapas do wizard: idioma, layout teclado, hostname, tema, splash,
      usuário admin, senha admin, **seleção de módulos** (BASIC | FULL | CUSTOM).
    - Se profile != BASIC: wizard pergunta URL do índice (Enter usa o
-     `modules-index.txt` servido pelo canal rolante `latest` do CapyUI
-     em `https://github.com/<owner>/CapyUI/releases/latest/download/`),
+     `modules-index.txt` imutável da release CapyOS
+     `v0.8.0-alpha.320+20260730`, em
+     `https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.320+20260730/modules-index.txt`),
      grava `/system/install/profile.ini` e dispara
      `capypkg_bootstrap_run_with_progress` que mostra
      `[modules] [i/N] instalando org.capyos.ui.desktop-session...` na tela.

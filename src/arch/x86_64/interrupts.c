@@ -205,11 +205,27 @@ static void x64_gdt_set(int index, uint32_t base, uint32_t limit,
 }
 
 static void x64_load_gdt(const struct x64_descriptor_ptr *gdtr) {
-  /* Long-mode segment caches already carry the selectors installed by the
-   * loader. Loading the larger kernel GDT is enough for later SYSRET/user
-   * selectors; rewriting DS/ES/SS or doing an early far return here regressed
-   * OVMF/QEMU boot before the native exception path was fully armed. */
-  __asm__ volatile("lgdt (%0)" : : "r"(gdtr) : "memory");
+  /*
+   * UEFI owns the selectors on entry. Install the kernel GDT, then reload CS
+   * with a long-mode far return and normalize all data-segment caches.
+   */
+  __asm__ volatile(
+      "lgdt (%0)\n\t"
+      "pushq $0x08\n\t"
+      "leaq 1f(%%rip), %%rax\n\t"
+      "pushq %%rax\n\t"
+      "lretq\n\t"
+      "1:\n\t"
+      "movw $0x10, %%ax\n\t"
+      "movw %%ax, %%ds\n\t"
+      "movw %%ax, %%es\n\t"
+      "movw %%ax, %%ss\n\t"
+      "xorw %%ax, %%ax\n\t"
+      "movw %%ax, %%fs\n\t"
+      "movw %%ax, %%gs\n\t"
+      :
+      : "r"(gdtr)
+      : "rax", "memory", "cc");
 }
 
 static void x64_idt_set_gate(uint8_t vector, void (*handler)(void),
@@ -401,9 +417,29 @@ report_fault(const struct x64_exception_frame *frame) {
   }
 }
 
+/* Serialize diagnostic reporting so a fault inside the reporting path cannot
+ * recursively consume the exception stack. The latch is global and atomic:
+ * on SMP, only the first CPU emits a report. */
+static volatile unsigned g_fault_report_active;
+
+static int x64_fault_report_try_enter(void) {
+  return __sync_lock_test_and_set(&g_fault_report_active, 1u) == 0u;
+}
+
+static void x64_fault_report_leave(void) {
+  __sync_lock_release(&g_fault_report_active);
+}
+
+__attribute__((noreturn)) static void x64_fault_report_halt(void) {
+  __asm__ volatile("cli");
+  for (;;)
+    __asm__ volatile("hlt");
+}
+
 __attribute__((optimize("O0"))) void
 x64_exception_dispatch(struct x64_exception_frame *frame) {
   uint64_t vector = frame ? frame->vector : 0xFFFFFFFFFFFFFFFFULL;
+  int vmm_recovery_refused = 0;
 
   if (vector >= 32u && vector <= 47u) {
     int irq = (int)(vector - 32u);
@@ -446,13 +482,19 @@ x64_exception_dispatch(struct x64_exception_frame *frame) {
       if (vmm_handle_page_fault(finfo.cr2, finfo.error_code) == 0) {
         return;
       }
-      diag_write("\n[x64] vmm_handle_page_fault refused recovery; "
-                 "escalating to KILL_PROCESS\n");
+      vmm_recovery_refused = 1;
       action = ARCH_FAULT_KILL_PROCESS;
     }
 
     if (action == ARCH_FAULT_KILL_PROCESS &&
         process_current() != NULL) {
+      if (!x64_fault_report_try_enter()) {
+        x64_fault_report_halt();
+      }
+      if (vmm_recovery_refused) {
+        diag_write("\n[x64] vmm_handle_page_fault refused recovery; "
+                   "escalating to KILL_PROCESS\n");
+      }
       diag_write("\n[x64] User-mode fault, killing offending process\n");
       diag_write("[x64] Type: ");
       diag_write(g_exception_names[vector]);
@@ -467,10 +509,15 @@ x64_exception_dispatch(struct x64_exception_frame *frame) {
       /* POSIX-style exit code: high byte indicates death by signal,
        * low byte carries the vector. process_exit() is noreturn and
        * reschedules. */
+      x64_fault_report_leave();
       process_exit(128 + (int)vector);
       /* Unreachable; defensive halt below if process_exit ever returns
        * (e.g. test environments). */
     }
+  }
+
+  if (!x64_fault_report_try_enter()) {
+    x64_fault_report_halt();
   }
 
   report_fault(frame);

@@ -58,6 +58,8 @@ _start:
     wrmsr
 .Lno_nxe:
 
+    # CPUID and RDMSR/WRMSR clobber EDX; restore the debugcon port.
+    mov dx, 0xE9
     mov al, 'F'
     out dx, al
 

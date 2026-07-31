@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from io import BytesIO
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,7 +15,7 @@ from smoke_x64_auth import (
     require_first_boot_wizard,
     require_installer_target_count,
 )
-from smoke_x64_common import create_runtime_ovmf_vars
+from smoke_x64_common import cleanup_file, create_runtime_ovmf_vars
 from smoke_x64_helpers import ensure_shell_after_login
 from smoke_x64_iso_install import (
     extract_volume_key,
@@ -263,6 +264,32 @@ def main() -> int:
     if sata_text.index("file=target.img") > sata_text.index("file=guard.img"):
         print("[FAIL] guard disk precedes explicit install target")
         return 1
+    previous_accelerator = os.environ.get("CAPYOS_QEMU_ACCEL")
+    try:
+        os.environ["CAPYOS_QEMU_ACCEL"] = "kvm"
+        accelerated = make_qemu_cmd(
+            "qemu-system-x86_64", "OVMF_CODE.fd", Path("OVMF_VARS.fd"),
+            target, 12345, 1024
+        )
+        if "q35,accel=kvm" not in accelerated:
+            print("[FAIL] explicit KVM accelerator was not honored")
+            return 1
+        os.environ["CAPYOS_QEMU_ACCEL"] = "invalid"
+        try:
+            make_qemu_cmd(
+                "qemu-system-x86_64", "OVMF_CODE.fd", Path("OVMF_VARS.fd"),
+                target, 12345, 1024
+            )
+        except ValueError:
+            pass
+        else:
+            print("[FAIL] invalid QEMU accelerator was accepted")
+            return 1
+    finally:
+        if previous_accelerator is None:
+            os.environ.pop("CAPYOS_QEMU_ACCEL", None)
+        else:
+            os.environ["CAPYOS_QEMU_ACCEL"] = previous_accelerator
     cdrom_cmd = make_qemu_cmd(
         "qemu-system-x86_64", "OVMF_CODE.fd", Path("OVMF_VARS.fd"),
         target, 12345, 1024, iso_path=Path("installer.iso"), boot_from="cdrom"
@@ -289,30 +316,42 @@ def main() -> int:
         else:
             print("[FAIL] destructive disk outside build/ci was accepted")
             return 1
-        secret_log = Path(temp) / "installer.log"
-        secret_key = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX"
-        secret_log.write_text(f"recovery={secret_key}\n", encoding="utf-8")
-        if extract_volume_key(secret_log) != secret_key:
+        fixture_log = Path(temp) / "installer.log"
+        synthetic_recovery_fixture = "-".join(
+            ("TEST", "ONLY", "NOTA", "REAL", "KEY0", "0000")
+        )
+        fixture_log.write_text(
+            f"recovery={synthetic_recovery_fixture}\n", encoding="utf-8"
+        )
+        if extract_volume_key(fixture_log) != synthetic_recovery_fixture:
             print("[FAIL] installer recovery key was not extracted")
             return 1
-        if secret_key in secret_log.read_text(encoding="utf-8"):
+        if synthetic_recovery_fixture in fixture_log.read_text(encoding="utf-8"):
             print("[FAIL] installer recovery key remained in persisted log")
             return 1
         ovmf_template = Path(temp) / "OVMF_VARS.fd"
         ovmf_template.write_bytes(b"ovmf-template")
         ovmf_log = Path(temp) / "smoke.log"
-        ovmf_runtime = ovmf_log.with_name("smoke.OVMF_VARS.runtime.fd")
-        ovmf_runtime.write_bytes(b"do-not-overwrite")
-        try:
-            create_runtime_ovmf_vars(ovmf_log, str(ovmf_template))
-        except FileExistsError:
-            pass
-        else:
-            print("[FAIL] pre-existing OVMF runtime was overwritten")
+        stale_ovmf_runtime = ovmf_log.with_name("smoke.OVMF_VARS.runtime.fd")
+        stale_ovmf_runtime.write_bytes(b"do-not-overwrite")
+        ovmf_runtime = create_runtime_ovmf_vars(ovmf_log, str(ovmf_template))
+        if ovmf_runtime == stale_ovmf_runtime:
+            print("[FAIL] OVMF runtime reused a stale fixed path")
             return 1
-        if ovmf_runtime.read_bytes() != b"do-not-overwrite":
+        if stale_ovmf_runtime.read_bytes() != b"do-not-overwrite":
             print("[FAIL] pre-existing OVMF runtime content changed")
             return 1
+        if ovmf_runtime.read_bytes() != b"ovmf-template":
+            print("[FAIL] run-private OVMF runtime content differs from template")
+            return 1
+        second_ovmf_runtime = create_runtime_ovmf_vars(
+            ovmf_log, str(ovmf_template)
+        )
+        if second_ovmf_runtime == ovmf_runtime:
+            print("[FAIL] OVMF runtimes are not isolated between runs")
+            return 1
+        cleanup_file(ovmf_runtime)
+        cleanup_file(second_ovmf_runtime)
         preexisting = Path(temp) / "preexisting.img"
         preexisting.write_bytes(b"do-not-truncate")
         try:

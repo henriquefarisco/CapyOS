@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools" / "scripts"))
 
 import smoke_x64_update_ab_contract as contract  # noqa: E402
 import smoke_x64_update_ab_flow as flow  # noqa: E402
+from smoke_x64_session import text_contains_pattern  # noqa: E402
 from update_manifest_common import (  # noqa: E402
     ManifestError,
     canonical_body,
@@ -75,6 +76,42 @@ def _lab_fields(url: str) -> dict[str, str]:
 def fail(reason: str) -> int:
     print(f"[FAIL] {reason}")
     return 1
+
+
+class _SlotStatusSession:
+    """Minimal console double for the shared post-apply lifecycle assertion."""
+
+    def __init__(self, output: str, marker: int = 0) -> None:
+        self.output = output
+        self.marker_value = marker
+        self.commands: list[str] = []
+        self.waits: list[tuple[str, int, bool]] = []
+
+    def marker(self) -> int:
+        return self.marker_value
+
+    def send_line(self, command: str) -> None:
+        self.commands.append(command)
+
+    def tail(self, max_bytes: int = 3500) -> str:
+        return self.output[-max_bytes:]
+
+    def wait_for(
+        self,
+        expected: str,
+        *,
+        timeout: float,
+        start_at: int,
+        ignore_line_breaks: bool = False,
+    ) -> None:
+        _ = timeout
+        self.waits.append((expected, start_at, ignore_line_breaks))
+        if not text_contains_pattern(
+            self.output[start_at:],
+            expected,
+            ignore_line_breaks=ignore_line_breaks,
+        ):
+            raise TimeoutError(expected)
 
 
 def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
@@ -137,6 +174,84 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         pass
     else:
         return fail("require_boot_attempt accepted a log reporting two attempts")
+
+    # update-apply arms the real lifecycle immediately: the candidate is
+    # active, unhealthy until confirmed and protected by a pending rollback.
+    expected_armed_state = (
+        "state=active",
+        "health=pending [ACTIVE]",
+        "Rollback pending: yes",
+    )
+    if contract.ARMED_ATTEMPT_EXPECTATIONS != expected_armed_state:
+        return fail("post-apply slot lifecycle literals drifted")
+    plain_armed_status = (
+        "Slot A: version=0.8.0-alpha.319 state=rollback boots=1 ok=1 fail=0 "
+        "health=confirmed\n"
+        "Slot B: version=0.8.0-alpha.320 state=active boots=0 ok=0 fail=0 "
+        "health=pending [ACTIVE]\n"
+        "Rollback pending: yes\n> "
+    )
+    wrapped_armed_status = (
+        plain_armed_status.replace("state=active", "state=act\r\nive")
+        .replace("health=pending [ACTIVE]", "health=pending \r\n[ACTIVE]")
+        .replace("Rollback pending: yes", "Rollback pend\ning: yes")
+    )
+    stale_prefix = "Slot B: version=old state=valid health=confirmed [ACTIVE]\n> "
+    marker = len(stale_prefix)
+    session = _SlotStatusSession(stale_prefix + wrapped_armed_status, marker)
+    try:
+        flow.assert_armed_attempt_state(session, 1.0)
+    except TimeoutError as exc:
+        return fail(f"post-apply lifecycle rejected a matching snapshot: {exc}")
+    if session.commands != ["print-boot-slot"]:
+        return fail("post-apply lifecycle must use one print-boot-slot snapshot")
+    if any(start_at != marker for _, start_at, _ in session.waits):
+        return fail("post-apply lifecycle did not keep one console marker")
+    invariant_waits = session.waits[: len(expected_armed_state)]
+    if any(not ignore_line_breaks for _, _, ignore_line_breaks in invariant_waits):
+        return fail("post-apply invariants must tolerate debugcon line wrapping")
+    for missing in expected_armed_state:
+        incomplete = plain_armed_status.replace(missing, "missing", 1)
+        try:
+            flow.assert_armed_attempt_state(_SlotStatusSession(incomplete), 1.0)
+        except TimeoutError:
+            continue
+        return fail(f"post-apply lifecycle accepted a snapshot without {missing!r}")
+    stale_valid = plain_armed_status.replace("state=active", "state=valid", 1)
+    try:
+        flow.assert_armed_attempt_state(_SlotStatusSession(stale_valid), 1.0)
+    except TimeoutError:
+        pass
+    else:
+        return fail("post-apply lifecycle accepted stale state=valid")
+
+    wrapped_confirmed = (
+        "Slot B: version=0.8.0-alpha.320 state=active health=\r\n"
+        "confirmed [ACTIVE]\n> "
+    )
+    confirmed_session = _SlotStatusSession(wrapped_confirmed)
+    try:
+        flow.assert_slot_state(
+            confirmed_session, 1.0, "health=confirmed [ACTIVE]"
+        )
+    except TimeoutError as exc:
+        return fail(f"slot-state assertion rejected wrapped status: {exc}")
+    if confirmed_session.commands != ["print-boot-slot"]:
+        return fail("slot-state assertion did not request one status snapshot")
+    if not confirmed_session.waits or not confirmed_session.waits[0][2]:
+        return fail("slot-state assertion must tolerate debugcon line wrapping")
+
+    for driver_name in (
+        "smoke_x64_qemu_update_ab.py",
+        "smoke_x64_vmware_update_ab.py",
+    ):
+        driver = (REPO_ROOT / "tools" / "scripts" / driver_name).read_text(
+            encoding="utf-8"
+        )
+        if "assert_armed_attempt_state(" not in driver:
+            return fail(f"{driver_name} does not use the shared lifecycle helper")
+        if '"state=valid"' in driver:
+            return fail(f"{driver_name} still asserts stale state=valid")
 
     # Production manifests must keep refusing plain http; only the lab build,
     # which swaps the trust anchor, accepts it.

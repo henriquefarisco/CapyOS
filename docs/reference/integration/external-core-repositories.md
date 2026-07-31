@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry aligned to CapyOS `0.8.0-alpha.318+20260727`; Etapas 1-7 closed and Etapa 8 active. Current pins and ABI status are authoritative in the compatibility matrix.
+**Status:** migration registry aligned to CapyOS `0.8.0-alpha.320+20260730`; Etapas 1-7 closed and Etapa 8 active (7/16). Current pins and ABI status are authoritative in the compatibility matrix.
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
 a versioned in-tree adapter and an external gate.
@@ -19,7 +19,7 @@ completed in-tree hygiene pass.
 | `CapyLang` | `0.1.12` | language parser, bytecode/IR, VM and host ABI | host-only until Etapa 15 |
 | `CapyAgent` | `0.0.10` | package format, resolver, component index and Ed25519 signer | signer published and CapyOS verifier registered in `alpha.276`; production trust anchor + external KAT remain fail-closed gates |
 | `CapyCodecs` | `0.0.12` | portable image/audio/video codec cores | `capy-codec-image` v2 integrated for Etapas 6-7; audio/video remain later-stage work |
-| `CapyUI` | `2.24.1` | retained widgets, desktop session, window manager and apps | desktop/session worker hardening integrated; compositor/font/input plumbing stays in CapyOS |
+| `CapyUI` | `2.24.2` | retained widgets, desktop session, window manager and apps | supply-chain-only patch over 2.24.1; desktop/session worker hardening integrated; compositor/font/input plumbing stays in CapyOS |
 | `CapyBenchmark` | `0.0.11` | report, replay and baseline core | host-only until Etapas 15-16 |
 | `CapyAI` | `0.2.1` | governed orchestrator, reproducible model and `capy-ai-core` artifact v0 | TaskPlan/file/app/power integration remains ABI-compatible; split leakage is eliminated and the mass risk campaign is release-gated; package is part of the eight-repo workspace aggregate |
 
