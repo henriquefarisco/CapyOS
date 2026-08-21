@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-07-30 (rev. `alpha.320`)
-**Versão atual:** `0.8.0-alpha.320+20260730`
+**Data de referência:** 2026-08-21 (rev. `alpha.321`)
+**Versão atual:** `0.8.0-alpha.321+20260821`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -738,6 +738,14 @@ instalação pela ISO, boot do disco instalado e reboot persistente com
 persistência. O smoke oficial ISO TCG, o update A/B e os gates VMware ainda não
 foram executados e precisam produzir as evidências restantes.
 
+**Corrigido na `alpha.321`:** em VMs sem COM1, a leitura da porta legado
+ausente podia retornar `0xFF`; o instalador tratava esse valor como tecla,
+fixava a UART como fonte e preenchia o prompt com `ÿ`. O loader agora exige um
+probe loopback 16550 valido, rejeita `0x00`/`0xFF`, erros RX e bytes nao-tecla,
+so fixa COM1 apos uma tecla valida e preserva uma janela limitada para EFI
+ConIn. Testes host e um gate QEMU/OVMF sem `isa-serial` cobrem a regressao; o
+aceite de release repete o caminho no VMware oficial.
+
 Como a chave de release é offline-only e nunca entra em runner automatizado, cada
 execução gera um par Ed25519 descartável e compila o kernel com
 `CAPYOS_UPDATE_LAB_TRUST_KEY_HEX`; o mesmo flag pina o catálogo em
@@ -804,7 +812,7 @@ de módulos, independente daquele fix pontual:
 
 - O índice default do first-boot continua sendo um **pin de release explícito em
   C** (`CAPYOS_DEFAULT_MODULES_INDEX_URL` em
-  `src/config/first_boot/modules.c`), agora alinhado à `alpha.320`; o
+  `src/config/first_boot/modules.c`), agora alinhado à `alpha.321`; o
   `version-audit` impede drift entre `VERSION.yaml`, Makefile e runtime. O
   contrato gerado possui exatamente nove entradas HTTPS únicas, com tamanho e
   SHA-256. A publicação dos assets e a verificação remota continuam obrigatórias.
@@ -1161,7 +1169,7 @@ A promoção de "host-provado" → "integrado" só ocorre por **adaptador CapyOS
 pequeno e versionado + gate externo aprovado** na Etapa em que o módulo é aceito
 (§5 da matriz de compatibilidade).
 
-### 20.1 CapyOS (core) — `0.8.0-alpha.320+20260730`
+### 20.1 CapyOS (core) — `0.8.0-alpha.321+20260821`
 
 **Papel:** base do sistema (boot, kernel, drivers, storage, rede/TLS,
 compositor, input, timers, sandbox, package install real, APIs nativas, gates de
@@ -1314,14 +1322,14 @@ CapyUI possuem os adapters de kernel, capability e UI; o pacote publicado é
 - **Entregue em 0.2.1:** split sem leakage e campanha massiva de comando/risco
   promovida a gate de release, sem mudança do artifact v0.
 - **Pendente na Etapa 8:** publicação coordenada no índice imutável
-  `alpha.320` e rerun do gate networked após os nove assets existirem.
+  `alpha.321` e rerun do gate networked após os nove assets existirem.
 
 **Critérios de aceite do módulo:**
 
 - [x] Modelo/pacote reproduzíveis e ABI artifact v0 preservada.
 - [x] Ações passam por grants, confirmação e audit; capabilities ausentes falham
       fechadas.
-- [ ] Índice alpha.320 e seus nove assets publicados e consumidos pelo gate
+- [ ] Índice alpha.321 e seus nove assets publicados e consumidos pelo gate
       networked oficial, com URL, tamanho e SHA-256 validados.
 
 ### 20.7 CapyLang — `0.1.12` (ABI `capy-lang-host` v0, roadmap-blocked)
