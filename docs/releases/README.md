@@ -4,13 +4,20 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.9.0+20260821.md`
+  - Promocao para a versao estavel 0.9.0 com consolidacao da trilha UEFI/GPT x86_64,
+    instalador seguro com selecao explicita e deteccao serial fail-closed,
+    integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7,
+    CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11),
+    e esteira de release autenticada.
+
+## Historico recente
+
 - `capyos-0.8.0-alpha.321+20260821.md`
   - Corrige a entrada fantasma `ÿ` do instalador em VMs sem COM1, valida a
     UART 16550 antes do uso e preserva EFI ConIn. Adiciona regressao QEMU sem
     UART, testes host da politica de entrada e bootstrap reproduzivel para
     Windows/WSL e gates VMware.
-
-## Historico recente
 
 - `capyos-0.8.0-alpha.320+20260730.md`
   - Restaura boot e instalacao UEFI com loader sem red zone, pilha real,
