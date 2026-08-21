@@ -10,6 +10,7 @@ GCC_VERSION="${GCC_VERSION:-13.2.0}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 INSTALL_SMOKE_DEPS=1
 INSTALL_CROSS_TOOLCHAIN=1
+INSTALL_HOST_PACKAGES=1
 ALLOW_ROOT_INSTALL="${ALLOW_ROOT_INSTALL:-0}"
 
 usage() {
@@ -18,6 +19,7 @@ Uso: ./install.sh [opcoes]
 
 Opcoes:
   --skip-cross           instala apenas dependencias de build do host
+  --skip-packages        nao executa apt; valida e prepara apenas a toolchain
   --skip-smoke           nao instala dependencias opcionais de smoke/QEMU
   --prefix DIR           define o prefixo da toolchain cruzada (padrao: $PREFIX)
   --src-dir DIR          define o diretorio de fontes/build da toolchain (padrao: $SRC_DIR)
@@ -33,6 +35,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-cross)
             INSTALL_CROSS_TOOLCHAIN=0
+            ;;
+        --skip-packages)
+            INSTALL_HOST_PACKAGES=0
             ;;
         --skip-smoke)
             INSTALL_SMOKE_DEPS=0
@@ -96,7 +101,11 @@ APT_PACKAGES=(
     gcc-x86-64-linux-gnu
     make
     python3
+    ca-certificates
     curl
+    git
+    openssl
+    xz-utils
     bison
     flex
     texinfo
@@ -119,13 +128,21 @@ log() {
     printf '[info] %s\n' "$*"
 }
 
-ensure_path_export() {
-    if [[ -f "$HOME/.bashrc" ]] && grep -Fqx "$PATH_EXPORT" "$HOME/.bashrc"; then
+ensure_path_export_file() {
+    local profile_path="$1"
+    if [[ -f "$profile_path" ]] && grep -Fqx "$PATH_EXPORT" "$profile_path"; then
         return
     fi
 
-    printf '\n%s\n' "$PATH_EXPORT" >> "$HOME/.bashrc"
-    log "PATH persistido em ~/.bashrc para $PREFIX/bin"
+    printf '\n%s\n' "$PATH_EXPORT" >> "$profile_path"
+    log "PATH persistido em $profile_path para $PREFIX/bin"
+}
+
+ensure_path_export() {
+    # Ubuntu's ~/.bashrc returns before its tail in non-interactive shells.
+    # Keep login shells (`bash -lc`) and interactive shells consistent.
+    ensure_path_export_file "$HOME/.profile"
+    ensure_path_export_file "$HOME/.bashrc"
 }
 
 download_if_missing() {
@@ -245,9 +262,21 @@ verify_tool() {
     fi
 }
 
+verify_ovmf() {
+    python3 -c \
+        'import sys; sys.path.insert(0, sys.argv[1]); from smoke_x64_session import detect_ovmf; code, vars_template = detect_ovmf(None); print(f"[ok] OVMF: {code} + {vars_template}")' \
+        "$PROJECT_ROOT/tools/scripts"
+}
+
 main() {
+    local toolchain64="elf"
+
     log "Projeto detectado em $PROJECT_ROOT"
-    install_packages
+    if [[ "$INSTALL_HOST_PACKAGES" -eq 1 ]]; then
+        install_packages
+    else
+        log "Pulando instalacao de pacotes do host por solicitacao"
+    fi
     ensure_path_export
 
     export PATH="$PREFIX/bin:$PATH"
@@ -256,24 +285,36 @@ main() {
         install_cross_toolchain
     else
         log "Pulando instalacao da toolchain cruzada por solicitacao"
+        toolchain64="host"
     fi
 
     verify_tool python3
+    verify_tool git
+    verify_tool openssl
+    verify_tool gcc
+    verify_tool x86_64-linux-gnu-gcc
+    verify_tool x86_64-linux-gnu-ld
+    verify_tool x86_64-linux-gnu-objcopy
     verify_tool xorriso
     verify_tool grub-mkrescue
     if [[ "$INSTALL_CROSS_TOOLCHAIN" -eq 1 ]]; then
         verify_tool "$TARGET-gcc"
         verify_tool "$TARGET-ld"
         verify_tool "$TARGET-objcopy"
-    else
-        verify_tool x86_64-linux-gnu-gcc
-        verify_tool x86_64-linux-gnu-ld
-        verify_tool x86_64-linux-gnu-objcopy
+    fi
+    if [[ "$INSTALL_SMOKE_DEPS" -eq 1 ]]; then
+        verify_tool qemu-system-x86_64
+        verify_ovmf
     fi
 
     if [[ -f "$PROJECT_ROOT/tools/scripts/check_deps.py" ]]; then
         log "Validando dependencias do projeto"
-        python3 "$PROJECT_ROOT/tools/scripts/check_deps.py"
+        if [[ "$INSTALL_CROSS_TOOLCHAIN" -eq 1 ]]; then
+            python3 "$PROJECT_ROOT/tools/scripts/check_deps.py"
+        else
+            python3 "$PROJECT_ROOT/tools/scripts/check_deps.py" \
+                --allow-fallback-toolchain
+        fi
     fi
 
     cat <<EOF
@@ -281,10 +322,10 @@ main() {
 [ok] Ambiente preparado.
 
 Comandos sugeridos:
-  source ~/.bashrc
-  make check-toolchain
-  make all64
-  make iso-uefi
+  source ~/.profile
+  make check-toolchain TOOLCHAIN64=$toolchain64
+  make all64 TOOLCHAIN64=$toolchain64
+  make iso-uefi TOOLCHAIN64=$toolchain64
 
 EOF
 }

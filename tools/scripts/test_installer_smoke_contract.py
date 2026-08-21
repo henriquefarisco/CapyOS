@@ -25,6 +25,16 @@ from smoke_x64_iso_install import (
     prepare_guard_disk,
     require_safe_disk_path,
 )
+from smoke_x64_qemu_installer_no_uart import (
+    SOURCE_COM1_MARKER,
+    SOURCE_CONIN_MARKER,
+    TARGET_CANCEL_MARKER,
+    TARGET_PROMPT_MARKER,
+    chars_to_sendkey_lines as no_uart_sendkey_lines,
+    installer_input_trace_passes,
+    make_no_uart_qemu_cmd,
+    qtree_proves_no_isa_serial,
+)
 from smoke_x64_session import (
     SmokeSession,
     make_qemu_cmd,
@@ -266,6 +276,90 @@ def main() -> int:
         return 1
     previous_accelerator = os.environ.get("CAPYOS_QEMU_ACCEL")
     try:
+        os.environ["CAPYOS_QEMU_ACCEL"] = "tcg"
+        no_uart_cmd = make_no_uart_qemu_cmd(
+            qemu_bin="qemu-system-x86_64",
+            ovmf_code="OVMF_CODE.fd",
+            ovmf_vars_runtime=Path("OVMF_VARS.fd"),
+            iso_path=Path("installer.iso"),
+            disk_path=target,
+            memory_mb=1024,
+            debugcon_log=Path("no-uart.debugcon.log"),
+            monitor_socket=Path("hmp.sock"),
+        )
+        serial_options = [
+            index for index, value in enumerate(no_uart_cmd) if value == "-serial"
+        ]
+        if len(serial_options) != 1 or no_uart_cmd[serial_options[0] + 1] != "none":
+            print("[FAIL] no-UART QEMU command did not disable serial exactly once")
+            return 1
+        no_uart_text = " ".join(str(part) for part in no_uart_cmd)
+        if "tcp:" in no_uart_text or "once=d,menu=off" not in no_uart_text:
+            print("[FAIL] no-UART smoke retained serial TCP or lost ISO boot")
+            return 1
+        if "unix:hmp.sock,server,nowait" not in no_uart_text:
+            print("[FAIL] no-UART smoke lacks its HMP input channel")
+            return 1
+        if "isa-debugcon.iobase=0xe9" not in no_uart_text:
+            print("[FAIL] no-UART smoke lacks independent debugcon evidence")
+            return 1
+        if "-nic none" not in no_uart_text:
+            print("[FAIL] no-UART smoke retained unrelated network hardware")
+            return 1
+        if "file=installer.iso,media=cdrom,readonly=on" not in no_uart_text:
+            print("[FAIL] no-UART smoke omitted the read-only installer ISO")
+            return 1
+        if no_uart_sendkey_lines("0\n") != ["sendkey 0\n", "sendkey ret\n"]:
+            print("[FAIL] no-UART smoke does not inject exact cancel input")
+            return 1
+        try:
+            no_uart_sendkey_lines("1")
+        except ValueError:
+            pass
+        else:
+            print("[FAIL] no-UART smoke accepted a destructive selection key")
+            return 1
+        valid_qtree = (
+            "info qtree\n"
+            "bus: main-system-bus\n"
+            "  type System\n"
+            "  dev: i8042\n"
+            "    dev: ps2-kbd\n"
+            "(qemu)"
+        )
+        if not qtree_proves_no_isa_serial(valid_qtree):
+            print("[FAIL] no-UART smoke rejected valid serial-free qtree")
+            return 1
+        invalid_qtrees = (
+            "",
+            "unknown command: 'info qtree'\n(qemu)",
+            "bus: main-system-bus\n  type System\n",
+            valid_qtree.replace("dev: i8042", "dev: isa-serial"),
+        )
+        if any(qtree_proves_no_isa_serial(text) for text in invalid_qtrees):
+            print("[FAIL] no-UART smoke accepted inconclusive/serial qtree")
+            return 1
+        valid_trace = (
+            f"boot\n{TARGET_PROMPT_MARKER}\n{SOURCE_CONIN_MARKER}\n"
+            f"{TARGET_CANCEL_MARKER}\n"
+        )
+        if not installer_input_trace_passes(valid_trace):
+            print("[FAIL] no-UART smoke rejected its valid debugcon trace")
+            return 1
+        invalid_traces = (
+            TARGET_PROMPT_MARKER,
+            TARGET_CANCEL_MARKER,
+            f"{TARGET_PROMPT_MARKER}\n{TARGET_CANCEL_MARKER}",
+            f"{TARGET_PROMPT_MARKER}\n{SOURCE_COM1_MARKER}\n"
+            f"{SOURCE_CONIN_MARKER}\n{TARGET_CANCEL_MARKER}",
+            f"{TARGET_PROMPT_MARKER}\n{TARGET_PROMPT_MARKER}\n"
+            f"{SOURCE_CONIN_MARKER}\n{TARGET_CANCEL_MARKER}",
+            f"{TARGET_CANCEL_MARKER}\n{SOURCE_CONIN_MARKER}\n"
+            f"{TARGET_PROMPT_MARKER}",
+        )
+        if any(installer_input_trace_passes(text) for text in invalid_traces):
+            print("[FAIL] no-UART smoke accepted an incomplete/repeated trace")
+            return 1
         os.environ["CAPYOS_QEMU_ACCEL"] = "kvm"
         accelerated = make_qemu_cmd(
             "qemu-system-x86_64", "OVMF_CODE.fd", Path("OVMF_VARS.fd"),

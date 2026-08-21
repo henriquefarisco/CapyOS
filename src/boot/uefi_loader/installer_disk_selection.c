@@ -1,5 +1,12 @@
 #include "internal/uefi_loader_internal.h"
 
+static void installer_input_debugcon_write(const char *text) {
+  if (!text)
+    return;
+  while (*text)
+    dbgcon_putc((UINT8)*text++);
+}
+
 const CHAR16 *installer_language_code(installer_language_t language) {
   switch (language) {
   case INSTALLER_LANG_PT_BR:
@@ -430,9 +437,13 @@ EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
     uefi_installer_serial_write("Select target disk [1-");
     uefi_installer_serial_write_u64((UINT64)eligible_count);
     uefi_installer_serial_write("] or 0 to cancel: ");
+    installer_input_debugcon_write(
+        "\n[installer-input] target-prompt\n");
     uefi_readline(st, selection_in, 16u, FALSE);
     char16_to_ascii(selection_ascii, sizeof(selection_ascii), selection_in);
     if (ascii_streq(selection_ascii, "0")) {
+      installer_input_debugcon_write(
+          "\n[installer-input] target-cancel\n");
       return EFI_ABORTED;
     }
     if (installer_disk_parse_selection(selection_ascii,

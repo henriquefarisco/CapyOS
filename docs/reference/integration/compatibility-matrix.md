@@ -1,9 +1,16 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo; **auditoria atual:** 2026-07-30, CapyOS
-`0.8.0-alpha.320+20260730`, com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
-ABI inalterados. O histórico técnico permanece nos snapshots datados abaixo.
+**Status:** autoritativo; **revisao atual:** 2026-08-21, CapyOS
+`0.8.0-alpha.321+20260821`, com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
+ABI inalterados. A ultima auditoria cross-repo completa permanece no snapshot
+datado da `alpha.320` abaixo.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
+**Atualizacao alpha.321 (2026-08-21):** CapyOS
+`0.8.0-alpha.321+20260821` preserva `capyos-base` v3,
+`capyos-package-apply` v1, handoff interno v10 e todos os pins de repos irmaos.
+A mudanca e local ao loader/instalador: detecta a UART 16550 antes do uso,
+rejeita entrada serial invalida e mantem EFI ConIn funcional em VMs sem COM1.
+Nao ha mudanca de ABI nem de contrato cross-repo.
 **Atualizacao alpha.320 (2026-07-30):** CapyOS
 `0.8.0-alpha.320+20260730` preserva `capyos-base` v3,
 `capyos-package-apply` v1 e handoff interno v10. O pin CapyUI avança de `2.24.1`
@@ -82,7 +89,7 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.320+20260730` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.8.0-alpha.321+20260821` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.0.10` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276), fail-closed ate o trust anchor de producao; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.10` | `0.0.10` |
 | `CapyBrowser` | `0.6.7` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.7` | `0.6.7` |
 | `CapyCodecs` | `0.0.12` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.12` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.12` |
@@ -125,7 +132,7 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | `0.8.0-alpha.320+20260730` (alpha extended) | `v0.<major>.<minor>-alpha.<n>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
+| `CapyOS` | `0.8.0-alpha.321+20260821` (alpha extended) | `v0.<major>.<minor>-alpha.<n>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
 | `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276) e KAT host-validado, fail-closed ate o trust anchor de producao; KAT externo do signer pendente** |
 | `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
@@ -214,7 +221,7 @@ versão correspondente do `VERSION.yaml`.
 
 ## 9. Referência cruzada
 
-- [`compatibility-audit-2026-07-30-alpha320.md`](compatibility-audit-2026-07-30-alpha320.md) (atual; alpha.320 restaura boot/instalacao; Etapa 8 segue aberta)
+- [`compatibility-audit-2026-07-30-alpha320.md`](compatibility-audit-2026-07-30-alpha320.md) (ultima auditoria cross-repo completa; a revisao alpha.321 preserva ABIs e pins)
 - [`compatibility-audit-2026-07-28-alpha319.md`](compatibility-audit-2026-07-28-alpha319.md) (historico; alpha.319 implementou o gate A/B, mas nao foi promovida)
 - [`compatibility-audit-2026-07-27-alpha318.md`](compatibility-audit-2026-07-27-alpha318.md) (histórico; alpha.318 + apply A/B persistente)
 - [`compatibility-audit-2026-07-20-alpha317.md`](compatibility-audit-2026-07-20-alpha317.md) (histórico; alpha.317 + fundação A/B/handoff v9 internos, pins externos inalterados)

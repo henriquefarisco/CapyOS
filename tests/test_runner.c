@@ -7,6 +7,7 @@ int run_grub_cfg_builder_tests(void);
 int run_boot_manifest_tests(void);
 int run_boot_writer_tests(void);
 int run_installer_disk_policy_tests(void);
+int run_installer_input_policy_tests(void);
 int run_first_boot_policy_tests(void);
 int run_csprng_tests(void);
 int run_crypt_vector_tests(void);
@@ -259,6 +260,7 @@ int main(int argc, char **argv) {
 
     if (argc > 1 && tr_arg_eq(argv[1], "installer-disk")) {
         failures += run_installer_disk_policy_tests();
+        failures += run_installer_input_policy_tests();
         printf("\n[installer-disk-selftest] %s (%d falha%s)\n",
                failures == 0 ? "OK" : "FALHOU", failures,
                failures == 1 ? "" : "s");
@@ -319,6 +321,7 @@ int main(int argc, char **argv) {
     failures += run_boot_manifest_tests();
     failures += run_boot_writer_tests();
     failures += run_installer_disk_policy_tests();
+    failures += run_installer_input_policy_tests();
     failures += run_first_boot_policy_tests();
     failures += run_csprng_tests();
     failures += run_crypt_vector_tests();
