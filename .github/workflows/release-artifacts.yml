@@ -242,7 +242,7 @@ jobs:
               echo "Refusing to replace already-published release $TAG"
               exit 1
             fi
-          elif [ -f "$LOOKUP_ERROR" ] && ! grep -Fq 'HTTP 404' "$LOOKUP_ERROR"; then
+          elif [ -s "$LOOKUP_ERROR" ] && ! grep -Fq 'HTTP 404' "$LOOKUP_ERROR"; then
             cat "$LOOKUP_ERROR" >&2
             exit 1
           fi
