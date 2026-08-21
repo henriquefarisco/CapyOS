@@ -30,7 +30,7 @@ def require_contains(text: str, needle: str, label: str) -> None:
 def require_channel_field(version_yaml: str, channel: str, field: str) -> str:
     pattern = (
         rf"^  {re.escape(channel)}:\n"
-        rf"(?P<body>(?:    .*\n)+?)(?=^  [A-Za-z0-9_-]+:|\Z)"
+        rf"(?P<body>(?:    .*\n)+?)(?=^  [A-Za-z0-9_-]+:|^[A-Za-z0-9_-]+:|\Z)"
     )
     match = re.search(pattern, version_yaml, flags=re.MULTILINE)
     if not match:

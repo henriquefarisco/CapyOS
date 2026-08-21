@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-08-21 | **Versao:** `0.8.0-alpha.321+20260821` | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-08-21 | **Versao:** `0.9.0+20260821` (stable) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**

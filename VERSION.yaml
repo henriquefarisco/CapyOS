@@ -1023,11 +1023,14 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.8.1
-    extended: 0.8.1+20260517
+    current: 0.9.0
+    extended: 0.9.0+20260821
     stability: production
-    current_summary: "Release estavel com refresh visual CapyUI, icones/cursores permissivos, melhorias no File Manager e correcao da exclusao recursiva de pastas pela interface grafica."
+    current_summary: "CapyOS 0.9.0 estavel: consolidacao da trilha UEFI/GPT x86_64, suporte robusto a instalacao em VMs sem UART/COM1 com deteccao serial fail-closed, integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7, CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11) e esteira de release autenticada."
     history:
+      - version: 0.9.0+20260821
+        date: 2026-08-21
+        summary: "CapyOS 0.9.0 estavel: consolidacao da trilha UEFI/GPT x86_64, suporte robusto a instalacao em VMs sem UART/COM1 com deteccao serial fail-closed, integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7, CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11) e esteira de release autenticada."
       - version: 0.8.1
         date: 2026-05-17
         summary: "Promocao stable: CapyUI recebe icones de referencia permissiva, cursores e controles de janela/menu refinados; File Manager separa path da toolbar, usa botoes icon-only, evita duplo clique em acoes e apaga pastas via vfs_rmdir_recursive; compositor corrige troca de cursor sem rastro."
@@ -1043,5 +1046,5 @@ modules_index:
   # (enforced by tools/scripts/audit_version_manifest.py). The release workflow
   # publishes this immutable aggregate and verifies all nine payloads before the
   # deployment is accepted.
-  pin: "v0.8.0-alpha.321+20260821"
-  url: "https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.321+20260821/modules-index.txt"
+  pin: "v0.9.0+20260821"
+  url: "https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.0+20260821/modules-index.txt"
