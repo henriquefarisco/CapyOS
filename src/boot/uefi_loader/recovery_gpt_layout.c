@@ -1,6 +1,14 @@
 #include "internal/uefi_loader_internal.h"
 
+#include "boot/installer_input_policy.h"
+
 #define INSTALLER_COM1_BASE 0x3F8u
+#define INSTALLER_COM1_DATA 0u
+#define INSTALLER_COM1_MCR 4u
+#define INSTALLER_COM1_LSR 5u
+#define INSTALLER_COM1_LOOPBACK_BYTE 0xAEu
+#define INSTALLER_COM1_CONIN_GRACE_POLLS 20u
+#define INSTALLER_COM1_CONIN_GRACE_POLL_US 1000u
 
 static EFI_STATUS uefi_block_io_alignment(EFI_BLOCK_IO_PROTOCOL *bio,
                                            UINTN *out_alignment) {
@@ -133,6 +141,7 @@ enum {
 };
 
 static UINT8 g_installer_input_source = INSTALLER_INPUT_UNKNOWN;
+static BOOLEAN g_installer_com1_present = FALSE;
 
 static inline void installer_outb(UINT16 port, UINT8 value) {
   __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -144,8 +153,46 @@ static inline UINT8 installer_inb(UINT16 port) {
   return value;
 }
 
+static void installer_input_debugcon_write(const char *text) {
+  if (!text)
+    return;
+  while (*text)
+    dbgcon_putc((UINT8)*text++);
+}
+
+/* VMware returns 0xFF for an unmapped legacy I/O port.  Probe COM1 before
+ * polling it so an absent UART cannot masquerade as an endless byte stream. */
+static BOOLEAN installer_com1_detect(void) {
+  UINT8 status;
+  UINTN spins = 10000u;
+
+  installer_outb(INSTALLER_COM1_BASE + INSTALLER_COM1_MCR, 0x1Eu);
+  installer_outb(INSTALLER_COM1_BASE + INSTALLER_COM1_DATA,
+                 INSTALLER_COM1_LOOPBACK_BYTE);
+  while (spins-- > 0u) {
+    status = installer_inb(INSTALLER_COM1_BASE + INSTALLER_COM1_LSR);
+    if (status == 0xFFu)
+      break;
+    if ((status & 0x01u) != 0u) {
+      UINT8 received =
+          installer_inb(INSTALLER_COM1_BASE + INSTALLER_COM1_DATA);
+      if (installer_input_serial_probe_valid(
+              status, received, INSTALLER_COM1_LOOPBACK_BYTE)) {
+        installer_outb(INSTALLER_COM1_BASE + INSTALLER_COM1_MCR, 0x0Bu);
+        return TRUE;
+      }
+      break;
+    }
+    __asm__ volatile("pause");
+  }
+
+  installer_outb(INSTALLER_COM1_BASE + INSTALLER_COM1_MCR, 0x0Bu);
+  return FALSE;
+}
+
 void uefi_installer_serial_init(void) {
   g_installer_input_source = INSTALLER_INPUT_UNKNOWN;
+  g_installer_com1_present = FALSE;
   installer_outb(INSTALLER_COM1_BASE + 1u, 0x00u);
   installer_outb(INSTALLER_COM1_BASE + 3u, 0x80u);
   installer_outb(INSTALLER_COM1_BASE + 0u, 0x01u);
@@ -153,14 +200,18 @@ void uefi_installer_serial_init(void) {
   installer_outb(INSTALLER_COM1_BASE + 3u, 0x03u);
   installer_outb(INSTALLER_COM1_BASE + 2u, 0xC7u);
   installer_outb(INSTALLER_COM1_BASE + 4u, 0x0Bu);
+  g_installer_com1_present = installer_com1_detect();
 }
 
 static void installer_serial_putc(char value) {
   UINTN spins = 1000000u;
+  if (!g_installer_com1_present)
+    return;
   while (spins-- > 0u &&
-         (installer_inb(INSTALLER_COM1_BASE + 5u) & 0x20u) == 0u) {
+         (installer_inb(INSTALLER_COM1_BASE + INSTALLER_COM1_LSR) & 0x20u) ==
+             0u) {
   }
-  installer_outb(INSTALLER_COM1_BASE, (UINT8)value);
+  installer_outb(INSTALLER_COM1_BASE + INSTALLER_COM1_DATA, (UINT8)value);
 }
 
 void uefi_installer_serial_write(const char *text) {
@@ -189,16 +240,56 @@ int uefi_installer_read_key(EFI_SYSTEM_TABLE *st, EFI_INPUT_KEY *key) {
       EFI_STATUS status =
           uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2, st->ConIn, key);
       if (!EFI_ERROR(status)) {
+        if (g_installer_input_source == INSTALLER_INPUT_UNKNOWN)
+          installer_input_debugcon_write(
+              "\n[installer-input] source=conin\n");
         g_installer_input_source = INSTALLER_INPUT_CONIN;
         return 0;
       }
     }
-    if (g_installer_input_source != INSTALLER_INPUT_CONIN &&
-        (installer_inb(INSTALLER_COM1_BASE + 5u) & 0x01u) != 0u) {
-      key->ScanCode = 0u;
-      key->UnicodeChar = (CHAR16)installer_inb(INSTALLER_COM1_BASE);
-      g_installer_input_source = INSTALLER_INPUT_COM1;
-      return 0;
+    if (g_installer_com1_present &&
+        g_installer_input_source != INSTALLER_INPUT_CONIN) {
+      UINT8 line_status =
+          installer_inb(INSTALLER_COM1_BASE + INSTALLER_COM1_LSR);
+      if (line_status != 0xFFu && (line_status & 0x01u) != 0u) {
+        if (g_installer_input_source == INSTALLER_INPUT_UNKNOWN) {
+          EFI_STATUS conin_status;
+          UINTN conin_grace_polls = INSTALLER_COM1_CONIN_GRACE_POLLS;
+
+          /* A firmware serial console and the direct UART fallback share the
+           * same FIFO.  Give ConIn a short bounded polling window to claim the
+           * pending key before consuming it directly; otherwise a later byte
+           * can be stranded in the firmware's private queue. */
+          while (conin_grace_polls-- > 0u) {
+            uefi_call_wrapper(st->BootServices->Stall, 1,
+                              INSTALLER_COM1_CONIN_GRACE_POLL_US);
+            conin_status =
+                uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2, st->ConIn, key);
+            if (!EFI_ERROR(conin_status)) {
+              installer_input_debugcon_write(
+                  "\n[installer-input] source=conin\n");
+              g_installer_input_source = INSTALLER_INPUT_CONIN;
+              return 0;
+            }
+          }
+          line_status =
+              installer_inb(INSTALLER_COM1_BASE + INSTALLER_COM1_LSR);
+          if (line_status == 0xFFu || (line_status & 0x01u) == 0u)
+            continue;
+        }
+        UINT8 byte = installer_inb(INSTALLER_COM1_BASE + INSTALLER_COM1_DATA);
+        /* Do not latch COM1 on line noise or non-key bytes.  Once a valid key
+         * selects a source, keeping the existing latch prevents mixed lines. */
+        if (installer_input_serial_key_valid(line_status, byte)) {
+          key->ScanCode = 0u;
+          key->UnicodeChar = (CHAR16)byte;
+          if (g_installer_input_source == INSTALLER_INPUT_UNKNOWN)
+            installer_input_debugcon_write(
+                "\n[installer-input] source=com1\n");
+          g_installer_input_source = INSTALLER_INPUT_COM1;
+          return 0;
+        }
+      }
     }
     uefi_call_wrapper(st->BootServices->Stall, 1, 1000u);
   }

@@ -4,15 +4,18 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
-- `capyos-0.8.0-alpha.320+20260730.md`
-  - Restaura boot e instalacao UEFI com loader sem red zone, pilha real,
-    validacao/copia verificada do ELF e recarga da GDT. Dois ciclos KVM
-    focados (quatro boots), o smoke oficial ISO KVM e o smoke CLI TCG
-    (86,2 s, dois boots com persistencia) passaram; ISO TCG oficial, update A/B,
-    VMware e a verificacao remota do indice de nove modulos seguem pendentes.
-    Coordena CapyUI 2.24.2 como patch supply-chain-only, sem bump das ABIs UI.
+- `capyos-0.8.0-alpha.321+20260821.md`
+  - Corrige a entrada fantasma `ÿ` do instalador em VMs sem COM1, valida a
+    UART 16550 antes do uso e preserva EFI ConIn. Adiciona regressao QEMU sem
+    UART, testes host da politica de entrada e bootstrap reproduzivel para
+    Windows/WSL e gates VMware.
 
 ## Historico recente
+
+- `capyos-0.8.0-alpha.320+20260730.md`
+  - Restaura boot e instalacao UEFI com loader sem red zone, pilha real,
+    validacao/copia verificada do ELF e recarga da GDT. Coordena CapyUI 2.24.2
+    como patch supply-chain-only, sem bump das ABIs UI.
 
 - `capyos-0.8.0-alpha.319+20260728.md`
   - Entregou o gate automatizado do ciclo A/B, mas nao foi promovida: a primeira

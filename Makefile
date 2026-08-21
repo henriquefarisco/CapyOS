@@ -850,13 +850,14 @@ EFI_LOADER_SRCS = \
 	$(SRC_DIR)/boot/uefi_loader/acpi_log_gop.c \
 	$(SRC_DIR)/boot/uefi_loader/efi_main.c
 EFI_LOADER_POLICY_OBJ = $(BUILD)/boot/uefi_loader/installer_disk_policy.o
+EFI_LOADER_INPUT_POLICY_OBJ = $(BUILD)/boot/uefi_loader/installer_input_policy.o
 EFI_LOADER_GPT_IDENTITY_OBJ = $(BUILD)/boot/uefi_loader/gpt_identity.o
 EFI_LOADER_BOOT_SLOT_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_core.o
 EFI_LOADER_BOOT_SLOT_OPS_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_operations_core.o
 EFI_LOADER_BOOT_SLOT_LIFECYCLE_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_lifecycle_core.o
 EFI_LOADER_BOOT_SLOT_STORE_OBJ = $(BUILD)/boot/uefi_loader/boot_slot_store_core.o
 EFI_LOADER_SHA256_OBJ = $(BUILD)/boot/uefi_loader/sha256_core.o
-EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS)) $(EFI_LOADER_POLICY_OBJ) $(EFI_LOADER_GPT_IDENTITY_OBJ) $(EFI_LOADER_BOOT_SLOT_OBJ) $(EFI_LOADER_BOOT_SLOT_OPS_OBJ) $(EFI_LOADER_BOOT_SLOT_LIFECYCLE_OBJ) $(EFI_LOADER_BOOT_SLOT_STORE_OBJ) $(EFI_LOADER_SHA256_OBJ)
+EFI_LOADER_OBJS = $(patsubst $(SRC_DIR)/boot/uefi_loader/%.c,$(BUILD)/boot/uefi_loader/%.o,$(EFI_LOADER_SRCS)) $(EFI_LOADER_POLICY_OBJ) $(EFI_LOADER_INPUT_POLICY_OBJ) $(EFI_LOADER_GPT_IDENTITY_OBJ) $(EFI_LOADER_BOOT_SLOT_OBJ) $(EFI_LOADER_BOOT_SLOT_OPS_OBJ) $(EFI_LOADER_BOOT_SLOT_LIFECYCLE_OBJ) $(EFI_LOADER_BOOT_SLOT_STORE_OBJ) $(EFI_LOADER_SHA256_OBJ)
 UEFI_LOADER_DEPS = $(EFI_LOADER_OBJS:.o=.d)
 
 all: all64
@@ -1785,6 +1786,11 @@ $(EFI_LOADER_POLICY_OBJ): $(SRC_DIR)/boot/installer_disk_policy.c | $(BUILD) $(B
 	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
 	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
+$(EFI_LOADER_INPUT_POLICY_OBJ): $(SRC_DIR)/boot/installer_input_policy.c | $(BUILD) $(BUILD)/boot
+	@mkdir -p $(dir $@)
+	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
+	$(EFI_CC) $(EFI_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
 $(EFI_LOADER_GPT_IDENTITY_OBJ): $(SRC_DIR)/boot/gpt_identity.c | $(BUILD) $(BUILD)/boot
 	@mkdir -p $(dir $@)
 	@if [ ! -f "$(EFI_INCLUDE_DIR)/efi.h" ]; then echo "gnu-efi headers ausentes. Instale gnu-efi ou defina EFI_PREFIX=/caminho/gnu-efi."; exit 1; fi
@@ -2376,6 +2382,7 @@ TEST_SRCS   := \
                \
                tests/boot/test_boot_manifest.c tests/boot/test_boot_writer.c \
                tests/boot/test_installer_disk_policy.c src/boot/installer_disk_policy.c \
+               tests/boot/test_installer_input_policy.c src/boot/installer_input_policy.c \
                tests/boot/test_grub_cfg_builder.c tests/boot/test_gen_boot_config.c \
                tests/config/test_first_boot_policy.c src/config/first_boot/policy.c \
                tests/boot/test_efi_block.c src/drivers/storage/efi_block.c \
@@ -2785,6 +2792,20 @@ installer-disk-selftest: $(INSTALLER_DISK_TEST_BIN)
 	$(INSTALLER_DISK_TEST_BIN)
 	python3 tools/scripts/test_installer_smoke_contract.py
 	python3 tools/scripts/verify_official_boot_config.py --self-test
+
+INSTALLER_INPUT_TEST_BIN := $(BUILD)/tests/installer_input_policy
+
+$(INSTALLER_INPUT_TEST_BIN): tests/boot/test_installer_input_policy.c \
+		src/boot/installer_input_policy.c include/boot/installer_input_policy.h | $(BUILD)
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -DINSTALLER_INPUT_STANDALONE -o $@ \
+		tests/boot/test_installer_input_policy.c src/boot/installer_input_policy.c
+
+.PHONY: installer-input-selftest
+installer-input-selftest: $(INSTALLER_INPUT_TEST_BIN)
+	@echo "Executando regressao focada da entrada serial do instalador..."
+	$(INSTALLER_INPUT_TEST_BIN)
+	python3 tools/scripts/test_installer_smoke_contract.py
 
 .PHONY: security-selftest
 # Focused security regression: untrusted-input parsers + crypto + package
@@ -3951,7 +3972,13 @@ smoke-x64-preemptive-all:
 	$(MAKE) smoke-x64-preemptive-user-2task
 	@echo "[ok] Suite preemptiva completa passou."
 
-smoke-x64-iso: all64 iso-uefi manifest64
+.PHONY: smoke-x64-qemu-installer-no-uart
+smoke-x64-qemu-installer-no-uart: all64 iso-uefi manifest64
+	@echo "Executando regressao QEMU/UEFI do instalador sem UART..."
+	python3 tools/scripts/smoke_x64_qemu_installer_no_uart.py \
+		$(SMOKE_X64_QEMU_INSTALLER_NO_UART_ARGS)
+
+smoke-x64-iso: smoke-x64-qemu-installer-no-uart
 	@echo "Executando smoke test da ISO oficial (instalacao + reboot + persistencia)..."
 	python3 tools/scripts/smoke_x64_iso_install.py $(SMOKE_X64_ISO_ARGS)
 
@@ -4040,7 +4067,7 @@ smoke-x64-vmware-update-ab:
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.320+20260730/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.321+20260821/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
@@ -4055,7 +4082,7 @@ inspect-disk:
 	@if [ -z "$(IMG)" ]; then echo "Usage: make inspect-disk IMG=build/disk-gpt.img"; exit 2; fi
 	python3 tools/scripts/inspect_disk.py "$(IMG)"
 
-$(TEST_BIN): $(TEST_SRCS) include/boot/gpt_types.h include/boot/gpt_identity.h include/boot/boot_slot.h include/boot/boot_slot_store.h include/boot/boot_slot_block_provider.h include/arch/x86_64/storage_boot_provider_policy.h include/fs/block.h include/drivers/storage/ata_status.h include/drivers/nvme/nvme_commands.h src/boot/internal/boot_slot_internal.h | $(BUILD)
+$(TEST_BIN): $(TEST_SRCS) include/boot/installer_input_policy.h include/boot/gpt_types.h include/boot/gpt_identity.h include/boot/boot_slot.h include/boot/boot_slot_store.h include/boot/boot_slot_block_provider.h include/arch/x86_64/storage_boot_provider_policy.h include/fs/block.h include/drivers/storage/ata_status.h include/drivers/nvme/nvme_commands.h src/boot/internal/boot_slot_internal.h | $(BUILD)
 	@mkdir -p $(BUILD)/tests
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $(TEST_SRCS)
 
@@ -4072,6 +4099,6 @@ clean:
 		find "$(BUILD)" -mindepth 1 -maxdepth 1 ! -path "$(ISO_IMG_EFI)" -exec rm -rf {} +; \
 		rmdir "$(BUILD)" 2>/dev/null || true; \
 	fi
-.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-capyai smoke-x64-qemu-capyai-gui-async smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
+.PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-capyai smoke-x64-qemu-capyai-gui-async smoke-x64-qemu-installer-no-uart smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)
