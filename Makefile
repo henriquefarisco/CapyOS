@@ -2686,7 +2686,7 @@ $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ disk
 
-test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety
+test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety test-release-promotion-contract
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
@@ -2702,6 +2702,15 @@ test-modules-index-assets:
 test-smoke-path-safety:
 	@echo "Validando os limites destrutivos dos discos de smoke..."
 	python3 -m unittest tools.scripts.test_smoke_x64_iso_install_paths
+
+.PHONY: test-release-promotion-contract
+test-release-promotion-contract:
+	@echo "Validando o inventario assinado exigido para promocao de release..."
+	python3 -m unittest \
+		tools.scripts.test_verify_release_promotion_bundle \
+		tools.scripts.test_verify_release_repository_policy \
+		tools.scripts.test_release_workflow_contract \
+		tools.scripts.test_release_manifest_expectations
 
 TEST_CAPYAI_BIN := $(BUILD)/tests/test_capyai_standalone
 TEST_CAPYAI_POLICY_BIN := $(BUILD)/tests/test_capyai_policy

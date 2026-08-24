@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-channel")
     parser.add_argument("--expected-branch")
     parser.add_argument("--expected-source")
+    parser.add_argument("--expected-published-at")
     parser.add_argument("--expected-payload-url")
     parser.add_argument(
         "--allow-lab-http-payload-url",
@@ -179,6 +180,7 @@ def main() -> int:
         require_expected(fields, "channel", args.expected_channel)
         require_expected(fields, "branch", args.expected_branch)
         require_expected(fields, "source", args.expected_source)
+        require_expected(fields, "published_at", args.expected_published_at)
         require_expected(fields, "payload_url", args.expected_payload_url)
         if args.payload:
             actual_size, actual_sha256 = payload_metadata(args.payload)

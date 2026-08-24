@@ -9,7 +9,8 @@ Indice das release notes mantidas no repositorio.
     instalador seguro com selecao explicita e deteccao serial fail-closed,
     integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7,
     CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11),
-    e esteira de release autenticada.
+    e publicacao com integridade SHA-256. A promocao Ed25519 e o ciclo A/B de
+    producao permanecem pendentes na Etapa 8.
 
 ## Historico recente
 

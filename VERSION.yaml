@@ -1026,11 +1026,11 @@ channels:
     current: 0.9.0
     extended: 0.9.0+20260821
     stability: production
-    current_summary: "CapyOS 0.9.0 estavel: consolidacao da trilha UEFI/GPT x86_64, suporte robusto a instalacao em VMs sem UART/COM1 com deteccao serial fail-closed, integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7, CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11) e esteira de release autenticada."
+    current_summary: "CapyOS 0.9.0 estavel: consolidacao da trilha UEFI/GPT x86_64, suporte robusto a instalacao em VMs sem UART/COM1 com deteccao serial fail-closed, integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7, CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11) e publicacao com integridade SHA-256; promocao Ed25519 permanece pendente."
     history:
       - version: 0.9.0+20260821
         date: 2026-08-21
-        summary: "CapyOS 0.9.0 estavel: consolidacao da trilha UEFI/GPT x86_64, suporte robusto a instalacao em VMs sem UART/COM1 com deteccao serial fail-closed, integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7, CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11) e esteira de release autenticada."
+        summary: "CapyOS 0.9.0 estavel: consolidacao da trilha UEFI/GPT x86_64, suporte robusto a instalacao em VMs sem UART/COM1 com deteccao serial fail-closed, integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7, CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11) e publicacao com integridade SHA-256; promocao Ed25519 permanece pendente."
       - version: 0.8.1
         date: 2026-05-17
         summary: "Promocao stable: CapyUI recebe icones de referencia permissiva, cursores e controles de janela/menu refinados; File Manager separa path da toolbar, usa botoes icon-only, evita duplo clique em acoes e apaga pastas via vfs_rmdir_recursive; compositor corrige troca de cursor sem rastro."

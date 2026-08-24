@@ -49,9 +49,46 @@ criptográfica completa continua nos gates públicos:
 - `verify-release-publication-manifest`
 - `release-publication-gate`
 
-## Gate de tag
+O `RELEASE_PUBLIC_KEY_SHA256` passado aos alvos locais não é a autoridade da
+promoção GitHub. O promoter obtém o fingerprint exclusivamente de
+`.github/release-policy/release-checksum-ed25519.sha256` no commit da própria
+tag; não existe fallback para uma variável mutável do repositório.
 
-Na esteira real de tag, `release-ci-tag-gate` executa este contrato entre o preflight público de CI e o gate público agregado de publicação.
+## Gate de tag e promoção GitHub
+
+`release-ci-tag-gate` continua disponível para handoffs F2/CI privada que
+possuam evidência VMware. O workflow público da tag não executa esse contrato:
+ele não recebe chaves nem material offline e termina num draft. Depois que os
+cinco materiais assinados são anexados, **Promote Signed Release** executa o
+inventário exato, `release-publication-gate`, validação do `latest.ini` e dos
+módulos no draft autenticado. Com releases imutáveis habilitadas, publica e
+marca Latest numa única mutação e repete os mesmos gates pelas URLs públicas da
+tag. Antes da mutação, o pin versionado deve existir como uma única linha
+`hex64` minúscula + LF e corresponder à chave de checksums publicada; pin
+ausente, placeholder ou chave do update-agent falha fechado. A configuração
+remota é comprovada pelo secret `CAPYOS_RELEASE_POLICY_AUDIT_TOKEN`: PAT/App
+fine-grained de curta duração, limitado ao repositório e com
+**Administration: write**. Esse privilégio elevado é necessário para a API
+expor `bypass_actors`, embora o workflow use o token somente em `GET` de
+`immutable-releases` e dos dois rulesets; resposta sem o campo falha fechado e
+a credencial deve ser revogada ou rotacionada após a janela. O ruleset de tag
+sem bypass indicado por `CAPYOS_RELEASE_TAG_RULESET_ID` impede update/deletion
+exatamente em `refs/tags/v*`. O ruleset de branch sem bypass indicado por
+`CAPYOS_RELEASE_MAIN_RULESET_ID` cobre exatamente `refs/heads/main`, impede
+deletion/non-fast-forward e exige pull request com ao menos uma aprovação,
+descarte de reviews obsoletos após push e aprovação do último push. Immutable
+releases também precisa estar habilitado; as três políticas são avaliadas por
+`tools/scripts/verify_release_repository_policy.py`. O `GITHUB_TOKEN` permanece
+responsável apenas pela release. Uma retomada após a mutação apenas revalida a
+publicação imutável com o pin histórico da tag.
+
+Builder e promoter usam o lock global `release-publication`, mas ações manuais
+não participam desse lock. Do último upload até a conclusão terminal da
+promoção, ninguém pode alterar assets, a tag, `main`, immutable releases ou
+qualquer dos dois rulesets. O promoter reconsulta as três políticas no mesmo
+passo, imediatamente antes do único `PATCH`. O ruleset de `main` prova a
+proteção corrente; não prova que o commit da tag passou historicamente por
+PR/review.
 
 ```bash
 make release-ci-tag-gate \

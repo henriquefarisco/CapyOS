@@ -8,8 +8,10 @@ datado da `alpha.320` abaixo.
 **Atualizacao 0.9.0 (2026-08-21):** CapyOS
 `0.9.0+20260821` promove o canal para stable mantendo `capyos-base` v3,
 `capyos-package-apply` v1, handoff interno v10 e todos os pins de repos irmaos.
-A mudanca consolida a trilha UEFI/GPT x86_64 com instalador seguro em VMs sem COM1,
-deteccao serial fail-closed e esteira de release autenticada.
+A mudanca consolida a trilha UEFI/GPT x86_64 com instalador seguro em VMs sem
+COM1, deteccao serial fail-closed e publicacao com integridade SHA-256. Os
+materiais Ed25519 e o `latest.ini` de produção permanecem pendentes; a Etapa 8
+continua ativa.
 Nao ha mudanca de ABI nem de contrato cross-repo.
 **Atualizacao alpha.320 (2026-07-30):** CapyOS
 `0.8.0-alpha.320+20260730` preserva `capyos-base` v3,
