@@ -29,6 +29,12 @@ um `latest.ini` assinado pela chave pinada e validado contra o `capyos64.bin` da
 mesma tag. A release 0.9.0 publicada em 2026-08-21 não contém esse asset e não é
 uma fonte de update stable; a ausência deve falhar fechado.
 
+`0.9.1+20260825` reprovisiona a âncora de produção por nova instalação oficial.
+As alphas 313/314 publicaram catálogos assinados pelo pin anterior, mas a chave
+privada necessária para uma release-ponte não estava disponível. Portanto, uma
+instalação que ainda confia no pin anterior deve instalar a ISO oficial 0.9.1;
+ela não deve aceitar o novo catálogo por um bypass de assinatura.
+
 ## Fluxo seguro
 
 1. `update-fetch` chama `update_agent_fetch_remote_manifest()`.

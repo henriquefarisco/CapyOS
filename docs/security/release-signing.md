@@ -64,8 +64,18 @@ O manifesto `latest.ini` usa uma chave dedicada, distinta do fluxo histórico de
 assinatura dos checksums. A chave pública raw Ed25519 pinada no runtime é:
 
 ```text
-be230bddb4144dfbcfbf0f24495ed2c8c9acf3866fb48633f4d29e49de69ae6d
+9a98d2011ba954a3975c9f628e2f9255df87f1f429c9665d51ac6aaf91f474e0
 ```
+
+Este pin foi provisionado em `0.9.1+20260825` como recuperação autenticada por
+nova instalação oficial. O pin anterior
+`be230bddb4144dfbcfbf0f24495ed2c8c9acf3866fb48633f4d29e49de69ae6d`
+assinou os catálogos públicos `alpha.313` e `alpha.314`, mas a chave privada não
+estava disponível para produzir uma release-ponte. Por isso, instalações que
+confiam no pin anterior não aceitam catálogos assinados pelo novo pin e devem
+ser reinstaladas a partir da ISO oficial `0.9.1+20260825` ou posterior. Essa é
+a recuperação fora do updater prevista na política de rotação abaixo; não deve
+ser descrita como rotação transparente.
 
 `tools/scripts/build_update_manifest.py` extrai somente a parte pública da chave
 privada fornecida pelo operador e recusa assinar quando ela não corresponde a
