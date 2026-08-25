@@ -67,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-public-key-sha256", default=os.environ.get("RELEASE_PUBLIC_KEY_SHA256") or os.environ.get("CAPYOS_RELEASE_PUBLIC_KEY_SHA256"))
     parser.add_argument("--public-key-manifest", type=Path, default=os.environ.get("RELEASE_PUBLIC_KEY_MANIFEST") or os.environ.get("CAPYOS_RELEASE_PUBLIC_KEY_MANIFEST") or "build/release-public-key.manifest")
     parser.add_argument("--publication-manifest", type=Path, default=Path("build/release-publication.manifest"))
+    parser.add_argument("--expected-release-id")
     parser.add_argument("--openssl", default=os.environ.get("OPENSSL", "openssl"))
     return parser.parse_args()
 
@@ -149,6 +150,8 @@ def main() -> int:
     ]
     if materials_root is not None:
         publication_command.extend(["--materials-root", str(materials_root)])
+    if args.expected_release_id is not None:
+        publication_command.extend(["--expected-release-id", args.expected_release_id])
     stages.append(("manifesto publico de publicacao", publication_command))
     for name, command in stages:
         rc = run_stage(name, command)

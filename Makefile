@@ -2168,7 +2168,7 @@ release-ci-official-provisioning-contract:
 
 .PHONY: release-ci-tag-gate
 release-ci-tag-gate:
-	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=0.8.0-alpha.N+YYYYMMDD ou v0.8.0-alpha.N+YYYYMMDD"; exit 2; fi
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "[err] informe RELEASE_TAG=<versao+data> ou v<versao+data>"; exit 2; fi
 	@if [ -z "$(RELEASE_PUBLIC_KEY)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY=/caminho/publico/ed25519.pub.pem"; exit 2; fi
 	@if [ -z "$(RELEASE_PUBLIC_KEY_SHA256)" ]; then echo "[err] informe RELEASE_PUBLIC_KEY_SHA256=<fingerprint esperado>"; exit 2; fi
 	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS=..."; exit 2; fi
@@ -2686,7 +2686,7 @@ $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ disk
 
-test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety
+test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety test-release-promotion-contract test-vmware-installer-no-uart-contract
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
@@ -2702,6 +2702,21 @@ test-modules-index-assets:
 test-smoke-path-safety:
 	@echo "Validando os limites destrutivos dos discos de smoke..."
 	python3 -m unittest tools.scripts.test_smoke_x64_iso_install_paths
+
+.PHONY: test-vmware-installer-no-uart-contract
+test-vmware-installer-no-uart-contract:
+	@echo "Validando o gate VMware do instalador sem UART..."
+	python3 tools/scripts/test_vmware_installer_no_uart_contract.py
+
+.PHONY: test-release-promotion-contract
+test-release-promotion-contract:
+	@echo "Validando o inventario assinado exigido para promocao de release..."
+	python3 -m unittest \
+		tools.scripts.test_verify_release_promotion_bundle \
+		tools.scripts.test_verify_release_repository_policy \
+		tools.scripts.test_release_workflow_contract \
+		tools.scripts.test_release_manifest_expectations \
+		tools.scripts.test_release_ci_tag_gate_contract
 
 TEST_CAPYAI_BIN := $(BUILD)/tests/test_capyai_standalone
 TEST_CAPYAI_POLICY_BIN := $(BUILD)/tests/test_capyai_policy
@@ -2806,6 +2821,7 @@ installer-input-selftest: $(INSTALLER_INPUT_TEST_BIN)
 	@echo "Executando regressao focada da entrada serial do instalador..."
 	$(INSTALLER_INPUT_TEST_BIN)
 	python3 tools/scripts/test_installer_smoke_contract.py
+	python3 tools/scripts/test_vmware_installer_no_uart_contract.py
 
 .PHONY: security-selftest
 # Focused security regression: untrusted-input parsers + crypto + package
@@ -3978,6 +3994,24 @@ smoke-x64-qemu-installer-no-uart: all64 iso-uefi manifest64
 	python3 tools/scripts/smoke_x64_qemu_installer_no_uart.py \
 		$(SMOKE_X64_QEMU_INSTALLER_NO_UART_ARGS)
 
+.PHONY: smoke-x64-vmware-installer-no-uart
+smoke-x64-vmware-installer-no-uart: all64 iso-uefi manifest64
+	@echo "Executando regressao VMware/UEFI do instalador sem UART..."
+	@ISO_PATH="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
+	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer_no_uart.py)"; \
+	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
+	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" \
+		$(SMOKE_X64_VMWARE_INSTALLER_NO_UART_ARGS)
+
+.PHONY: smoke-x64-vmware-installer-no-uart-existing-iso
+smoke-x64-vmware-installer-no-uart-existing-iso:
+	@if [ -z "$(EXISTING_ISO)" ] || [ ! -f "$(EXISTING_ISO)" ]; then echo "[err] informe EXISTING_ISO=<ISO existente>"; exit 2; fi
+	@echo "Executando regressao VMware/UEFI sem UART no ISO exato existente..."
+	@SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer_no_uart.py)"; \
+	ISO_WIN="$$(wslpath -w "$(EXISTING_ISO)")"; \
+	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" \
+		$(SMOKE_X64_VMWARE_INSTALLER_NO_UART_ARGS)
+
 smoke-x64-iso: smoke-x64-qemu-installer-no-uart
 	@echo "Executando smoke test da ISO oficial (instalacao + reboot + persistencia)..."
 	python3 tools/scripts/smoke_x64_iso_install.py $(SMOKE_X64_ISO_ARGS)
@@ -3988,6 +4022,14 @@ smoke-x64-vmware-installer-wizard: all64 iso-uefi manifest64
 	@ISO_PATH="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
 	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer.py)"; \
 	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
+	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" $(SMOKE_X64_VMWARE_INSTALLER_ARGS)
+
+.PHONY: smoke-x64-vmware-installer-wizard-existing-iso
+smoke-x64-vmware-installer-wizard-existing-iso:
+	@if [ -z "$(EXISTING_ISO)" ] || [ ! -f "$(EXISTING_ISO)" ]; then echo "[err] informe EXISTING_ISO=<ISO existente>"; exit 2; fi
+	@echo "Executando gate VMware do installer wizard no ISO exato existente..."
+	@SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer.py)"; \
+	ISO_WIN="$$(wslpath -w "$(EXISTING_ISO)")"; \
 	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" $(SMOKE_X64_VMWARE_INSTALLER_ARGS)
 
 .PHONY: smoke-x64-qemu-installer-wizard
@@ -4067,7 +4109,7 @@ smoke-x64-vmware-update-ab:
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.0+20260821/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.1+20260825/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)

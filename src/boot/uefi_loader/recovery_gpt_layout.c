@@ -233,6 +233,31 @@ void uefi_installer_serial_write_u64(UINT64 value) {
   while (length > 0u) installer_serial_putc(buffer[--length]);
 }
 
+static void installer_serial_write_hex64(UINT64 value) {
+  static const char digits[] = "0123456789abcdef";
+  char text[17];
+  for (UINTN i = 0; i < 16u; ++i) {
+    UINTN shift = (15u - i) * 4u;
+    text[i] = digits[(UINTN)((value >> shift) & 0x0fu)];
+  }
+  text[16] = '\0';
+  uefi_installer_serial_write(text);
+}
+
+void uefi_installer_serial_write_disk_marker(const char *kind, UINT64 index,
+                                             UINT64 path_id, UINT64 size_mib) {
+  if (!kind || !*kind) return;
+  uefi_installer_serial_write("[installer] ");
+  uefi_installer_serial_write(kind);
+  uefi_installer_serial_write("-index=");
+  uefi_installer_serial_write_u64(index);
+  uefi_installer_serial_write(" pathid=");
+  installer_serial_write_hex64(path_id);
+  uefi_installer_serial_write(" size-mib=");
+  uefi_installer_serial_write_u64(size_mib);
+  uefi_installer_serial_write("\r\n");
+}
+
 int uefi_installer_read_key(EFI_SYSTEM_TABLE *st, EFI_INPUT_KEY *key) {
   if (!st || !st->ConIn || !key) return -1;
   for (;;) {

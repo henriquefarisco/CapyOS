@@ -298,6 +298,8 @@ void disable_uefi_watchdog(EFI_SYSTEM_TABLE *st);
 void uefi_installer_serial_init(void);
 void uefi_installer_serial_write(const char *text);
 void uefi_installer_serial_write_u64(UINT64 value);
+void uefi_installer_serial_write_disk_marker(const char *kind, UINT64 index,
+                                             UINT64 path_id, UINT64 size_mib);
 int uefi_installer_read_key(EFI_SYSTEM_TABLE *st, EFI_INPUT_KEY *key);
 UINTN uefi_readline(EFI_SYSTEM_TABLE *st, CHAR16 *buf, UINTN maxlen,
                     BOOLEAN hidden);

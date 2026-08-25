@@ -22,6 +22,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -41,14 +45,17 @@ jobs:
       - name: Resolve and verify release tag
         id: release
         shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         run: |
+          set -euo pipefail
           VERSION="$(sed -n 's/^#define CAPYOS_VERSION_FULL[[:space:]]*"\([^"]*\)"/\1/p' include/core/version.h)"
           if [ -z "$VERSION" ]; then
             echo "Unable to resolve CAPYOS_VERSION_FULL"
             exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.release_tag }}"
+            TAG="$RELEASE_TAG_INPUT"
           else
             TAG="$GITHUB_REF_NAME"
           fi
@@ -225,24 +232,39 @@ jobs:
             build/CapyOS-Installer-UEFI.last-built.txt
             build/update/latest.unsigned.ini
           if-no-files-found: error
+          retention-days: 14
 
       - name: Refuse to mutate an already-published release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.release.outputs.tag }}"
+          TAG="$RELEASE_TAG"
           LOOKUP_ERROR="build/release-lookup.err"
-          if EXISTING_DRAFT="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/releases" \
-            --jq ".[] | select(.tag_name == \"${TAG}\") | .draft" 2>"$LOOKUP_ERROR")" && [ -n "$EXISTING_DRAFT" ]; then
+          if gh release view "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
+            > build/release-existing.json 2>"$LOOKUP_ERROR"; then
+            EXISTING_DRAFT="$(jq -r '.isDraft' build/release-existing.json)"
             if [ "$EXISTING_DRAFT" != "true" ]; then
               echo "Refusing to replace already-published release $TAG"
               exit 1
             fi
-          elif [ -s "$LOOKUP_ERROR" ] && ! grep -Fq 'HTTP 404' "$LOOKUP_ERROR"; then
+            if jq -e 'any(.assets[]; .name == "latest.ini" or .name == "release-artifacts.sha256.sig" or .name == "release-ed25519.pub.pem" or .name == "release-public-key.manifest" or .name == "release-publication.manifest")' \
+              build/release-existing.json >/dev/null; then
+              echo "Refusing to replace payloads after offline signed materials were attached"
+              exit 1
+            else
+              JQ_STATUS=$?
+              if [ "$JQ_STATUS" -ne 1 ]; then
+                echo "Unable to inspect the existing draft asset inventory"
+                exit 1
+              fi
+            fi
+          elif ! grep -Fxq 'release not found' "$LOOKUP_ERROR"; then
             cat "$LOOKUP_ERROR" >&2
             exit 1
           fi
@@ -264,14 +286,17 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_STAGE_DIR: ${{ steps.release_stage.outputs.stage_dir }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.release.outputs.tag }}"
-          STAGE_DIR="${{ steps.release_stage.outputs.stage_dir }}"
+          TAG="$RELEASE_TAG"
+          STAGE_DIR="$RELEASE_STAGE_DIR"
           DRAFT_DIR="build/release-draft-download"
 
-          DRAFT_STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/releases" \
-            --jq ".[] | select(.tag_name == \"${TAG}\") | .draft")"
+          DRAFT_STATUS="$(gh release view "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft --jq '.isDraft')"
           if [ "$DRAFT_STATUS" != "true" ]; then
             echo "Release is not an unpublished draft"
             exit 1
@@ -320,91 +345,15 @@ jobs:
             --backoff-seconds 1 \
             --timeout 45
 
-      - name: Promote the verified draft to latest
+      - name: Record the offline signing boundary
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          TAG="${{ steps.release.outputs.tag }}"
-          RELEASE_ID="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/releases" \
-            --jq ".[] | select(.tag_name == \"${TAG}\") | .id")"
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-            -F draft=false \
-            -F prerelease=false \
-            -f make_latest=true > build/release-promoted.json
-          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-            --jq '.draft')" != "false" ]; then
-            echo "Release remained a draft after promotion"
-            exit 1
-          fi
-
-      - name: Verify public latest release and all nine module payloads
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.release.outputs.tag }}"
-          STAGE_DIR="${{ steps.release_stage.outputs.stage_dir }}"
-          PUBLIC_DIR="build/release-public-download"
-          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          rm -rf "$PUBLIC_DIR"
-          mkdir -p "$PUBLIC_DIR"
-
-          latest_verified=false
-          for attempt in 1 2 3 4 5; do
-            LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
-              --jq '.tag_name' 2>/dev/null || true)"
-            if [ "$LATEST_TAG" = "$TAG" ]; then
-              latest_verified=true
-              break
-            fi
-            if [ "$attempt" -lt 5 ]; then
-              sleep "$((attempt * 2))"
-            fi
-          done
-          if [ "$latest_verified" != true ]; then
-            echo "Latest release did not converge to $TAG"
-            exit 1
-          fi
-
-          while IFS= read -r asset; do
-            downloaded=false
-            for attempt in 1 2 3 4 5; do
-              rm -f "$PUBLIC_DIR/$asset.partial"
-              if curl --fail --location --silent --show-error \
-                --connect-timeout 10 --max-time 90 \
-                --output "$PUBLIC_DIR/$asset.partial" \
-                "$BASE_URL/$asset"; then
-                mv "$PUBLIC_DIR/$asset.partial" "$PUBLIC_DIR/$asset"
-                downloaded=true
-                break
-              fi
-              if [ "$attempt" -lt 5 ]; then
-                sleep "$((attempt * 2))"
-              fi
-            done
-            if [ "$downloaded" != true ]; then
-              echo "Public asset unavailable after bounded retries: $asset"
-              exit 1
-            fi
-            cmp --silent "$STAGE_DIR/$asset" "$PUBLIC_DIR/$asset"
-          done < build/release-stage-assets.txt
-
-          (
-            cd "$PUBLIC_DIR"
-            sha256sum -c modules.sha256
-            sha256sum -c release-artifacts.sha256
-          )
-          python3 tools/scripts/verify_modules_index_assets.py \
-            --index "$PUBLIC_DIR/modules-index.txt" \
-            --release-tag "$TAG" \
-            --attempts 5 \
-            --backoff-seconds 1 \
-            --timeout 45 \
-            --retry-404
+          {
+            echo "### Draft verified; offline signatures required"
+            echo ""
+            echo "The GitHub Release remains an unpublished draft by design."
+            echo "Upload the signed checksum, approved release public key, public manifests,"
+            echo "and signed latest.ini, then run the Promote Signed Release workflow."
+            echo "No tag workflow is allowed to mark an unsigned draft as Latest."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,15 +1,23 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo; **revisao atual:** 2026-08-21, CapyOS
-`0.9.0+20260821` (stable), com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
+**Status:** autoritativo; **revisao atual:** 2026-08-25, CapyOS
+`0.9.1+20260825` (stable candidate), com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
 ABI inalterados. A ultima auditoria cross-repo completa permanece no snapshot
 datado da `alpha.320` abaixo.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
+**Atualizacao 0.9.1 (2026-08-25):** CapyOS
+`0.9.1+20260825` preserva `capyos-base` v3, `capyos-package-apply` v1,
+handoff interno v10 e todos os pins de repositorios irmaos. O patch automatiza
+o gate VMware do instalador sem UART/COM1, endurece o wizard multi-disco e a
+promocao assinada/imutavel; nao altera ABI nem contrato cross-repo. O estado e
+de candidato ate os gates do mesmo artefato e a publicacao aceitarem.
 **Atualizacao 0.9.0 (2026-08-21):** CapyOS
 `0.9.0+20260821` promove o canal para stable mantendo `capyos-base` v3,
 `capyos-package-apply` v1, handoff interno v10 e todos os pins de repos irmaos.
-A mudanca consolida a trilha UEFI/GPT x86_64 com instalador seguro em VMs sem COM1,
-deteccao serial fail-closed e esteira de release autenticada.
+A mudanca consolida a trilha UEFI/GPT x86_64 com instalador seguro em VMs sem
+COM1, deteccao serial fail-closed e publicacao com integridade SHA-256. Os
+materiais Ed25519 e o `latest.ini` de produção permanecem pendentes; a Etapa 8
+continua ativa.
 Nao ha mudanca de ABI nem de contrato cross-repo.
 **Atualizacao alpha.320 (2026-07-30):** CapyOS
 `0.8.0-alpha.320+20260730` preserva `capyos-base` v3,
@@ -89,7 +97,7 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.9.0+20260821` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.9.1+20260825` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.0.10` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276), fail-closed ate o trust anchor de producao; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.10` | `0.0.10` |
 | `CapyBrowser` | `0.6.7` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.7` | `0.6.7` |
 | `CapyCodecs` | `0.0.12` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.12` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.12` |
@@ -132,7 +140,7 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | `0.9.0+20260821` (stable extended) | `v0.<major>.<minor>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
+| `CapyOS` | `0.9.1+20260825` (stable extended) | `v<major>.<minor>.<patch>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
 | `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276) e KAT host-validado, fail-closed ate o trust anchor de producao; KAT externo do signer pendente** |
 | `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |

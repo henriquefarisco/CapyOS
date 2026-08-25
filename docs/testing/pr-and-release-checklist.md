@@ -42,6 +42,11 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
       `make smoke-marker-policy-selftest` passou e a saida foi anexada.
 - [ ] Quando aplicavel, `make smoke-x64-cli SMOKE_X64_CLI_ARGS='--require-shell'`
       ou outro smoke especifico foi executado e o log anexado ao PR.
+- [ ] Mudancas no loader UEFI, instalador ou politica de input passaram no mesmo
+      ISO por `smoke-x64-qemu-installer-no-uart`,
+      `smoke-x64-vmware-installer-no-uart-existing-iso` e
+      `smoke-x64-vmware-installer-wizard-existing-iso`; os tres registros citam
+      o mesmo SHA-256 e nenhuma VM descartavel permaneceu ativa.
 
 ## 3. Robustez e plano vivo
 
@@ -112,9 +117,52 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
       version-audit` passou.
 - [ ] Checksums de release (`build/release-artifacts.sha256`) foram
       regenerados e validados via `make verify-release-checksums TOOLCHAIN64=elf`.
-- [ ] Assinatura Ed25519 de release foi gerada e verificada com
-      `make sign-release-checksums` e `make verify-release-signature`, usando
-      chave privada offline e chave publica esperada.
+
+## 10. Depois da tag e durante a promoção para Latest
+
+- [ ] **Release Artifacts** terminou verde e deixou a release como draft com
+      exatamente os sete assets-base.
+- [ ] O `release-artifacts.sha256` do draft cobre exatamente os seis payloads
+      públicos; ele foi baixado e assinado diretamente com `sign_release.py`,
+      sem executar `make sign-release-checksums` no handoff.
+- [ ] Os cinco materiais offline (`.sig`, chave pública, manifesto da chave,
+      manifesto de publicação e `latest.ini`) foram verificados e anexados ao
+      draft; nenhuma chave privada entrou no workspace ou no GitHub.
+- [ ] O commit da tag contém o arquivo regular
+      `.github/release-policy/release-checksum-ed25519.sha256` com exatamente
+      uma linha `hex64` minúscula + LF; o valor real aprovado corresponde a
+      `release-ed25519.pub.pem` e não reutiliza a chave do update-agent. Nenhuma
+      variável mutável do repositório substitui esse pin versionado.
+- [ ] **Immutable releases** está habilitado no repositório e a consulta
+      `repos/<owner>/<repo>/immutable-releases` retorna `enabled=true`.
+- [ ] O secret `CAPYOS_RELEASE_POLICY_AUDIT_TOKEN` contém PAT/App fine-grained
+      de curta duração, limitado ao repositório e com **Administration: write**.
+      O workflow fez somente `GET` de `immutable-releases` e dos dois rulesets;
+      ambas as respostas expuseram `bypass_actors` explicitamente, e a
+      credencial foi revogada ou rotacionada após a janela.
+- [ ] `CAPYOS_RELEASE_TAG_RULESET_ID` aponta para um ruleset de tag ativo, sem
+      bypass/exclusões, que restringe update e deletion de `refs/tags/v*`.
+- [ ] `CAPYOS_RELEASE_MAIN_RULESET_ID` aponta para um ruleset de branch ativo,
+      sem bypass/exclusões, que cobre exatamente `refs/heads/main`, restringe
+      deletion e non-fast-forward e exige pull request com pelo menos uma
+      aprovação, descarte de reviews obsoletos após push e aprovação do último
+      push.
+- [ ] O ruleset de `main` foi tratado como prova de proteção corrente, não como
+      evidência histórica de que o commit da tag passou por PR/review.
+- [ ] A primeira execução de **Promote Signed Release** foi disparada a partir
+      do commit exato de `main` apontado pela tag; pin versionado, draft com 12
+      assets, imutabilidade, credencial e ambos os rulesets estavam válidos
+      antes do dispatch.
+- [ ] Do último upload até a conclusão terminal da promoção, ninguém alterou os
+      assets, a tag, `main`, immutable releases ou qualquer dos dois rulesets. O
+      promoter reconsultou as três políticas imediatamente antes do único
+      `PATCH`; o lock global de Actions não foi tratado como bloqueio de ações
+      humanas.
+- [ ] A promoção confirmou os 12 assets no draft autenticado e nas URLs
+      imutáveis da tag; pela rota `releases/latest/download/`, confirmou
+      especificamente `latest.ini` e `capyos64.bin`.
+- [ ] Após a promoção, o ciclo A/B de produção no VMware oficial comprovou
+      apply, reboot, confirmação de saúde e rollback, com evidência preservada.
 
 ## Notas
 

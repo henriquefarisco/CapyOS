@@ -290,10 +290,22 @@ def verify_material_hash(path: Path, expected: str, label: str) -> int:
     return 0
 
 
-def verify_publication_manifest(manifest: Path, materials_root: Path, artifact_root: Path, pinned_sha256: str | None, openssl: str) -> int:
+def verify_publication_manifest(
+    manifest: Path,
+    materials_root: Path,
+    artifact_root: Path,
+    pinned_sha256: str | None,
+    openssl: str,
+    expected_release_id: str | None = None,
+) -> int:
     rc, data, manifest_entries = load_publication_manifest(manifest)
     if rc != 0:
         return rc
+    if expected_release_id is not None:
+        if not expected_release_id:
+            return fail("release id esperado nao pode ser vazio")
+        if data.get("release_id") != expected_release_id:
+            return fail("manifesto publico de publicacao diverge do release id")
     checksums = materials_root / data["checksums_file"]
     signature = materials_root / data["signature_file"]
     public_key = materials_root / data["public_key_file"]
@@ -355,6 +367,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--materials-root", type=Path)
     parser.add_argument("--artifact-root", type=Path, default=Path("."))
     parser.add_argument("--expected-public-key-sha256", default=os.environ.get("RELEASE_PUBLIC_KEY_SHA256") or os.environ.get("CAPYOS_RELEASE_PUBLIC_KEY_SHA256"))
+    parser.add_argument("--expected-release-id")
     parser.add_argument("--openssl", default=os.environ.get("OPENSSL", "openssl"))
     return parser.parse_args()
 
@@ -364,7 +377,14 @@ def main() -> int:
     manifest = args.manifest.expanduser()
     materials_root = args.materials_root.expanduser() if args.materials_root else manifest.parent
     artifact_root = args.artifact_root.expanduser()
-    return verify_publication_manifest(manifest, materials_root, artifact_root, args.expected_public_key_sha256, args.openssl)
+    return verify_publication_manifest(
+        manifest,
+        materials_root,
+        artifact_root,
+        args.expected_public_key_sha256,
+        args.openssl,
+        args.expected_release_id,
+    )
 
 
 if __name__ == "__main__":

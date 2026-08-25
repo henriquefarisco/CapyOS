@@ -4,14 +4,20 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.9.1+20260825.md`
+  - Corrige e automatiza o gate VMware do instalador sem UART/COM1, endurece a
+    evidência do wizard multi-disco e prepara a promoção assinada e imutável sem
+    alterar as ABIs nem os pins dos módulos desacoplados.
+
+## Historico recente
+
 - `capyos-0.9.0+20260821.md`
   - Promocao para a versao estavel 0.9.0 com consolidacao da trilha UEFI/GPT x86_64,
     instalador seguro com selecao explicita e deteccao serial fail-closed,
     integracao estavel dos modulos desacoplados (CapyUI 2.24.2, CapyBrowser 0.6.7,
     CapyAI 0.2.1, CapyCodecs 0.0.12, CapyAgent 0.0.10, CapyLang 0.1.12, CapyBenchmark 0.0.11),
-    e esteira de release autenticada.
-
-## Historico recente
+    e publicacao com integridade SHA-256. A promocao Ed25519 e o ciclo A/B de
+    producao permanecem pendentes na Etapa 8.
 
 - `capyos-0.8.0-alpha.321+20260821.md`
   - Corrige a entrada fantasma `ÿ` do instalador em VMs sem COM1, valida a

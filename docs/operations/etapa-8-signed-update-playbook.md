@@ -1,13 +1,11 @@
 # Playbook — gate do ciclo A/B assinado (Etapa 8)
 
-> **Estado em `alpha.320`:** a regressão de boot foi corrigida no loader UEFI
-> (pilha real sem red zone, ELF validado/copiado/comparado e GDT recarregada).
-> Dois ciclos KVM focados passaram, com quatro boots e persistência; o smoke
-> oficial ISO KVM também passou com instalação, boot do disco e
-> `marker:persist-ok`. O smoke CLI TCG passou em 86,2 s, com dois boots e
-> persistência. O smoke ISO TCG oficial, o update A/B e os gates VMware ainda
-> não foram executados. A Etapa 8 permanece aberta em 7/16 até o ciclo A/B
-> VMware produzir evidência completa.
+> **Baseline atual: `0.9.1+20260825` (stable candidate).** O lifecycle A/B e os gates de
+> laboratório existem, mas a Etapa 8 permanece aberta até que a candidata publique
+> os materiais Ed25519 de produção e execute apply, reboot, confirmação de saúde e
+> rollback no VMware oficial. A release 0.9.0 publicada contém os sete
+> assets-base verificados por SHA-256, mas não contém `.sig`, manifestos públicos
+> ou `latest.ini`; portanto ela não é evidência desse ciclo de produção.
 
 Este playbook cobre o gate que fecha o critério de update da Etapa 8: um
 manifesto Ed25519 é buscado por HTTP, o payload é verificado, gravado no slot
@@ -21,11 +19,13 @@ confirmação é revertido pelo loader e reportado pelo updater.
 
 ## 1. Por que existe uma âncora de confiança de laboratório
 
-A chave privada de release é offline-only e nunca entra em CI ou em runner
-automatizado (ver [`../security/release-signing.md`](../security/release-signing.md)).
-Sem uma segunda âncora, nenhum gate automatizado conseguiria produzir um
-manifesto que o kernel aceite, e o critério ficaria dependente de uma execução
-manual com material sensível.
+A chave privada dedicada ao `latest.ini`/update-agent é offline-only e nunca
+entra em CI ou em runner automatizado (ver
+[`../security/release-signing.md`](../security/release-signing.md)). Ela é
+distinta da chave offline que assina `release-artifacts.sha256`. Sem uma âncora
+de laboratório, nenhum gate automatizado conseguiria produzir um manifesto que
+o kernel aceite, e o critério ficaria dependente de uma execução manual com
+material sensível.
 
 O gate resolve isso gerando **um par Ed25519 descartável por execução** e
 compilando o kernel com:
@@ -115,22 +115,51 @@ key.
 O gate acima prova o mecanismo. Para provar a cadeia de publicação real, com a
 âncora pinada em `src/services/update_agent_parse.c`:
 
-1. Publique `capyos64.bin` como asset da tag e assine o `latest.ini` offline:
-   ```sh
-   python3 tools/scripts/build_update_manifest.py \
-     --version <proxima-alpha> --channel stable --branch main \
-     --source github:henriquefarisco/CapyOS --published-at <YYYY-MM-DD> \
-     --payload build/capyos64.bin \
-     --payload-url https://github.com/henriquefarisco/CapyOS/releases/download/<tag>/capyos64.bin \
-     --private-key <chave-offline> --output build/update/latest.ini --force
-   python3 tools/scripts/verify_update_manifest.py \
-     --manifest build/update/latest.ini --payload build/capyos64.bin
-   ```
-2. Publique `latest.ini` no mesmo release.
-3. Numa instalação oficial (sem flags de laboratório): `update-fetch` →
+1. Deixe **Release Artifacts** criar o draft com os sete assets-base e siga o
+   handoff de `release-artifacts.sha256` descrito em
+   [`release-process.md`](release-process.md).
+2. Assine o `latest.ini` offline com a chave dedicada do update-agent usando os
+   comandos autoritativos de [`release-process.md`](release-process.md). Não
+   escolha a data manualmente: derive `PUBLISHED_AT` de `+YYYYMMDD` da versão ou
+   da data do commit da tag. A verificação deve exigir versão, canal `stable`,
+   branch `main`, source, data, URL imutável da tag e os bytes exatos de
+   `capyos64.bin`.
+3. Confirme que o commit da tag contém
+   `.github/release-policy/release-checksum-ed25519.sha256` como arquivo regular
+   com uma única linha `hex64` minúscula + LF e que esse valor é o fingerprint
+   real aprovado da chave que assina `release-artifacts.sha256`, não o pin do
+   update-agent. Sem esse pin versionado a promoção permanece fail-closed.
+4. Anexe os cinco materiais offline ao draft e execute **Promote Signed
+   Release**. O repositório deve ter releases imutáveis habilitadas e o secret
+   `CAPYOS_RELEASE_POLICY_AUDIT_TOKEN` deve conter PAT/App fine-grained de curta
+   duração, limitado ao repositório e com **Administration: write**. A permissão
+   elevada é necessária para a API expor `bypass_actors`, embora o workflow use
+   o token somente em `GET` de `immutable-releases` e dos dois rulesets; resposta
+   sem esse campo falha fechado. Revogue ou rotacione o token após a janela.
+   `CAPYOS_RELEASE_TAG_RULESET_ID` deve apontar para o ruleset sem bypass que
+   bloqueia update/delete exatamente em `refs/tags/v*`.
+   `CAPYOS_RELEASE_MAIN_RULESET_ID` deve apontar para o ruleset sem bypass de
+   `refs/heads/main`, com deletion e non-fast-forward bloqueados, pull request
+   obrigatório, pelo menos uma aprovação, descarte de review obsoleto após push
+   e aprovação do último push. A workflow valida esses controles com
+   `verify_release_repository_policy.py`, verifica os 12 assets no draft
+   autenticado, publica e marca Latest numa única mutação, exige o estado
+   imutável e então repete os gates pelas URLs públicas da tag. Pela rota
+   `releases/latest/download/`, revalida `latest.ini` e `capyos64.bin`.
+   Esse ruleset prova proteção corrente; não prova historicamente que o commit da
+   tag passou por PR/review. Entre o último upload e a conclusão terminal do
+   workflow, mantenha uma janela exclusiva: não altere assets, a tag, `main`, a
+   configuração de immutable releases nem qualquer dos dois rulesets. O promoter
+   reconsulta as três políticas imediatamente antes do único `PATCH`; o lock
+   global serializa workflows, mas não impede mutação manual externa.
+5. Após a promoção, numa instalação oficial (sem flags de laboratório):
+   `update-fetch` →
    `update-download-payload` → `update-prepare` → `update-apply`, reinicie,
    `update-confirm-health`.
-4. Repita sem confirmar e observe `update-rollback-check` reportando o rollback.
+6. Repita sem confirmar e observe `update-rollback-check` reportando o rollback.
+
+Os passos 5–6 são aceite pós-promoção obrigatório: uma workflow criptográfica
+verde não fecha sozinha a Etapa 8.
 
 Nunca use `--allow-lab-http-payload-url` nem `--allow-insecure-key` com a chave
 de produção.

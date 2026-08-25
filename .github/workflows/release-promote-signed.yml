@@ -1,0 +1,588 @@
+name: Promote Signed Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Signed CapyOS release tag (v<version>)"
+        required: true
+        type: string
+      confirmation:
+        description: "Confirm atomic promotion of the verified signed draft"
+        required: true
+        type: choice
+        options:
+          - "promote-signed-draft"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  promote-signed-draft:
+    name: Verify and promote signed draft
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout trusted promotion validators
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - name: Resolve and verify release identity
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG_INPUT"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta|rc)(\.[0-9]+)?))?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag syntax: $TAG"
+            exit 1
+          fi
+          TAG_COMMIT="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" "$GITHUB_SHA"; then
+            echo "Release tag is not contained in the selected main history"
+            exit 1
+          fi
+          VERSION="$(git show "${TAG_COMMIT}:include/core/version.h" \
+            | sed -n 's/^#define CAPYOS_VERSION_FULL[[:space:]]*"\([^"]*\)"/\1/p')"
+          if [ -z "$VERSION" ] || [ "$TAG" != "v${VERSION}" ]; then
+            echo "Tag/version mismatch: tag=$TAG version=$VERSION"
+            exit 1
+          fi
+          BUILD_DATE="${VERSION##*+}"
+          if [[ "$BUILD_DATE" =~ ^[0-9]{8}$ ]]; then
+            PUBLISHED_AT="${BUILD_DATE:0:4}-${BUILD_DATE:4:2}-${BUILD_DATE:6:2}"
+          else
+            PUBLISHED_AT="$(git show -s --format=%cs "$TAG_COMMIT")"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_commit=$TAG_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "published_at=$PUBLISHED_AT" >> "$GITHUB_OUTPUT"
+
+      - name: Require the approved release signer fingerprint
+        id: signer
+        shell: bash
+        env:
+          RELEASE_TAG_COMMIT: ${{ steps.release.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          POLICY_PATH=".github/release-policy/release-checksum-ed25519.sha256"
+          POLICY_FILE="$RUNNER_TEMP/release-checksum-ed25519.sha256"
+          if ! git show "${RELEASE_TAG_COMMIT}:${POLICY_PATH}" > "$POLICY_FILE"; then
+            echo "Release signer fingerprint policy is absent from the tagged commit: $POLICY_PATH"
+            exit 1
+          fi
+          POLICY_MODE="$(git ls-tree "$RELEASE_TAG_COMMIT" -- "$POLICY_PATH" \
+            | awk 'NR == 1 { print $1 }')"
+          if [ "$POLICY_MODE" != "100644" ]; then
+            echo "Release signer fingerprint policy must be a non-executable regular file"
+            exit 1
+          fi
+          mapfile -t FINGERPRINT_LINES < "$POLICY_FILE"
+          if [ "${#FINGERPRINT_LINES[@]}" -ne 1 ]; then
+            echo "Release signer fingerprint policy must contain exactly one line"
+            exit 1
+          fi
+          POLICY_SIZE="$(wc -c < "$POLICY_FILE")"
+          POLICY_LAST_BYTE="$(tail -c 1 "$POLICY_FILE" \
+            | od -An -t u1 | tr -d '[:space:]')"
+          if [ "$POLICY_SIZE" -ne 65 ] || [ "$POLICY_LAST_BYTE" != "10" ]; then
+            echo "Release signer fingerprint policy must be exactly 64 hex bytes followed by LF"
+            exit 1
+          fi
+          FINGERPRINT="${FINGERPRINT_LINES[0]}"
+          if [[ ! "$FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Release signer fingerprint policy must be one lowercase SHA-256 hex value"
+            exit 1
+          fi
+          echo "fingerprint=$FINGERPRINT" >> "$GITHUB_OUTPUT"
+
+      - name: Discover and download the signed release
+        id: release_object
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG_COMMIT: ${{ steps.release.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          RELEASE_DIR="build/release-signed"
+          mkdir -p build
+          gh release view "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
+            > build/release-before.json
+
+          RELEASE_ID="$(jq -er \
+            '.databaseId | select(type == "number" and . > 0)' \
+            build/release-before.json)"
+          OBSERVED_TAG="$(jq -r '.tagName' build/release-before.json)"
+          DRAFT_STATUS="$(jq -r '.isDraft' build/release-before.json)"
+          PRERELEASE_STATUS="$(jq -r '.isPrerelease' build/release-before.json)"
+          IMMUTABLE_STATUS="$(jq -r '.isImmutable' build/release-before.json)"
+          if [ "$OBSERVED_TAG" != "$TAG" ] || [ "$PRERELEASE_STATUS" != "false" ]; then
+            echo "Release must be the exact stable release for $TAG"
+            exit 1
+          fi
+
+          if [ "$DRAFT_STATUS" = "true" ] && [ "$IMMUTABLE_STATUS" = "false" ]; then
+            RELEASE_STATE=draft
+          elif [ "$DRAFT_STATUS" = "false" ] && [ "$IMMUTABLE_STATUS" = "true" ]; then
+            RELEASE_STATE=published
+          else
+            echo "Release is neither a mutable draft nor an immutable publication"
+            exit 1
+          fi
+
+          if [ "$RELEASE_STATE" = "draft" ] \
+            && [ "$RELEASE_TAG_COMMIT" != "$GITHUB_SHA" ]; then
+            echo "A mutable draft can only be promoted from its exact tagged main commit"
+            echo "tag=$RELEASE_TAG_COMMIT selected_main=$GITHUB_SHA"
+            exit 1
+          fi
+
+          if [ "$RELEASE_STATE" = "published" ]; then
+            LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+              --jq '.tag_name')"
+            if [ "$LATEST_TAG" != "$TAG" ]; then
+              echo "Immutable published release is not Latest; refusing non-idempotent recovery"
+              exit 1
+            fi
+          fi
+
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$RELEASE_DIR" \
+            --clobber
+          jq '[.assets[] | {id, name, size, digest, createdAt, updatedAt, state}] | sort_by(.name)' \
+            build/release-before.json \
+            > build/release-assets-before.json
+          find "$RELEASE_DIR" -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort > build/release-asset-names.txt
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
+          echo "release_state=$RELEASE_STATE" >> "$GITHUB_OUTPUT"
+
+      - name: Require repository release protections before initial promotion
+        if: steps.release_object.outputs.release_state == 'draft'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CAPYOS_RELEASE_POLICY_AUDIT_TOKEN }}
+          RELEASE_MAIN_RULESET_ID: ${{ vars.CAPYOS_RELEASE_MAIN_RULESET_ID }}
+          RELEASE_TAG_RULESET_ID: ${{ vars.CAPYOS_RELEASE_TAG_RULESET_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Repository secret CAPYOS_RELEASE_POLICY_AUDIT_TOKEN is absent"
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG_RULESET_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Repository variable CAPYOS_RELEASE_TAG_RULESET_ID is absent or invalid"
+            exit 1
+          fi
+          if [[ ! "$RELEASE_MAIN_RULESET_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Repository variable CAPYOS_RELEASE_MAIN_RULESET_ID is absent or invalid"
+            exit 1
+          fi
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            > build/immutable-release-settings.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/rulesets/${RELEASE_TAG_RULESET_ID}" \
+            > build/release-tag-ruleset.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/rulesets/${RELEASE_MAIN_RULESET_ID}" \
+            > build/release-main-ruleset.json
+          unset GH_TOKEN
+          python3 tools/scripts/verify_release_repository_policy.py \
+            --immutable-settings build/immutable-release-settings.json \
+            --tag-ruleset build/release-tag-ruleset.json \
+            --main-ruleset build/release-main-ruleset.json
+
+      - name: Verify every signed release material
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          RELEASE_DIR: ${{ steps.release_object.outputs.release_dir }}
+          RELEASE_KEY_FINGERPRINT: ${{ steps.signer.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          PAYLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/capyos64.bin"
+
+          python3 tools/scripts/verify_release_promotion_bundle.py \
+            --bundle-dir "$RELEASE_DIR"
+          (
+            cd "$RELEASE_DIR"
+            sha256sum -c modules.sha256
+          )
+          python3 tools/scripts/release_publication_gate.py \
+            --checksums "$RELEASE_DIR/release-artifacts.sha256" \
+            --signature "$RELEASE_DIR/release-artifacts.sha256.sig" \
+            --artifact-root "$RELEASE_DIR" \
+            --materials-root "$RELEASE_DIR" \
+            --public-key "$RELEASE_DIR/release-ed25519.pub.pem" \
+            --expected-public-key-sha256 "$RELEASE_KEY_FINGERPRINT" \
+            --public-key-manifest "$RELEASE_DIR/release-public-key.manifest" \
+            --publication-manifest "$RELEASE_DIR/release-publication.manifest" \
+            --expected-release-id "$RELEASE_VERSION"
+          python3 tools/scripts/verify_update_manifest.py \
+            --manifest "$RELEASE_DIR/latest.ini" \
+            --payload "$RELEASE_DIR/capyos64.bin" \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-channel stable \
+            --expected-branch main \
+            --expected-source "github:${GITHUB_REPOSITORY}" \
+            --expected-published-at "$RELEASE_PUBLISHED_AT" \
+            --expected-payload-url "$PAYLOAD_URL"
+          python3 tools/scripts/verify_modules_index_assets.py \
+            --index "$RELEASE_DIR/modules-index.txt" \
+            --release-tag "$RELEASE_TAG" \
+            --local-payload-dir "$RELEASE_DIR" \
+            --attempts 5 \
+            --backoff-seconds 1 \
+            --timeout 45
+          (
+            cd "$RELEASE_DIR"
+            sha256sum -- * | LC_ALL=C sort
+          ) > build/release-before-files.sha256
+
+      - name: Refuse release mutation after verification and publish atomically
+        shell: bash
+        env:
+          POLICY_AUDIT_TOKEN: ${{ secrets.CAPYOS_RELEASE_POLICY_AUDIT_TOKEN }}
+          RELEASE_MAIN_RULESET_ID: ${{ vars.CAPYOS_RELEASE_MAIN_RULESET_ID }}
+          RELEASE_TAG_RULESET_ID: ${{ vars.CAPYOS_RELEASE_TAG_RULESET_ID }}
+          RELEASE_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG_COMMIT: ${{ steps.release.outputs.tag_commit }}
+          RELEASE_ID: ${{ steps.release_object.outputs.release_id }}
+          RELEASE_STATE: ${{ steps.release_object.outputs.release_state }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_STATE" = "draft" ]; then
+            if [ -z "$POLICY_AUDIT_TOKEN" ]; then
+              echo "Repository secret CAPYOS_RELEASE_POLICY_AUDIT_TOKEN disappeared"
+              exit 1
+            fi
+            GH_TOKEN="$POLICY_AUDIT_TOKEN" gh api \
+              "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+              > build/immutable-release-settings-final.json
+            GH_TOKEN="$POLICY_AUDIT_TOKEN" gh api \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${RELEASE_TAG_RULESET_ID}" \
+              > build/release-tag-ruleset-final.json
+            GH_TOKEN="$POLICY_AUDIT_TOKEN" gh api \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${RELEASE_MAIN_RULESET_ID}" \
+              > build/release-main-ruleset-final.json
+            unset POLICY_AUDIT_TOKEN
+            env -u RELEASE_TOKEN python3 \
+              tools/scripts/verify_release_repository_policy.py \
+              --immutable-settings build/immutable-release-settings-final.json \
+              --tag-ruleset build/release-tag-ruleset-final.json \
+              --main-ruleset build/release-main-ruleset-final.json
+          else
+            unset POLICY_AUDIT_TOKEN
+          fi
+
+          GH_TOKEN="$RELEASE_TOKEN" gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
+            > build/release-after-verification.json
+
+          EXPECTED_DRAFT=true
+          EXPECTED_IMMUTABLE=false
+          if [ "$RELEASE_STATE" = "published" ]; then
+            EXPECTED_DRAFT=false
+            EXPECTED_IMMUTABLE=true
+          fi
+          if [ "$(jq -r '.databaseId' build/release-after-verification.json)" != "$RELEASE_ID" ] \
+            || [ "$(jq -r '.tagName' build/release-after-verification.json)" != "$RELEASE_TAG" ] \
+            || [ "$(jq -r '.isDraft' build/release-after-verification.json)" != "$EXPECTED_DRAFT" ] \
+            || [ "$(jq -r '.isPrerelease' build/release-after-verification.json)" != "false" ] \
+            || [ "$(jq -r '.isImmutable' build/release-after-verification.json)" != "$EXPECTED_IMMUTABLE" ]; then
+            echo "Release identity or publication state changed during verification"
+            exit 1
+          fi
+          jq '[.assets[] | {id, name, size, digest, createdAt, updatedAt, state}] | sort_by(.name)' \
+            build/release-after-verification.json \
+            > build/release-assets-after.json
+          cmp --silent build/release-assets-before.json build/release-assets-after.json
+
+          if [ "$RELEASE_STATE" = "draft" ]; then
+            if ! REMOTE_TAG_COMMIT="$(git ls-remote --exit-code origin \
+              "refs/tags/${RELEASE_TAG}^{}" | awk 'NR == 1 { print $1 }')"; then
+              REMOTE_TAG_COMMIT="$(git ls-remote --exit-code origin \
+                "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 { print $1 }')"
+            fi
+            if [ -z "$REMOTE_TAG_COMMIT" ] \
+              || [ "$REMOTE_TAG_COMMIT" != "$RELEASE_TAG_COMMIT" ]; then
+              echo "Remote release tag changed after checkout"
+              exit 1
+            fi
+
+            GH_TOKEN="$RELEASE_TOKEN" gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              -F draft=false \
+              -F prerelease=false \
+              -f make_latest=true > build/release-promoted.json
+            if [ "$(jq -r '.draft' build/release-promoted.json)" != "false" ]; then
+              echo "Release remained a draft after atomic promotion"
+              exit 1
+            fi
+          fi
+
+      - name: Verify immutable publication state and Latest convergence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG_COMMIT: ${{ steps.release.outputs.tag_commit }}
+          RELEASE_ID: ${{ steps.release_object.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          published_verified=false
+          for attempt in 1 2 3 4 5; do
+            if gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
+              > build/release-published.json; then
+              LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+                --jq '.tag_name' 2>/dev/null || true)"
+              if [ "$(jq -r '.databaseId' build/release-published.json)" = "$RELEASE_ID" ] \
+                && [ "$(jq -r '.tagName' build/release-published.json)" = "$RELEASE_TAG" ] \
+                && [ "$(jq -r '.isDraft' build/release-published.json)" = "false" ] \
+                && [ "$(jq -r '.isPrerelease' build/release-published.json)" = "false" ] \
+                && [ "$(jq -r '.isImmutable' build/release-published.json)" = "true" ] \
+                && [ "$LATEST_TAG" = "$RELEASE_TAG" ]; then
+                published_verified=true
+                break
+              fi
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep "$((attempt * 2))"
+            fi
+          done
+          if [ "$published_verified" != true ]; then
+            echo "Release did not converge to immutable Latest state"
+            exit 1
+          fi
+          if ! REMOTE_TAG_COMMIT="$(git ls-remote --exit-code origin \
+            "refs/tags/${RELEASE_TAG}^{}" | awk 'NR == 1 { print $1 }')"; then
+            REMOTE_TAG_COMMIT="$(git ls-remote --exit-code origin \
+              "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 { print $1 }')"
+          fi
+          if [ -z "$REMOTE_TAG_COMMIT" ] \
+            || [ "$REMOTE_TAG_COMMIT" != "$RELEASE_TAG_COMMIT" ]; then
+            echo "Immutable release tag differs from the verified commit"
+            exit 1
+          fi
+          jq '[.assets[] | {id, name, size, digest, createdAt, updatedAt, state}] | sort_by(.name)' \
+            build/release-published.json \
+            > build/release-assets-published.json
+          cmp --silent \
+            build/release-assets-before.json \
+            build/release-assets-published.json
+
+      - name: Download publicly and repeat every verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          RELEASE_ID: ${{ steps.release_object.outputs.release_id }}
+          RELEASE_KEY_FINGERPRINT: ${{ steps.signer.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          PUBLIC_DIR="build/release-public-download"
+          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          PAYLOAD_URL="${BASE_URL}/capyos64.bin"
+          rm -rf "$PUBLIC_DIR"
+          mkdir -p "$PUBLIC_DIR"
+
+          while IFS= read -r asset; do
+            downloaded=false
+            for attempt in 1 2 3 4 5; do
+              rm -f "$PUBLIC_DIR/$asset.partial"
+              if curl --fail --location --silent --show-error \
+                --connect-timeout 10 --max-time 90 \
+                --output "$PUBLIC_DIR/$asset.partial" \
+                "$BASE_URL/$asset"; then
+                mv "$PUBLIC_DIR/$asset.partial" "$PUBLIC_DIR/$asset"
+                downloaded=true
+                break
+              fi
+              if [ "$attempt" -lt 5 ]; then
+                sleep "$((attempt * 2))"
+              fi
+            done
+            if [ "$downloaded" != true ]; then
+              echo "Public asset unavailable after bounded retries: $asset"
+              exit 1
+            fi
+          done < build/release-asset-names.txt
+
+          python3 tools/scripts/verify_release_promotion_bundle.py \
+            --bundle-dir "$PUBLIC_DIR"
+          (
+            cd "$PUBLIC_DIR"
+            sha256sum -c modules.sha256
+          )
+          python3 tools/scripts/release_publication_gate.py \
+            --checksums "$PUBLIC_DIR/release-artifacts.sha256" \
+            --signature "$PUBLIC_DIR/release-artifacts.sha256.sig" \
+            --artifact-root "$PUBLIC_DIR" \
+            --materials-root "$PUBLIC_DIR" \
+            --public-key "$PUBLIC_DIR/release-ed25519.pub.pem" \
+            --expected-public-key-sha256 "$RELEASE_KEY_FINGERPRINT" \
+            --public-key-manifest "$PUBLIC_DIR/release-public-key.manifest" \
+            --publication-manifest "$PUBLIC_DIR/release-publication.manifest" \
+            --expected-release-id "$RELEASE_VERSION"
+          python3 tools/scripts/verify_update_manifest.py \
+            --manifest "$PUBLIC_DIR/latest.ini" \
+            --payload "$PUBLIC_DIR/capyos64.bin" \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-channel stable \
+            --expected-branch main \
+            --expected-source "github:${GITHUB_REPOSITORY}" \
+            --expected-published-at "$RELEASE_PUBLISHED_AT" \
+            --expected-payload-url "$PAYLOAD_URL"
+          python3 tools/scripts/verify_modules_index_assets.py \
+            --index "$PUBLIC_DIR/modules-index.txt" \
+            --release-tag "$RELEASE_TAG" \
+            --attempts 5 \
+            --backoff-seconds 1 \
+            --timeout 45 \
+            --retry-404
+          (
+            cd "$PUBLIC_DIR"
+            sha256sum -- * | LC_ALL=C sort
+          ) > build/release-public-files.sha256
+          cmp --silent \
+            build/release-before-files.sha256 \
+            build/release-public-files.sha256
+
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
+            > build/release-public.json
+          if [ "$(jq -r '.databaseId' build/release-public.json)" != "$RELEASE_ID" ] \
+            || [ "$(jq -r '.isDraft' build/release-public.json)" != "false" ] \
+            || [ "$(jq -r '.isImmutable' build/release-public.json)" != "true" ]; then
+            echo "Public release identity or immutable state changed"
+            exit 1
+          fi
+          jq '[.assets[] | {id, name, size, digest, createdAt, updatedAt, state}] | sort_by(.name)' \
+            build/release-public.json \
+            > build/release-assets-public.json
+          cmp --silent \
+            build/release-assets-before.json \
+            build/release-assets-public.json
+
+      - name: Verify runtime Latest download route
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          RELEASE_ID: ${{ steps.release_object.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          PUBLIC_DIR="build/release-public-download"
+          LATEST_DIR="build/release-latest-download"
+          PAYLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/capyos64.bin"
+
+          LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+            --jq '.tag_name')"
+          if [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
+            echo "Latest release changed after public verification"
+            exit 1
+          fi
+
+          rm -rf "$LATEST_DIR"
+          mkdir -p "$LATEST_DIR"
+          for asset in latest.ini capyos64.bin; do
+            downloaded=false
+            for attempt in 1 2 3 4 5; do
+              rm -f "$LATEST_DIR/$asset.partial"
+              if curl --fail --location --silent --show-error \
+                --connect-timeout 10 --max-time 90 \
+                --output "$LATEST_DIR/$asset.partial" \
+                "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/$asset"; then
+                mv "$LATEST_DIR/$asset.partial" "$LATEST_DIR/$asset"
+                downloaded=true
+                break
+              fi
+              if [ "$attempt" -lt 5 ]; then
+                sleep "$((attempt * 2))"
+              fi
+            done
+            if [ "$downloaded" != true ]; then
+              echo "Latest asset unavailable after bounded retries: $asset"
+              exit 1
+            fi
+            cmp --silent "$PUBLIC_DIR/$asset" "$LATEST_DIR/$asset"
+          done
+          python3 tools/scripts/verify_update_manifest.py \
+            --manifest "$LATEST_DIR/latest.ini" \
+            --payload "$LATEST_DIR/capyos64.bin" \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-channel stable \
+            --expected-branch main \
+            --expected-source "github:${GITHUB_REPOSITORY}" \
+            --expected-published-at "$RELEASE_PUBLISHED_AT" \
+            --expected-payload-url "$PAYLOAD_URL"
+
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
+            > build/release-latest.json
+          if [ "$(jq -r '.databaseId' build/release-latest.json)" != "$RELEASE_ID" ] \
+            || [ "$(jq -r '.isDraft' build/release-latest.json)" != "false" ] \
+            || [ "$(jq -r '.isImmutable' build/release-latest.json)" != "true" ]; then
+            echo "Latest release lost its immutable publication state"
+            exit 1
+          fi
+          jq '[.assets[] | {id, name, size, digest, createdAt, updatedAt, state}] | sort_by(.name)' \
+            build/release-latest.json \
+            > build/release-assets-latest.json
+          cmp --silent \
+            build/release-assets-before.json \
+            build/release-assets-latest.json
+          FINAL_LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+            --jq '.tag_name')"
+          if [ "$FINAL_LATEST_TAG" != "$RELEASE_TAG" ]; then
+            echo "Latest release changed before workflow completion"
+            exit 1
+          fi
+          {
+            echo "### Signed release promoted and verified"
+            echo ""
+            echo "Tag: $RELEASE_TAG"
+            echo "Release id: $RELEASE_ID"
+            echo "All 12 assets were verified through immutable tag URLs."
+            echo "latest.ini and capyos64.bin were also verified through the runtime Latest route."
+          } >> "$GITHUB_STEP_SUMMARY"

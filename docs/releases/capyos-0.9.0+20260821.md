@@ -8,8 +8,8 @@
 
 ## Resumo executivo
 
-`0.9.0+20260821` consolida o ciclo de desenvolvimento das etapas 1 a 8 e promove
-o CapyOS para a versao estavel `0.9.0`. A release formaliza a trilha oficial
+`0.9.0+20260821` consolida as Etapas 1-7 e o trabalho entregue ate aqui na
+Etapa 8, promovendo o CapyOS para a versao estavel `0.9.0`. A release formaliza a trilha oficial
 `UEFI/GPT/x86_64` com instalador seguro com selecao explicita e deteccao serial
 fail-closed, integracao estavel com a suite de modulos desacoplados, sistema de
 arquivos CAPYFS com volume `DATA` criptografado e pipeline de release auditado.
@@ -36,11 +36,11 @@ em hipervisores com ou sem console serial.
 - **Armazenamento e seguranca:** volumes gerenciados por header v1 com KDF
   Argon2id, HMAC-SHA256 check tag e criptografia AES-XTS.
 - **Esteira de release:** automacao CI/CD com verificacao de integridade SHA-256,
-  download autenticado de rascunhos, promocao para Latest e verificacao publica.
+  re-download via API autenticada, promocao para Latest e verificacao publica.
 
 ## Validacao
 
-Todos os gates abaixo foram executados e validados:
+Os gates registrados abaixo foram executados e validados:
 
 | Evidencia | Resultado |
 |---|---|
@@ -49,6 +49,17 @@ Todos os gates abaixo foram executados e validados:
 | `smoke-x64-iso` | passa; instalacao completa, primeiro boot do disco instalado e persistencia pos-reboot |
 | `smoke-x64-qemu-installer-wizard` | passa; selecao explicita multi-disco com disco de guarda de 3 GB intacto |
 | `smoke_x64_vmware_installer.py` | passa; gate oficial VMware Workstation com multi-disco, login e persistencia |
+
+## Errata de publicacao — 2026-08-24
+
+A release pública 0.9.0 contém sete assets e prova integridade SHA-256, mas não
+inclui `release-artifacts.sha256.sig`, chave pública, manifestos públicos nem
+`latest.ini` assinado. Portanto ela não constitui evidência de publicação
+criptograficamente autenticada e não fecha o ciclo A/B de produção da Etapa 8.
+Uma promoção em duas fases está sendo implementada para as próximas releases:
+draft com assinatura offline, validação autenticada e uma única transição para
+publicação + Latest sob a proteção de releases imutáveis, seguida da
+revalidação pelas rotas públicas.
 
 ## Compliance de versoes
 

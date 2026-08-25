@@ -24,6 +24,11 @@ Se `remote_manifest=` não existir, o agente deriva a URL a partir de
 o formato oficial legado do CapyOS; uma `remote_manifest=` customizada nunca é
 reescrita.
 
+O canal stable só fica operacional quando a release marcada como Latest contém
+um `latest.ini` assinado pela chave pinada e validado contra o `capyos64.bin` da
+mesma tag. A release 0.9.0 publicada em 2026-08-21 não contém esse asset e não é
+uma fonte de update stable; a ausência deve falhar fechado.
+
 ## Fluxo seguro
 
 1. `update-fetch` chama `update_agent_fetch_remote_manifest()`.
@@ -96,35 +101,37 @@ Discos anteriores ao `alpha.317` com GUIDs duplicados entram por modo legado
 validado apenas para mount e nunca recebem capability de update.
 
 `update-arm off` e `update-clear` continuam disponíveis para limpar estado.
-A instalação inicial da alpha atual deve ser feita pelo instalador oficial.
+A instalação inicial da stable atual deve ser feita pelo instalador oficial.
 
 ## Publicação do catálogo estável
 
-O workflow publica `capyos64.bin`, `manifest.bin`, checksums e
-`latest.unsigned.ini` como material de handoff. A chave privada permanece
-offline e nunca entra em GitHub Actions. O exemplo histórico abaixo usa
-`alpha.313`; adapte versão, data e URL à release realmente publicada antes de
-executar. Depois de baixar exatamente o payload, o operador gera e verifica o
-asset final:
+O workflow **Release Artifacts** deixa no GitHub Release draft exatamente os
+sete assets-base, incluindo `capyos64.bin`, `manifest.bin` e checksums. Um
+artifact interno do Actions, retido por 14 dias, contém esses bytes e
+`latest.unsigned.ini` como handoff; o arquivo unsigned não é asset do draft e
+não é implantável. A chave privada permanece offline e nunca entra em GitHub
+Actions. Ainda com a release em draft, o operador assina o payload exato, gera
+`latest.ini`, valida todos os campos esperados e o anexa junto dos outros quatro
+materiais offline. `PUBLISHED_AT` é derivado de `+YYYYMMDD` da versão ou, sem
+essa metadata, da data do commit da tag. O procedimento autoritativo, incluindo
+os comandos de assinatura, verificação dos 12 assets e promoção atômica, está em
+[`release-process.md`](release-process.md). Não gere `latest.ini` depois que a
+release já estiver publicada e imutável.
 
-```bash
-python3 tools/scripts/build_update_manifest.py \
-  --version 0.8.0-alpha.313+20260712 \
-  --channel stable --branch main \
-  --source github:henriquefarisco/CapyOS \
-  --published-at 2026-07-12 \
-  --payload build/publish/capyos64.bin \
-  --payload-url https://github.com/henriquefarisco/CapyOS/releases/download/v0.8.0-alpha.313+20260712/capyos64.bin \
-  --private-key /caminho/offline/update-ed25519.pem \
-  --output build/publish/latest.ini
-
-python3 tools/scripts/verify_update_manifest.py \
-  --manifest build/publish/latest.ini \
-  --payload build/publish/capyos64.bin \
-  --expected-version 0.8.0-alpha.313+20260712 \
-  --expected-channel stable --expected-branch main \
-  --expected-source github:henriquefarisco/CapyOS
-```
+O fingerprint do signer de checksums vem exclusivamente de
+`.github/release-policy/release-checksum-ed25519.sha256` no commit da tag; ele é
+distinto do pin do update-agent e não pode ser substituído por variável mutável
+do repositório. A promoção inicial também exige releases imutáveis, os rulesets
+sem bypass de `refs/tags/v*` e `refs/heads/main` e o secret
+`CAPYOS_RELEASE_POLICY_AUDIT_TOKEN`. Esse PAT/App fine-grained deve ser
+temporário, limitado ao repositório e ter `Administration: write`: a API precisa
+dessa permissão para expor `bypass_actors`, embora o workflow faça somente `GET`.
+Resposta parcial mantém o gate fail-closed; revogue ou rotacione o token depois.
+O ruleset de `main` comprova proteção corrente, não review histórico do commit.
+Do último upload até a conclusão terminal do promoter, não altere assets, a tag,
+`main`, immutable releases nem qualquer dos dois rulesets. As três políticas são
+reconsultadas imediatamente antes do único `PATCH`; o lock global cobre apenas
+workflows do Actions.
 
 O builder recusa uma chave privada cuja chave pública não seja exatamente a
 chave raw Ed25519 pinada pelo runtime. O verificador reproduz a remoção da linha

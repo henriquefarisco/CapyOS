@@ -6,7 +6,6 @@ static void installer_input_debugcon_write(const char *text) {
   while (*text)
     dbgcon_putc((UINT8)*text++);
 }
-
 const CHAR16 *installer_language_code(installer_language_t language) {
   switch (language) {
   case INSTALLER_LANG_PT_BR:
@@ -400,6 +399,9 @@ EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
             candidate->disk_bytes / (1024ULL * 1024ULL),
             (candidate->layout.data_sectors * INSTALLER_DISK_BLOCK_SIZE) /
                 (1024ULL * 1024ULL));
+      uefi_installer_serial_write_disk_marker(
+          "target", (UINT64)(eligible_count + 1u), candidate->path_id,
+          candidate->disk_bytes / (1024ULL * 1024ULL));
       ++eligible_count;
     } else if (candidate->preflight_result ==
                INSTALLER_DISK_PREFLIGHT_TOO_SMALL) {
@@ -464,6 +466,9 @@ EFI_STATUS choose_target_disk(EFI_SYSTEM_TABLE *st,
           candidates[selected_index].disk_bytes / (1024ULL * 1024ULL),
           (out_target->layout.data_sectors * INSTALLER_DISK_BLOCK_SIZE) /
               (1024ULL * 1024ULL));
+    uefi_installer_serial_write_disk_marker(
+        "selected", (UINT64)(selected_eligible + 1u), out_target->path_id,
+        candidates[selected_index].disk_bytes / (1024ULL * 1024ULL));
     uefi_installer_serial_write("Selected target disk: ");
     uefi_installer_serial_write_u64(
         candidates[selected_index].disk_bytes / (1024ULL * 1024ULL));

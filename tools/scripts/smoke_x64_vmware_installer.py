@@ -18,11 +18,18 @@ try:
 except ModuleNotFoundError:  # Imported by the portable host contract on POSIX.
     msvcrt = None  # type: ignore[assignment]
 
-from smoke_x64_auth import complete_iso_install, installer_eligible_target_count, login, maybe_run_first_boot_setup
+from smoke_x64_auth import (
+    complete_iso_install,
+    installer_eligible_target_count,
+    installer_select_target_by_size,
+    login,
+    maybe_run_first_boot_setup,
+)
 from smoke_x64_boot import smoke_first_boot, smoke_second_boot
 from smoke_x64_helpers import ensure_shell_after_login
 from smoke_x64_vmware_installer_contract import (
     RECOVERY_KEY_RE,
+    exact_extent_size_mib,
     parse_flat_extent,
     render_evidence,
     render_scratch_vmx,
@@ -31,6 +38,25 @@ from smoke_x64_vmware_installer_contract import (
 )
 
 SERIAL_CHAR_DELAY = 0.002
+
+
+def parse_vmrun_list(text: str) -> tuple[Path, ...]:
+    lines = tuple(line.strip() for line in text.splitlines() if line.strip())
+    if not lines:
+        raise RuntimeError("vmrun list returned no output")
+    match = re.fullmatch(r"Total running VMs:\s*(\d+)", lines[0])
+    if match is None:
+        raise RuntimeError("vmrun list header is ambiguous")
+    paths = tuple(Path(line) for line in lines[1:])
+    if len(paths) != int(match.group(1), 10):
+        raise RuntimeError("vmrun list count does not match its paths")
+    return paths
+
+
+def same_windows_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+        os.path.abspath(right)
+    )
 
 
 class PhaseProcess:
@@ -87,7 +113,14 @@ class VmwareConsole:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.write_vmrun_log("start", result)
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "vmrun start failed")
+            start_error = result.stderr.strip() or result.stdout.strip() or "vmrun start failed"
+            try:
+                self.stop()
+            except BaseException as cleanup_error:
+                raise RuntimeError(
+                    f"{start_error}; cleanup failed: {cleanup_error}"
+                ) from cleanup_error
+            raise RuntimeError(start_error)
         try:
             self._pipe = self._open_pipe(30.0)
             self._reader = threading.Thread(target=self._read_pipe, daemon=True)
@@ -107,6 +140,13 @@ class VmwareConsole:
             check=False,
         )
         self.write_vmrun_log("stop", result)
+        list_result = subprocess.run(
+            [str(self.vmrun), "-T", "ws", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.write_vmrun_log("list-after-stop", list_result)
         self.ended.set()
         if self._pipe is not None:
             try:
@@ -117,6 +157,11 @@ class VmwareConsole:
         if self._reader is not None:
             self._reader.join(timeout=2.0)
         self.write_public_log()
+        if list_result.returncode != 0:
+            raise RuntimeError("vmrun list failed after stopping disposable VM")
+        running = parse_vmrun_list(list_result.stdout)
+        if any(same_windows_path(path, self.vmx) for path in running):
+            raise RuntimeError("disposable VMware VM remained running after hard stop")
 
     def write_public_log(self) -> None:
         text = sanitize_public_text(self.text(), self.secrets)
@@ -333,10 +378,14 @@ def run_checked(command: list[str]) -> None:
 
 
 def current_release_tag(repo_root: Path) -> str:
-    text = (repo_root / "VERSION.yaml").read_text(encoding="utf-8")
-    match = re.search(r"^\s*extended:\s*([^\s]+)\s*$", text, flags=re.MULTILINE)
+    text = (repo_root / "include/core/version.h").read_text(encoding="utf-8")
+    match = re.search(
+        r'^\s*#define\s+CAPYOS_VERSION_FULL\s+"([^"]+)"\s*$',
+        text,
+        flags=re.MULTILINE,
+    )
     if not match:
-        raise ValueError("VERSION.yaml extended alpha is missing")
+        raise ValueError("CAPYOS_VERSION_FULL is missing")
     return match.group(1)
 
 
@@ -374,6 +423,12 @@ def start_console(
     return console
 
 
+def reset_evidence_output(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    path.with_suffix(path.suffix + ".tmp").unlink(missing_ok=True)
+
+
 def main() -> int:
     args = parse_args()
     if os.name != "nt":
@@ -395,6 +450,8 @@ def main() -> int:
     if not iso.is_file() or not vmrun.is_file() or not vdiskmanager.is_file():
         print("[err] ISO or VMware executable is missing", file=sys.stderr)
         return 2
+    reset_evidence_output(evidence_path)
+    artifact_root = evidence_path.parent
     run_id = uuid.uuid4().hex[:12]
     run_root = work_root / run_id
     try:
@@ -406,15 +463,22 @@ def main() -> int:
     target_descriptor = run_root / "target.vmdk"
     guard_descriptor = run_root / "guard.vmdk"
     vmx = run_root / "CapyOS-Installer.vmx"
-    installer_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.installer.log"
-    boot1_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.boot1.log"
-    marker_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.marker-write.log"
-    boot2_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.boot2.log"
+    installer_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.installer.log"
+    boot1_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.boot1.log"
+    marker_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.marker-write.log"
+    boot2_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.boot2.log"
     success = False
     recovery_key = ""
     try:
+        iso_sha256_before = sha256_file(iso)
         target_extent = create_vmdk(vdiskmanager, target_descriptor, args.target_size)
         guard_extent = create_vmdk(vdiskmanager, guard_descriptor, args.guard_size)
+        target_size_mib = exact_extent_size_mib(target_extent)
+        guard_size_mib = exact_extent_size_mib(guard_extent)
+        if target_extent == guard_extent or iso in (target_extent, guard_extent):
+            raise RuntimeError("ISO, target and guard must be distinct files")
+        if guard_size_mib <= target_size_mib:
+            raise RuntimeError("guard disk must be larger than the explicit target")
         with guard_extent.open("r+b") as stream:
             stream.write(b"CAPYOS-VMWARE-GUARD-BEGIN-v1")
             stream.seek(-4096, os.SEEK_END)
@@ -432,7 +496,8 @@ def main() -> int:
         try:
             complete_iso_install(
                 installer, args.step_timeout, "us", args.user, args.password,
-                expected_eligible_targets=2, target_selection=1, target_size_mib=None,
+                expected_eligible_targets=2, target_selection=1,
+                target_size_mib=target_size_mib,
             )
         except BaseException as exc:
             installer_error = exc
@@ -465,6 +530,11 @@ def main() -> int:
         eligible_count = installer_eligible_target_count(raw_installer)
         if eligible_count != 2:
             raise RuntimeError("VMware installer did not expose exactly two eligible targets")
+        selected_index, selected_path_id = installer_select_target_by_size(
+            raw_installer, target_size_mib
+        )
+        if selected_index != 1:
+            raise RuntimeError("VMware target VMDK was not the first eligible disk")
         write_vmx(vmx, render_scratch_vmx(
             display_name=f"CapyOS Installer {run_id}", iso_path=iso,
             target_descriptor=target_descriptor, guard_descriptor=guard_descriptor,
@@ -472,6 +542,7 @@ def main() -> int:
         ))
         boot1 = start_console(vmrun, vmx, pipe_name, boot1_log, secrets=(recovery_key,), verbose=args.verbose)
         marker_written = False
+        marker_session_used = False
         try:
             setup_result = maybe_run_first_boot_setup(
                 boot1, args.step_timeout, args.user, args.password, "us",
@@ -486,6 +557,7 @@ def main() -> int:
         finally:
             boot1.stop()
         if not marker_written:
+            marker_session_used = True
             marker_session = start_console(vmrun, vmx, pipe_name, marker_log, secrets=(recovery_key,), verbose=args.verbose)
             try:
                 setup_result = maybe_run_first_boot_setup(
@@ -500,6 +572,8 @@ def main() -> int:
                 smoke_first_boot(marker_session, args.step_timeout, args.user, args.password, "persist-ok")
             finally:
                 marker_session.stop()
+        if not marker_log.exists():
+            marker_log.write_bytes(b"")
         boot2 = start_console(vmrun, vmx, pipe_name, boot2_log, secrets=(recovery_key,), verbose=args.verbose)
         try:
             mode = login(boot2, args.step_timeout, args.user, args.password, allow_desktop=True)
@@ -517,18 +591,33 @@ def main() -> int:
         guard_after_final = sha256_file(guard_extent)
         if guard_after_final != guard_before:
             raise RuntimeError("VMware guard disk changed after installed boots")
-        public_logs = (installer_log, boot1_log, boot2_log)
+        iso_sha256_after = sha256_file(iso)
+        if iso_sha256_after != iso_sha256_before:
+            raise RuntimeError("installer ISO changed during the VMware wizard gate")
+        public_logs = (installer_log, boot1_log, marker_log, boot2_log)
         if not all(path.is_file() for path in public_logs):
             raise RuntimeError("VMware installer public logs are incomplete")
         fields = {
-            "format": "capyos-installer-wizard-evidence-manifest-v1",
+            "format": "capyos-installer-wizard-evidence-manifest-v3",
             "release_tag": current_release_tag(repo_root),
             "track": "UEFI/GPT/x86_64",
             "provider": "vmware-workstation",
+            "firmware": "uefi",
+            "secure_boot": "disabled",
+            "vcpu_count": "2",
+            "memory_mib": "1024",
+            "network": "nat-e1000",
             "iso_artifact": iso.name,
-            "iso_sha256": sha256_file(iso),
+            "iso_sha256": iso_sha256_before,
+            "iso_sha256_before": iso_sha256_before,
+            "iso_sha256_after": iso_sha256_after,
+            "iso_unchanged": "yes",
             "eligible_target_count": str(eligible_count),
             "target_selected_explicitly": "yes",
+            "target_selected_index": str(selected_index),
+            "target_path_id": selected_path_id,
+            "target_size_mib": str(target_size_mib),
+            "guard_size_mib": str(guard_size_mib),
             "target_identity_revalidated": "yes",
             "erase_token_confirmed": "yes",
             "target_sha256_before": target_before,
@@ -544,8 +633,14 @@ def main() -> int:
             "persistence_marker_read_after_reboot": "yes",
             "recovery_key_redacted": "yes",
             "recovery_key_included": "no",
+            "marker_session_used": "yes" if marker_session_used else "no",
+            "installer_log": installer_log.name,
             "installer_log_sha256": sha256_file(installer_log),
+            "boot1_log": boot1_log.name,
             "boot1_log_sha256": sha256_file(boot1_log),
+            "marker_log": marker_log.name,
+            "marker_log_sha256": sha256_file(marker_log),
+            "boot2_log": boot2_log.name,
             "boot2_log_sha256": sha256_file(boot2_log),
         }
         evidence_text = render_evidence(fields)

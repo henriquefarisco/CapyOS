@@ -13,24 +13,55 @@ the guest-visible flat extents while the VM is powered off.
 
 ## Prerequisites
 
-- Windows host with VMware Workstation, `vmrun.exe`, `vmware-vdiskmanager.exe`
-  and Python 3 available as `py.exe`.
+- Windows host with VMware Workstation, `vmrun.exe`, `vmware-vdiskmanager.exe`,
+  `vmcli.exe` and Python 3 available as `py.exe`.
 - WSL build toolchain and the current CapyOS sibling workspace.
 - No pre-existing files at the scratch paths. The operator's VM is irrelevant
   and must remain powered/owned independently.
 
 ## Command
 
-Run through the workspace remote execution helper:
+To rebuild and test the current tree, run from WSL:
 
 ```bash
-Automation/remote-exec.sh --bg -t 1800 \
-  "wsl -e sh -lc \"cd '/mnt/c/Users/conta/Desktop/Devin Workspace/CapyOS' && make smoke-x64-vmware-installer-wizard TOOLCHAIN64=host\""
+make smoke-x64-vmware-installer-no-uart TOOLCHAIN64=elf
+make smoke-x64-vmware-installer-wizard TOOLCHAIN64=elf
 ```
 
 Optional arguments are passed through `SMOKE_X64_VMWARE_INSTALLER_ARGS`.
 `--keep-vm` preserves a successful scratch VM for inspection. Failures always
 preserve the scratch VM and disks.
+
+For a release candidate or an ISO downloaded from a draft, do not use a target
+that depends on `iso-uefi`: that target is phony and rebuilds the image. Run the
+two exact-artifact gates instead:
+
+```bash
+make smoke-x64-vmware-installer-no-uart-existing-iso \
+  EXISTING_ISO=build/CapyOS-Installer-UEFI.iso
+make smoke-x64-vmware-installer-wizard-existing-iso \
+  EXISTING_ISO=build/CapyOS-Installer-UEFI.iso
+```
+
+Record the SHA-256 before both commands and after the second command. Promotion
+evidence is valid only when QEMU, VMware without UART and the complete VMware
+wizard name the same digest. The publish workflow builds its own ISO; therefore
+the final promotion must repeat these commands against the ISO downloaded from
+the draft, not infer equivalence from a local build.
+
+## VMware without UART
+
+`smoke-x64-vmware-installer-no-uart` is complementary to the complete wizard.
+It creates a separate UEFI VM with Secure Boot, networking and every
+`serialN.*` device disabled. A temporary unauthenticated RFB listener exists
+only on `127.0.0.1` for the duration of the gate.
+
+The no-UART gate requires an eight-second byte-identical idle prompt, sends
+exactly `0` down/up, verifies that only the input field changed, waits another
+two seconds without phantom input, sends Return down/up and accepts only the
+installer's defined cancellation path back to VMware firmware. Target and guard
+VMDKs must remain byte-identical. Exact RFB frames, sanitized VMX/logs, runtime
+serial query, VMware version and ISO hashes are stored under `build/ci`.
 
 ## Required evidence
 
@@ -54,9 +85,10 @@ build/ci/installer-wizard-evidence.manifest
 ```
 
 The manifest uses
-`capyos-installer-wizard-evidence-manifest-v1`, includes only public artifact
+`capyos-installer-wizard-evidence-manifest-v3`, includes only public artifact
 names and SHA-256 values, and is rejected if target/guard invariants, required
-booleans, field order or recovery-key declarations differ.
+booleans, field order or recovery-key declarations differ. Every named log is
+stored beside the manifest so the recorded digest can be independently checked.
 
 ## Failure handling
 
@@ -64,6 +96,9 @@ On failure, the harness powers off only its scratch VM and preserves its unique
 run directory and sanitized public logs. It never deletes or truncates an
 existing VMDK/VMX. Recovery keys are held only in process memory and replaced
 before logs are written publicly.
+
+The no-UART harness also queries `vmrun list` after teardown and fails if its
+exact disposable VM remains active. It never stops another listed VM.
 
 Do not upload a scratch directory, raw pipe transcript, `.vmem`, `.nvram`, VMDK
 or unvalidated log. Public workflows must allowlist the evidence manifest and

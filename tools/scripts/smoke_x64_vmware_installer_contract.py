@@ -8,8 +8,9 @@ from typing import Mapping
 RECOVERY_KEY_RE = re.compile(
     r"(?<![A-Z0-9])[A-Z0-9]{4}(?:-[A-Z0-9]{4}){5}(?![A-Z0-9])"
 )
-EVIDENCE_FORMAT = "capyos-installer-wizard-evidence-manifest-v1"
+EVIDENCE_FORMAT = "capyos-installer-wizard-evidence-manifest-v3"
 _REQUIRED_YES = (
+    "iso_unchanged",
     "target_selected_explicitly",
     "target_identity_revalidated",
     "erase_token_confirmed",
@@ -27,10 +28,22 @@ _REQUIRED_FIELDS = (
     "release_tag",
     "track",
     "provider",
+    "firmware",
+    "secure_boot",
+    "vcpu_count",
+    "memory_mib",
+    "network",
     "iso_artifact",
     "iso_sha256",
+    "iso_sha256_before",
+    "iso_sha256_after",
+    "iso_unchanged",
     "eligible_target_count",
     "target_selected_explicitly",
+    "target_selected_index",
+    "target_path_id",
+    "target_size_mib",
+    "guard_size_mib",
     "target_identity_revalidated",
     "erase_token_confirmed",
     "target_sha256_before",
@@ -46,8 +59,14 @@ _REQUIRED_FIELDS = (
     "persistence_marker_read_after_reboot",
     "recovery_key_redacted",
     "recovery_key_included",
+    "marker_session_used",
+    "installer_log",
     "installer_log_sha256",
+    "boot1_log",
     "boot1_log_sha256",
+    "marker_log",
+    "marker_log_sha256",
+    "boot2_log",
     "boot2_log_sha256",
 )
 
@@ -99,6 +118,7 @@ def render_scratch_vmx(
         f'displayName = "{display_name}"',
         'guestOS = "other-64"',
         'firmware = "efi"',
+        'uefi.secureBoot.enabled = "FALSE"',
         # The loader owns COM1 directly. Firmware serial-console redirection
         # would feed each pipe byte into both ConIn and the UART, splitting a
         # line across two independent consumers.
@@ -141,10 +161,25 @@ def parse_flat_extent(descriptor: Path) -> Path:
     matches = re.findall(r'^RW\s+\d+\s+FLAT\s+"([^"]+)"\s+\d+\s*$', text, flags=re.MULTILINE)
     if len(matches) != 1:
         raise ValueError("VMDK descriptor must contain exactly one FLAT extent")
-    extent = (descriptor.parent / matches[0]).resolve()
+    descriptor_root = descriptor.parent.resolve()
+    extent = (descriptor_root / matches[0]).resolve()
+    try:
+        extent.relative_to(descriptor_root)
+    except ValueError as exc:
+        raise ValueError("VMDK extent must stay beside its descriptor") from exc
+    if extent.parent != descriptor_root:
+        raise ValueError("VMDK extent must be a direct descriptor sibling")
     if not extent.is_file():
         raise FileNotFoundError(extent)
     return extent
+
+
+def exact_extent_size_mib(extent: Path) -> int:
+    size = extent.stat().st_size
+    mib = 1024 * 1024
+    if size <= 0 or size % mib != 0:
+        raise ValueError("VMDK extent size must be a positive whole MiB")
+    return size // mib
 
 
 def render_evidence(fields: Mapping[str, str]) -> str:
@@ -175,6 +210,14 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError("installer evidence format is invalid")
     if fields.get("track") != "UEFI/GPT/x86_64" or fields.get("provider") != "vmware-workstation":
         raise ValueError("installer evidence platform is invalid")
+    if (
+        fields.get("firmware") != "uefi"
+        or fields.get("secure_boot") != "disabled"
+        or fields.get("vcpu_count") != "2"
+        or fields.get("memory_mib") != "1024"
+        or fields.get("network") != "nat-e1000"
+    ):
+        raise ValueError("installer evidence VM topology is invalid")
     if fields.get("recovery_key_included") != "no":
         raise ValueError("installer evidence cannot include recovery key")
     for key in _REQUIRED_YES:
@@ -186,10 +229,34 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError("eligible target count is invalid") from exc
     if eligible < 2:
         raise ValueError("installer evidence requires at least two eligible targets")
+    try:
+        selected_index = int(fields.get("target_selected_index", "0"), 10)
+        target_size_mib = int(fields.get("target_size_mib", "0"), 10)
+        guard_size_mib = int(fields.get("guard_size_mib", "0"), 10)
+    except ValueError as exc:
+        raise ValueError("installer evidence disk identity is invalid") from exc
+    if selected_index < 1 or selected_index > eligible:
+        raise ValueError("installer evidence selected index is outside target inventory")
+    if target_size_mib <= 0 or guard_size_mib <= target_size_mib:
+        raise ValueError("installer evidence disk capacities are invalid")
+    if not re.fullmatch(r"[0-9a-f]{16}", fields.get("target_path_id", "")):
+        raise ValueError("installer evidence PathId is invalid")
+    if fields.get("marker_session_used") not in ("yes", "no"):
+        raise ValueError("installer evidence marker session state is invalid")
+    for key in ("installer_log", "boot1_log", "marker_log", "boot2_log"):
+        value = fields.get(key, "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+\.log", value):
+            raise ValueError(f"installer evidence artifact name is invalid: {key}")
     digest_fields = tuple(key for key in _REQUIRED_FIELDS if key.endswith("sha256"))
     for key in digest_fields:
         if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
             raise ValueError(f"installer evidence digest is invalid: {key}")
+    if not (
+        fields["iso_sha256"]
+        == fields["iso_sha256_before"]
+        == fields["iso_sha256_after"]
+    ):
+        raise ValueError("installer ISO changed during validation")
     if fields["target_sha256_before"] == fields["target_sha256_after"]:
         raise ValueError("installer target did not change")
     if fields["guard_sha256_before"] != fields["guard_sha256_after"]:

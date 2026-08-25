@@ -1,65 +1,62 @@
-# CapyOS — Conferência do pacote público de release
+# CapyOS — conferência do pacote público de release
 
 ## Objetivo
 
-`tools/scripts/release_public_materials_check.py` confere os materiais públicos
-que devem acompanhar uma release antes da publicação externa, sem acessar chave
-privada e sem gerar artefatos.
-
-O gate valida que checksums, assinatura, chave pública, fingerprint e manifesto
-público estão coerentes entre si.
+`release_public_materials_check.py` e `release_publication_gate.py` validam os
+materiais públicos sem consumir uma chave privada. Na promoção oficial eles
+operam sobre os bytes baixados do GitHub Release, não sobre os artefatos locais
+regerados pelo Makefile.
 
 ## Entradas exigidas
 
-- `build/release-artifacts.sha256`
-  - lista pública de checksums SHA-256.
-- `build/release-artifacts.sha256.sig`
-  - assinatura Ed25519 raw de 64 bytes.
-- `RELEASE_PUBLIC_KEY` ou `CAPYOS_RELEASE_PUBLIC_KEY`
-  - chave pública Ed25519 PEM/SPKI.
-- `RELEASE_PUBLIC_KEY_SHA256` ou `CAPYOS_RELEASE_PUBLIC_KEY_SHA256`
-  - fingerprint SHA-256 esperado da chave pública.
-- `RELEASE_PUBLIC_KEY_MANIFEST` ou `CAPYOS_RELEASE_PUBLIC_KEY_MANIFEST`
-  - manifesto público gerado por `release-public-key-manifest`.
+- `release-artifacts.sha256`, com exatamente os seis payloads públicos;
+- `release-artifacts.sha256.sig`, assinatura Ed25519 raw de 64 bytes;
+- `release-ed25519.pub.pem`;
+- fingerprint real aprovado em
+  `.github/release-policy/release-checksum-ed25519.sha256` no commit da tag;
+- `release-public-key.manifest`;
+- `release-publication.manifest` com `release_id=<versão-estendida-sem-v>`;
+- os seis payloads referenciados pelo checksum.
 
-## Execução via Makefile
+O `latest.ini` assinado é validado separadamente por
+`verify_update_manifest.py`, pois usa a chave dedicada pinada pelo update-agent.
+Essa chave é distinta do signer de checksums e seu pin não pode ser reutilizado
+no arquivo de política. Para uma invocação local, `RELEASE_KEY_SHA256` abaixo
+deve receber exatamente o valor versionado; a promoção oficial não lê
+`CAPYOS_RELEASE_PUBLIC_KEY_SHA256` de uma variável do repositório GitHub.
 
-```bash
-make release-public-materials-check \
-  RELEASE_PUBLIC_KEY=build/release-ed25519.pub.pem \
-  RELEASE_PUBLIC_KEY_SHA256=<hex64-ou-aa:bb:...> \
-  RELEASE_PUBLIC_KEY_MANIFEST=build/release-public-key.manifest
+## Execução sobre o bundle staged
+
+```sh
+python3 tools/scripts/release_publication_gate.py \
+  --checksums "$BUNDLE/release-artifacts.sha256" \
+  --signature "$BUNDLE/release-artifacts.sha256.sig" \
+  --artifact-root "$BUNDLE" \
+  --materials-root "$BUNDLE" \
+  --public-key "$BUNDLE/release-ed25519.pub.pem" \
+  --expected-public-key-sha256 "$RELEASE_KEY_SHA256" \
+  --public-key-manifest "$BUNDLE/release-public-key.manifest" \
+  --publication-manifest "$BUNDLE/release-publication.manifest" \
+  --expected-release-id "$VERSION"
 ```
 
-## Validações
+Antes do gate criptográfico, a promoção executa:
 
-O gate falha fechado quando encontra:
-
-- arquivo de checksums ausente, vazio, não UTF-8 ou malformado;
-- artefato listado ausente ou com SHA-256 divergente;
-- caminho de artefato absoluto, com `..`, backslash ou NUL;
-- assinatura ausente, vazia ou com tamanho diferente de 64 bytes;
-- chave pública ausente, vazia ou não Ed25519/SPKI;
-- fingerprint esperado ausente, inválido ou divergente;
-- manifesto ausente, vazio, não UTF-8, incompleto, duplicado ou com campo
-  desconhecido;
-- manifesto divergente da chave pública ou do fingerprint esperado;
-- assinatura Ed25519 inválida sobre o arquivo de checksums.
-
-## Posição no pipeline
-
-Ordem recomendada para release pública:
-
-```bash
-make sign-release-checksums RELEASE_PRIVATE_KEY=... RELEASE_PUBLIC_KEY=...
-make release-public-key-fingerprint RELEASE_PUBLIC_KEY=...
-make release-public-key-manifest RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
-make release-public-materials-check RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
-make release-publication-manifest RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
-make verify-release-publication-manifest RELEASE_PUBLIC_KEY_SHA256=...
-make release-ci-publication-contract RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
-make release-publication-gate RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
-make release-ci-tag-gate RELEASE_TAG=... RELEASE_PUBLIC_KEY=... RELEASE_PUBLIC_KEY_SHA256=...
+```sh
+python3 tools/scripts/verify_release_promotion_bundle.py --bundle-dir "$BUNDLE"
 ```
 
-A chave privada continua offline e nunca é consumida por estes gates.
+Esse verificador exige o conjunto exato de 12 assets e confirma que
+`release-artifacts.sha256` cobre, em ordem lexicográfica, somente os seis
+payloads. Ele também rejeita diretórios, links simbólicos, arquivos vazios,
+nomes inseguros, múltiplos payloads CapyAI e assinatura com tamanho incorreto.
+
+## Limite importante
+
+`make sign-release-checksums` continua válido para o pacote local de cinco
+artefatos descrito em `docs/security/release-signing.md`, mas não deve ser usado
+no handoff do GitHub draft: ele regenera outro inventário. Para a release
+pública, `sign_release.py` deve assinar diretamente o
+`release-artifacts.sha256` baixado do draft.
+
+A chave privada continua offline e nunca é consumida por esses gates.

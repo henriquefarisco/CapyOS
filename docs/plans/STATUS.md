@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-08-21 | **Versao:** `0.9.0+20260821` (stable) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-08-25 | **Versao:** `0.9.1+20260825` (stable candidate) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -26,13 +26,18 @@
   congelamento ao abrir/fechar repetidamente, e o CapyAI grafico passa a usar
   execucao assincrona sem bloquear frames do desktop.
 
-- **Etapa 8 em andamento:** o preflight autenticado do updater agora inicializa
-  a versão real do core no boot e usa `payload_size` assinado para limitar o
-  buffer temporário do agente; valida tamanho/SHA-256 antes e depois do readback
-  persistido e exige bytes reais no dry-run/apply futuro. Staging/apply continuam
-  fail-closed (`-60`) até o boot-control A/B ser consumido pelo UEFI com flush
-  durável e rollback comprovado após reboot; nenhum critério de aceite da Etapa 8
-  foi marcado como concluído por esta fatia.
+- **Etapa 8 em andamento:** staging, apply no slot inativo, tentativa única,
+  confirmação de saúde e rollback já estão implementados e host-provados. O
+  instalador oficial e a publicação remota dos nove módulos também passaram. O
+  critério restante exige materiais Ed25519 de produção publicados e o ciclo
+  apply/reboot/health/rollback completo no VMware oficial.
+
+- **Candidato stable `0.9.1+20260825`:** automatiza a regressao do instalador
+  VMware sem UART sobre uma ISO existente, exige prompt estavel e entrada EFI
+  ConIn valida, preserva dois discos descartaveis e endurece a evidencia do
+  wizard completo. O bump nao altera ABI nem pins de repositorios irmaos. A
+  candidatura nao equivale a publicacao: assinatura offline, politicas remotas,
+  promocao imutavel e ciclo A/B de producao continuam gates obrigatorios.
 
 - **Etapa 8 — hardening do instalador:** o loader deixa de escolher o maior
   disco silenciosamente. A nova politica pura calcula e testa o plano GPT,
@@ -154,6 +159,25 @@
   EFI ConIn recebe uma janela limitada de 20 ms antes do fallback direto. O
   contrato ganhou testes host e um gate QEMU/OVMF sem `isa-serial`, enquanto o
   bootstrap Windows/WSL passou a validar todo o toolchain de build e VMware.
+- **Stable `0.9.0+20260821`:** a ISO, o índice imutável e os nove módulos foram
+  publicados e revalidados remotamente por URL, tamanho e SHA-256. A release
+  pública possui sete assets, sem `.sig`, manifestos públicos ou `latest.ini`;
+  portanto ainda não prova autenticação Ed25519 nem o ciclo A/B de produção. O
+  desenvolvimento pós-0.9 separa o draft da promoção, usa o fingerprint real do
+  signer de checksums versionado em
+  `.github/release-policy/release-checksum-ed25519.sha256`, valida os 12 assets
+  antes de uma transição atômica para Latest imutável e repete os gates pelas
+  rotas públicas. A promoção inicial também exige um token de auditoria
+  fine-grained, temporário e limitado ao repositório com `Administration: write`
+  — elevado porque a API só assim expõe `bypass_actors`, embora a workflow faça
+  apenas `GET` — e rulesets sem bypass de `refs/tags/v*` e `refs/heads/main`.
+  Resposta parcial, pin ausente/placeholder ou pré-requisito remoto incompleto
+  mantém a promoção fail-closed. O lock de workflows é global e o operador deve
+  preservar, do último upload até o fim do run, uma janela sem mutação manual de
+  assets, refs, imutabilidade ou rulesets; as três políticas são reconsultadas
+  imediatamente antes do único `PATCH`. O ruleset de `main` prova proteção
+  corrente, não review histórico do commit. O ciclo A/B VMware permanece aceite
+  pós-promoção obrigatório.
 - **Histórico `alpha.319` — gate do ciclo A/B entregue, candidata não
   promovida:** o gate do último critério e os contratos host ficaram prontos,
   mas a primeira execução real expôs uma falha de boot anterior à lógica de
@@ -173,12 +197,12 @@
   passou em 86,2 s, com dois boots e persistência. O smoke oficial ISO TCG, o
   update A/B e os gates VMware ainda não foram executados; esses gates não podem
   ser inferidos a partir dos smokes já aprovados.
-- **Entrega de módulos na `alpha.320`:** o índice imutável tem exatamente nove
-  entradas HTTPS únicas, com tamanho e SHA-256. A verificação pós-publicação
-  deverá baixar novamente o índice da release, compará-lo byte a byte e validar
-  os nove payloads. O pin CapyUI sobe de `2.24.1` para `2.24.2`, patch exclusivo
+- **Entrega de módulos iniciada na `alpha.320` e publicada em `0.9.0`:** o índice
+  imutável tem exatamente nove entradas HTTPS únicas, com tamanho e SHA-256; a
+  verificação pós-publicação baixou novamente o índice, comparou-o byte a byte e
+  validou os nove payloads. O pin CapyUI sobe de `2.24.1` para `2.24.2`, patch exclusivo
   de supply chain, sem mudança de `capy-ui-widget` v2.22, desktop-session v1 ou
-  schema 7. Esse gate fica pendente até a tag e os assets existirem.
+  schema 7.
 - **Conteúdo do gate entregue no `alpha.319`:** `make
   smoke-x64-vmware-update-ab` (aceite oficial VMware+UEFI+E1000) e `make
   smoke-x64-qemu-update-ab` (preflight) instalam a ISO oficial num disco vazio e
@@ -187,12 +211,14 @@
   inativo com autorização geracional e flush durável, consumo da única tentativa
   pelo loader UEFI, confirmação de saúde persistente e, no segundo ciclo deixado
   sem confirmar, rollback aplicado pelo loader e reportado pelo updater. Como a
-  chave de release é offline-only, cada execução gera um par Ed25519 descartável e
-  compila o kernel com `CAPYOS_UPDATE_LAB_TRUST_KEY_HEX` (mesmo flag pina o
-  catálogo e libera `payload_url` `http://`); o kernel de laboratório é
-  fail-closed, recusado por `iso-uefi` fora do target de smoke e por
-  `release-check`. A publicação assinada pela chave de produção permanece passo de
-  operador (custódia de chave), documentada em
+  chave dedicada de produção do `latest.ini`/update-agent é offline-only, cada
+  execução de laboratório gera um par Ed25519 descartável específico para esse
+  manifesto e compila o kernel com `CAPYOS_UPDATE_LAB_TRUST_KEY_HEX` (mesmo flag
+  pina o catálogo e libera `payload_url` `http://`); esse par não é a chave que
+  assina os checksums da release. O kernel de laboratório é fail-closed,
+  recusado por `iso-uefi` fora do target de smoke e por `release-check`. A
+  publicação com as duas chaves oficiais permanece passo de operador (custódia
+  de chave), documentada em
   [`../operations/etapa-8-signed-update-playbook.md`](../operations/etapa-8-signed-update-playbook.md).
   Observabilidade: rótulo de motivo para as nove recusas do provider A/B,
   `Boot provider: ready=/reason=` em `print-boot-slot` e
@@ -221,7 +247,7 @@
 - **Etapa 5 fechada em `alpha.264`:** `libcapy-tls` userland agora faz handshake BearSSL **real** (`capy_tls_is_supported()==1`) — entropia/wall-clock syscalls, trust anchors reais, ClientHello+SNI, handshake-drive, validação X.509 fail-closed e o seam HTTPS de `capy_net`. A flag `CAPYOS_TLS_USERLAND_HANDSHAKE` foi **promovida a default** após o gate externo (`make smoke-x64-vmware-tls-handshake`, marker `[smoke] tls-handshake ready` no COM1, + `release-check`). Hardening de segurança nesta janela: overflows de integer no ELF loader (userland + boot, corrigidos + testes), tetos de custo KDF no volume header, robustez adversarial de DNS/DHCP/ICMP/ARP e bound do `names_equal` do CAPYFS.
 - **Etapas bloqueadas:** Etapas 9-16 dependem do fechamento integral da etapa anterior.
 
-## Repositórios apartados (estado em alpha.321)
+## Repositórios apartados (baseline 0.9.0)
 
 Os contratos de integração cross-repo são autoritativos em
 [`docs/reference/integration/`](../reference/integration/README.md). A
@@ -422,7 +448,7 @@ VMware + UEFI + E1000.
 [`docs/operations/etapa-2-external-validation-playbook.md`](../operations/etapa-2-external-validation-playbook.md)
 orquestra build gates + provisionamento + smoke real + evidência/aceitação + promoção pública.
 
-## Sequência ativa (alpha.321)
+## Sequência ativa (baseline 0.9.0)
 
 > **Nota:** após a reordenação por ROI em 2026-05-15, a numeração das
 > Etapas 3-16 mudou. A sequência antiga está em
@@ -439,7 +465,7 @@ Resumo executivo vigente:
 | 5 | TLS userland real | Concluída | fechada em alpha.264 |
 | 6 | Apps básicos do desktop maduros | Concluída | fechada em alpha.287 |
 | 7 | Browser usável com web estática moderna | Concluída | fechada em alpha.312; integra CapyBrowser, CapyCodecs e CapyAI |
-| 8 | Release/update gate oficial + instalador polido | **Em andamento** | boot/instalação KVM + CLI TCG validados; ISO TCG oficial, update A/B, VMware e publicação verificável ainda abertos |
+| 8 | Release/update gate oficial + instalador polido | **Em andamento** | publicação Ed25519 e ciclo A/B oficial VMware ainda abertos |
 | 9 | Package manager + SDK + ABI estável | Bloqueada | depende do fechamento integral da Etapa 8 |
 | 10 | Áudio + multimídia básica | Bloqueada | integra `CapyCodecs` áudio por contrato |
 | 11 | WiFi + power management + suspend/resume | Bloqueada | sem repo apartado |
