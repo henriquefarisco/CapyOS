@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import re
 import sys
 import tempfile
 import unittest
@@ -17,10 +18,44 @@ if str(SCRIPTS) not in sys.path:
 
 import verify_release_publication_manifest as publication  # noqa: E402
 import verify_update_manifest as update  # noqa: E402
-from update_manifest_common import ManifestError  # noqa: E402
+from update_manifest_common import ManifestError, PINNED_PUBLIC_KEY_HEX  # noqa: E402
 
 
 class ReleaseManifestExpectationTests(unittest.TestCase):
+    def test_update_trust_anchor_matches_runtime_and_operator_documentation(
+        self,
+    ) -> None:
+        source = (ROOT / "src" / "services" / "update_agent_parse.c").read_text(
+            encoding="utf-8"
+        )
+        initializer = re.search(
+            r"update_agent_release_public_key\[ED25519_PUBLIC_KEY_SIZE\]\s*=\s*\{([^}]*)\}",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(initializer)
+        assert initializer is not None
+        runtime_hex = "".join(
+            match.group(1).lower()
+            for match in re.finditer(r"0x([0-9a-fA-F]{2})", initializer.group(1))
+        )
+        self.assertEqual(runtime_hex, PINNED_PUBLIC_KEY_HEX)
+        self.assertEqual(len(runtime_hex), 64)
+
+        signing_doc = (ROOT / "docs" / "security" / "release-signing.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"```text\n{PINNED_PUBLIC_KEY_HEX}\n```", signing_doc)
+
+    def test_versioned_release_key_policy_is_canonical(self) -> None:
+        policy = (
+            ROOT
+            / ".github"
+            / "release-policy"
+            / "release-checksum-ed25519.sha256"
+        ).read_bytes()
+        self.assertRegex(policy.decode("ascii"), r"^[0-9a-f]{64}\n$")
+
     def test_update_published_at_must_match_exactly(self) -> None:
         fields = {"published_at": "2026-08-24"}
         update.require_expected(fields, "published_at", "2026-08-24")

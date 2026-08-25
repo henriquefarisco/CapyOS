@@ -4,7 +4,7 @@
 **Canal:** stable (producao)
 **Versao:** `0.9.1+20260825`
 **Plataforma oficial:** VMware + UEFI + E1000
-**Tipo:** patch de compatibilidade do instalador e hardening da promocao de release
+**Tipo:** patch de compatibilidade do instalador, recuperacao de confianca e hardening da promocao de release
 
 ## Resumo executivo
 
@@ -22,6 +22,12 @@ teste. A esteira de promocao permanece fail-closed: assinatura Ed25519 e
 politicas remotas sao exigidas antes da unica transicao para publicacao e
 Latest, sem armazenar chaves privadas no repositorio ou na CI.
 
+Esta release também reprovisiona a chave dedicada do `latest.ini` por uma nova
+instalação oficial. As alphas 313/314 foram assinadas pelo pin anterior, mas a
+chave privada necessária para uma release-ponte não estava disponível. A
+recuperação não enfraquece a verificação: instalações antigas precisam desta
+ISO oficial; somente imagens 0.9.1 ou posteriores aceitam o novo catálogo.
+
 ## Mudancas
 
 - Novo gate `smoke-x64-vmware-installer-no-uart-existing-iso`, com framebuffer
@@ -36,29 +42,36 @@ Latest, sem armazenar chaves privadas no repositorio ou na CI.
   `vmware-vdiskmanager.exe`.
 - Documentacao operacional passa a exigir QEMU sem UART, VMware sem UART e
   wizard VMware sobre a mesma ISO e o mesmo SHA-256.
+- Fingerprint real da nova chave dedicada de checksums passa a ser autoridade
+  versionada em `.github/release-policy/release-checksum-ed25519.sha256`.
+- Âncora raw Ed25519 do update-agent é reprovisionada para
+  `9a98d2011ba954a3975c9f628e2f9255df87f1f429c9665d51ac6aaf91f474e0`;
+  clientes do pin anterior exigem reinstalação oficial, sem bypass de assinatura.
 
 ## Validacao
 
 - `make release-check TOOLCHAIN64=elf CROSS64=/home/henriquefarisco/cross/bin/x86_64-elf`
   -- passa no WSL; testes, layout audit, version audit, build UEFI e checksums.
 - ISO final validada byte a byte: SHA-256
-  `b38c8c6f7c300575c6704fb18872476c8815986e6e8f28b4b90c9a64f97c79df`.
+  `0b2765d757d6e606c04d0af9f57623ab2af516e69b2941a70d2e819955fdf19c`.
 - `smoke-x64-qemu-installer-no-uart` -- passa sem `isa-serial`; prompt limpo,
   EFI ConIn funcional e disco inalterado. Evidencias em
-  `build/ci/release-v0.9.1-b38c8c6f/qemu-no-uart/`.
+  `build/ci/release-v0.9.1-0b2765d7/qemu-no-uart/`.
 - `smoke-x64-vmware-installer-no-uart-existing-iso` -- passa com zero UART,
   prompt visualmente estavel, entrada `0` localizada, cancelamento para o Boot
   Manager, ISO e ambos os VMDKs inalterados. Manifesto e capturas em
-  `build/ci/release-v0.9.1-b38c8c6f/vmware-no-uart/`.
+  `build/ci/release-v0.9.1-0b2765d7/vmware-no-uart/`.
 - `smoke-x64-vmware-installer-wizard-existing-iso` -- passa com selecao explicita
   do alvo por capacidade/`PathId`, instalacao, primeiro boot, login, marcador de
   persistencia lido apos reboot e disco guard byte-identico. Manifesto v3 e logs
-  publicos em `build/ci/release-v0.9.1-b38c8c6f/vmware-wizard/`.
+  publicos em `build/ci/release-v0.9.1-0b2765d7/vmware-wizard/`.
 - `vmrun list` -- zero VMs apos cada gate VMware; a ISO manteve o mesmo SHA-256
   antes e depois dos tres cenarios.
 
-Esta nota registra validacao local do artefato e nao antecipa publicacao,
-assinatura, imutabilidade ou Latest.
+Os hashes e evidências acima pertencem ao candidato local depois da recuperação
+de confiança. O workflow da tag recompila o artefato; por isso, os três gates de
+VM serão repetidos sobre os bytes exatos baixados do draft antes da promoção.
+Esta nota não antecipa publicação, assinatura, imutabilidade ou Latest.
 
 ## Compliance de versoes
 

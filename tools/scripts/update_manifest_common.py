@@ -13,8 +13,8 @@ from datetime import date
 from pathlib import Path
 
 PINNED_PUBLIC_KEY_HEX = (
-    "be230bddb4144dfbcfbf0f24495ed2c8"
-    "c9acf3866fb48633f4d29e49de69ae6d"
+    "9a98d2011ba954a3975c9f628e2f9255"
+    "df87f1f429c9665d51ac6aaf91f474e0"
 )
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 MANIFEST_MAX_BYTES = 767
