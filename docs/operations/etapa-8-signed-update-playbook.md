@@ -1,8 +1,8 @@
 # Playbook — gate do ciclo A/B assinado (Etapa 8)
 
-> **Baseline atual: `0.9.0+20260821` (stable).** O lifecycle A/B e os gates de
-> laboratório existem, mas a Etapa 8 permanece aberta até uma release com os
-> materiais Ed25519 de produção executar apply, reboot, confirmação de saúde e
+> **Baseline atual: `0.9.1+20260825` (stable candidate).** O lifecycle A/B e os gates de
+> laboratório existem, mas a Etapa 8 permanece aberta até que a candidata publique
+> os materiais Ed25519 de produção e execute apply, reboot, confirmação de saúde e
 > rollback no VMware oficial. A release 0.9.0 publicada contém os sete
 > assets-base verificados por SHA-256, mas não contém `.sig`, manifestos públicos
 > ou `latest.ini`; portanto ela não é evidência desse ciclo de produção.

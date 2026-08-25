@@ -1,7 +1,7 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-08-24 (baseline stable 0.9.0)
-**Versão atual:** `0.9.0+20260821`
+**Data de referência:** 2026-08-25 (candidato stable 0.9.1)
+**Versão atual:** `0.9.1+20260825`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
@@ -86,7 +86,7 @@ Referências obrigatórias:
 | 5 | TLS userland real | Concluída (alpha.264) | Etapa 4 | BearSSL userland com handshake real validado |
 | 6 | Apps básicos do desktop maduros | Concluída (alpha.287) | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
 | 7 | Browser usável com web estática moderna | Concluída (alpha.312) | Etapa 6 | HTTPS real, HTML/CSS, imagens, toolbar, histórico, links, cache, limites, sem JavaScript |
-| 8 | Release/update gate oficial + instalador polido | Em andamento (0.9.0) | Etapa 7 | publicação Ed25519, ciclo A/B oficial e instalador wizard amigável |
+| 8 | Release/update gate oficial + instalador polido | Em andamento (candidato 0.9.1) | Etapa 7 | publicação Ed25519, ciclo A/B oficial e instalador wizard amigável |
 | 9 | Package manager + SDK + ABI estável | Bloqueada | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
 | 10 | Áudio + multimídia básica | Bloqueada | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist e codecs por contrato |
 | 11 | WiFi + power management + suspend/resume | Bloqueada | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
@@ -753,7 +753,7 @@ so fixa COM1 apos uma tecla valida e preserva uma janela limitada para EFI
 ConIn. Testes host e um gate QEMU/OVMF sem `isa-serial` cobrem a regressao; o
 aceite de release repete o caminho no VMware oficial.
 
-**Em desenvolvimento após `0.9.0` — promoção assinada fail-closed:** o workflow
+**Candidato `0.9.1` — promoção assinada e validação VMware fail-closed:** o workflow
 da tag passa a parar num draft com sete assets-base. Após a assinatura offline
 dos bytes exatos, uma workflow manual exige o conjunto de 12 assets, o
 fingerprint real do signer de checksums versionado no commit da tag em
@@ -780,6 +780,13 @@ tenha passado historicamente por PR/review. Como o lock não cobre ações human
 do último upload até o término do run nenhum operador pode alterar assets, a
 tag, `main`, immutable releases ou qualquer dos dois rulesets. O promoter
 reconsulta as três políticas imediatamente antes do único `PATCH`.
+
+O mesmo candidato adiciona um gate VMware sem UART/COM1 sobre uma ISO existente:
+o VMX e a consulta runtime precisam provar zero dispositivos seriais, o prompt
+deve permanecer byte-estavel por oito segundos, EFI ConIn recebe uma sequencia
+de cancelamento valida e os discos target/guard precisam manter seus hashes. O
+wizard completo continua sendo um gate separado de instalacao, login,
+persistencia e reboot sobre exatamente o mesmo SHA-256.
 
 Como a chave dedicada de produção do `latest.ini`/update-agent é offline-only e
 nunca entra em runner automatizado, cada execução de laboratório gera um par
@@ -854,7 +861,7 @@ de módulos, independente daquele fix pontual:
 
 - O índice default do first-boot continua sendo um **pin de release explícito em
   C** (`CAPYOS_DEFAULT_MODULES_INDEX_URL` em
-  `src/config/first_boot/modules.c`), agora alinhado à `0.9.0`; o
+  `src/config/first_boot/modules.c`), agora alinhado ao candidato `0.9.1`; o
   `version-audit` impede drift entre `VERSION.yaml`, Makefile e runtime. O
   contrato gerado possui exatamente nove entradas HTTPS únicas, com tamanho e
   SHA-256. A publicação dos assets e a verificação remota continuam obrigatórias.
@@ -1211,7 +1218,7 @@ A promoção de "host-provado" → "integrado" só ocorre por **adaptador CapyOS
 pequeno e versionado + gate externo aprovado** na Etapa em que o módulo é aceito
 (§5 da matriz de compatibilidade).
 
-### 20.1 CapyOS (core) — `0.9.0+20260821`
+### 20.1 CapyOS (core) — `0.9.1+20260825`
 
 **Papel:** base do sistema (boot, kernel, drivers, storage, rede/TLS,
 compositor, input, timers, sandbox, package install real, APIs nativas, gates de

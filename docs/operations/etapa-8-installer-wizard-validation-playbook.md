@@ -85,9 +85,10 @@ build/ci/installer-wizard-evidence.manifest
 ```
 
 The manifest uses
-`capyos-installer-wizard-evidence-manifest-v1`, includes only public artifact
+`capyos-installer-wizard-evidence-manifest-v3`, includes only public artifact
 names and SHA-256 values, and is rejected if target/guard invariants, required
-booleans, field order or recovery-key declarations differ.
+booleans, field order or recovery-key declarations differ. Every named log is
+stored beside the manifest so the recorded digest can be independently checked.
 
 ## Failure handling
 

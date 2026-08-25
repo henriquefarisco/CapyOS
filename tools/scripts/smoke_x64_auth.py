@@ -27,12 +27,17 @@ def installer_eligible_target_count(text: str) -> int | None:
 
 
 def installer_eligible_targets(text: str) -> tuple[tuple[int, str, int], ...]:
-    pattern = re.compile(
+    display_pattern = re.compile(
         r"^\s*\[(\d+)\] PathId ([0-9A-Fa-f]{16}), MediaId \d+ - (\d+) MiB - eligible(?:\s|$)"
+    )
+    serial_pattern = re.compile(
+        r"^\[installer\] target-index=(\d+) pathid=([0-9A-Fa-f]{16}) size-mib=(\d+)$"
     )
     targets: list[tuple[int, str, int]] = []
     for line in text.splitlines():
-        match = pattern.match(line)
+        match = display_pattern.match(line)
+        if match is None:
+            match = serial_pattern.match(line.strip())
         if match:
             targets.append(
                 (int(match.group(1), 10), match.group(2).lower(), int(match.group(3), 10))
@@ -118,11 +123,15 @@ def complete_iso_install(
     mk = session.marker()
     session.send_firmware_line(str(target_selection))
     session.wait_for("Press 'I' to start", timeout=timeout, start_at=mk)
-    if (
-        selected_path_id
-        and f"selected pathid {selected_path_id}" not in session.text_since(mk).lower()
-    ):
-        raise RuntimeError("installer selected a different PathId than requested target")
+    if selected_path_id:
+        selected_marker = (
+            f"[installer] selected-index={target_selection} "
+            f"pathid={selected_path_id} size-mib={target_size_mib}"
+        )
+        if selected_marker not in session.text_since(mk).lower():
+            raise RuntimeError(
+                "installer selected a different index, PathId or capacity than requested target"
+            )
     mk = session.marker()
     session.send_text("I", newline=False)
     installer_prompt = session.wait_for_any(

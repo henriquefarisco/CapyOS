@@ -186,6 +186,22 @@ def main() -> int:
     ):
         print("[FAIL] installer target was not selected by capacity")
         return 1
+    serial_candidate_text = (
+        "[installer] target-index=1 pathid=0123456789abcdef size-mib=2048\n"
+        "[installer] target-index=2 pathid=fedcba9876543210 size-mib=3072\n"
+    )
+    if installer_eligible_targets(serial_candidate_text) != (
+        (1, "0123456789abcdef", 2048),
+        (2, "fedcba9876543210", 3072),
+    ):
+        print("[FAIL] installer serial target inventory was not parsed")
+        return 1
+    if installer_select_target_by_size(serial_candidate_text, 2048) != (
+        1,
+        "0123456789abcdef",
+    ):
+        print("[FAIL] installer serial target was not selected by capacity")
+        return 1
     try:
         installer_select_target_by_size(candidate_text + candidate_text, 2048)
     except RuntimeError:
@@ -558,14 +574,26 @@ def main() -> int:
         digest_a = "a" * 64
         digest_b = "b" * 64
         evidence = {
-            "format": "capyos-installer-wizard-evidence-manifest-v1",
+            "format": "capyos-installer-wizard-evidence-manifest-v3",
             "release_tag": "0.8.0-alpha.315+20260715",
             "track": "UEFI/GPT/x86_64",
             "provider": "vmware-workstation",
+            "firmware": "uefi",
+            "secure_boot": "disabled",
+            "vcpu_count": "2",
+            "memory_mib": "1024",
+            "network": "nat-e1000",
             "iso_artifact": "CapyOS.iso",
             "iso_sha256": digest_a,
+            "iso_sha256_before": digest_a,
+            "iso_sha256_after": digest_a,
+            "iso_unchanged": "yes",
             "eligible_target_count": "2",
             "target_selected_explicitly": "yes",
+            "target_selected_index": "1",
+            "target_path_id": "0123456789abcdef",
+            "target_size_mib": "2048",
+            "guard_size_mib": "3072",
             "target_identity_revalidated": "yes",
             "erase_token_confirmed": "yes",
             "target_sha256_before": digest_a,
@@ -581,8 +609,14 @@ def main() -> int:
             "persistence_marker_read_after_reboot": "yes",
             "recovery_key_redacted": "yes",
             "recovery_key_included": "no",
+            "marker_session_used": "yes",
+            "installer_log": "installer.log",
             "installer_log_sha256": digest_a,
+            "boot1_log": "boot1.log",
             "boot1_log_sha256": digest_a,
+            "marker_log": "marker.log",
+            "marker_log_sha256": digest_a,
+            "boot2_log": "boot2.log",
             "boot2_log_sha256": digest_a,
         }
         rendered = render_evidence(evidence)

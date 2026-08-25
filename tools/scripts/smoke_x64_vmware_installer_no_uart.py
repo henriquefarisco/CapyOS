@@ -190,9 +190,14 @@ def parse_vmrun_version_output(text: str) -> str:
 
 def query_vmrun_version(vmrun: Path, host_log: Path) -> str:
     result = run_logged([str(vmrun)], host_log, "vmrun-version")
-    if result.returncode != 0:
+    # VMware Workstation 26 prints its exact version followed by usage and exits
+    # with -1 when vmrun is invoked without a command.  Windows subprocess may
+    # expose that status as either -1 or unsigned 0xffffffff.  Accept only those
+    # observed usage statuses, then require one canonical version line; crashes
+    # and ambiguous output still fail.
+    if result.returncode not in (0, 1, -1, 0xFFFFFFFF):
         raise RuntimeError("unable to query VMware vmrun version")
-    return parse_vmrun_version_output(result.stdout)
+    return parse_vmrun_version_output(result.stdout + "\n" + result.stderr)
 
 
 def create_vmdk(
@@ -958,24 +963,25 @@ def main() -> int:
         return 2
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.unlink(missing_ok=True)
+    artifact_root = evidence_path.parent
 
     run_id = uuid.uuid4().hex[:12]
     run_root = work_root / run_id
     run_root.mkdir(parents=True, exist_ok=False)
     display_name = f"CapyOS Installer No UART {run_id}"
-    host_log = safe_root / f"smoke_x64_vmware_installer_no_uart_{run_id}.host.log"
+    host_log = artifact_root / f"smoke_x64_vmware_installer_no_uart_{run_id}.host.log"
     artifact_prefix = f"smoke_x64_vmware_installer_no_uart_{run_id}"
-    prompt_bmp = safe_root / f"{artifact_prefix}.prompt.bmp"
-    idle_bmp = safe_root / f"{artifact_prefix}.idle.bmp"
-    zero_bmp = safe_root / f"{artifact_prefix}.zero.bmp"
-    cancel_bmp = safe_root / f"{artifact_prefix}.cancel.bmp"
-    failure_bmp = safe_root / f"{artifact_prefix}.failure.bmp"
-    prompt_png = safe_root / f"{artifact_prefix}.prompt.png"
-    idle_png = safe_root / f"{artifact_prefix}.idle.png"
-    zero_png = safe_root / f"{artifact_prefix}.zero.png"
-    cancel_png = safe_root / f"{artifact_prefix}.cancel.png"
-    public_vmware_log = safe_root / f"smoke_x64_vmware_installer_no_uart_{run_id}.vmware.log"
-    public_vmx = safe_root / f"smoke_x64_vmware_installer_no_uart_{run_id}.vmx"
+    prompt_bmp = artifact_root / f"{artifact_prefix}.prompt.bmp"
+    idle_bmp = artifact_root / f"{artifact_prefix}.idle.bmp"
+    zero_bmp = artifact_root / f"{artifact_prefix}.zero.bmp"
+    cancel_bmp = artifact_root / f"{artifact_prefix}.cancel.bmp"
+    failure_bmp = artifact_root / f"{artifact_prefix}.failure.bmp"
+    prompt_png = artifact_root / f"{artifact_prefix}.prompt.png"
+    idle_png = artifact_root / f"{artifact_prefix}.idle.png"
+    zero_png = artifact_root / f"{artifact_prefix}.zero.png"
+    cancel_png = artifact_root / f"{artifact_prefix}.cancel.png"
+    public_vmware_log = artifact_root / f"{artifact_prefix}.vmware.log"
+    public_vmx = artifact_root / f"{artifact_prefix}.vmx"
     target_descriptor = run_root / "target.vmdk"
     guard_descriptor = run_root / "guard.vmdk"
     vmx = run_root / "CapyOS-Installer-No-UART.vmx"

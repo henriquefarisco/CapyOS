@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-08-24 | **Versao:** `0.9.0+20260821` (stable) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-08-25 | **Versao:** `0.9.1+20260825` (stable candidate) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -31,6 +31,13 @@
   instalador oficial e a publicação remota dos nove módulos também passaram. O
   critério restante exige materiais Ed25519 de produção publicados e o ciclo
   apply/reboot/health/rollback completo no VMware oficial.
+
+- **Candidato stable `0.9.1+20260825`:** automatiza a regressao do instalador
+  VMware sem UART sobre uma ISO existente, exige prompt estavel e entrada EFI
+  ConIn valida, preserva dois discos descartaveis e endurece a evidencia do
+  wizard completo. O bump nao altera ABI nem pins de repositorios irmaos. A
+  candidatura nao equivale a publicacao: assinatura offline, politicas remotas,
+  promocao imutavel e ciclo A/B de producao continuam gates obrigatorios.
 
 - **Etapa 8 — hardening do instalador:** o loader deixa de escolher o maior
   disco silenciosamente. A nova politica pura calcula e testa o plano GPT,

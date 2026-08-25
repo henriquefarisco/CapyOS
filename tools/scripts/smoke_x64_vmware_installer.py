@@ -18,7 +18,13 @@ try:
 except ModuleNotFoundError:  # Imported by the portable host contract on POSIX.
     msvcrt = None  # type: ignore[assignment]
 
-from smoke_x64_auth import complete_iso_install, installer_eligible_target_count, login, maybe_run_first_boot_setup
+from smoke_x64_auth import (
+    complete_iso_install,
+    installer_eligible_target_count,
+    installer_select_target_by_size,
+    login,
+    maybe_run_first_boot_setup,
+)
 from smoke_x64_boot import smoke_first_boot, smoke_second_boot
 from smoke_x64_helpers import ensure_shell_after_login
 from smoke_x64_vmware_installer_contract import (
@@ -445,6 +451,7 @@ def main() -> int:
         print("[err] ISO or VMware executable is missing", file=sys.stderr)
         return 2
     reset_evidence_output(evidence_path)
+    artifact_root = evidence_path.parent
     run_id = uuid.uuid4().hex[:12]
     run_root = work_root / run_id
     try:
@@ -456,10 +463,10 @@ def main() -> int:
     target_descriptor = run_root / "target.vmdk"
     guard_descriptor = run_root / "guard.vmdk"
     vmx = run_root / "CapyOS-Installer.vmx"
-    installer_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.installer.log"
-    boot1_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.boot1.log"
-    marker_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.marker-write.log"
-    boot2_log = safe_root / f"smoke_x64_vmware_installer_{run_id}.boot2.log"
+    installer_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.installer.log"
+    boot1_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.boot1.log"
+    marker_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.marker-write.log"
+    boot2_log = artifact_root / f"smoke_x64_vmware_installer_{run_id}.boot2.log"
     success = False
     recovery_key = ""
     try:
@@ -523,6 +530,11 @@ def main() -> int:
         eligible_count = installer_eligible_target_count(raw_installer)
         if eligible_count != 2:
             raise RuntimeError("VMware installer did not expose exactly two eligible targets")
+        selected_index, selected_path_id = installer_select_target_by_size(
+            raw_installer, target_size_mib
+        )
+        if selected_index != 1:
+            raise RuntimeError("VMware target VMDK was not the first eligible disk")
         write_vmx(vmx, render_scratch_vmx(
             display_name=f"CapyOS Installer {run_id}", iso_path=iso,
             target_descriptor=target_descriptor, guard_descriptor=guard_descriptor,
@@ -530,6 +542,7 @@ def main() -> int:
         ))
         boot1 = start_console(vmrun, vmx, pipe_name, boot1_log, secrets=(recovery_key,), verbose=args.verbose)
         marker_written = False
+        marker_session_used = False
         try:
             setup_result = maybe_run_first_boot_setup(
                 boot1, args.step_timeout, args.user, args.password, "us",
@@ -544,6 +557,7 @@ def main() -> int:
         finally:
             boot1.stop()
         if not marker_written:
+            marker_session_used = True
             marker_session = start_console(vmrun, vmx, pipe_name, marker_log, secrets=(recovery_key,), verbose=args.verbose)
             try:
                 setup_result = maybe_run_first_boot_setup(
@@ -558,6 +572,8 @@ def main() -> int:
                 smoke_first_boot(marker_session, args.step_timeout, args.user, args.password, "persist-ok")
             finally:
                 marker_session.stop()
+        if not marker_log.exists():
+            marker_log.write_bytes(b"")
         boot2 = start_console(vmrun, vmx, pipe_name, boot2_log, secrets=(recovery_key,), verbose=args.verbose)
         try:
             mode = login(boot2, args.step_timeout, args.user, args.password, allow_desktop=True)
@@ -578,18 +594,30 @@ def main() -> int:
         iso_sha256_after = sha256_file(iso)
         if iso_sha256_after != iso_sha256_before:
             raise RuntimeError("installer ISO changed during the VMware wizard gate")
-        public_logs = (installer_log, boot1_log, boot2_log)
+        public_logs = (installer_log, boot1_log, marker_log, boot2_log)
         if not all(path.is_file() for path in public_logs):
             raise RuntimeError("VMware installer public logs are incomplete")
         fields = {
-            "format": "capyos-installer-wizard-evidence-manifest-v1",
+            "format": "capyos-installer-wizard-evidence-manifest-v3",
             "release_tag": current_release_tag(repo_root),
             "track": "UEFI/GPT/x86_64",
             "provider": "vmware-workstation",
+            "firmware": "uefi",
+            "secure_boot": "disabled",
+            "vcpu_count": "2",
+            "memory_mib": "1024",
+            "network": "nat-e1000",
             "iso_artifact": iso.name,
             "iso_sha256": iso_sha256_before,
+            "iso_sha256_before": iso_sha256_before,
+            "iso_sha256_after": iso_sha256_after,
+            "iso_unchanged": "yes",
             "eligible_target_count": str(eligible_count),
             "target_selected_explicitly": "yes",
+            "target_selected_index": str(selected_index),
+            "target_path_id": selected_path_id,
+            "target_size_mib": str(target_size_mib),
+            "guard_size_mib": str(guard_size_mib),
             "target_identity_revalidated": "yes",
             "erase_token_confirmed": "yes",
             "target_sha256_before": target_before,
@@ -605,8 +633,14 @@ def main() -> int:
             "persistence_marker_read_after_reboot": "yes",
             "recovery_key_redacted": "yes",
             "recovery_key_included": "no",
+            "marker_session_used": "yes" if marker_session_used else "no",
+            "installer_log": installer_log.name,
             "installer_log_sha256": sha256_file(installer_log),
+            "boot1_log": boot1_log.name,
             "boot1_log_sha256": sha256_file(boot1_log),
+            "marker_log": marker_log.name,
+            "marker_log_sha256": sha256_file(marker_log),
+            "boot2_log": boot2_log.name,
             "boot2_log_sha256": sha256_file(boot2_log),
         }
         evidence_text = render_evidence(fields)
