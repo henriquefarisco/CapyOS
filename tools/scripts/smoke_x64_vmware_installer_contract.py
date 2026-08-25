@@ -99,6 +99,7 @@ def render_scratch_vmx(
         f'displayName = "{display_name}"',
         'guestOS = "other-64"',
         'firmware = "efi"',
+        'uefi.secureBoot.enabled = "FALSE"',
         # The loader owns COM1 directly. Firmware serial-console redirection
         # would feed each pipe byte into both ConIn and the UART, splitting a
         # line across two independent consumers.
@@ -141,10 +142,25 @@ def parse_flat_extent(descriptor: Path) -> Path:
     matches = re.findall(r'^RW\s+\d+\s+FLAT\s+"([^"]+)"\s+\d+\s*$', text, flags=re.MULTILINE)
     if len(matches) != 1:
         raise ValueError("VMDK descriptor must contain exactly one FLAT extent")
-    extent = (descriptor.parent / matches[0]).resolve()
+    descriptor_root = descriptor.parent.resolve()
+    extent = (descriptor_root / matches[0]).resolve()
+    try:
+        extent.relative_to(descriptor_root)
+    except ValueError as exc:
+        raise ValueError("VMDK extent must stay beside its descriptor") from exc
+    if extent.parent != descriptor_root:
+        raise ValueError("VMDK extent must be a direct descriptor sibling")
     if not extent.is_file():
         raise FileNotFoundError(extent)
     return extent
+
+
+def exact_extent_size_mib(extent: Path) -> int:
+    size = extent.stat().st_size
+    mib = 1024 * 1024
+    if size <= 0 or size % mib != 0:
+        raise ValueError("VMDK extent size must be a positive whole MiB")
+    return size // mib
 
 
 def render_evidence(fields: Mapping[str, str]) -> str:

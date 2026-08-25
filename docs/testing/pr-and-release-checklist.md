@@ -42,6 +42,11 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
       `make smoke-marker-policy-selftest` passou e a saida foi anexada.
 - [ ] Quando aplicavel, `make smoke-x64-cli SMOKE_X64_CLI_ARGS='--require-shell'`
       ou outro smoke especifico foi executado e o log anexado ao PR.
+- [ ] Mudancas no loader UEFI, instalador ou politica de input passaram no mesmo
+      ISO por `smoke-x64-qemu-installer-no-uart`,
+      `smoke-x64-vmware-installer-no-uart-existing-iso` e
+      `smoke-x64-vmware-installer-wizard-existing-iso`; os tres registros citam
+      o mesmo SHA-256 e nenhuma VM descartavel permaneceu ativa.
 
 ## 3. Robustez e plano vivo
 

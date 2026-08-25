@@ -85,11 +85,17 @@ function Assert-WindowsTools {
     $vdiskCandidates = @($vmwareRoots | ForEach-Object {
         if ($_ ) { Join-Path $_ "vmware-vdiskmanager.exe" }
     })
+    $vmcliCandidates = @($vmwareRoots | ForEach-Object {
+        if ($_ ) { Join-Path $_ "vmcli.exe" }
+    })
     if ($null -eq (Resolve-WindowsTool "vmrun.exe" $vmrunCandidates)) {
         throw "vmrun.exe nao encontrado; instale VMware Workstation para o gate oficial."
     }
     if ($null -eq (Resolve-WindowsTool "vmware-vdiskmanager.exe" $vdiskCandidates)) {
         throw "vmware-vdiskmanager.exe nao encontrado; instale VMware Workstation para o gate oficial."
+    }
+    if ($null -eq (Resolve-WindowsTool "vmcli.exe" $vmcliCandidates)) {
+        throw "vmcli.exe nao encontrado; instale VMware Workstation para o gate sem UART."
     }
 }
 

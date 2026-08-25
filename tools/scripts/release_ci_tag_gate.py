@@ -47,21 +47,26 @@ def reject_private_key_env() -> int:
     return 0
 
 
-def parse_version_yaml(path: Path) -> tuple[int, str, str]:
+def parse_version_yaml(path: Path, channel: str) -> tuple[int, str, str]:
     if not path.exists() or not path.is_file():
         return fail(f"VERSION.yaml ausente: {path}"), "", ""
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return fail(f"VERSION.yaml nao e UTF-8: {path}"), "", ""
-    current = ""
-    extended = ""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("current:") and not current:
-            current = stripped.split(":", 1)[1].strip().strip('"')
-        if stripped.startswith("extended:") and not extended:
-            extended = stripped.split(":", 1)[1].strip().strip('"')
+    match = re.search(
+        rf"^  {re.escape(channel)}:\n"
+        rf"(?P<body>(?:    .*\n)+?)(?=^  [A-Za-z0-9_-]+:|^[A-Za-z0-9_-]+:|\Z)",
+        text,
+        flags=re.MULTILINE,
+    )
+    if match is None:
+        return fail(f"VERSION.yaml sem canal ativo: {channel}"), "", ""
+    body = match.group("body")
+    current_match = re.search(r"^\s*current:\s*([^\s]+)\s*$", body, re.MULTILINE)
+    extended_match = re.search(r"^\s*extended:\s*([^\s]+)\s*$", body, re.MULTILINE)
+    current = current_match.group(1).strip('"') if current_match else ""
+    extended = extended_match.group(1).strip('"') if extended_match else ""
     if not current or not extended:
         return fail("VERSION.yaml sem current/extended"), "", ""
     if not extended.startswith(current + "+"):
@@ -81,7 +86,12 @@ def parse_version_header(path: Path) -> tuple[int, dict[str, str]]:
         parts = line.strip().split(maxsplit=2)
         if len(parts) == 3 and parts[0] == "#define" and parts[2].startswith('"') and parts[2].endswith('"'):
             values[parts[1]] = parts[2].strip('"')
-    required = ("CAPYOS_VERSION_PRERELEASE", "CAPYOS_VERSION_EXTENDED", "CAPYOS_VERSION_FULL", "CAPYOS_VERSION_ALPHA")
+    required = (
+        "CAPYOS_VERSION_CHANNEL",
+        "CAPYOS_VERSION_PRERELEASE",
+        "CAPYOS_VERSION_EXTENDED",
+        "CAPYOS_VERSION_FULL",
+    )
     missing = [name for name in required if name not in values]
     if missing:
         return fail("version.h sem macros: " + ", ".join(missing)), {}
@@ -100,14 +110,25 @@ def normalize_release_tag(tag: str | None) -> str | None:
 
 
 def validate_version_contract(args: argparse.Namespace) -> int:
-    rc, current, extended = parse_version_yaml(args.version_yaml.expanduser())
-    if rc != 0:
-        return rc
     rc, header = parse_version_header(args.version_header.expanduser())
     if rc != 0:
         return rc
-    if header["CAPYOS_VERSION_ALPHA"] != current:
-        return fail("CAPYOS_VERSION_ALPHA diverge de VERSION.yaml current")
+    channel = header["CAPYOS_VERSION_CHANNEL"]
+    channel_macros = {
+        "alpha": "CAPYOS_VERSION_ALPHA",
+        "beta": "CAPYOS_VERSION_BETA",
+        "stable": "CAPYOS_VERSION_STABLE",
+    }
+    channel_macro = channel_macros.get(channel)
+    if channel_macro is None or channel_macro not in header:
+        return fail(f"canal de versao nao suportado ou sem macro: {channel}")
+    rc, current, extended = parse_version_yaml(
+        args.version_yaml.expanduser(), channel
+    )
+    if rc != 0:
+        return rc
+    if header[channel_macro] != current:
+        return fail(f"{channel_macro} diverge de VERSION.yaml {channel}.current")
     if header["CAPYOS_VERSION_EXTENDED"] != current:
         return fail("CAPYOS_VERSION_EXTENDED diverge de VERSION.yaml current")
     if header["CAPYOS_VERSION_FULL"] != extended:
