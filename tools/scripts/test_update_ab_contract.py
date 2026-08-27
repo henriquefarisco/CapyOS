@@ -199,6 +199,22 @@ class _LaggingDebugPromptSession(_SlotStatusSession):
         )
 
 
+class _HttpProgressSession(_SlotStatusSession):
+    """Model an optional fetch whose progress prefix contains ``> ``."""
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.primary_reads = 0
+
+    def serial_text_since(self, start_at: int) -> str:
+        _ = start_at
+        self.primary_reads += 1
+        progress = "net-fetch https://example.com\r\n>>> https://example.com (?) ...\r\n"
+        if self.primary_reads == 1:
+            return progress
+        return progress + "[erro] dns resolution failed\r\nadmin@smoke-node>~> "
+
+
 def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     lagging_debug_prompt = _LaggingDebugPromptSession()
     try:
@@ -210,6 +226,20 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         )
     except RuntimeError as exc:
         return fail(f"run_cmd accepted a stale debugcon prompt: {exc}")
+
+    http_progress = _HttpProgressSession()
+    helpers.run_cmd(
+        http_progress,
+        "net-fetch https://example.com",
+        timeout=1.0,
+        expect="status=200",
+        expect_optional=True,
+    )
+    if http_progress.primary_reads < 2:
+        return fail("run_cmd accepted the HTTP >>> progress prefix as a shell prompt")
+
+    cwd_prompt = _SlotStatusSession("admin@smoke-node>~/.../projetos/capy> ")
+    helpers.run_cmd(cwd_prompt, "mypath", timeout=1.0)
 
     failed_command = _SlotStatusSession(
         "payload download failed\r\nadmin@smoke-node>~> "
@@ -366,14 +396,17 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         "health=confirmed\n"
         "Slot B: version=0.8.0-alpha.320 state=active boots=0 ok=0 fail=0 "
         "health=pending [ACTIVE]\n"
-        "Rollback pending: yes\n> "
+        "Rollback pending: yes\nadmin@smoke-node>~> "
     )
     wrapped_armed_status = (
         plain_armed_status.replace("state=active", "state=act\r\nive")
         .replace("health=pending [ACTIVE]", "health=pending \r\n[ACTIVE]")
         .replace("Rollback pending: yes", "Rollback pend\ning: yes")
     )
-    stale_prefix = "Slot B: version=old state=valid health=confirmed [ACTIVE]\n> "
+    stale_prefix = (
+        "Slot B: version=old state=valid health=confirmed [ACTIVE]\n"
+        "admin@smoke-node>~> "
+    )
     marker = len(stale_prefix)
     session = _SlotStatusSession(stale_prefix + wrapped_armed_status, marker)
     try:
@@ -404,7 +437,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
 
     wrapped_confirmed = (
         "Slot B: version=0.8.0-alpha.320 state=active health=\r\n"
-        "confirmed [ACTIVE]\n> "
+        "confirmed [ACTIVE]\nadmin@smoke-node>~> "
     )
     confirmed_session = _SlotStatusSession(wrapped_confirmed)
     try:
@@ -421,7 +454,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     wrapped_rollback = (
         f"{contract.ROLLBACK_OK}\n"
         "boot rolled back to the confirmed slot; staged update di\r\n"
-        "sarmed\n> "
+        "sarmed\nadmin@smoke-node>~> "
     )
     rollback_session = _SlotStatusSession(wrapped_rollback)
     try:
@@ -446,7 +479,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         f"{contract.PREPARE_OK}\n"
         f"{contract.APPLY_OK}\n"
         f"{contract.APPLY_SUMMARY}\n"
-        "configured=yes rc=0\n> "
+        "configured=yes rc=0\nadmin@smoke-node>~> "
     )
     bound_session = _SlotStatusSession(bound_output)
     try:
@@ -472,7 +505,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     refusal_output = (
         f"{contract.MANIFEST_NOT_NEWER_SUMMARY}\n"
         "configured=yes rc=-20\n"
-        "current=0.9.2+20260826 available=-\n> "
+        "current=0.9.2+20260826 available=-\nadmin@smoke-node>~> "
     )
     refusal_session = _SlotStatusSession(refusal_output)
     try:
@@ -486,7 +519,9 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     if refusal_session.commands != ["update-fetch", "update-status", "update-status"]:
         return fail("equal-release refusal did not prove fetch result and status")
 
-    endpoint_session = _SlotStatusSession("status=200 host=192.168.87.1\n> ")
+    endpoint_session = _SlotStatusSession(
+        "status=200 host=192.168.87.1\nadmin@smoke-node>~> "
+    )
     try:
         flow.assert_http_endpoint_reachable(
             endpoint_session, 240.0, "http://192.168.87.1:18083/latest.ini"
@@ -498,7 +533,8 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     ]:
         return fail("lab endpoint probe did not fetch the configured URL exactly")
     failing_endpoint = _SlotStatusSession(
-        "[erro] tcp connect timeout\ndiag: arp=1 syn-out=2 syn-ack=0\n> "
+        "[erro] tcp connect timeout\ndiag: arp=1 syn-out=2 syn-ack=0\n"
+        "admin@smoke-node>~> "
     )
     try:
         flow.assert_http_endpoint_reachable(
