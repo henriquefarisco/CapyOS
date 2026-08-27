@@ -50,6 +50,8 @@ static const uint8_t *g_payload_bytes;
 static size_t g_payload_len;
 static size_t g_last_payload_buffer_size;
 static int g_payload_rc;
+static int g_payload_failures_remaining;
+static int g_payload_fetch_calls;
 static int g_corrupt_payload_write;
 static char g_last_payload_url[192];
 
@@ -103,6 +105,8 @@ static void reset_files(void) {
     g_payload_len = 0u;
     g_last_payload_buffer_size = 0u;
     g_payload_rc = -1;
+    g_payload_failures_remaining = 0;
+    g_payload_fetch_calls = 0;
     g_corrupt_payload_write = 0;
     g_last_payload_url[0] = '\0';
 }
@@ -217,10 +221,15 @@ static int stub_fetch_manifest(const char *url, char *buffer, size_t buffer_size
 static int stub_fetch_payload(const char *url, uint8_t *buffer,
                               size_t buffer_size, size_t *out_len) {
     size_t i = 0u;
+    g_payload_fetch_calls++;
     g_last_payload_buffer_size = buffer_size;
     if (url) {
         strncpy(g_last_payload_url, url, sizeof(g_last_payload_url) - 1u);
         g_last_payload_url[sizeof(g_last_payload_url) - 1u] = '\0';
+    }
+    if (g_payload_failures_remaining > 0) {
+        g_payload_failures_remaining--;
+        return -1;
     }
     if (g_payload_rc != 0 || !g_payload_bytes || !buffer ||
         g_payload_len > buffer_size) {
@@ -611,6 +620,13 @@ int run_update_agent_tests(void) {
     update_agent_status_get(&status);
     fails += expect_true(strcmp(status.payload_cache_sha256, UPDATE_AGENT_ABC_SHA256) == 0,
                          "payload cache sha256 should survive poll");
+
+    g_payload_fetch_calls = 0;
+    g_payload_failures_remaining = 1;
+    fails += expect_true(update_agent_download_payload() == 0,
+                         "one transient payload transport failure should retry");
+    fails += expect_true(g_payload_fetch_calls == 2,
+                         "transient payload failure should use one bounded retry");
 
     g_corrupt_payload_write = 1;
     fails += expect_true(update_agent_download_payload() == -49,

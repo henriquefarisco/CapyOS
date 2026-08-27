@@ -4,12 +4,17 @@ Indice das release notes mantidas no repositorio.
 
 ## Release atual
 
+- `capyos-0.9.2+20260826.md`
+  - Corrige o aceite A/B pos-promocao com assets publicos e ordem
+    rollback-then-confirm, sem chave privada ou flags de laboratorio; preserva
+    as ABIs e os pins dos modulos desacoplados.
+
+## Historico recente
+
 - `capyos-0.9.1+20260825.md`
   - Corrige e automatiza o gate VMware do instalador sem UART/COM1, endurece a
     evidência do wizard multi-disco e prepara a promoção assinada e imutável sem
     alterar as ABIs nem os pins dos módulos desacoplados.
-
-## Historico recente
 
 - `capyos-0.9.0+20260821.md`
   - Promocao para a versao estavel 0.9.0 com consolidacao da trilha UEFI/GPT x86_64,

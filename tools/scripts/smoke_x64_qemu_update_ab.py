@@ -59,7 +59,7 @@ from smoke_x64_update_ab_contract import (  # noqa: E402
     TRACK,
     TRUST_ANCHOR,
     manifest_url,
-    next_prerelease_version,
+    next_lab_update_version,
     payload_url,
     release_tag_from_version_yaml,
     render_evidence,
@@ -117,7 +117,7 @@ def build_signed_material(args: argparse.Namespace, www_root: Path) -> tuple[str
     served_payload = www_root / LAB_PAYLOAD_NAME
     shutil.copyfile(payload_src, served_payload)
     size, digest = payload_metadata(served_payload)
-    version = next_prerelease_version(args.current_version)
+    version = next_lab_update_version(args.current_version)
     manifest = www_root / LAB_MANIFEST_NAME
     subprocess.run(
         [
@@ -371,7 +371,8 @@ def main() -> int:
         return 2
 
     release_tag = release_tag_from_version_yaml(
-        (REPO_ROOT / "VERSION.yaml").read_text(encoding="utf-8", errors="replace")
+        (REPO_ROOT / "VERSION.yaml").read_text(encoding="utf-8", errors="replace"),
+        args.current_version,
     )
     http_server = None
     ovmf_vars_runtime = None

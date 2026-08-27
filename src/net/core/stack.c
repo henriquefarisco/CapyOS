@@ -54,6 +54,9 @@ static int ip_is_broadcast(uint32_t ip) {
   return ip == NET_IPV4_ADDR(255, 255, 255, 255);
 }
 
+static const uint8_t net_broadcast_mac[6] = {
+    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu};
+
 static void set_default_config(void) {
   g_net.ipv4.addr = NET_IPV4_ADDR(10, 0, 2, 15);
   g_net.ipv4.mask = NET_IPV4_ADDR(255, 255, 255, 0);
@@ -329,10 +332,9 @@ int net_stack_poll(void) {
   return processed;
 }
 
-int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
-                        const uint8_t *payload, size_t payload_len) {
-  static const uint8_t broadcast_mac[6] = {0xFFu, 0xFFu, 0xFFu,
-                                           0xFFu, 0xFFu, 0xFFu};
+static int net_stack_send_ipv4_from(uint8_t protocol, uint32_t src_ip,
+                                    uint32_t dst_ip, const uint8_t *payload,
+                                    size_t payload_len) {
   if (!g_net.initialized || !g_net.ready || !payload || payload_len == 0) {
     g_net.stats.frames_drop++;
     return -1;
@@ -349,8 +351,8 @@ int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
 
   if (ip_is_broadcast(dst_ip)) {
     struct net_stack_ipv4_runtime runtime = stack_ipv4_runtime();
-    return net_stack_ipv4_send_frame(&runtime, protocol, g_net.ipv4.addr,
-                                     dst_ip, broadcast_mac, payload,
+    return net_stack_ipv4_send_frame(&runtime, protocol, src_ip, dst_ip,
+                                     net_broadcast_mac, payload,
                                      payload_len, arp_send_frame_cb);
   }
 
@@ -371,9 +373,53 @@ int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
   g_net.stats.arp_hits++;
   {
     struct net_stack_ipv4_runtime runtime = stack_ipv4_runtime();
-    return net_stack_ipv4_send_frame(&runtime, protocol, g_net.ipv4.addr,
-                                     dst_ip, g_net.arp[arp_idx].mac, payload,
+    return net_stack_ipv4_send_frame(&runtime, protocol, src_ip, dst_ip,
+                                     g_net.arp[arp_idx].mac, payload,
                                      payload_len, arp_send_frame_cb);
+  }
+}
+
+int net_stack_send_ipv4(uint8_t protocol, uint32_t dst_ip,
+                        const uint8_t *payload, size_t payload_len) {
+  return net_stack_send_ipv4_from(protocol, g_net.ipv4.addr, dst_ip, payload,
+                                  payload_len);
+}
+
+static int net_stack_send_service_ipv4(uint8_t protocol, uint32_t src_ip,
+                                       uint32_t dst_ip,
+                                       const uint8_t *payload,
+                                       size_t payload_len) {
+  return net_stack_send_ipv4_from(protocol, src_ip, dst_ip, payload,
+                                  payload_len);
+}
+
+static int net_stack_wait_dhcp_stage(uint32_t timeout_ms, int waiting_offer) {
+  uint64_t start_ticks = net_stack_clock_ticks_100hz();
+  uint64_t timeout_ticks = ((uint64_t)timeout_ms + 9u) / 10u;
+  uint32_t fallback_elapsed = 0u;
+
+  if (timeout_ticks == 0u) {
+    timeout_ticks = 1u;
+  }
+
+  for (;;) {
+    (void)net_stack_poll();
+    if ((waiting_offer && g_net.dhcp.offer_ready) ||
+        (!waiting_offer &&
+         (g_net.dhcp.ack_ready || g_net.dhcp.nak_received))) {
+      return 1;
+    }
+
+    if (start_ticks != UINT64_MAX) {
+      uint64_t now_ticks = net_stack_clock_ticks_100hz();
+      if (now_ticks != UINT64_MAX &&
+          (now_ticks - start_ticks) >= timeout_ticks) {
+        return 0;
+      }
+    } else if (fallback_elapsed++ >= timeout_ms) {
+      return 0;
+    }
+    net_stack_delay_approx_1ms();
   }
 }
 
@@ -459,19 +505,13 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
 
   if (net_dhcp_send_message(&g_net.dhcp, &g_net.ipv4,
                             NET_DHCP_MSG_DISCOVER, 0u, 0u,
-                            net_stack_send_ipv4) != 0) {
+                            net_stack_send_service_ipv4) != 0) {
     net_dhcp_reset(&g_net.dhcp);
     g_net.dhcp_last_error = -2;
     return -1;
   }
 
-  for (uint32_t elapsed = 0; elapsed <= stage_timeout; ++elapsed) {
-    (void)net_stack_poll();
-    if (g_net.dhcp.offer_ready) {
-      break;
-    }
-    net_stack_delay_approx_1ms();
-  }
+  (void)net_stack_wait_dhcp_stage(stage_timeout, 1);
   if (!g_net.dhcp.offer_ready || g_net.dhcp.offered_ip == 0u ||
       g_net.dhcp.server_id == 0u) {
     net_dhcp_reset(&g_net.dhcp);
@@ -486,19 +526,13 @@ int net_stack_dhcp_acquire(uint32_t timeout_ms) {
   if (net_dhcp_send_message(&g_net.dhcp, &g_net.ipv4,
                             NET_DHCP_MSG_REQUEST,
                             g_net.dhcp.offered_ip, g_net.dhcp.server_id,
-                            net_stack_send_ipv4) != 0) {
+                            net_stack_send_service_ipv4) != 0) {
     net_dhcp_reset(&g_net.dhcp);
     g_net.dhcp_last_error = -4;
     return -1;
   }
 
-  for (uint32_t elapsed = 0; elapsed <= stage_timeout; ++elapsed) {
-    (void)net_stack_poll();
-    if (g_net.dhcp.ack_ready || g_net.dhcp.nak_received) {
-      break;
-    }
-    net_stack_delay_approx_1ms();
-  }
+  (void)net_stack_wait_dhcp_stage(stage_timeout, 0);
   if (!g_net.dhcp.ack_ready || g_net.dhcp.nak_received ||
       g_net.dhcp.ack_ip == 0u) {
     net_dhcp_reset(&g_net.dhcp);
@@ -564,7 +598,7 @@ int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
   }
 
   if (net_dns_send_query(&g_net.dns, &g_net.ipv4, hostname,
-                         net_stack_send_ipv4) != 0) {
+                         net_stack_send_service_ipv4) != 0) {
     net_dns_reset(&g_net.dns);
     return -1;
   }
@@ -590,7 +624,7 @@ int net_stack_dns_resolve(const char *hostname, uint32_t timeout_ms,
     if (elapsed >= next_retransmit_at &&
         retransmit_count < NET_DNS_MAX_RETRANSMITS) {
       (void)net_dns_send_query(&g_net.dns, &g_net.ipv4, hostname,
-                               net_stack_send_ipv4);
+                               net_stack_send_service_ipv4);
       retransmit_count++;
       next_retransmit_at += NET_DNS_RETRANSMIT_INTERVAL_MS;
     }

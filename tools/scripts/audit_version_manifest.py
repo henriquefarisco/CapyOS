@@ -8,6 +8,12 @@ import sys
 from pathlib import Path
 
 
+MODULES_INDEX_URL_TEMPLATE = (
+    "https://github.com/henriquefarisco/CapyOS/releases/download/"
+    "{pin}/modules-index.txt"
+)
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -20,6 +26,15 @@ def require_match(pattern: str, text: str, label: str) -> str:
     if not match:
         raise RuntimeError(f"campo ausente: {label}")
     return match.group(1)
+
+
+def require_unique_match(pattern: str, text: str, label: str) -> str:
+    matches = list(re.finditer(pattern, text, flags=re.MULTILINE))
+    if not matches:
+        raise RuntimeError(f"campo ausente: {label}")
+    if len(matches) != 1:
+        raise RuntimeError(f"campo duplicado: {label}")
+    return matches[0].group(1)
 
 
 def require_contains(text: str, needle: str, label: str) -> None:
@@ -40,6 +55,121 @@ def require_channel_field(version_yaml: str, channel: str, field: str) -> str:
         match.group("body"),
         f"channels.{channel}.{field}",
     )
+
+
+def require_top_level_mapping_field(
+    version_yaml: str, section: str, field: str
+) -> str:
+    section_matches = list(
+        re.finditer(
+            rf"^{re.escape(section)}:[ \t]*(?:#.*)?$",
+            version_yaml,
+            flags=re.MULTILINE,
+        )
+    )
+    label = f"{section}.{field}"
+    if not section_matches:
+        raise RuntimeError(f"secao ausente: {section}")
+    if len(section_matches) != 1:
+        raise RuntimeError(f"secao duplicada: {section}")
+
+    body_lines: list[str] = []
+    for line in version_yaml[section_matches[0].end() :].splitlines():
+        if line.strip() and not line.startswith((" ", "\t", "#")):
+            break
+        body_lines.append(line)
+
+    raw_value = require_unique_match(
+        rf"^  {re.escape(field)}:[ \t]*(.*?)[ \t]*$",
+        "\n".join(body_lines),
+        label,
+    ).strip()
+    if len(raw_value) >= 2 and raw_value[0] in {'"', "'"}:
+        if raw_value[-1] != raw_value[0]:
+            raise RuntimeError(f"valor YAML malformado: {label}")
+        raw_value = raw_value[1:-1]
+    elif " #" in raw_value:
+        raw_value = raw_value.split(" #", 1)[0].rstrip()
+    if not raw_value or any(char.isspace() for char in raw_value):
+        raise RuntimeError(f"valor YAML invalido: {label}")
+    return raw_value
+
+
+def canonical_modules_index_url(pin: str) -> str:
+    return MODULES_INDEX_URL_TEMPLATE.format(pin=pin)
+
+
+def audit_modules_index_contract(
+    version_yaml: str, modules_c: str, makefile: str
+) -> list[str]:
+    """Validate every maintained copy of the stable modules-index pin."""
+
+    errors: list[str] = []
+    expected_pin: str | None = None
+    expected_url: str | None = None
+
+    try:
+        stable_extended = require_channel_field(version_yaml, "stable", "extended")
+        expected_pin = f"v{stable_extended}"
+        expected_url = canonical_modules_index_url(expected_pin)
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+    try:
+        declared_pin = require_top_level_mapping_field(
+            version_yaml, "modules_index", "pin"
+        )
+        if expected_pin is not None and declared_pin != expected_pin:
+            errors.append(
+                f"modules_index.pin={declared_pin} difere de "
+                f"v<stable.extended>={expected_pin}"
+            )
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+    try:
+        declared_url = require_top_level_mapping_field(
+            version_yaml, "modules_index", "url"
+        )
+        if expected_url is not None and declared_url != expected_url:
+            errors.append(
+                f"modules_index.url={declared_url} difere da URL canonica "
+                f"derivada do pin={expected_url}"
+            )
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+    try:
+        runtime_url = require_unique_match(
+            r"^[ \t]*#define[ \t]+CAPYOS_DEFAULT_MODULES_INDEX_URL"
+            r"(?:[ \t]*\\[ \t]*\r?\n)?[ \t]*\"([^\"\r\n]+)\"",
+            modules_c,
+            "CAPYOS_DEFAULT_MODULES_INDEX_URL",
+        )
+        if expected_url is not None and runtime_url != expected_url:
+            errors.append(
+                f"CAPYOS_DEFAULT_MODULES_INDEX_URL={runtime_url} difere da "
+                f"URL canonica={expected_url}"
+            )
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+    try:
+        smoke_url = require_unique_match(
+            r"^[ \t]*SMOKE_X64_MODULES_INDEX_URL[ \t]*\?="
+            r"[ \t]*([^\s#]+)[ \t]*(?:#.*)?$",
+            makefile,
+            "SMOKE_X64_MODULES_INDEX_URL",
+        )
+        if expected_url is not None and smoke_url != expected_url:
+            errors.append(
+                f"SMOKE_X64_MODULES_INDEX_URL={smoke_url} difere da "
+                f"URL canonica={expected_url}"
+            )
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+    return errors
 
 
 def main() -> int:
@@ -114,30 +244,12 @@ def main() -> int:
         except RuntimeError as exc:
             errors.append(str(exc))
 
-    # Modules-index pin: the first-boot default in modules.c MUST match the
-    # single-sourced pin in VERSION.yaml (modules_index.url). Makes the
-    # otherwise-buried C constant explicit + audited and fails on drift (the
-    # fragility class behind the alpha.286 install bug). Full resolve-at-publish
-    # (signed token-addressed index) is sequenced to Etapa 8.
-    try:
-        declared_url = require_match(
-            r'^modules_index:\n(?:[ \t].*\n)*?[ \t]+url:\s*"([^"]+)"',
-            version_yaml,
-            "modules_index.url",
-        )
-        modules_c = read_text(repo / "src/config/first_boot/modules.c")
-        code_url = require_match(
-            r'#\s*define\s+CAPYOS_DEFAULT_MODULES_INDEX_URL\s*\\[^\n]*\n\s*"([^"]+)"',
-            modules_c,
-            "CAPYOS_DEFAULT_MODULES_INDEX_URL",
-        )
-        if declared_url != code_url:
-            errors.append(
-                f"modules_index.url (VERSION.yaml)={declared_url} difere do "
-                f"CAPYOS_DEFAULT_MODULES_INDEX_URL (modules.c)={code_url}"
-            )
-    except RuntimeError as exc:
-        errors.append(str(exc))
+    # The immutable modules-index release pin is duplicated only where a
+    # consumer needs a literal. Audit all copies against stable.extended so a
+    # version bump cannot leave first boot or the network smoke on stale data.
+    modules_c = read_text(repo / "src/config/first_boot/modules.c")
+    makefile = read_text(repo / "Makefile")
+    errors.extend(audit_modules_index_contract(version_yaml, modules_c, makefile))
 
     if errors:
         print("[err] auditoria de versao encontrou divergencias:")

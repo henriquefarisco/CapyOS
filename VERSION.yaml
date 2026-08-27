@@ -1,5 +1,5 @@
 meta:
-  generated: 2026-08-25
+  generated: 2026-08-26
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
@@ -1023,11 +1023,14 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.9.1
-    extended: 0.9.1+20260825
+    current: 0.9.2
+    extended: 0.9.2+20260826
     stability: production
-    current_summary: "CapyOS 0.9.1 estavel: corrige e automatiza a validacao do instalador em VMware sem UART/COM1, prova que EFI ConIn permanece responsivo sem a entrada fantasma 0xFF, endurece o wizard multi-disco e prepara uma promocao de release assinada, imutavel e fail-closed; ABIs e pins dos modulos permanecem inalterados."
+    current_summary: "CapyOS 0.9.2 estavel: torna executavel e fail-closed o aceite A/B pos-promocao com a ISO 0.9.1 publicada como predecessora, assets publicos Latest, ancora Ed25519 de producao e ordem rollback-then-confirm compativel com anti-downgrade; nao recebe chave privada nem flags de laboratorio e preserva ABIs e pins dos repositorios irmaos."
     history:
+      - version: 0.9.2+20260826
+        date: 2026-08-26
+        summary: "CapyOS 0.9.2 estavel: torna executavel e fail-closed o aceite A/B pos-promocao com a ISO 0.9.1 publicada como predecessora, assets publicos Latest, ancora Ed25519 de producao e ordem rollback-then-confirm compativel com anti-downgrade; nao recebe chave privada nem flags de laboratorio e preserva ABIs e pins dos repositorios irmaos."
       - version: 0.9.1+20260825
         date: 2026-08-25
         summary: "CapyOS 0.9.1 estavel: corrige e automatiza a validacao do instalador em VMware sem UART/COM1, prova que EFI ConIn permanece responsivo sem a entrada fantasma 0xFF, endurece o wizard multi-disco e prepara uma promocao de release assinada, imutavel e fail-closed; ABIs e pins dos modulos permanecem inalterados."
@@ -1049,5 +1052,5 @@ modules_index:
   # (enforced by tools/scripts/audit_version_manifest.py). The release workflow
   # publishes this immutable aggregate and verifies all nine payloads before the
   # deployment is accepted.
-  pin: "v0.9.1+20260825"
-  url: "https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.1+20260825/modules-index.txt"
+  pin: "v0.9.2+20260826"
+  url: "https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.2+20260826/modules-index.txt"

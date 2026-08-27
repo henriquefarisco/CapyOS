@@ -56,6 +56,8 @@ int run_http_hsts_tests(void);
 int run_browser_fetch_tests(void);
 int run_net_dns_tests(void);
 int run_net_dhcp_options_tests(void);
+int run_net_dhcp_wire_tests(void);
+int run_e1000_identity_tests(void);
 int run_net_icmp_tests(void);
 int run_net_arp_tests(void);
 int run_elf_bounds_tests(void);
@@ -288,6 +290,8 @@ int main(int argc, char **argv) {
         failures += run_capypkg_tests();
         failures += run_net_dns_tests();
         failures += run_net_dhcp_options_tests();
+        failures += run_net_dhcp_wire_tests();
+        failures += run_e1000_identity_tests();
         failures += run_net_icmp_tests();
         failures += run_net_arp_tests();
         failures += run_elf_bounds_tests();
@@ -370,6 +374,8 @@ int main(int argc, char **argv) {
     failures += run_browser_fetch_tests();
     failures += run_net_dns_tests();
     failures += run_net_dhcp_options_tests();
+    failures += run_net_dhcp_wire_tests();
+    failures += run_e1000_identity_tests();
     failures += run_net_icmp_tests();
     failures += run_net_arp_tests();
     failures += run_elf_bounds_tests();

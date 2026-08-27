@@ -50,8 +50,19 @@ uint16_t net_stack_checksum16(const uint8_t *data, size_t len) {
 
 static void (*g_net_yield_hook)(void) = (void *)0;
 
+/* The architecture timer is linked by production kernels. Keep it weak so
+ * host-side protocol tests can link the network core without an x86 timer. */
+extern uint64_t pit_ticks(void) __attribute__((weak));
+
 void net_stack_set_yield_hook(void (*hook)(void)) {
   g_net_yield_hook = hook;
+}
+
+uint64_t net_stack_clock_ticks_100hz(void) {
+  if (pit_ticks) {
+    return pit_ticks();
+  }
+  return UINT64_MAX;
 }
 
 void net_stack_delay_approx_1ms(void) {

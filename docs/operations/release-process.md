@@ -21,10 +21,12 @@ repositórios irmãos. Alterações cross-repo devem respeitar os pins de
 
 ## 2. Validação e criação do draft
 
-1. Desenvolva em branch baseada em `develop` e execute os gates proporcionais
+1. Desenvolva em branch baseada na `main` atual e execute os gates proporcionais
    à mudança: testes focados, `make test`, `make layout-audit`,
    `make version-audit`, build real e os smokes QEMU/VMware aplicáveis.
-2. Integre `develop`, confirme CI/CodeQL verdes, faça fast-forward de `main` e
+2. Abra pull request para `main`, confirme CI/CodeQL verdes e obtenha a
+   aprovação independente exigida pelo ruleset depois do ultimo push. Somente
+   após o merge, com o checkout local em fast-forward exato de `origin/main`,
    crie a tag `v<versão-estendida>`.
 3. O workflow **Release Artifacts** recompila a tag, valida os irmãos pinados e
    cria ou atualiza somente um GitHub Release em estado `draft`.
@@ -288,8 +290,14 @@ públicas. Essa retomada somente leitura continua possível após novos commits 
 
 Confirme workflows verdes, título/notas da release, 12 assets públicos e o tag
 retornado por `/releases/latest`. Depois da promoção, execute o ciclo A/B de
-produção no VMware oficial; esse é um gate de aceite da Etapa 8 e não é
-substituído pelas verificações criptográficas de publicação. Preserve a
-evidência e remova apenas temporários e VMs descartáveis cuja identidade tenha
-sido confirmada. A existência do artifact ou da tag, isoladamente, não conclui
-a publicação nem fecha a Etapa 8.
+produção no VMware oficial com
+`smoke-x64-vmware-update-ab-production-existing-iso`; esse é um gate de aceite
+da Etapa 8 e não é substituído pelas verificações criptográficas de publicação.
+A ISO predecessora precisa ser um release público estritamente anterior que já
+contenha a mesma âncora de produção. O primeiro release após uma rotação de chave
+é somente o bootstrap desse requisito e o aceite fica, de forma explícita,
+pendente até o release seguinte — nunca use uma ISO retroativa, override de
+versão ou o gate com chave de laboratório como substituto. Preserve a evidência
+e remova apenas temporários e VMs descartáveis cuja identidade tenha sido
+confirmada. A existência do artifact ou da tag, isoladamente, não conclui a
+publicação nem fecha a Etapa 8.

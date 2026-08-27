@@ -9,4 +9,10 @@ int e1000_ready(void);
 int e1000_send_frame(const uint8_t *frame, uint16_t len);
 int e1000_poll_frame(uint8_t *out_frame, uint16_t out_cap, uint16_t *out_len);
 
+/* Receive-address register helpers are public so the register contract can be
+ * covered by host tests without emulating the complete MMIO device. */
+int e1000_mac_decode(uint32_t ral, uint32_t rah, uint8_t mac_out[6]);
+int e1000_mac_encode(const uint8_t mac[6], uint32_t *ral_out,
+                     uint32_t *rah_out);
+
 #endif /* DRIVERS_NET_E1000_H */

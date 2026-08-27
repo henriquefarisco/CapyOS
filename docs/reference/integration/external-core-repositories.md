@@ -1,6 +1,6 @@
 # External core repositories
 
-**Status:** migration registry aligned to CapyOS `0.9.1+20260825` stable candidate;
+**Status:** migration registry aligned to CapyOS `0.9.2+20260826` stable candidate;
 Etapas 1-7 closed and Etapa 8 active (7/16). Current pins and ABI status are
 authoritative in the compatibility matrix.
 **Rule:** external repository progress does not count as CapyOS

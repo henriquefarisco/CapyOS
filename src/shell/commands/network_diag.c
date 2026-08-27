@@ -13,6 +13,22 @@ static void shell_print_signed_number(int32_t value) {
   shell_print_number((uint32_t)value);
 }
 
+static void shell_print_mac_address(const uint8_t mac[6]) {
+  static const char digits[] = "0123456789ABCDEF";
+  char text[18];
+  uint32_t pos = 0u;
+
+  for (uint32_t i = 0u; i < 6u; ++i) {
+    text[pos++] = digits[(mac[i] >> 4) & 0x0Fu];
+    text[pos++] = digits[mac[i] & 0x0Fu];
+    if (i + 1u < 6u) {
+      text[pos++] = ':';
+    }
+  }
+  text[pos] = '\0';
+  shell_print(text);
+}
+
 static void print_hyperv_runtime_dump(const struct net_stack_status *st) {
   struct system_runtime_platform platform;
 
@@ -155,6 +171,9 @@ int net_cmd_status(struct shell_context *ctx, int argc, char **argv) {
   shell_print(net_cli_runtime_label(&st));
   shell_print(" ready=");
   shell_print(st.ready ? "yes\n" : "no\n");
+  shell_print("mac=");
+  shell_print_mac_address(st.ipv4.mac);
+  shell_newline();
   shell_print("dhcp=");
   if (!shell_string_equal(net_cli_current_mode(ctx), "dhcp")) {
     shell_print("off");

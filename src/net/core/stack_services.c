@@ -15,6 +15,7 @@
 #define NET_DHCP_OPTION_SERVER_ID 54u
 #define NET_DHCP_OPTION_PARAM_REQ_LIST 55u
 #define NET_DHCP_OPTION_END 255u
+#define NET_DHCP_MIN_MESSAGE_SIZE 300u
 
 struct net_udp_hdr {
   uint16_t src_port;
@@ -166,8 +167,7 @@ int net_dhcp_send_message(struct net_dhcp_state *state,
                           const struct net_ipv4_config *ipv4, uint8_t msg_type,
                           uint32_t requested_ip, uint32_t server_id,
                           net_service_send_ipv4_fn send_ipv4) {
-  uint8_t udp_payload[sizeof(struct net_udp_hdr) + sizeof(struct net_bootp_hdr) +
-                      32];
+  uint8_t udp_payload[sizeof(struct net_udp_hdr) + NET_DHCP_MIN_MESSAGE_SIZE];
   struct net_udp_hdr *udp = (struct net_udp_hdr *)udp_payload;
   struct net_bootp_hdr *bootp =
       (struct net_bootp_hdr *)(udp_payload + sizeof(struct net_udp_hdr));
@@ -208,19 +208,26 @@ int net_dhcp_send_message(struct net_dhcp_state *state,
   options[opt_len++] = NET_DHCP_OPTION_SUBNET_MASK;
   options[opt_len++] = NET_DHCP_OPTION_ROUTER;
   options[opt_len++] = NET_DHCP_OPTION_DNS;
+
+  /* RFC 1542 section 2.1 permits receivers and relays to reject BOOTP/DHCP
+   * messages whose UDP data field is shorter than 300 octets. RFC 2132
+   * section 3.2 defines END as the end of valid option information and says
+   * all subsequent octets should be PAD. Some older ISC-derived servers used
+   * by desktop hypervisors enforce that canonical order. */
   options[opt_len++] = NET_DHCP_OPTION_END;
+  while (sizeof(struct net_bootp_hdr) + opt_len < NET_DHCP_MIN_MESSAGE_SIZE) {
+    options[opt_len++] = 0u;
+  }
 
   udp->src_port = services_htons16(NET_DHCP_CLIENT_PORT);
   udp->dst_port = services_htons16(NET_DHCP_SERVER_PORT);
-  udp->len =
-      services_htons16((uint16_t)(sizeof(struct net_udp_hdr) +
-                                  sizeof(struct net_bootp_hdr) + opt_len));
+  udp->len = services_htons16(
+      (uint16_t)(sizeof(struct net_udp_hdr) + NET_DHCP_MIN_MESSAGE_SIZE));
   udp->checksum = 0;
 
-  return send_ipv4(NET_L4_PROTO_UDP, NET_IPV4_ADDR(255, 255, 255, 255),
-                   udp_payload,
-                   sizeof(struct net_udp_hdr) + sizeof(struct net_bootp_hdr) +
-                       opt_len);
+  return send_ipv4(NET_L4_PROTO_UDP, 0u,
+                   NET_IPV4_ADDR(255, 255, 255, 255), udp_payload,
+                   sizeof(struct net_udp_hdr) + NET_DHCP_MIN_MESSAGE_SIZE);
 }
 
 int net_dns_send_query(struct net_dns_state *state,
@@ -261,7 +268,7 @@ int net_dns_send_query(struct net_dns_state *state,
   udp->dst_port = services_htons16(NET_DNS_SERVER_PORT);
   udp->len = services_htons16((uint16_t)(sizeof(struct net_udp_hdr) + dns_len));
   udp->checksum = 0;
-  return send_ipv4(NET_L4_PROTO_UDP, ipv4->dns, udp_payload,
+  return send_ipv4(NET_L4_PROTO_UDP, ipv4->addr, ipv4->dns, udp_payload,
                    sizeof(struct net_udp_hdr) + dns_len);
 }
 

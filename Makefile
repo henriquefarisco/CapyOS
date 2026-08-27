@@ -2431,6 +2431,8 @@ TEST_SRCS   := \
                    userland/bin/capybrowse/page_budget.c \
                tests/net/test_net_dns.c src/net/services/dns.c \
                tests/net/test_net_dhcp_options.c src/net/core/dhcp_options.c \
+               tests/net/test_net_dhcp_wire.c src/net/core/stack_services.c \
+               tests/drivers/test_e1000_identity.c src/drivers/net/e1000.c \
                tests/net/test_net_icmp.c src/net/protocols/stack_icmp.c \
                tests/net/test_net_arp.c src/net/protocols/stack_arp.c \
                tests/kernel/test_elf_bounds.c \
@@ -2712,6 +2714,7 @@ test-vmware-installer-no-uart-contract:
 test-release-promotion-contract:
 	@echo "Validando o inventario assinado exigido para promocao de release..."
 	python3 -m unittest \
+		tools.scripts.test_audit_version_manifest \
 		tools.scripts.test_verify_release_promotion_bundle \
 		tools.scripts.test_verify_release_repository_policy \
 		tools.scripts.test_release_workflow_contract \
@@ -4084,7 +4087,7 @@ smoke-x64-qemu-update-ab:
 
 .PHONY: smoke-x64-vmware-update-ab
 smoke-x64-vmware-update-ab:
-	@echo "Executando gate oficial VMware+UEFI+E1000 do ciclo A/B assinado..."
+	@echo "Executando gate VMware+UEFI+E1000 de laboratorio do ciclo A/B assinado..."
 	python3 tools/scripts/update_ab_lab_config.py --provider vmware --out $(UPDATE_AB_LAB_ENV)
 	@set -e; . $(UPDATE_AB_LAB_ENV); \
 	$(MAKE) all64 iso-uefi manifest64 \
@@ -4103,13 +4106,36 @@ smoke-x64-vmware-update-ab:
 		--published-at $(UPDATE_AB_PUBLISHED_AT) \
 		$(SMOKE_X64_VMWARE_UPDATE_AB_ARGS)
 
+# Post-promotion production proof. Unlike the hermetic target above, this never
+# builds or signs material and never receives a private key. It installs the
+# exact released predecessor ISO, verifies copies downloaded from the public
+# release, and makes the guest consume GitHub's public Latest route over HTTPS.
+.PHONY: smoke-x64-vmware-update-ab-production-existing-iso
+smoke-x64-vmware-update-ab-production-existing-iso:
+	@if [ -z "$(EXISTING_ISO)" ] || [ ! -f "$(EXISTING_ISO)" ]; then echo "[err] informe EXISTING_ISO=<ISO predecessora publicada>"; exit 2; fi
+	@if [ -z "$(PRODUCTION_PREDECESSOR_VERSION)" ]; then echo "[err] informe PRODUCTION_PREDECESSOR_VERSION=<versao da ISO>"; exit 2; fi
+	@if [ -z "$(PRODUCTION_PREDECESSOR_ISO_SHA256)" ]; then echo "[err] informe PRODUCTION_PREDECESSOR_ISO_SHA256=<sha256 publicado da ISO>"; exit 2; fi
+	@if [ -z "$(PRODUCTION_MANIFEST)" ] || [ ! -f "$(PRODUCTION_MANIFEST)" ]; then echo "[err] informe PRODUCTION_MANIFEST=<latest.ini publico>"; exit 2; fi
+	@if [ -z "$(PRODUCTION_PAYLOAD)" ] || [ ! -f "$(PRODUCTION_PAYLOAD)" ]; then echo "[err] informe PRODUCTION_PAYLOAD=<capyos64.bin publico>"; exit 2; fi
+	@echo "Executando gate VMware A/B de producao sobre assets publicos exatos..."
+	@SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_update_ab.py)"; \
+	ISO_WIN="$$(wslpath -w "$(EXISTING_ISO)")"; \
+	MANIFEST_WIN="$$(wslpath -w "$(PRODUCTION_MANIFEST)")"; \
+	PAYLOAD_WIN="$$(wslpath -w "$(PRODUCTION_PAYLOAD)")"; \
+	py.exe -3 "$$SCRIPT_WIN" --production --iso "$$ISO_WIN" \
+		--current-version "$(PRODUCTION_PREDECESSOR_VERSION)" \
+		--expected-iso-sha256 "$(PRODUCTION_PREDECESSOR_ISO_SHA256)" \
+		--production-manifest "$$MANIFEST_WIN" \
+		--production-payload "$$PAYLOAD_WIN" \
+		$(SMOKE_X64_VMWARE_UPDATE_AB_PRODUCTION_ARGS)
+
 .PHONY: smoke-x64-iso-modules-net
 # Networked full-install regression gate (alpha.287): builds the ISO and runs
 # the official install smoke with profile=full + real QEMU user-net (SLIRP NAT)
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.1+20260825/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.2+20260826/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
