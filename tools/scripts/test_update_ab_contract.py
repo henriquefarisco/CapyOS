@@ -399,6 +399,20 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     if late_lab_console.commands != ["print-version"]:
         return fail("VMware production runtime did not complete the guarded query")
 
+    vmware_update_ab.assert_boot_reported_vmx_mac(
+        "boot prefix 00:0C:29:\r\n70:F0:CF boot suffix",
+        "00:0C:29:70:F0:CF",
+    )
+    try:
+        vmware_update_ab.assert_boot_reported_vmx_mac(
+            "boot prefix 00:0C:29:70:F0:D0 boot suffix",
+            "00:0C:29:70:F0:CF",
+        )
+    except RuntimeError:
+        pass
+    else:
+        return fail("VMware production gate accepted a different guest MAC")
+
     version_yaml = (
         "channels:\n"
         "  alpha:\n"
@@ -651,8 +665,10 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
                 return fail("VMware A/B gate may pass the flat VMDK as a descriptor")
             if "assert_guest_uses_vmx_mac(" not in driver:
                 return fail("VMware A/B gate lost the guest/VMX MAC binding assertion")
-            if 'expect=f"mac={expected_mac}"' not in driver:
+            if "assert_boot_reported_vmx_mac(console.text(), expected_mac)" not in driver:
                 return fail("VMware A/B gate no longer proves the guest station MAC")
+            if 'expect="driver=e1000 mode=dhcp detected=yes runtime=ready ready=yes"' not in driver:
+                return fail("VMware A/B gate no longer proves the E1000 runtime")
             driver_tree = ast.parse(driver, filename=driver_name)
             main_nodes = [
                 node

@@ -90,6 +90,7 @@ from smoke_x64_vmware_installer import (  # noqa: E402
     start_console,
     write_vmx,
 )
+from smoke_x64_session import text_contains_pattern  # noqa: E402
 from update_manifest_common import (  # noqa: E402
     PINNED_PUBLIC_KEY_HEX,
     ensure_regular_file,
@@ -197,13 +198,23 @@ def read_vmx_generated_mac(vmx_path: Path) -> str:
     raise RuntimeError("VMware did not persist ethernet0.generatedAddress")
 
 
+def assert_boot_reported_vmx_mac(text: str, expected_mac: str) -> None:
+    """Bind the guest boot diagnostic to VMware's generated station address."""
+    if not text_contains_pattern(text, expected_mac, ignore_line_breaks=True):
+        raise RuntimeError(
+            "production boot did not report the VMware station address "
+            f"{expected_mac!r}"
+        )
+
+
 def assert_guest_uses_vmx_mac(console, timeout: float, vmx_path: Path) -> None:
     expected_mac = read_vmx_generated_mac(vmx_path)
+    assert_boot_reported_vmx_mac(console.text(), expected_mac)
     run_cmd(
         console,
         "net-status",
         timeout,
-        expect=f"mac={expected_mac}",
+        expect="driver=e1000 mode=dhcp detected=yes runtime=ready ready=yes",
         expect_ignore_line_breaks=True,
     )
 
