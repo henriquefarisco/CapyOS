@@ -238,27 +238,16 @@ def verify_repository_policy(
     if not isinstance(pull_request, dict):
         raise RepositoryPolicyError("main pull_request rule has no parameters")
     approvals = pull_request.get("required_approving_review_count")
-    if (
-        not isinstance(approvals, int)
-        or isinstance(approvals, bool)
-        or approvals < 0
-    ):
+    if not isinstance(approvals, int) or isinstance(approvals, bool):
         raise RepositoryPolicyError(
             "main pull_request rule has an invalid approval count"
         )
-    if approvals == 0:
-        _require_solo_maintainer_controls(main_rules, pull_request)
-    else:
-        if pull_request.get("dismiss_stale_reviews_on_push") is not True:
-            raise RepositoryPolicyError(
-                "reviewed main pull_request rule must dismiss stale approvals "
-                "after a push"
-            )
-        if pull_request.get("require_last_push_approval") is not True:
-            raise RepositoryPolicyError(
-                "reviewed main pull_request rule must require approval of the "
-                "last push"
-            )
+    if approvals != 0:
+        raise RepositoryPolicyError(
+            "main pull_request rule must require exactly zero approvals for the "
+            "permanent solo-maintainer profile"
+        )
+    _require_solo_maintainer_controls(main_rules, pull_request)
 
 
 def parse_args() -> argparse.Namespace:

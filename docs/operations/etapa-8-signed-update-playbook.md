@@ -151,9 +151,9 @@ O gate acima prova o mecanismo. Para provar a cadeia de publicação real, com a
    bloqueia update/delete exatamente em `refs/tags/v*`.
    `CAPYOS_RELEASE_MAIN_RULESET_ID` deve apontar para o ruleset sem bypass de
    `refs/heads/main`, com deletion e non-fast-forward bloqueados, pull request
-   obrigatório e um dos perfis fail-closed: revisão independente após o último
-   push, ou mantenedor solo com zero aprovação, squash-only, threads resolvidas
-   e os seis checks strict autenticados (`Lint`, `Release gates`,
+   obrigatório e o perfil permanente solo fail-closed: exatamente zero
+   aprovação, squash-only, threads resolvidas e os seis checks strict
+   autenticados (`Lint`, `Release gates`,
    `QEMU ISO smoke`, dois `Analyze` e `CodeQL`). A workflow valida esses controles com
    `verify_release_repository_policy.py`, verifica os 12 assets no draft
    autenticado, publica e marca Latest numa única mutação, exige o estado

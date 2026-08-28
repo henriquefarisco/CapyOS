@@ -75,10 +75,9 @@ a credencial deve ser revogada ou rotacionada após a janela. O ruleset de tag
 sem bypass indicado por `CAPYOS_RELEASE_TAG_RULESET_ID` impede update/deletion
 exatamente em `refs/tags/v*`. O ruleset de branch sem bypass indicado por
 `CAPYOS_RELEASE_MAIN_RULESET_ID` cobre exatamente `refs/heads/main`, impede
-deletion/non-fast-forward e exige pull request. Ele aceita o perfil com aprovação
-independente, reviews obsoletos descartados e aprovação do último push, ou o
-perfil solo fail-closed com zero aprovação, squash-only, threads resolvidas e os
-seis checks strict vinculados às integrações oficiais. Immutable
+deletion/non-fast-forward e exige pull request com o perfil permanente solo
+fail-closed: exatamente zero aprovação, squash-only, threads resolvidas e os seis
+checks strict vinculados às integrações oficiais. Immutable
 releases também precisa estar habilitado; as três políticas são avaliadas por
 `tools/scripts/verify_release_repository_policy.py`. O `GITHUB_TOKEN` permanece
 responsável apenas pela release. Uma retomada após a mutação apenas revalida a

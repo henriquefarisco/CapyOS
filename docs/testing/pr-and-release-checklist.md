@@ -144,9 +144,9 @@ mudanca relevante atualize a fonte de verdade da robustez do sistema.
       bypass/exclusões, que restringe update e deletion de `refs/tags/v*`.
 - [ ] `CAPYOS_RELEASE_MAIN_RULESET_ID` aponta para um ruleset de branch ativo,
       sem bypass/exclusões, que cobre exatamente `refs/heads/main`, restringe
-      deletion e non-fast-forward e exige pull request com pelo menos uma
-      aprovação, descarte de reviews obsoletos após push e aprovação do último
-      push.
+      deletion e non-fast-forward e exige pull request com o perfil permanente
+      solo: exatamente zero aprovação, squash-only, resolução de threads, branch
+      atualizada e os seis checks autenticados definidos na política.
 - [ ] O ruleset de `main` foi tratado como prova de proteção corrente, não como
       evidência histórica de que o commit da tag passou por PR/review.
 - [ ] A primeira execução de **Promote Signed Release** foi disparada a partir

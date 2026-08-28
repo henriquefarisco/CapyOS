@@ -37,9 +37,27 @@ def valid_main_ruleset() -> dict[str, Any]:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 1,
-                    "dismiss_stale_reviews_on_push": True,
-                    "require_last_push_approval": True,
+                    "allowed_merge_methods": ["squash"],
+                    "dismiss_stale_reviews_on_push": False,
+                    "require_code_owner_review": False,
+                    "require_extra_approval_for_unattributed_changes": False,
+                    "require_last_push_approval": False,
+                    "required_approving_review_count": 0,
+                    "required_review_thread_resolution": True,
+                    "required_reviewers": [],
+                },
+            },
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "do_not_enforce_on_create": False,
+                    "required_status_checks": [
+                        {"context": context, "integration_id": integration_id}
+                        for context, integration_id in sorted(
+                            SOLO_MAINTAINER_REQUIRED_STATUS_CHECKS.items()
+                        )
+                    ],
+                    "strict_required_status_checks_policy": True,
                 },
             },
         ],
@@ -47,36 +65,7 @@ def valid_main_ruleset() -> dict[str, Any]:
 
 
 def valid_solo_main_ruleset() -> dict[str, Any]:
-    ruleset = valid_main_ruleset()
-    pull_request = ruleset["rules"][2]["parameters"]
-    pull_request.update(
-        {
-            "allowed_merge_methods": ["squash"],
-            "dismiss_stale_reviews_on_push": False,
-            "require_code_owner_review": False,
-            "require_extra_approval_for_unattributed_changes": False,
-            "require_last_push_approval": False,
-            "required_approving_review_count": 0,
-            "required_review_thread_resolution": True,
-            "required_reviewers": [],
-        }
-    )
-    ruleset["rules"].append(
-        {
-            "type": "required_status_checks",
-            "parameters": {
-                "do_not_enforce_on_create": False,
-                "required_status_checks": [
-                    {"context": context, "integration_id": integration_id}
-                    for context, integration_id in sorted(
-                        SOLO_MAINTAINER_REQUIRED_STATUS_CHECKS.items()
-                    )
-                ],
-                "strict_required_status_checks_policy": True,
-            },
-        }
-    )
-    return ruleset
+    return copy.deepcopy(valid_main_ruleset())
 
 
 class VerifyReleaseRepositoryPolicyTests(unittest.TestCase):
@@ -135,10 +124,14 @@ class VerifyReleaseRepositoryPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(RepositoryPolicyError, "must be active"):
             verify_repository_policy({"enabled": True}, valid_tag_ruleset(), ruleset)
 
-    def test_accepts_fail_closed_solo_maintainer_policy(self) -> None:
-        verify_repository_policy(
-            {"enabled": True}, valid_tag_ruleset(), valid_solo_main_ruleset()
-        )
+    def test_rejects_switch_to_reviewed_profile(self) -> None:
+        ruleset = valid_solo_main_ruleset()
+        pull_request = ruleset["rules"][2]["parameters"]
+        pull_request["required_approving_review_count"] = 1
+        pull_request["dismiss_stale_reviews_on_push"] = True
+        pull_request["require_last_push_approval"] = True
+        with self.assertRaisesRegex(RepositoryPolicyError, "exactly zero approvals"):
+            verify_repository_policy({"enabled": True}, valid_tag_ruleset(), ruleset)
 
     def test_rejects_zero_approvals_without_required_checks(self) -> None:
         ruleset = valid_solo_main_ruleset()
@@ -207,16 +200,16 @@ class VerifyReleaseRepositoryPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(RepositoryPolicyError, "required reviewers"):
             verify_repository_policy({"enabled": True}, valid_tag_ruleset(), ruleset)
 
-    def test_rejects_stale_approval_reuse(self) -> None:
+    def test_rejects_solo_stale_review_dependency(self) -> None:
         ruleset = copy.deepcopy(valid_main_ruleset())
-        ruleset["rules"][2]["parameters"]["dismiss_stale_reviews_on_push"] = False
-        with self.assertRaisesRegex(RepositoryPolicyError, "dismiss stale"):
+        ruleset["rules"][2]["parameters"]["dismiss_stale_reviews_on_push"] = True
+        with self.assertRaisesRegex(RepositoryPolicyError, "stale-review"):
             verify_repository_policy({"enabled": True}, valid_tag_ruleset(), ruleset)
 
-    def test_rejects_unreviewed_last_push(self) -> None:
+    def test_rejects_solo_last_push_approval_dependency(self) -> None:
         ruleset = copy.deepcopy(valid_main_ruleset())
-        ruleset["rules"][2]["parameters"]["require_last_push_approval"] = False
-        with self.assertRaisesRegex(RepositoryPolicyError, "last push"):
+        ruleset["rules"][2]["parameters"]["require_last_push_approval"] = True
+        with self.assertRaisesRegex(RepositoryPolicyError, "last-push"):
             verify_repository_policy({"enabled": True}, valid_tag_ruleset(), ruleset)
 
 
