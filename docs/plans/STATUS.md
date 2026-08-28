@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-08-25 | **Versao:** `0.9.1+20260825` (stable candidate) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-08-26 | **Versao:** `0.9.2+20260826` (stable candidate) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -28,16 +28,28 @@
 
 - **Etapa 8 em andamento:** staging, apply no slot inativo, tentativa única,
   confirmação de saúde e rollback já estão implementados e host-provados. O
-  instalador oficial e a publicação remota dos nove módulos também passaram. O
-  critério restante exige materiais Ed25519 de produção publicados e o ciclo
-  apply/reboot/health/rollback completo no VMware oficial.
+  instalador oficial, a publicação remota dos nove módulos e os materiais
+  Ed25519 da `0.9.1` passaram. A `0.9.1` e o bootstrap da ancora nova: a `0.9.0`
+  contem o pin anterior e a `0.9.1` nao pode atualizar para si mesma. O criterio
+  restante exige publicar a `0.9.2` e executar o ciclo
+  apply/reboot/rollback/reapply/health completo no VMware oficial a partir da
+  ISO `0.9.1` publicada.
 
-- **Candidato stable `0.9.1+20260825`:** automatiza a regressao do instalador
+- **Candidato stable `0.9.2+20260826`:** separa o aceite A/B de producao do gate
+  lab, recusa chave privada/flags lab, fixa a ISO predecessora ao SHA-256
+  publicado, consome os assets publicos e executa rollback antes da confirmacao
+  para respeitar o anti-downgrade. O bump nao altera ABI nem pins de repositorios
+  irmaos. Os gates lab passaram no VMware e no QEMU/OVMF em quatro boots, com
+  confirmacao e rollback; o VMware usou E1000/DHCP reais. `release-check` e o
+  build oficial sem material lab tambem passaram. Publicacao e gate VMware
+  pos-promocao continuam obrigatorios.
+
+- **Release stable `0.9.1+20260825`:** automatiza a regressao do instalador
   VMware sem UART sobre uma ISO existente, exige prompt estavel e entrada EFI
   ConIn valida, preserva dois discos descartaveis e endurece a evidencia do
   wizard completo. O bump nao altera ABI nem pins de repositorios irmaos. A
-  candidatura nao equivale a publicacao: assinatura offline, politicas remotas,
-  promocao imutavel e ciclo A/B de producao continuam gates obrigatorios.
+  release foi publicada assinada, imutavel e Latest; por ser o bootstrap da
+  ancora corrente, o ciclo A/B de producao segue para a candidata `0.9.2`.
 
 - **Etapa 8 — hardening do instalador:** o loader deixa de escolher o maior
   disco silenciosamente. A nova politica pura calcula e testa o plano GPT,

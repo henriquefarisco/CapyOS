@@ -3,9 +3,64 @@
 
 from __future__ import annotations
 
+import re
 import time
 
-from smoke_x64_session import SmokeSession
+from smoke_x64_session import SmokeSession, text_contains_pattern
+
+SHELL_PROMPT_TOKEN = "\0CAPYOS_SHELL_PROMPT\0"
+SHELL_PROMPT_RE = re.compile(
+    r"(?:^|[\r\n])[^\s@>]+@[^\s@>]+>[^\r\n]*> "
+)
+
+
+def _contains_shell_prompt(text: str) -> bool:
+    return SHELL_PROMPT_RE.search(text) is not None
+
+
+def _primary_text_since(session: SmokeSession, start_at: object) -> str:
+    serial_text_since = getattr(session, "serial_text_since", None)
+    if callable(serial_text_since):
+        return str(serial_text_since(start_at))
+    return session.text_since(start_at)
+
+
+def _wait_for_primary_any(
+    session: SmokeSession,
+    patterns: list[str],
+    *,
+    timeout: float,
+    start_at: object,
+    ignore_line_breaks: bool = False,
+) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = _primary_text_since(session, start_at)
+        for pattern in patterns:
+            if pattern == SHELL_PROMPT_TOKEN:
+                matched = _contains_shell_prompt(text)
+            else:
+                matched = text_contains_pattern(
+                    text, pattern, ignore_line_breaks=ignore_line_breaks
+                )
+            if matched:
+                return pattern
+        proc = getattr(session, "proc", None)
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(f"VM exited early with code {proc.returncode}")
+        time.sleep(0.05)
+
+    text = _primary_text_since(session, start_at)
+    for pattern in patterns:
+        if pattern == SHELL_PROMPT_TOKEN:
+            matched = _contains_shell_prompt(text)
+        else:
+            matched = text_contains_pattern(
+                text, pattern, ignore_line_breaks=ignore_line_breaks
+            )
+        if matched:
+            return pattern
+    raise TimeoutError(f"timeout waiting for patterns: {patterns!r}")
 
 
 def run_cmd(
@@ -22,26 +77,57 @@ def run_cmd(
         try:
             if isinstance(expect, (list, tuple)):
                 patterns = list(expect)
-                if expect_optional:
-                    patterns.append("> ")
-                session.wait_for_any(patterns, timeout=timeout, start_at=mk)
-            elif expect_optional:
-                session.wait_for_any([expect, "> "], timeout=timeout, start_at=mk)
-            else:
-                session.wait_for(
-                    expect,
+                patterns.append(SHELL_PROMPT_TOKEN)
+                found = _wait_for_primary_any(
+                    session,
+                    patterns,
                     timeout=timeout,
                     start_at=mk,
                     ignore_line_breaks=expect_ignore_line_breaks,
                 )
+                if found == SHELL_PROMPT_TOKEN and not expect_optional:
+                    raise RuntimeError(
+                        f"command {cmd!r} returned to the shell before "
+                        f"expected output {list(expect)!r}"
+                    )
+            elif expect_optional:
+                _wait_for_primary_any(
+                    session,
+                    [expect, SHELL_PROMPT_TOKEN],
+                    timeout=timeout,
+                    start_at=mk,
+                    ignore_line_breaks=expect_ignore_line_breaks,
+                )
+            elif expect_ignore_line_breaks:
+                session.wait_for(
+                    expect,
+                    timeout=timeout,
+                    start_at=mk,
+                    ignore_line_breaks=True,
+                )
+            else:
+                found = _wait_for_primary_any(
+                    session,
+                    [expect, SHELL_PROMPT_TOKEN],
+                    timeout=timeout,
+                    start_at=mk,
+                    ignore_line_breaks=expect_ignore_line_breaks,
+                )
+                if found == SHELL_PROMPT_TOKEN:
+                    raise RuntimeError(
+                        f"command {cmd!r} returned to the shell before "
+                        f"expected output {expect!r}"
+                    )
         except TimeoutError:
             if not expect_optional:
                 raise
-            if "> " in session.tail(1600):
+            if _contains_shell_prompt(_primary_text_since(session, mk)):
                 return
-    if "> " in session.tail(1600):
+    if _contains_shell_prompt(_primary_text_since(session, mk)):
         return
-    session.wait_for("> ", timeout=timeout, start_at=mk)
+    _wait_for_primary_any(
+        session, [SHELL_PROMPT_TOKEN], timeout=timeout, start_at=mk
+    )
 
 
 def run_cmd_expect_prompt(

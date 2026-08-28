@@ -34,6 +34,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define UPDATE_AGENT_PAYLOAD_FETCH_ATTEMPTS 2u
+
 #if defined(UNIT_TEST)
 static uint8_t g_update_payload_storage[UPDATE_AGENT_PAYLOAD_MAX_BYTES];
 #endif
@@ -312,8 +314,15 @@ int update_agent_download_payload(void) {
     return -48;
   }
 
-  rc = update_agent_fetch_payload_bytes(manifest.payload_url, payload_buffer,
-                                        payload_limit, &payload_len);
+  for (uint32_t attempt = 0u;
+       attempt < UPDATE_AGENT_PAYLOAD_FETCH_ATTEMPTS; ++attempt) {
+    payload_len = 0u;
+    rc = update_agent_fetch_payload_bytes(manifest.payload_url, payload_buffer,
+                                          payload_limit, &payload_len);
+    if (rc == 0) {
+      break;
+    }
+  }
   if (rc != 0 || payload_len == 0u || payload_len > payload_limit) {
     update_agent_g_status.last_result = -42;
     update_agent_local_copy(update_agent_g_status.summary,

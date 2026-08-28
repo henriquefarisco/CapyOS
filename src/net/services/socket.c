@@ -2,16 +2,60 @@
 #include "net/stack.h"
 #include "net/tcp.h"
 #include "memory/kmem.h"
+#include "security/csprng.h"
 #include "../internal/stack_utils.h"
 #include <stddef.h>
+
+#define SOCKET_EPHEMERAL_PORT_MIN 49152u
+#define SOCKET_EPHEMERAL_PORT_COUNT 16384u
 
 static struct socket socket_table[SOCKET_MAX];
 static struct socket_stats sock_stats;
 static int socket_initialized = 1;
+static uint16_t socket_next_ephemeral_port;
 
 static void socket_memset(void *dst, int val, size_t len) {
   uint8_t *d = (uint8_t *)dst;
   for (size_t i = 0; i < len; i++) d[i] = (uint8_t)val;
+}
+
+static int socket_local_port_in_use(uint16_t port) {
+  for (int i = 0; i < SOCKET_MAX; ++i) {
+    if (socket_table[i].state != SOCK_STATE_UNUSED &&
+        socket_table[i].local_addr.sin_port == port) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void socket_seed_ephemeral_port(void) {
+  uint8_t random_bytes[2];
+  uint16_t random_value;
+
+  csprng_fill(random_bytes, sizeof(random_bytes));
+  random_value =
+      (uint16_t)(((uint16_t)random_bytes[0] << 8) | random_bytes[1]);
+  socket_next_ephemeral_port =
+      (uint16_t)(SOCKET_EPHEMERAL_PORT_MIN +
+                 (random_value % SOCKET_EPHEMERAL_PORT_COUNT));
+}
+
+static uint16_t socket_allocate_ephemeral_port(void) {
+  if (socket_next_ephemeral_port < SOCKET_EPHEMERAL_PORT_MIN) {
+    socket_seed_ephemeral_port();
+  }
+  for (uint32_t attempt = 0; attempt < SOCKET_EPHEMERAL_PORT_COUNT;
+       ++attempt) {
+    uint16_t candidate = socket_next_ephemeral_port++;
+    if (socket_next_ephemeral_port < SOCKET_EPHEMERAL_PORT_MIN) {
+      socket_next_ephemeral_port = SOCKET_EPHEMERAL_PORT_MIN;
+    }
+    if (!socket_local_port_in_use(candidate)) {
+      return candidate;
+    }
+  }
+  return 0u;
 }
 
 static int socket_wait_for_tcp_state(int conn_id, uint8_t target_state,
@@ -46,6 +90,7 @@ static int socket_wait_for_tcp_state(int conn_id, uint8_t target_state,
 void socket_system_init(void) {
   socket_memset(socket_table, 0, sizeof(socket_table));
   socket_memset(&sock_stats, 0, sizeof(sock_stats));
+  socket_next_ephemeral_port = 0u;
   socket_initialized = 1;
 }
 
@@ -124,9 +169,12 @@ int socket_connect(int fd, const struct sockaddr_in *addr) {
     ipv4 = st.ipv4;
 
     if (s->local_addr.sin_port == 0) {
-      static uint16_t ephemeral = 49152;
-      s->local_addr.sin_port = ephemeral++;
-      if (ephemeral == 0) ephemeral = 49152;
+      s->local_addr.sin_port = socket_allocate_ephemeral_port();
+      if (s->local_addr.sin_port == 0u) {
+        s->state = SOCK_STATE_ERROR;
+        s->error = -1;
+        return -1;
+      }
       s->local_addr.sin_addr = ipv4.addr;
     }
 

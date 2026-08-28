@@ -25,6 +25,11 @@
 #define E1000_REG_RAH0 0x5404u
 
 #define E1000_CTRL_RST (1u << 26)
+#define E1000_CTRL_SLU (1u << 6)
+#define E1000_RAH_AV (1u << 31)
+
+#define E1000_RESET_POLL_LIMIT 1000000u
+#define E1000_EEPROM_RELOAD_DELAY 250000u
 
 #define E1000_RCTL_EN (1u << 1)
 #define E1000_RCTL_BAM (1u << 15)
@@ -91,6 +96,10 @@ static inline void mmio_write32(uint32_t off, uint32_t val) {
   __asm__ volatile("" ::: "memory");
 }
 
+static inline void mmio_flush(void) {
+  (void)mmio_read32(E1000_REG_STATUS);
+}
+
 static void mem_zero(void *dst, uint32_t len) {
   uint8_t *p = (uint8_t *)dst;
   for (uint32_t i = 0; i < len; ++i) {
@@ -112,12 +121,72 @@ static void io_relax_delay(uint32_t loops) {
   }
 }
 
-static int mac_nonzero(const uint8_t mac[6]) {
+static int mac_valid_unicast(const uint8_t mac[6]) {
   uint8_t any = 0;
+  if (!mac || (mac[0] & 0x01u) != 0u) {
+    return 0;
+  }
   for (int i = 0; i < 6; ++i) {
     any |= mac[i];
   }
   return any != 0;
+}
+
+int e1000_mac_decode(uint32_t ral, uint32_t rah, uint8_t mac_out[6]) {
+  uint8_t mac[6];
+
+  if (!mac_out) {
+    return -1;
+  }
+  mac[0] = (uint8_t)(ral & 0xFFu);
+  mac[1] = (uint8_t)((ral >> 8) & 0xFFu);
+  mac[2] = (uint8_t)((ral >> 16) & 0xFFu);
+  mac[3] = (uint8_t)((ral >> 24) & 0xFFu);
+  mac[4] = (uint8_t)(rah & 0xFFu);
+  mac[5] = (uint8_t)((rah >> 8) & 0xFFu);
+  if (!mac_valid_unicast(mac)) {
+    return -1;
+  }
+  mem_copy(mac_out, mac, 6u);
+  return 0;
+}
+
+int e1000_mac_encode(const uint8_t mac[6], uint32_t *ral_out,
+                     uint32_t *rah_out) {
+  if (!mac_valid_unicast(mac) || !ral_out || !rah_out) {
+    return -1;
+  }
+  *ral_out = (uint32_t)mac[0] | ((uint32_t)mac[1] << 8) |
+             ((uint32_t)mac[2] << 16) | ((uint32_t)mac[3] << 24);
+  *rah_out = (uint32_t)mac[4] | ((uint32_t)mac[5] << 8) | E1000_RAH_AV;
+  return 0;
+}
+
+static int e1000_wait_reset_complete(void) {
+  for (uint32_t spin = 0u; spin < E1000_RESET_POLL_LIMIT; ++spin) {
+    if ((mmio_read32(E1000_REG_CTRL) & E1000_CTRL_RST) == 0u) {
+      return 0;
+    }
+    __asm__ volatile("pause");
+  }
+  return -1;
+}
+
+static int e1000_read_mac(uint8_t mac_out[6]) {
+  return e1000_mac_decode(mmio_read32(E1000_REG_RAL0),
+                          mmio_read32(E1000_REG_RAH0), mac_out);
+}
+
+static void e1000_program_mac(const uint8_t mac[6]) {
+  uint32_t ral = 0u;
+  uint32_t rah = 0u;
+
+  if (e1000_mac_encode(mac, &ral, &rah) != 0) {
+    return;
+  }
+  mmio_write32(E1000_REG_RAL0, ral);
+  mmio_write32(E1000_REG_RAH0, rah);
+  mmio_flush();
 }
 
 static void e1000_setup_rings(void) {
@@ -157,18 +226,50 @@ static void e1000_setup_rings(void) {
 }
 
 int e1000_init(uint64_t bar0, uint8_t mac_out[6]) {
+  uint8_t hardware_mac[6];
+  int have_hardware_mac = 0;
+
   mem_zero(&g_e1000, sizeof(g_e1000));
   if (bar0 == 0) {
     return -1;
   }
   g_e1000.mmio = (volatile uint8_t *)(uintptr_t)(bar0 & ~0xFull);
 
+  /* Firmware and hypervisors normally preload RAR0 with the assigned station
+   * address. Preserve it before the global reset: some virtual E1000 models
+   * do not reload their synthetic EEPROM quickly enough for a polling-only
+   * freestanding driver, and transmitting with the probe fallback address is
+   * rejected by anti-spoofing virtual switches (notably VMware VMnet). */
+  if (e1000_read_mac(hardware_mac) == 0) {
+    have_hardware_mac = 1;
+  }
+
   mmio_write32(E1000_REG_IMC, 0xFFFFFFFFu);
+  mmio_flush();
 
   uint32_t ctrl = mmio_read32(E1000_REG_CTRL);
   mmio_write32(E1000_REG_CTRL, ctrl | E1000_CTRL_RST);
-  io_relax_delay(50000u);
+  mmio_flush();
+  if (e1000_wait_reset_complete() != 0) {
+    return -2;
+  }
+
+  /* Give EEPROM auto-read a bounded settling interval, then prefer the
+   * hypervisor/firmware identity captured before reset. If it was not yet
+   * available, accept the post-reset RAR0 identity instead. */
+  io_relax_delay(E1000_EEPROM_RELOAD_DELAY);
+  if (!have_hardware_mac && e1000_read_mac(hardware_mac) == 0) {
+    have_hardware_mac = 1;
+  }
+  if (!have_hardware_mac) {
+    return -3;
+  }
+  e1000_program_mac(hardware_mac);
+
   mmio_write32(E1000_REG_IMC, 0xFFFFFFFFu);
+  ctrl = mmio_read32(E1000_REG_CTRL);
+  mmio_write32(E1000_REG_CTRL, ctrl | E1000_CTRL_SLU);
+  mmio_flush();
 
   e1000_setup_rings();
 
@@ -180,20 +281,7 @@ int e1000_init(uint64_t bar0, uint8_t mac_out[6]) {
   mmio_write32(E1000_REG_TIPG, 0x0060200Au);
 
   if (mac_out) {
-    uint8_t mac[6];
-    uint32_t ral = mmio_read32(E1000_REG_RAL0);
-    uint32_t rah = mmio_read32(E1000_REG_RAH0);
-    mac[0] = (uint8_t)(ral & 0xFFu);
-    mac[1] = (uint8_t)((ral >> 8) & 0xFFu);
-    mac[2] = (uint8_t)((ral >> 16) & 0xFFu);
-    mac[3] = (uint8_t)((ral >> 24) & 0xFFu);
-    mac[4] = (uint8_t)(rah & 0xFFu);
-    mac[5] = (uint8_t)((rah >> 8) & 0xFFu);
-    if (mac_nonzero(mac)) {
-      for (uint32_t i = 0; i < 6; ++i) {
-        mac_out[i] = mac[i];
-      }
-    }
+    mem_copy(mac_out, hardware_mac, 6u);
   }
 
   g_e1000.ready = 1;
@@ -224,6 +312,7 @@ int e1000_send_frame(const uint8_t *frame, uint16_t len) {
 
   g_e1000.tx_tail = (uint16_t)((idx + 1u) % E1000_TX_DESC_COUNT);
   mmio_write32(E1000_REG_TDT, g_e1000.tx_tail);
+  mmio_flush();
 
   for (uint32_t spin = 0; spin < 200000u; ++spin) {
     if (desc->status & E1000_TX_STATUS_DD) {
@@ -253,6 +342,7 @@ int e1000_poll_frame(uint8_t *out_frame, uint16_t out_cap, uint16_t *out_len) {
 
   desc->status = 0;
   mmio_write32(E1000_REG_RDT, g_e1000.rx_next);
+  mmio_flush();
   g_e1000.rx_next = (uint16_t)((g_e1000.rx_next + 1u) % E1000_RX_DESC_COUNT);
   return 1;
 }

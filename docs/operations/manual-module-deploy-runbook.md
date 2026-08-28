@@ -6,8 +6,8 @@ com wizard interativo e comando `capy`).
 módulos remotos via os repositórios externos (`CapyAgent`,
 `CapyBrowser`, `CapyCodecs`, `CapyUI`, `CapyLang`, `CapyBenchmark`).
 **Plataforma alvo:** `VMware + UEFI + E1000` (trilha oficial).
-**Etapa atual:** Etapa 4 (CapyDisplay 2D + scheduler); Etapas 8-9 (installer/package) ainda
-bloqueadas — este runbook usa o adapter `services/capypkg`
+**Etapa atual:** Etapa 8 (release/update + instalador) em andamento; Etapa 9
+(package manager + SDK/ABI estavel) ainda bloqueada — este runbook usa o adapter `services/capypkg`
 **entrega antecipatória da Etapa 9**, em modo recebedor fail-closed,
 estendida com:
 
@@ -97,7 +97,7 @@ O aggregator (`tools/scripts/build_modules_index.py`) busca cada
 com separadores `---` no arquivo único.
 
 O contrato de publicação é imutável por release. Para
-`0.9.1+20260825`:
+`0.9.2+20260826`:
 
 ```bash
 make modules-index
@@ -107,7 +107,7 @@ make verify-modules-index-assets
 O índice final deve conter **exatamente nove** descritores, com nomes e URLs
 HTTPS únicos, tamanho esperado e SHA-256 por payload. Publique
 `build/capypkg/modules-index.txt` e os nove payloads como assets da tag
-`v0.9.1+20260825` do CapyOS; não mova uma tag rolante `latest` e não
+`v0.9.2+20260826` do CapyOS; não mova uma tag rolante `latest` e não
 use `/releases/latest/download/` como identidade do contrato.
 
 Depois da publicação, o workflow deve:
@@ -119,7 +119,7 @@ Depois da publicação, o workflow deve:
 5. validar tamanho e SHA-256 antes de aceitar a release.
 
 HTTP 404, divergência do índice, tamanho incorreto ou hash inválido falham
-imediatamente. A release `0.9.1` so e promovida depois que essa prova
+imediatamente. A release `0.9.2` so e promovida depois que essa prova
 pos-publicacao aceita a tag e os assets publicos.
 
 A URL do índice será referenciada em `profile.ini`. Não use a URL de
@@ -220,8 +220,8 @@ sistema instalado, via TUI no framebuffer:
      usuário admin, senha admin, **seleção de módulos** (BASIC | FULL | CUSTOM).
    - Se profile != BASIC: wizard pergunta URL do índice (Enter usa o
      `modules-index.txt` imutável da release CapyOS
-     `v0.9.1+20260825`, em
-     `https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.1+20260825/modules-index.txt`),
+     `v0.9.2+20260826`, em
+     `https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.2+20260826/modules-index.txt`),
      grava `/system/install/profile.ini` e dispara
      `capypkg_bootstrap_run_with_progress` que mostra
      `[modules] [i/N] instalando org.capyos.ui.desktop-session...` na tela.

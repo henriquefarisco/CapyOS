@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools" / "scripts"))
 
 import smoke_x64_update_ab_contract as contract  # noqa: E402
 import smoke_x64_update_ab_flow as flow  # noqa: E402
+import smoke_x64_helpers as helpers  # noqa: E402
 from smoke_x64_session import text_contains_pattern  # noqa: E402
 from update_manifest_common import (  # noqa: E402
     ManifestError,
@@ -60,6 +61,52 @@ def _evidence(**overrides: str) -> dict[str, str]:
     return fields
 
 
+def _production_evidence(**overrides: str) -> dict[str, str]:
+    fields = {
+        "format": contract.PRODUCTION_EVIDENCE_FORMAT,
+        "release_tag": "v0.9.2+20260826",
+        "track": contract.TRACK,
+        "provider": "vmware-workstation",
+        "trust_anchor": contract.PRODUCTION_TRUST_ANCHOR,
+        "trust_public_key": "aa" * 32,
+        "predecessor_version": "0.9.1+20260825",
+        "manifest_version": "0.9.2+20260826",
+        "manifest_url": (
+            "https://github.com/henriquefarisco/CapyOS/"
+            "releases/latest/download/latest.ini"
+        ),
+        "payload_url": (
+            "https://github.com/henriquefarisco/CapyOS/releases/download/"
+            "v0.9.2+20260826/capyos64.bin"
+        ),
+        "payload_size": "2863536",
+        "payload_sha256": "bb" * 32,
+        "boot_media_sha256": "cc" * 32,
+        "first_attempt_slot": "1",
+        "second_attempt_slot": "1",
+        "boots_observed": "4",
+        "cycle_order": contract.PRODUCTION_CYCLE_ORDER,
+        "lab_override_absent": "yes",
+        "public_latest_route": "yes",
+        "provider_ready": "yes",
+        "signed_manifest_accepted": "yes",
+        "payload_verified": "yes",
+        "inactive_slot_written": "yes",
+        "attempt_armed": "yes",
+        "loader_consumed_attempt": "yes",
+        "unconfirmed_attempt_spent": "yes",
+        "loader_applied_rollback": "yes",
+        "rollback_reported": "yes",
+        "confirmed_slot_restored": "yes",
+        "second_attempt_armed": "yes",
+        "health_confirmed": "yes",
+        "equal_release_refused": "yes",
+        "recovery_key_included": "no",
+    }
+    fields.update(overrides)
+    return fields
+
+
 def _lab_fields(url: str) -> dict[str, str]:
     return {
         "available_version": "0.8.0-alpha.320",
@@ -86,6 +133,7 @@ class _SlotStatusSession:
         self.marker_value = marker
         self.commands: list[str] = []
         self.waits: list[tuple[str, int, bool]] = []
+        self.wait_any: list[tuple[tuple[str, ...], int]] = []
 
     def marker(self) -> int:
         return self.marker_value
@@ -95,6 +143,9 @@ class _SlotStatusSession:
 
     def tail(self, max_bytes: int = 3500) -> str:
         return self.output[-max_bytes:]
+
+    def text_since(self, start_at: int) -> str:
+        return self.output[start_at:]
 
     def wait_for(
         self,
@@ -113,8 +164,108 @@ class _SlotStatusSession:
         ):
             raise TimeoutError(expected)
 
+    def wait_for_any(
+        self,
+        patterns,
+        *,
+        timeout: float,
+        start_at: int,
+    ) -> str:
+        _ = timeout
+        choices = tuple(patterns)
+        self.wait_any.append((choices, start_at))
+        for pattern in choices:
+            if text_contains_pattern(self.output[start_at:], pattern):
+                return pattern
+        raise TimeoutError(choices)
+
+
+class _LaggingDebugPromptSession(_SlotStatusSession):
+    """Model a stale prompt arriving late on QEMU debugcon."""
+
+    def __init__(self) -> None:
+        super().__init__(">~> ")
+        self.primary_reads = 0
+
+    def serial_text_since(self, start_at: int) -> str:
+        _ = start_at
+        self.primary_reads += 1
+        if self.primary_reads == 1:
+            return "print-boot-slot"
+        return (
+            "print-boot-slot\r\n"
+            "Boot provider: ready=yes reason=ready\r\n"
+            "admin@smoke-node>~> "
+        )
+
+
+class _HttpProgressSession(_SlotStatusSession):
+    """Model an optional fetch whose progress prefix contains ``> ``."""
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.primary_reads = 0
+
+    def serial_text_since(self, start_at: int) -> str:
+        _ = start_at
+        self.primary_reads += 1
+        progress = "net-fetch https://example.com\r\n>>> https://example.com (?) ...\r\n"
+        if self.primary_reads == 1:
+            return progress
+        return progress + "[erro] dns resolution failed\r\nadmin@smoke-node>~> "
+
 
 def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
+    lagging_debug_prompt = _LaggingDebugPromptSession()
+    try:
+        helpers.run_cmd(
+            lagging_debug_prompt,
+            "print-boot-slot",
+            timeout=1.0,
+            expect="Boot provider: ready=yes reason=ready",
+        )
+    except RuntimeError as exc:
+        return fail(f"run_cmd accepted a stale debugcon prompt: {exc}")
+
+    http_progress = _HttpProgressSession()
+    helpers.run_cmd(
+        http_progress,
+        "net-fetch https://example.com",
+        timeout=1.0,
+        expect="status=200",
+        expect_optional=True,
+    )
+    if http_progress.primary_reads < 2:
+        return fail("run_cmd accepted the HTTP >>> progress prefix as a shell prompt")
+
+    cwd_prompt = _SlotStatusSession("admin@smoke-node>~/.../projetos/capy> ")
+    helpers.run_cmd(cwd_prompt, "mypath", timeout=1.0)
+
+    failed_command = _SlotStatusSession(
+        "payload download failed\r\nadmin@smoke-node>~> "
+    )
+    try:
+        helpers.run_cmd(
+            failed_command,
+            "update-download-payload",
+            timeout=60.0,
+            expect=flow.DOWNLOAD_OK,
+        )
+    except RuntimeError:
+        pass
+    else:
+        return fail("run_cmd waited past a completed command failure")
+
+    successful_command = _SlotStatusSession(
+        f"{flow.DOWNLOAD_OK}\r\nadmin@smoke-node>~> "
+    )
+    helpers.run_cmd(
+        successful_command,
+        "update-download-payload",
+        timeout=60.0,
+        expect=flow.DOWNLOAD_OK,
+    )
+
     # The runtime comparator ignores build metadata, so only the prerelease
     # number can make a manifest newer than the running system.
     if contract.next_prerelease_version("0.8.0-alpha.319+20260728") != "0.8.0-alpha.320":
@@ -128,10 +279,66 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
             continue
         return fail(f"next_prerelease_version accepted {rejected!r}")
 
+    if contract.next_lab_update_version("0.9.2+20260826") != "0.9.3":
+        return fail("stable lab update version must increment the patch")
+    if contract.next_lab_update_version("0.8.0-alpha.321+20260821") != (
+        "0.8.0-alpha.322"
+    ):
+        return fail("prerelease lab update version must increment its suffix")
+    for rejected in ("0.9", "0.9.2-dev.1", "0.9.4294967295", ""):
+        try:
+            contract.next_lab_update_version(rejected)
+        except ValueError:
+            continue
+        return fail(f"next_lab_update_version accepted {rejected!r}")
+
+    version_cases = (
+        ("0.9.2+20260826", "0.9.1+20260825", 1),
+        ("0.9.1+20260826", "0.9.1+20260825", 0),
+        ("0.9.1", "0.9.1-rc.9", 1),
+        ("0.9.1-rc.1", "0.9.1-beta.99", 1),
+        ("0.9.1-alpha.1", "0.9.1-beta.1", -1),
+    )
+    for candidate, current, expected in version_cases:
+        actual = contract.compare_update_versions(candidate, current)
+        if actual != expected:
+            return fail(
+                f"runtime version comparison {candidate!r}/{current!r}: {actual}"
+            )
+    for malformed in ("0.9", "0.9.1-dev.1", "4294967296.0.0", ""):
+        try:
+            contract.compare_update_versions(malformed, "0.9.1")
+        except ValueError:
+            continue
+        return fail(f"runtime version comparison accepted {malformed!r}")
+
+    version_yaml = (
+        "channels:\n"
+        "  alpha:\n"
+        "    extended: 0.8.0-alpha.321+20260821\n"
+        "  stable:\n"
+        "    current: 0.9.2\n"
+        "    extended: 0.9.2+20260826\n"
+    )
+    if contract.channel_extended_from_version_yaml(version_yaml, "stable") != (
+        "0.9.2+20260826"
+    ):
+        return fail("stable version lookup crossed a VERSION.yaml channel boundary")
+
     if contract.release_tag_from_version_yaml(
         "channels:\n  alpha:\n    current: 0.8.0-alpha.319\n    extended: 0.8.0-alpha.319+20260728\n"
     ) != "0.8.0-alpha.319+20260728":
         return fail("release tag must come from the extended alpha field")
+    if contract.release_tag_from_version_yaml(
+        version_yaml, "0.9.2+20260826"
+    ) != "0.9.2+20260826":
+        return fail("release tag must bind to the stable runtime under test")
+    try:
+        contract.release_tag_from_version_yaml(version_yaml, "9.9.9")
+    except ValueError:
+        pass
+    else:
+        return fail("release tag accepted a runtime absent from VERSION.yaml")
 
     # The gate owns port 18083; 18080-18082 belong to the browser gates.
     if contract.LOCAL_HTTP_PORT != 18083:
@@ -189,14 +396,17 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         "health=confirmed\n"
         "Slot B: version=0.8.0-alpha.320 state=active boots=0 ok=0 fail=0 "
         "health=pending [ACTIVE]\n"
-        "Rollback pending: yes\n> "
+        "Rollback pending: yes\nadmin@smoke-node>~> "
     )
     wrapped_armed_status = (
         plain_armed_status.replace("state=active", "state=act\r\nive")
         .replace("health=pending [ACTIVE]", "health=pending \r\n[ACTIVE]")
         .replace("Rollback pending: yes", "Rollback pend\ning: yes")
     )
-    stale_prefix = "Slot B: version=old state=valid health=confirmed [ACTIVE]\n> "
+    stale_prefix = (
+        "Slot B: version=old state=valid health=confirmed [ACTIVE]\n"
+        "admin@smoke-node>~> "
+    )
     marker = len(stale_prefix)
     session = _SlotStatusSession(stale_prefix + wrapped_armed_status, marker)
     try:
@@ -227,7 +437,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
 
     wrapped_confirmed = (
         "Slot B: version=0.8.0-alpha.320 state=active health=\r\n"
-        "confirmed [ACTIVE]\n> "
+        "confirmed [ACTIVE]\nadmin@smoke-node>~> "
     )
     confirmed_session = _SlotStatusSession(wrapped_confirmed)
     try:
@@ -241,6 +451,101 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     if not confirmed_session.waits or not confirmed_session.waits[0][2]:
         return fail("slot-state assertion must tolerate debugcon line wrapping")
 
+    wrapped_rollback = (
+        f"{contract.ROLLBACK_OK}\n"
+        "boot rolled back to the confirmed slot; staged update di\r\n"
+        "sarmed\nadmin@smoke-node>~> "
+    )
+    rollback_session = _SlotStatusSession(wrapped_rollback)
+    try:
+        flow.assert_rollback_reported(rollback_session, 1.0)
+    except TimeoutError as exc:
+        return fail(f"rollback assertion rejected wrapped status: {exc}")
+    if not rollback_session.waits or not rollback_session.waits[0][2]:
+        return fail("rollback summary assertion must tolerate console wrapping")
+
+    bound_payload_url = (
+        "https://github.com/henriquefarisco/CapyOS/releases/download/"
+        "v0.9.2+20260826/capyos64.bin"
+    )
+    bound_payload_sha256 = "ab" * 32
+    bound_output = (
+        f"{contract.FETCH_OK}\n"
+        "current=0.9.1+20260825 available=0.9.2+20260826\n"
+        f"payload={bound_payload_url}\n"
+        f"{contract.DOWNLOAD_OK}\n"
+        f"payload-cache=/system/update/payload.bin sha256={bound_payload_sha256}\n"
+        f"{contract.PREPARE_EXPLAIN_CLEAN}\n"
+        f"{contract.PREPARE_OK}\n"
+        f"{contract.APPLY_OK}\n"
+        f"{contract.APPLY_SUMMARY}\n"
+        "configured=yes rc=0\nadmin@smoke-node>~> "
+    )
+    bound_session = _SlotStatusSession(bound_output)
+    try:
+        flow.stage_and_arm_update(
+            bound_session,
+            1.0,
+            expect_version="0.9.2+20260826",
+            expect_payload_url=bound_payload_url,
+            expect_payload_sha256=bound_payload_sha256,
+        )
+    except TimeoutError as exc:
+        return fail(f"material-bound update flow rejected matching status: {exc}")
+    if bound_session.commands.count("update-status") != 5:
+        return fail("material-bound update flow skipped a catalog/cache assertion")
+    for expected in (
+        f"payload={bound_payload_url}",
+        f"sha256={bound_payload_sha256}",
+    ):
+        matching_waits = [wait for wait in bound_session.waits if wait[0] == expected]
+        if not matching_waits or not matching_waits[0][2]:
+            return fail(f"material binding lost wrapped-console match for {expected!r}")
+
+    refusal_output = (
+        f"{contract.MANIFEST_NOT_NEWER_SUMMARY}\n"
+        "configured=yes rc=-20\n"
+        "current=0.9.2+20260826 available=-\nadmin@smoke-node>~> "
+    )
+    refusal_session = _SlotStatusSession(refusal_output)
+    try:
+        flow.assert_equal_release_refused(
+            refusal_session,
+            1.0,
+            current_version="0.9.2+20260826",
+        )
+    except TimeoutError as exc:
+        return fail(f"equal-release refusal rejected matching status: {exc}")
+    if refusal_session.commands != ["update-fetch", "update-status", "update-status"]:
+        return fail("equal-release refusal did not prove fetch result and status")
+
+    endpoint_session = _SlotStatusSession(
+        "status=200 host=192.168.87.1\nadmin@smoke-node>~> "
+    )
+    try:
+        flow.assert_http_endpoint_reachable(
+            endpoint_session, 240.0, "http://192.168.87.1:18083/latest.ini"
+        )
+    except RuntimeError as exc:
+        return fail(f"lab endpoint probe rejected HTTP 200: {exc}")
+    if endpoint_session.commands != [
+        "net-fetch http://192.168.87.1:18083/latest.ini"
+    ]:
+        return fail("lab endpoint probe did not fetch the configured URL exactly")
+    failing_endpoint = _SlotStatusSession(
+        "[erro] tcp connect timeout\ndiag: arp=1 syn-out=2 syn-ack=0\n"
+        "admin@smoke-node>~> "
+    )
+    try:
+        flow.assert_http_endpoint_reachable(
+            failing_endpoint, 240.0, "http://192.168.87.1:18083/latest.ini"
+        )
+    except RuntimeError as exc:
+        if "syn-ack=0" not in str(exc):
+            return fail("lab endpoint failure omitted the TCP diagnostic")
+    else:
+        return fail("lab endpoint probe accepted a failed TCP diagnostic")
+
     for driver_name in (
         "smoke_x64_qemu_update_ab.py",
         "smoke_x64_vmware_update_ab.py",
@@ -252,6 +557,15 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
             return fail(f"{driver_name} does not use the shared lifecycle helper")
         if '"state=valid"' in driver:
             return fail(f"{driver_name} still asserts stale state=valid")
+        if driver_name == "smoke_x64_vmware_update_ab.py":
+            if 'target_descriptor = run_root / "target.vmdk"' not in driver:
+                return fail("VMware A/B gate lost the VMDK descriptor path")
+            if "target = create_vmdk(" in driver:
+                return fail("VMware A/B gate may pass the flat VMDK as a descriptor")
+            if "assert_guest_uses_vmx_mac(" not in driver:
+                return fail("VMware A/B gate lost the guest/VMX MAC binding assertion")
+            if 'expect=f"mac={expected_mac}"' not in driver:
+                return fail("VMware A/B gate no longer proves the guest station MAC")
 
     # Production manifests must keep refusing plain http; only the lab build,
     # which swaps the trust anchor, accepts it.
@@ -310,6 +624,37 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         except ValueError:
             continue
         return fail(f"validate_evidence accepted {key}={bad!r}")
+
+    production_evidence = _production_evidence()
+    try:
+        contract.validate_production_evidence(production_evidence)
+    except ValueError as exc:
+        return fail(f"production evidence rejected a passing run: {exc}")
+    if contract.render_production_evidence(production_evidence).count("\n") != len(
+        production_evidence
+    ):
+        return fail("production evidence did not render every canonical field")
+    for key, bad in (
+        ("lab_override_absent", "no"),
+        ("public_latest_route", "no"),
+        ("equal_release_refused", "no"),
+        ("trust_anchor", "lab-ed25519"),
+        ("provider", "qemu-ovmf"),
+        ("cycle_order", "confirm-then-rollback"),
+        ("predecessor_version", "0.9.2+20260826"),
+        ("release_tag", "v0.9.1+20260825"),
+        ("manifest_url", "http://10.0.2.2/latest.ini"),
+        ("payload_url", "https://example.test/capyos64.bin"),
+        ("boot_media_sha256", "not-hex"),
+        ("recovery_key_included", "yes"),
+    ):
+        try:
+            contract.validate_production_evidence(
+                _production_evidence(**{key: bad})
+            )
+        except ValueError:
+            continue
+        return fail(f"production evidence accepted {key}={bad!r}")
 
     leaked = _evidence(manifest_version="ABCD-EFGH-IJKL-MNOP-QRST-UVWX")
     try:

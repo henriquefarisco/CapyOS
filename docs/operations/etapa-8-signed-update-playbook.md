@@ -1,11 +1,11 @@
 # Playbook — gate do ciclo A/B assinado (Etapa 8)
 
-> **Baseline atual: `0.9.1+20260825` (stable candidate).** O lifecycle A/B e os gates de
-> laboratório existem, mas a Etapa 8 permanece aberta até que a candidata publique
-> os materiais Ed25519 de produção e execute apply, reboot, confirmação de saúde e
-> rollback no VMware oficial. A release 0.9.0 publicada contém os sete
-> assets-base verificados por SHA-256, mas não contém `.sig`, manifestos públicos
-> ou `latest.ini`; portanto ela não é evidência desse ciclo de produção.
+> **Baseline atual: `0.9.2+20260826` (stable candidate).** A `0.9.1` publicou os
+> materiais Ed25519 e estabeleceu a ancora de producao corrente, mas e o
+> bootstrap dessa ancora: a `0.9.0` usa o pin anterior e a `0.9.1` nao pode
+> atualizar para si mesma. A Etapa 8 permanece aberta ate a candidata `0.9.2`
+> executar apply, reboot, rollback, reaplicacao e confirmacao de saude no VMware
+> oficial a partir da ISO `0.9.1` publicada.
 
 Este playbook cobre o gate que fecha o critério de update da Etapa 8: um
 manifesto Ed25519 é buscado por HTTP, o payload é verificado, gravado no slot
@@ -13,7 +13,10 @@ inativo e armado para **uma única** tentativa; o loader UEFI consome essa
 tentativa; o boot resultante confirma saúde; e um segundo ciclo deixado sem
 confirmação é revertido pelo loader e reportado pelo updater.
 
-- Aceite oficial: `make smoke-x64-vmware-update-ab` (VMware + UEFI + E1000).
+- Gate VMware do mecanismo: `make smoke-x64-vmware-update-ab` (chave lab).
+- Aceite pós-promoção: `make
+  smoke-x64-vmware-update-ab-production-existing-iso` (assets públicos, sem
+  chave privada nem flags lab).
 - Feedback de desenvolvimento: `make smoke-x64-qemu-update-ab`.
 - Contrato host (roda em `release-check`): `make update-ab-selftest`.
 
@@ -54,7 +57,7 @@ O que o gate **não** prova: que a chave de produção específica está pinada 
 um asset assinado por ela está publicado. Isso permanece um passo de operador
 (§4) porque é custódia de chave, não engenharia.
 
-## 2. Sequência provada (quatro power cycles)
+## 2. Sequência provada no laboratório (quatro power cycles)
 
 | Boot | Estado do loader | Ações | Evidência |
 |---|---|---|---|
@@ -78,6 +81,14 @@ um asset assinado por ela está publicado. Isso permanece um passo de operador
   `alpha.319+20260803` contra `alpha.319+20260728` compara igual e o download
   recusa com `-40`.
 
+Essa ordem é válida apenas no gate de laboratório: o payload descartável ainda
+reporta a versão-base compilada, embora o manifesto efêmero declare a próxima
+prerelease. Num release real, o payload passa a reportar a própria versão do
+`latest.ini`; depois de confirmado, reaplicar o mesmo catálogo é corretamente
+recusado pelo anti-downgrade. O gate de produção usa a ordem inversa descrita na
+§4: primeiro rollback, depois nova aplicação a partir do predecessor restaurado
+e confirmação de saúde.
+
 ## 3. Como rodar
 
 Os gates são autocontidos: geram a chave, recompilam o kernel de laboratório,
@@ -87,7 +98,7 @@ servem o material assinado e conduzem os quatro boots.
 # Preflight local (WSL): instalação + dois ciclos sob QEMU/OVMF.
 make smoke-x64-qemu-update-ab
 
-# Aceite oficial (host Windows com VMware Workstation).
+# Gate VMware do mecanismo, ainda com chave descartável de laboratório.
 make smoke-x64-vmware-update-ab
 ```
 
@@ -140,8 +151,10 @@ O gate acima prova o mecanismo. Para provar a cadeia de publicação real, com a
    bloqueia update/delete exatamente em `refs/tags/v*`.
    `CAPYOS_RELEASE_MAIN_RULESET_ID` deve apontar para o ruleset sem bypass de
    `refs/heads/main`, com deletion e non-fast-forward bloqueados, pull request
-   obrigatório, pelo menos uma aprovação, descarte de review obsoleto após push
-   e aprovação do último push. A workflow valida esses controles com
+   obrigatório e o perfil permanente solo fail-closed: exatamente zero
+   aprovação, squash-only, threads resolvidas e os seis checks strict
+   autenticados (`Lint`, `Release gates`,
+   `QEMU ISO smoke`, dois `Analyze` e `CodeQL`). A workflow valida esses controles com
    `verify_release_repository_policy.py`, verifica os 12 assets no draft
    autenticado, publica e marca Latest numa única mutação, exige o estado
    imutável e então repete os gates pelas URLs públicas da tag. Pela rota
@@ -152,17 +165,50 @@ O gate acima prova o mecanismo. Para provar a cadeia de publicação real, com a
    configuração de immutable releases nem qualquer dos dois rulesets. O promoter
    reconsulta as três políticas imediatamente antes do único `PATCH`; o lock
    global serializa workflows, mas não impede mutação manual externa.
-5. Após a promoção, numa instalação oficial (sem flags de laboratório):
-   `update-fetch` →
-   `update-download-payload` → `update-prepare` → `update-apply`, reinicie,
-   `update-confirm-health`.
-6. Repita sem confirmar e observe `update-rollback-check` reportando o rollback.
+5. Baixe anonimamente do release público o `latest.ini` e o `capyos64.bin` e
+   selecione como `EXISTING_ISO` a ISO **publicada** do predecessor imediato. O
+   predecessor precisa reportar versão estritamente menor e já conter a mesma
+   âncora Ed25519 de produção. Execute, sem chave privada nem flags de
+   laboratório:
+
+   ```sh
+   make smoke-x64-vmware-update-ab-production-existing-iso \
+     EXISTING_ISO=/caminho/CapyOS-Installer-UEFI-predecessor.iso \
+     PRODUCTION_PREDECESSOR_VERSION=0.9.1+20260825 \
+     PRODUCTION_PREDECESSOR_ISO_SHA256=<sha256 publicado da ISO> \
+     PRODUCTION_MANIFEST=/caminho/latest.ini \
+     PRODUCTION_PAYLOAD=/caminho/capyos64.bin
+   ```
+
+6. O driver fixa a ISO ao SHA-256 publicado e verifica assinatura, versão, URL
+   imutável, tamanho e SHA-256 do update antes de criar a VM descartável. No
+   guest ele exige a rota pública
+   `releases/latest/download/latest.ini`, ausência do banner de laboratório e
+   executa dois ciclos na única ordem compatível com o anti-downgrade:
+   aplica e **não confirma** o primeiro ciclo, observa o rollback ao predecessor,
+   reaplica o mesmo release e então confirma saúde. A evidência declara
+   `trust_anchor=production-ed25519`, `cycle_order=rollback-then-confirm`, hash da
+   ISO predecessora e todos os invariantes de loader/updater.
+
+### Invariante de bootstrap da âncora
+
+O primeiro release após uma rotação da âncora não pode satisfazer este gate se
+nenhum release oficial anterior já trouxer a nova chave: o predecessor não
+aceita a assinatura nova, enquanto o release recém-publicado não pode atualizar
+para si mesmo. Nesse caso, preserve o release como bootstrap, registre o gate
+como pendente e execute o aceite com o release seguinte. Não crie uma ISO
+retroativa, não use override de versão e não converta o gate de laboratório em
+evidência de produção.
+
+Para `0.9.1+20260825`, `0.9.0+20260821` contém a âncora anterior; portanto a
+`0.9.1` é o bootstrap da âncora corrente. O primeiro ciclo de produção
+executável é `0.9.1` → release estável seguinte.
 
 Os passos 5–6 são aceite pós-promoção obrigatório: uma workflow criptográfica
 verde não fecha sozinha a Etapa 8.
 
-Nunca use `--allow-lab-http-payload-url` nem `--allow-insecure-key` com a chave
-de produção.
+Nunca use `--allow-lab-http-payload-url`, `--allow-insecure-key`,
+`CAPYOS_UPDATE_LAB_TRUST_KEY_HEX` ou uma chave privada no gate de produção.
 
 ## 5. Diagnóstico de `-60`
 

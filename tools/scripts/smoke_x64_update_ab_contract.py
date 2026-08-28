@@ -43,9 +43,14 @@ LAB_PAYLOAD_NAME = "capyos64.bin"
 QEMU_SLIRP_GATEWAY = "10.0.2.2"
 
 EVIDENCE_FORMAT = "capyos-signed-ab-update-evidence-manifest-v1"
+PRODUCTION_EVIDENCE_FORMAT = (
+    "capyos-production-signed-ab-update-evidence-manifest-v1"
+)
 TRACK = "UEFI/GPT/x86_64"
 PROVIDERS = ("qemu-ovmf", "vmware-workstation")
 TRUST_ANCHOR = "lab-ed25519"
+PRODUCTION_TRUST_ANCHOR = "production-ed25519"
+PRODUCTION_CYCLE_ORDER = "rollback-then-confirm"
 
 # ---- runtime literals (English locale) -------------------------------------
 PROVIDER_READY_LINE = "Boot provider: ready=yes reason=ready"
@@ -68,9 +73,15 @@ ATTEMPT_PENDING_SUMMARY = "boot attempt pending confirmation; rollback still arm
 ROLLBACK_OK = "[ok] boot rollback completed"
 ROLLBACK_SUMMARY = "boot rolled back to the confirmed slot; staged update disarmed"
 NO_ROLLBACK_SUMMARY = "no boot rollback pending"
+MANIFEST_NOT_NEWER_SUMMARY = "imported manifest not newer than current system"
 
 _PRERELEASE_RE = re.compile(
     r"^(?P<base>\d+\.\d+\.\d+)-(?P<label>alpha|beta|rc)\.(?P<number>\d+)"
+    r"(?:\+[0-9A-Za-z.-]+)?$"
+)
+_RUNTIME_VERSION_RE = re.compile(
+    r"^[vV]?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
+    r"(?:-(?P<label>alpha|beta|rc)(?:\.(?P<number>\d+))?)?"
     r"(?:\+[0-9A-Za-z.-]+)?$"
 )
 
@@ -107,6 +118,46 @@ _REQUIRED_FIELDS = (
     "second_attempt_slot",
     "boots_observed",
     *_REQUIRED_YES,
+    "recovery_key_included",
+)
+
+_PRODUCTION_REQUIRED_YES = (
+    "lab_override_absent",
+    "public_latest_route",
+    "provider_ready",
+    "signed_manifest_accepted",
+    "payload_verified",
+    "inactive_slot_written",
+    "attempt_armed",
+    "loader_consumed_attempt",
+    "unconfirmed_attempt_spent",
+    "loader_applied_rollback",
+    "rollback_reported",
+    "confirmed_slot_restored",
+    "second_attempt_armed",
+    "health_confirmed",
+    "equal_release_refused",
+)
+
+_PRODUCTION_REQUIRED_FIELDS = (
+    "format",
+    "release_tag",
+    "track",
+    "provider",
+    "trust_anchor",
+    "trust_public_key",
+    "predecessor_version",
+    "manifest_version",
+    "manifest_url",
+    "payload_url",
+    "payload_size",
+    "payload_sha256",
+    "boot_media_sha256",
+    "first_attempt_slot",
+    "second_attempt_slot",
+    "boots_observed",
+    "cycle_order",
+    *_PRODUCTION_REQUIRED_YES,
     "recovery_key_included",
 )
 
@@ -149,12 +200,82 @@ def next_prerelease_version(current: str) -> str:
     return f"{match['base']}-{match['label']}.{int(match['number']) + 1}"
 
 
-def release_tag_from_version_yaml(text: str) -> str:
-    """Extract `channels.alpha.extended` the same way the installer gate does."""
+def next_lab_update_version(current: str) -> str:
+    """Return a strictly newer synthetic version for either release family.
+
+    Prerelease builds keep the historical behaviour and increment their numeric
+    suffix. Stable builds increment the patch component because build metadata
+    is deliberately ignored by the runtime comparator.
+    """
+    prerelease = _PRERELEASE_RE.match(current.strip())
+    if prerelease:
+        return next_prerelease_version(current)
+    match = _RUNTIME_VERSION_RE.fullmatch(current.strip())
+    if not match or match["label"] is not None:
+        raise ValueError(f"unsupported CapyOS runtime version: {current!r}")
+    components = tuple(int(match[name]) for name in ("major", "minor", "patch"))
+    if any(value > 0xFFFFFFFF for value in components):
+        raise ValueError(f"CapyOS version component overflows uint32: {current!r}")
+    if components[2] == 0xFFFFFFFF:
+        raise ValueError(f"CapyOS patch version cannot be incremented: {current!r}")
+    return f"{components[0]}.{components[1]}.{components[2] + 1}"
+
+
+def _runtime_version_key(version: str) -> tuple[int, int, int, int, int]:
+    """Mirror the runtime update comparator, including ignored build metadata."""
+    match = _RUNTIME_VERSION_RE.fullmatch(version.strip())
+    if not match:
+        raise ValueError(f"unsupported CapyOS runtime version: {version!r}")
+    values = tuple(int(match[name] or "0") for name in ("major", "minor", "patch"))
+    number = int(match["number"] or "0")
+    if any(value > 0xFFFFFFFF for value in (*values, number)):
+        raise ValueError(f"CapyOS version component overflows uint32: {version!r}")
+    rank = {None: 4, "alpha": 1, "beta": 2, "rc": 3}[match["label"]]
+    return (*values, rank, number)
+
+
+def compare_update_versions(candidate: str, current: str) -> int:
+    """Return -1, 0 or 1 using the exact ordering enforced by the kernel."""
+    candidate_key = _runtime_version_key(candidate)
+    current_key = _runtime_version_key(current)
+    return (candidate_key > current_key) - (candidate_key < current_key)
+
+
+def channel_extended_from_version_yaml(text: str, channel: str) -> str:
+    """Extract one channel's extended version without accepting another block."""
+    wanted_indent = None
+    for line in text.splitlines():
+        channel_match = re.match(r"^(\s*)([A-Za-z0-9_-]+):\s*$", line)
+        if channel_match:
+            if wanted_indent is not None and len(channel_match[1]) <= wanted_indent:
+                break
+            if channel_match[2] == channel:
+                wanted_indent = len(channel_match[1])
+            continue
+        if wanted_indent is not None:
+            match = re.match(r"^\s*extended:\s*(\S+)\s*$", line)
+            if match:
+                return match.group(1)
+    raise ValueError(f"VERSION.yaml has no extended version for channel {channel!r}")
+
+
+def release_tag_from_version_yaml(
+    text: str, runtime_version: str | None = None
+) -> str:
+    """Extract an extended release tag, optionally bound to the running build."""
+    extended = []
     for line in text.splitlines():
         match = re.match(r"^\s*extended:\s*(\S+)\s*$", line)
         if match:
-            return match.group(1)
+            extended.append(match.group(1))
+    if runtime_version is None and extended:
+        return extended[0]
+    if runtime_version in extended:
+        return runtime_version
+    if runtime_version is not None:
+        raise ValueError(
+            f"VERSION.yaml has no channel matching runtime {runtime_version!r}"
+        )
     raise ValueError("VERSION.yaml has no extended release tag")
 
 
@@ -300,6 +421,72 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError("evidence text still contains a recovery key")
 
 
+def render_production_evidence(fields: Mapping[str, str]) -> str:
+    if tuple(fields) != _PRODUCTION_REQUIRED_FIELDS:
+        raise ValueError(
+            "production evidence fields must use the canonical contract order"
+        )
+    return "".join(f"{key}={fields[key]}\n" for key in _PRODUCTION_REQUIRED_FIELDS)
+
+
+def validate_production_evidence(fields: Mapping[str, str]) -> None:
+    missing = [key for key in _PRODUCTION_REQUIRED_FIELDS if key not in fields]
+    if missing:
+        raise ValueError(
+            f"production evidence is missing fields: {', '.join(missing)}"
+        )
+    if fields["format"] != PRODUCTION_EVIDENCE_FORMAT:
+        raise ValueError("production evidence format mismatch")
+    if fields["track"] != TRACK:
+        raise ValueError(f"production evidence track must be {TRACK}")
+    if fields["provider"] != "vmware-workstation":
+        raise ValueError("production evidence provider must be vmware-workstation")
+    if fields["trust_anchor"] != PRODUCTION_TRUST_ANCHOR:
+        raise ValueError(
+            f"production trust_anchor must be {PRODUCTION_TRUST_ANCHOR}"
+        )
+    if fields["cycle_order"] != PRODUCTION_CYCLE_ORDER:
+        raise ValueError(
+            f"production cycle_order must be {PRODUCTION_CYCLE_ORDER}"
+        )
+    for key in _PRODUCTION_REQUIRED_YES:
+        if fields[key] != "yes":
+            raise ValueError(f"production evidence field {key} must be 'yes'")
+    if fields["recovery_key_included"] != "no":
+        raise ValueError("production evidence must never embed a recovery key")
+    for key in ("trust_public_key", "payload_sha256", "boot_media_sha256"):
+        if not _HEX64_RE.fullmatch(fields[key]):
+            raise ValueError(f"{key} must be lower-case hex64")
+    if not _DECIMAL_RE.fullmatch(fields["payload_size"]):
+        raise ValueError("payload_size must be a positive decimal")
+    for key in ("first_attempt_slot", "second_attempt_slot"):
+        if fields[key] not in ("0", "1"):
+            raise ValueError(f"{key} must be slot 0 or 1")
+    if not _DECIMAL_RE.fullmatch(fields["boots_observed"]) or int(
+        fields["boots_observed"]
+    ) < 4:
+        raise ValueError("a production two-cycle proof needs at least 4 boots")
+    if compare_update_versions(
+        fields["manifest_version"], fields["predecessor_version"]
+    ) <= 0:
+        raise ValueError("production manifest must be newer than its predecessor")
+    if fields["release_tag"] != f"v{fields['manifest_version']}":
+        raise ValueError("release_tag must identify the manifest version exactly")
+    if not fields["manifest_url"].startswith("https://") or not fields[
+        "manifest_url"
+    ].endswith("/releases/latest/download/latest.ini"):
+        raise ValueError("production manifest_url must use the public Latest route")
+    if not fields["payload_url"].startswith("https://"):
+        raise ValueError("production payload_url must use HTTPS")
+    expected_payload_suffix = (
+        f"/releases/download/{fields['release_tag']}/capyos64.bin"
+    )
+    if not fields["payload_url"].endswith(expected_payload_suffix):
+        raise ValueError("production payload_url must identify the release exactly")
+    if contains_recovery_key(render_production_evidence(fields)):
+        raise ValueError("production evidence text still contains a recovery key")
+
+
 __all__ = [
     "APPLY_OK",
     "APPLY_SUMMARY",
@@ -311,6 +498,7 @@ __all__ = [
     "EVIDENCE_FORMAT",
     "FETCH_OK",
     "LAB_BANNER",
+    "MANIFEST_NOT_NEWER_SUMMARY",
     "LAB_MANIFEST_NAME",
     "LAB_PAYLOAD_NAME",
     "LOCAL_HTTP_PORT",
@@ -318,6 +506,9 @@ __all__ = [
     "PREPARE_EXPLAIN_CLEAN",
     "PREPARE_EXPLAIN_OK",
     "PREPARE_OK",
+    "PRODUCTION_CYCLE_ORDER",
+    "PRODUCTION_EVIDENCE_FORMAT",
+    "PRODUCTION_TRUST_ANCHOR",
     "PROVIDER_READY_LINE",
     "PROVIDERS",
     "QEMU_SLIRP_GATEWAY",
@@ -326,15 +517,20 @@ __all__ = [
     "TRACK",
     "TRUST_ANCHOR",
     "attempt_marker",
+    "channel_extended_from_version_yaml",
+    "compare_update_versions",
     "contains_recovery_key",
     "generate_lab_keypair",
     "manifest_url",
+    "next_lab_update_version",
     "next_prerelease_version",
     "parse_evidence",
     "payload_url",
     "release_tag_from_version_yaml",
     "render_evidence",
+    "render_production_evidence",
     "render_update_ab_vmx",
     "sanitize_public_text",
     "validate_evidence",
+    "validate_production_evidence",
 ]

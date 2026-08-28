@@ -1,10 +1,20 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo; **revisao atual:** 2026-08-25, CapyOS
-`0.9.1+20260825` (stable candidate), com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
+**Status:** autoritativo; **revisao atual:** 2026-08-26, CapyOS
+`0.9.2+20260826` (stable candidate), com CapyAI `0.2.1`, CapyUI `2.24.2` e os contratos
 ABI inalterados. A ultima auditoria cross-repo completa permanece no snapshot
 datado da `alpha.320` abaixo.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
+**Atualizacao 0.9.2 (2026-08-26):** CapyOS
+`0.9.2+20260826` preserva `capyos-base` v3, `capyos-package-apply` v1,
+handoff interno v10 e todos os pins de repositorios irmaos. O patch adiciona o
+gate A/B de producao sobre a ISO `0.9.1` publicada e assets Latest publicos,
+sem chave privada/flags lab, com ordem rollback-then-confirm compativel com
+anti-downgrade. Tambem endurece E1000/DHCP e o transporte do updater para o
+runtime VMware real, sem alterar ABI nem contrato cross-repo. Os gates lab
+A/B VMware e QEMU/OVMF passaram em quatro boots e o `release-check` oficial
+passou; somente a promocao publica e o gate VMware de producao pos-promocao
+permanecem pendentes.
 **Atualizacao 0.9.1 (2026-08-25):** CapyOS
 `0.9.1+20260825` preserva `capyos-base` v3, `capyos-package-apply` v1,
 handoff interno v10 e todos os pins de repositorios irmaos. O patch automatiza
@@ -97,8 +107,8 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.9.1+20260825` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
-| `CapyAgent` | `0.0.10` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276), fail-closed ate o trust anchor de producao; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.10` | `0.0.10` |
+| `CapyOS` | `0.9.2+20260826` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyAgent` | `0.0.10` | `capy-agent-component-index` v1 (Ed25519 signer publicado host-side; verifier CapyOS-side registrado + KAT host-validado (alpha.276); trust anchor de producao publicado na CapyOS `0.9.1`; KAT externo do signer pendente; emit rejeita dependencia duplicada) | `0.0.10` | `0.0.10` |
 | `CapyBrowser` | `0.6.7` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.7` | `0.6.7` |
 | `CapyCodecs` | `0.0.12` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.12` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.12` |
 | `CapyUI` | `2.24.2` | `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1; logout/session/worker hardening, launcher/browser, chat CapyAI assincrono e release supply-chain fail-closed | `2.24.2` | `2.24.2` |
@@ -140,8 +150,8 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | `0.9.1+20260825` (stable extended) | `v<major>.<minor>.<patch>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
-| `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276) e KAT host-validado, fail-closed ate o trust anchor de producao; KAT externo do signer pendente** |
+| `CapyOS` | `0.9.2+20260826` (stable extended) | `v<major>.<minor>.<patch>+<YYYYMMDD>` | autoritativo; assina release quando o gate completo aceitar |
+| `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276), KAT host-validado e trust anchor de producao publicado na CapyOS `0.9.1`; KAT externo do signer pendente** |
 | `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
 | `CapyUI` | semver `MAJOR.MINOR.PATCH` (versão 2.x ativa; absorveu desktop+window+apps em alpha.241; modules `widget-core` + `desktop-session`) | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote signed |
@@ -169,7 +179,7 @@ incidente; documente no `STATUS.md`.
 | Etapa 3 (concluída em alpha.253) | apenas `org.capyos.ui.widget-core` e `org.capyos.ui.desktop-session` em `--unsigned` para validar o pipeline; nenhum em `signed` (verifier do CapyAgent ainda NULL) | demais |
 | Etapa 4 (concluída em alpha.262) | mesmo escopo da Etapa 3 + adapter CapyOS-side para consumir `capy-ui-widget` v2.22 / display-list schema v7 do sister `CapyUI`; módulos remotos continuam em `--unsigned` durante o scaffolding | CapyCodecs (audio + image como módulo), CapyBrowser, CapyAgent assinado, CapyLang, CapyBenchmark |
 | Etapas 5-7 (concluídas) | CapyUI widget/desktop, CapyCodecs image v2, CapyBrowser estático textual/gráfico e CapyAI `capy-ai-core` v0 / `org.capyos.ai.assistant` integrados por seams/adapters versionados | CapyLang, CapyBenchmark |
-| Etapa 8 (ativa) | installer/update/release gate; signer/verifier CapyAgent já entregues, trust anchor de produção + KAT externo pendentes | CapyLang, CapyBenchmark |
+| Etapa 8 (ativa) | installer/update/release gate; signer/verifier CapyAgent e trust anchor de produção já publicados na `0.9.1`; promoção da `0.9.2`, ciclo A/B VMware público e KAT externo permanecem pendentes | CapyLang, CapyBenchmark |
 | Etapa 9 (bloqueada por Etapa 8) | package manager + SDK + ABI estável; nenhum progresso conta antes do fecho da Etapa 8 | CapyLang, CapyBenchmark |
 | Etapa 10 | CapyCodecs audio | CapyLang, CapyBenchmark |
 | Etapa 15 | CapyLang VM e benchmarks | — |

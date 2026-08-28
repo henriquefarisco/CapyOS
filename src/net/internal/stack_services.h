@@ -42,7 +42,8 @@ struct net_dns_state {
   uint32_t answer_negative_ttl;
 };
 
-typedef int (*net_service_send_ipv4_fn)(uint8_t protocol, uint32_t dst_ip,
+typedef int (*net_service_send_ipv4_fn)(uint8_t protocol, uint32_t src_ip,
+                                        uint32_t dst_ip,
                                         const uint8_t *payload,
                                         size_t payload_len);
 

@@ -21,10 +21,14 @@ repositórios irmãos. Alterações cross-repo devem respeitar os pins de
 
 ## 2. Validação e criação do draft
 
-1. Desenvolva em branch baseada em `develop` e execute os gates proporcionais
+1. Desenvolva em branch baseada na `main` atual e execute os gates proporcionais
    à mudança: testes focados, `make test`, `make layout-audit`,
    `make version-audit`, build real e os smokes QEMU/VMware aplicáveis.
-2. Integre `develop`, confirme CI/CodeQL verdes, faça fast-forward de `main` e
+2. Abra pull request para `main` e confirme o perfil permanente solo fail-closed
+   exigido pelo ruleset: zero aprovação humana, branch atualizada, threads
+   resolvidas, somente squash merge e os seis checks autenticados descritos
+   abaixo. Somente
+   após o merge, com o checkout local em fast-forward exato de `origin/main`,
    crie a tag `v<versão-estendida>`.
 3. O workflow **Release Artifacts** recompila a tag, valida os irmãos pinados e
    cria ou atualiza somente um GitHub Release em estado `draft`.
@@ -211,9 +215,12 @@ aplicado exatamente a `refs/tags/v*` com **Restrict updates** e **Restrict
 deletions**. Ele permite criar a tag, mas impede que sua identidade mude durante
 o handoff. `MAIN_RULESET_ID` deve identificar outro ruleset ativo, também sem
 bypass ou exclusões, aplicado exatamente a `refs/heads/main`; ele deve restringir
-deletion e non-fast-forward e exigir pull request com pelo menos uma aprovação,
-descarte de aprovações obsoletas após push e aprovação do último push. O último
-comando deve retornar `true`. Um administrador deve habilitar **immutable
+deletion e non-fast-forward e exigir pull request. O perfil permanente solo
+exige exatamente zero aprovação, somente squash merge, resolução de threads e
+checks strict, sem isenção na criação, vinculados às
+integrações esperadas: `Lint`, `Release gates`, `QEMU ISO smoke`,
+`Analyze (c-cpp)`, `Analyze (python)` e `CodeQL`. O último comando deve retornar
+`true`. Um administrador deve habilitar **immutable
 releases** nas configurações do repositório antes da promoção. O workflow baixa
 as três políticas e as valida com
 `tools/scripts/verify_release_repository_policy.py`.
@@ -257,7 +264,8 @@ A workflow:
    commit exato selecionado;
 2. exige imutabilidade habilitada, o ruleset sem bypass que impede
    atualização/exclusão de `refs/tags/v*` e o ruleset sem bypass de
-   `refs/heads/main` com deletion/non-fast-forward bloqueados e review obrigatório;
+   `refs/heads/main` com deletion/non-fast-forward bloqueados, PR obrigatório e
+   perfil permanente solo com checks autenticados;
 3. aceita o draft stable exato ou, numa retomada idempotente, a mesma release já
    publicada, imutável e Latest;
 4. captura IDs, nomes, tamanhos, digests e timestamps dos 12 assets;
@@ -288,8 +296,14 @@ públicas. Essa retomada somente leitura continua possível após novos commits 
 
 Confirme workflows verdes, título/notas da release, 12 assets públicos e o tag
 retornado por `/releases/latest`. Depois da promoção, execute o ciclo A/B de
-produção no VMware oficial; esse é um gate de aceite da Etapa 8 e não é
-substituído pelas verificações criptográficas de publicação. Preserve a
-evidência e remova apenas temporários e VMs descartáveis cuja identidade tenha
-sido confirmada. A existência do artifact ou da tag, isoladamente, não conclui
-a publicação nem fecha a Etapa 8.
+produção no VMware oficial com
+`smoke-x64-vmware-update-ab-production-existing-iso`; esse é um gate de aceite
+da Etapa 8 e não é substituído pelas verificações criptográficas de publicação.
+A ISO predecessora precisa ser um release público estritamente anterior que já
+contenha a mesma âncora de produção. O primeiro release após uma rotação de chave
+é somente o bootstrap desse requisito e o aceite fica, de forma explícita,
+pendente até o release seguinte — nunca use uma ISO retroativa, override de
+versão ou o gate com chave de laboratório como substituto. Preserve a evidência
+e remova apenas temporários e VMs descartáveis cuja identidade tenha sido
+confirmada. A existência do artifact ou da tag, isoladamente, não conclui a
+publicação nem fecha a Etapa 8.

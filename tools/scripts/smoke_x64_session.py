@@ -256,6 +256,16 @@ class SmokeSession:
     def text_since(self, start_at: int | tuple[int, int]) -> str:
         return "\n".join(self._channel_texts_since(start_at))
 
+    def serial_text_since(self, start_at: int | tuple[int, int]) -> str:
+        """Return only the interactive serial channel after a marker.
+
+        Debugcon can trail the serial reader and replay an older shell prompt
+        after a command marker. Command completion must therefore use the
+        interactive channel, while general boot-marker waits may still merge
+        both channels through ``text_since``/``wait_for``.
+        """
+        return self._channel_texts_since(start_at)[0]
+
     def text(self) -> str:
         with self._lock:
             serial = self._buf.decode("latin-1", errors="replace")

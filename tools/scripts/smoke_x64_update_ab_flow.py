@@ -40,6 +40,7 @@ from smoke_x64_update_ab_contract import (
     DOWNLOAD_OK,
     FETCH_OK,
     LOCAL_HTTP_PORT,
+    MANIFEST_NOT_NEWER_SUMMARY,
     PREPARE_EXPLAIN_CLEAN,
     PREPARE_OK,
     PROVIDER_READY_LINE,
@@ -91,6 +92,30 @@ def assert_provider_ready(session, timeout: float) -> None:
     run_cmd(session, "print-boot-slot", timeout, expect=PROVIDER_READY_LINE)
 
 
+def assert_http_endpoint_reachable(session, timeout: float, url: str) -> None:
+    """Fail quickly with the guest's ARP/TCP diagnostic if a lab URL is blocked."""
+    marker = session.marker()
+    session.send_line(f"net-fetch {url}")
+    outcome = session.wait_for_any(
+        ("status=200", "diag:"),
+        timeout=min(timeout, 60.0),
+        start_at=marker,
+    )
+    session.wait_for("> ", timeout=min(timeout, 60.0), start_at=marker)
+    if outcome != "status=200":
+        for command in (
+            "net-status",
+            "net-ip",
+            "net-gw",
+            "hey gateway",
+        ):
+            run_cmd(session, command, min(timeout, 30.0))
+        raise RuntimeError(
+            "guest could not reach the signed-update lab endpoint:\n"
+            + session.tail(5200)
+        )
+
+
 def assert_armed_attempt_state(session, timeout: float) -> None:
     """Prove the durable post-apply lifecycle in one slot-manager snapshot.
 
@@ -112,11 +137,34 @@ def assert_armed_attempt_state(session, timeout: float) -> None:
     session.wait_for("> ", timeout=timeout, start_at=marker)
 
 
-def stage_and_arm_update(session, timeout: float, *, expect_version: str) -> None:
+def stage_and_arm_update(
+    session,
+    timeout: float,
+    *,
+    expect_version: str,
+    expect_payload_url: str | None = None,
+    expect_payload_sha256: str | None = None,
+) -> None:
     """fetch -> download -> preflight -> prepare -> apply on the inactive slot."""
     run_cmd(session, "update-fetch", timeout * 4, expect=FETCH_OK)
     run_cmd(session, "update-status", timeout, expect=f"available={expect_version}")
+    if expect_payload_url is not None:
+        run_cmd(
+            session,
+            "update-status",
+            timeout,
+            expect=f"payload={expect_payload_url}",
+            expect_ignore_line_breaks=True,
+        )
     run_cmd(session, "update-download-payload", timeout * 8, expect=DOWNLOAD_OK)
+    if expect_payload_sha256 is not None:
+        run_cmd(
+            session,
+            "update-status",
+            timeout,
+            expect=f"sha256={expect_payload_sha256}",
+            expect_ignore_line_breaks=True,
+        )
     run_cmd(
         session,
         "update-prepare-explain",
@@ -157,9 +205,35 @@ def confirm_boot_health(session, timeout: float) -> None:
     run_cmd(session, "update-status", timeout, expect=CONFIRM_SUMMARY)
 
 
+def assert_equal_release_refused(
+    session, timeout: float, *, current_version: str
+) -> None:
+    """Prove that the confirmed release cannot be imported again as an update."""
+    run_cmd(
+        session,
+        "update-fetch",
+        timeout * 4,
+        expect=MANIFEST_NOT_NEWER_SUMMARY,
+    )
+    run_cmd(session, "update-status", timeout, expect="rc=-20")
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect=f"current={current_version} available=-",
+        expect_ignore_line_breaks=True,
+    )
+
+
 def assert_rollback_reported(session, timeout: float) -> None:
     run_cmd(session, "update-rollback-check", timeout * 2, expect=ROLLBACK_OK)
-    run_cmd(session, "update-status", timeout, expect=ROLLBACK_SUMMARY)
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect=ROLLBACK_SUMMARY,
+        expect_ignore_line_breaks=True,
+    )
 
 
 def assert_slot_state(session, timeout: float, expect: str) -> None:
