@@ -65,6 +65,7 @@ from smoke_x64_update_ab_contract import (  # noqa: E402
     render_production_evidence,
     render_update_ab_vmx,
     sanitize_public_text,
+    stable_runtime_identity_marker,
     validate_evidence,
     validate_production_evidence,
 )
@@ -89,7 +90,6 @@ from smoke_x64_vmware_installer import (  # noqa: E402
     start_console,
     write_vmx,
 )
-from smoke_x64_session import text_contains_pattern  # noqa: E402
 from update_manifest_common import (  # noqa: E402
     PINNED_PUBLIC_KEY_HEX,
     ensure_regular_file,
@@ -361,12 +361,19 @@ def prepare_production_material(args: argparse.Namespace) -> dict[str, str]:
     }
 
 
-def assert_production_runtime(text: str, expected_version: str) -> None:
-    if LAB_BANNER in text:
+def assert_production_runtime(console, timeout: float, expected_version: str) -> None:
+    if LAB_BANNER in console.text():
         raise RuntimeError("production boot exposed the lab trust override banner")
-    marker = f"[boot] Build: {expected_version}"
-    if not text_contains_pattern(text, marker, ignore_line_breaks=True):
-        raise RuntimeError(f"production boot did not report {marker!r}")
+    marker = stable_runtime_identity_marker(expected_version)
+    run_cmd(
+        console,
+        "print-version",
+        timeout,
+        expect=marker,
+        expect_ignore_line_breaks=True,
+    )
+    if LAB_BANNER in console.text():
+        raise RuntimeError("production boot exposed the lab trust override banner")
 
 
 def main() -> int:
@@ -521,7 +528,9 @@ def main() -> int:
                     continue
                 login_shell(args, console)
                 if args.production:
-                    assert_production_runtime(console.text(), args.current_version)
+                    assert_production_runtime(
+                        console, args.step_timeout, args.current_version
+                    )
                 require_boot_attempt(console.text(), 0, "confirmed")
                 assert_guest_uses_vmx_mac(console, args.step_timeout, vmx_path)
                 assert_provider_ready(console, args.step_timeout)
@@ -563,7 +572,7 @@ def main() -> int:
             )
             try:
                 login_shell(args, console)
-                assert_production_runtime(console.text(), version)
+                assert_production_runtime(console, args.step_timeout, version)
                 require_boot_attempt(console.text(), 1, "pending")
                 assert_attempt_pending(console, args.step_timeout)
                 sync_and_reboot(args, console)
@@ -576,7 +585,9 @@ def main() -> int:
             )
             try:
                 login_shell(args, console)
-                assert_production_runtime(console.text(), args.current_version)
+                assert_production_runtime(
+                    console, args.step_timeout, args.current_version
+                )
                 require_boot_attempt(console.text(), 0, "rollback")
                 assert_rollback_reported(console, args.step_timeout)
                 assert_slot_state(console, args.step_timeout, "state=failed")
@@ -598,7 +609,7 @@ def main() -> int:
             )
             try:
                 login_shell(args, console)
-                assert_production_runtime(console.text(), version)
+                assert_production_runtime(console, args.step_timeout, version)
                 require_boot_attempt(console.text(), 1, "pending")
                 assert_attempt_pending(console, args.step_timeout)
                 confirm_boot_health(console, args.step_timeout)

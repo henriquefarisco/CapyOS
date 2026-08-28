@@ -184,6 +184,9 @@ O gate acima prova o mecanismo. Para provar a cadeia de publicação real, com a
    imutável, tamanho e SHA-256 do update antes de criar a VM descartável. No
    guest ele exige a rota pública
    `releases/latest/download/latest.ini`, ausência do banner de laboratório e
+   consulta `print-version` após cada login para vincular o runtime ao release
+   estável esperado (a identidade estendida exata permanece presa aos hashes da
+   ISO predecessora e do payload assinado). Ele então
    executa dois ciclos na única ordem compatível com o anti-downgrade:
    aplica e **não confirma** o primeiro ciclo, observa o rollback ao predecessor,
    reaplica o mesmo release e então confirma saúde. A evidência declara
