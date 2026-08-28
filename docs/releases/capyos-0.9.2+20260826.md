@@ -55,6 +55,10 @@ o primeiro predecessor oficial apto ao gate e exatamente a `0.9.1`.
   geometria e o lifecycle esperado pelo `vmrun`.
 - Playbooks distinguem gate de mecanismo (lab) de aceite pos-promocao e
   documentam explicitamente a invariante de bootstrap da ancora.
+- A politica de publicacao aceita um perfil permanente para repositorio pessoal
+  solo: PR e squash obrigatorios, zero bypass, delete/force-push bloqueados,
+  branch atualizada, threads resolvidas e seis checks autenticados no lugar de
+  uma aprovacao humana impossivel.
 
 ## Validacao
 

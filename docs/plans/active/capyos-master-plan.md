@@ -766,8 +766,10 @@ workflow use somente `GET`; resposta parcial falha fechado e a credencial deve
 ser revogada ou rotacionada após a janela. O ruleset de tag ativo e sem bypass
 bloqueia update/deletion exatamente em `refs/tags/v*`; o ruleset de branch ativo
 e sem bypass cobre exatamente `refs/heads/main`, bloqueia deletion/non-fast-forward e
-exige pull request com pelo menos uma aprovação, descarte de reviews obsoletos
-após push e aprovação do último push. Pin ausente, placeholder, formato
+exige pull request. O perfil revisado exige aprovação independente após o último
+push; o perfil solo exige zero aprovação, squash-only, threads resolvidas e seis
+checks strict autenticados (`Lint`, `Release gates`, `QEMU ISO smoke`, dois
+`Analyze` e `CodeQL`). Pin ausente, placeholder, formato
 divergente, resposta parcial das políticas ou uso da chave distinta do
 update-agent falha fechado. Ela valida o draft autenticado e publica + marca
 Latest numa única mutação; depois exige o estado imutável e repete os gates por

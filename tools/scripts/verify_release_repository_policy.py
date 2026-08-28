@@ -14,6 +14,16 @@ class RepositoryPolicyError(ValueError):
     pass
 
 
+SOLO_MAINTAINER_REQUIRED_STATUS_CHECKS = {
+    "Analyze (c-cpp)": 15368,
+    "Analyze (python)": 15368,
+    "CodeQL": 57789,
+    "Lint": 15368,
+    "QEMU ISO smoke": 15368,
+    "Release gates": 15368,
+}
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -91,6 +101,104 @@ def _require_common_ruleset_controls(
     return _rule_map(ruleset, label)
 
 
+def _require_solo_maintainer_controls(
+    main_rules: dict[str, dict[str, Any]],
+    pull_request: dict[str, Any],
+) -> None:
+    if pull_request.get("dismiss_stale_reviews_on_push") is not False:
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must disable stale-review handling"
+        )
+    if pull_request.get("require_last_push_approval") is not False:
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must disable last-push approval"
+        )
+    if (
+        pull_request.get("require_extra_approval_for_unattributed_changes")
+        is not False
+    ):
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must disable extra approval"
+        )
+    if pull_request.get("require_code_owner_review") is not False:
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must disable code-owner approval"
+        )
+    if pull_request.get("required_reviewers") != []:
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must not define required reviewers"
+        )
+    if pull_request.get("required_review_thread_resolution") is not True:
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must require thread resolution"
+        )
+    if pull_request.get("allowed_merge_methods") != ["squash"]:
+        raise RepositoryPolicyError(
+            "solo-maintainer pull_request rule must allow only squash merge"
+        )
+
+    status_rule = main_rules.get("required_status_checks")
+    if status_rule is None:
+        raise RepositoryPolicyError(
+            "solo-maintainer main ruleset must require status checks"
+        )
+    parameters = status_rule.get("parameters")
+    if not isinstance(parameters, dict):
+        raise RepositoryPolicyError(
+            "main required_status_checks rule has no parameters"
+        )
+    if parameters.get("strict_required_status_checks_policy") is not True:
+        raise RepositoryPolicyError(
+            "solo-maintainer status checks must require the latest main"
+        )
+    if parameters.get("do_not_enforce_on_create") is not False:
+        raise RepositoryPolicyError(
+            "solo-maintainer status checks must be enforced on creation"
+        )
+
+    checks = parameters.get("required_status_checks")
+    if not isinstance(checks, list):
+        raise RepositoryPolicyError(
+            "main required_status_checks rule has no checks array"
+        )
+    actual: dict[str, int] = {}
+    for check in checks:
+        if not isinstance(check, dict):
+            raise RepositoryPolicyError(
+                "main required_status_checks rule contains an invalid check"
+            )
+        context = check.get("context")
+        integration_id = check.get("integration_id")
+        if not isinstance(context, str) or not context:
+            raise RepositoryPolicyError(
+                "main required_status_checks rule contains an invalid context"
+            )
+        if not isinstance(integration_id, int) or isinstance(integration_id, bool):
+            raise RepositoryPolicyError(
+                f"required status check {context!r} has no integration identity"
+            )
+        if context in actual:
+            raise RepositoryPolicyError(
+                f"main required_status_checks rule repeats {context!r}"
+            )
+        actual[context] = integration_id
+
+    missing = set(SOLO_MAINTAINER_REQUIRED_STATUS_CHECKS) - set(actual)
+    if missing:
+        raise RepositoryPolicyError(
+            "solo-maintainer main ruleset is missing status checks: "
+            + ", ".join(sorted(missing))
+        )
+    for context, expected_integration_id in (
+        SOLO_MAINTAINER_REQUIRED_STATUS_CHECKS.items()
+    ):
+        if actual[context] != expected_integration_id:
+            raise RepositoryPolicyError(
+                f"required status check {context!r} must come from integration "
+                f"{expected_integration_id}"
+            )
+
+
 def verify_repository_policy(
     immutable_settings: dict[str, Any],
     tag_ruleset: dict[str, Any],
@@ -130,18 +238,27 @@ def verify_repository_policy(
     if not isinstance(pull_request, dict):
         raise RepositoryPolicyError("main pull_request rule has no parameters")
     approvals = pull_request.get("required_approving_review_count")
-    if not isinstance(approvals, int) or isinstance(approvals, bool) or approvals < 1:
+    if (
+        not isinstance(approvals, int)
+        or isinstance(approvals, bool)
+        or approvals < 0
+    ):
         raise RepositoryPolicyError(
-            "main pull_request rule must require at least one approval"
+            "main pull_request rule has an invalid approval count"
         )
-    if pull_request.get("dismiss_stale_reviews_on_push") is not True:
-        raise RepositoryPolicyError(
-            "main pull_request rule must dismiss stale approvals after a push"
-        )
-    if pull_request.get("require_last_push_approval") is not True:
-        raise RepositoryPolicyError(
-            "main pull_request rule must require approval of the last push"
-        )
+    if approvals == 0:
+        _require_solo_maintainer_controls(main_rules, pull_request)
+    else:
+        if pull_request.get("dismiss_stale_reviews_on_push") is not True:
+            raise RepositoryPolicyError(
+                "reviewed main pull_request rule must dismiss stale approvals "
+                "after a push"
+            )
+        if pull_request.get("require_last_push_approval") is not True:
+            raise RepositoryPolicyError(
+                "reviewed main pull_request rule must require approval of the "
+                "last push"
+            )
 
 
 def parse_args() -> argparse.Namespace:

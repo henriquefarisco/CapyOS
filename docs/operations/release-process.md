@@ -24,8 +24,11 @@ repositórios irmãos. Alterações cross-repo devem respeitar os pins de
 1. Desenvolva em branch baseada na `main` atual e execute os gates proporcionais
    à mudança: testes focados, `make test`, `make layout-audit`,
    `make version-audit`, build real e os smokes QEMU/VMware aplicáveis.
-2. Abra pull request para `main`, confirme CI/CodeQL verdes e obtenha a
-   aprovação independente exigida pelo ruleset depois do ultimo push. Somente
+2. Abra pull request para `main` e confirme os gates exigidos pelo ruleset. Em
+   repositório com revisores independentes, obtenha a aprovação depois do último
+   push. Em repositório pessoal mantido por uma única identidade, use o perfil
+   solo fail-closed: zero aprovação humana, branch atualizada, threads resolvidas,
+   somente squash merge e os seis checks autenticados descritos abaixo. Somente
    após o merge, com o checkout local em fast-forward exato de `origin/main`,
    crie a tag `v<versão-estendida>`.
 3. O workflow **Release Artifacts** recompila a tag, valida os irmãos pinados e
@@ -213,9 +216,13 @@ aplicado exatamente a `refs/tags/v*` com **Restrict updates** e **Restrict
 deletions**. Ele permite criar a tag, mas impede que sua identidade mude durante
 o handoff. `MAIN_RULESET_ID` deve identificar outro ruleset ativo, também sem
 bypass ou exclusões, aplicado exatamente a `refs/heads/main`; ele deve restringir
-deletion e non-fast-forward e exigir pull request com pelo menos uma aprovação,
-descarte de aprovações obsoletas após push e aprovação do último push. O último
-comando deve retornar `true`. Um administrador deve habilitar **immutable
+deletion e non-fast-forward e exigir pull request. O perfil com revisores exige
+pelo menos uma aprovação, descarte de aprovações obsoletas após push e aprovação
+do último push. O perfil solo exige zero aprovação, somente squash merge,
+resolução de threads e checks strict, sem isenção na criação, vinculados às
+integrações esperadas: `Lint`, `Release gates`, `QEMU ISO smoke`,
+`Analyze (c-cpp)`, `Analyze (python)` e `CodeQL`. O último comando deve retornar
+`true`. Um administrador deve habilitar **immutable
 releases** nas configurações do repositório antes da promoção. O workflow baixa
 as três políticas e as valida com
 `tools/scripts/verify_release_repository_policy.py`.
@@ -259,7 +266,8 @@ A workflow:
    commit exato selecionado;
 2. exige imutabilidade habilitada, o ruleset sem bypass que impede
    atualização/exclusão de `refs/tags/v*` e o ruleset sem bypass de
-   `refs/heads/main` com deletion/non-fast-forward bloqueados e review obrigatório;
+   `refs/heads/main` com deletion/non-fast-forward bloqueados, PR obrigatório e
+   perfil de revisão humana ou solo com checks autenticados;
 3. aceita o draft stable exato ou, numa retomada idempotente, a mesma release já
    publicada, imutável e Latest;
 4. captura IDs, nomes, tamanhos, digests e timestamps dos 12 assets;

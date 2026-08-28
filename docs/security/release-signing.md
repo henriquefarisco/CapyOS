@@ -358,8 +358,11 @@ expor `bypass_actors`, mas o workflow executa somente `GET`. Resposta sem esse
 campo falha fechado; revogue ou rotacione o token após a janela. O primeiro
 bloqueia update/deletion exatamente em
 `refs/tags/v*`; o segundo cobre exatamente `refs/heads/main`, bloqueia deletion
-e non-fast-forward e exige pull request com pelo menos uma aprovação, descarte
-de reviews obsoletos após push e aprovação do último push. Sem o pin real,
+e non-fast-forward e exige pull request. Com revisores independentes, exige uma
+aprovação, descarte de reviews obsoletos e aprovação do último push. No perfil
+solo, exige zero aprovação, squash-only, resolução de threads e os seis checks
+strict vinculados aos apps esperados (`Lint`, `Release gates`, `QEMU ISO smoke`,
+dois `Analyze` e `CodeQL`). Sem o pin real,
 imutabilidade, leitura completa das políticas, qualquer ruleset ou os 12 assets
 exatos, a promoção inicial falha fechado. Ela verifica o draft autenticado e,
 numa única mutação, publica a release e a marca como Latest.
