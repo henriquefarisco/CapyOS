@@ -9,6 +9,7 @@ payload-URL relaxation cannot drift without a red gate.
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -222,13 +223,8 @@ class _HttpProgressSession(_SlotStatusSession):
 class _LateLabBannerSession(_SlotStatusSession):
     """Expose a lab trust banner only after the runtime identity query."""
 
-    def __init__(self, output: str) -> None:
-        super().__init__(output)
-        self.text_reads = 0
-
     def text(self) -> str:
-        self.text_reads += 1
-        if self.text_reads > 1:
+        if self.commands:
             return f"{self.output}\r\n{contract.LAB_BANNER}"
         return self.output
 
@@ -381,7 +377,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
             timeout=1.0,
             expected_version="0.9.1+20260825",
         )
-    except TimeoutError:
+    except (RuntimeError, TimeoutError):
         pass
     else:
         return fail("VMware production runtime accepted a different version")
@@ -657,7 +653,22 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
                 return fail("VMware A/B gate lost the guest/VMX MAC binding assertion")
             if 'expect=f"mac={expected_mac}"' not in driver:
                 return fail("VMware A/B gate no longer proves the guest station MAC")
-            if driver.count("assert_production_runtime(") != 5:
+            driver_tree = ast.parse(driver, filename=driver_name)
+            main_nodes = [
+                node
+                for node in driver_tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main"
+            ]
+            runtime_calls = []
+            if len(main_nodes) == 1:
+                runtime_calls = [
+                    node
+                    for node in ast.walk(main_nodes[0])
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "assert_production_runtime"
+                ]
+            if len(runtime_calls) != 4:
                 return fail("VMware production gate must bind all four boots to runtime")
             if '"print-version"' not in driver:
                 return fail("VMware production gate no longer queries runtime identity")
