@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools" / "scripts"))
 import smoke_x64_update_ab_contract as contract  # noqa: E402
 import smoke_x64_update_ab_flow as flow  # noqa: E402
 import smoke_x64_helpers as helpers  # noqa: E402
+import smoke_x64_vmware_update_ab as vmware_update_ab  # noqa: E402
 from smoke_x64_session import text_contains_pattern  # noqa: E402
 from update_manifest_common import (  # noqa: E402
     ManifestError,
@@ -147,6 +148,9 @@ class _SlotStatusSession:
     def text_since(self, start_at: int) -> str:
         return self.output[start_at:]
 
+    def text(self) -> str:
+        return self.output
+
     def wait_for(
         self,
         expected: str,
@@ -213,6 +217,20 @@ class _HttpProgressSession(_SlotStatusSession):
         if self.primary_reads == 1:
             return progress
         return progress + "[erro] dns resolution failed\r\nadmin@smoke-node>~> "
+
+
+class _LateLabBannerSession(_SlotStatusSession):
+    """Expose a lab trust banner only after the runtime identity query."""
+
+    def __init__(self, output: str) -> None:
+        super().__init__(output)
+        self.text_reads = 0
+
+    def text(self) -> str:
+        self.text_reads += 1
+        if self.text_reads > 1:
+            return f"{self.output}\r\n{contract.LAB_BANNER}"
+        return self.output
 
 
 def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
@@ -311,6 +329,79 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         except ValueError:
             continue
         return fail(f"runtime version comparison accepted {malformed!r}")
+
+    runtime_marker_cases = (
+        ("0.9.1+20260825", "CapyOS 0.9.1 [stable]"),
+        ("v1.2.3", "CapyOS 1.2.3 [stable]"),
+    )
+    for version, expected in runtime_marker_cases:
+        actual = contract.stable_runtime_identity_marker(version)
+        if actual != expected:
+            return fail(f"stable runtime marker {version!r}: {actual!r}")
+    for rejected in ("0.9.2-rc.1", "0.9", ""):
+        try:
+            contract.stable_runtime_identity_marker(rejected)
+        except ValueError:
+            continue
+        return fail(f"stable runtime marker accepted {rejected!r}")
+
+    runtime_marker = "CapyOS 0.9.1 [stable]"
+    runtime_console = _SlotStatusSession(
+        f"{runtime_marker}\r\nadmin@smoke-node>~> "
+    )
+    vmware_update_ab.assert_production_runtime(
+        runtime_console, timeout=1.0, expected_version="0.9.1+20260825"
+    )
+    if runtime_console.commands != ["print-version"]:
+        return fail("VMware production runtime identity did not query print-version")
+    if runtime_console.waits != [(runtime_marker, 0, True)]:
+        return fail("VMware production runtime identity lost its exact marker assertion")
+
+    early_lab_console = _SlotStatusSession(
+        f"{contract.LAB_BANNER}\r\n{runtime_marker}\r\nadmin@smoke-node>~> "
+    )
+    try:
+        vmware_update_ab.assert_production_runtime(
+            early_lab_console, timeout=1.0, expected_version="0.9.1+20260825"
+        )
+    except RuntimeError as exc:
+        if "lab trust override banner" not in str(exc):
+            return fail(f"unexpected pre-query lab-banner failure: {exc}")
+    else:
+        return fail("VMware production runtime accepted a pre-query lab banner")
+    if early_lab_console.commands:
+        return fail("VMware production runtime queried a lab-trust boot")
+
+    wrong_runtime_console = _SlotStatusSession(
+        "CapyOS 0.9.2 [stable]\r\nadmin@smoke-node>~> "
+    )
+    try:
+        vmware_update_ab.assert_production_runtime(
+            wrong_runtime_console,
+            timeout=1.0,
+            expected_version="0.9.1+20260825",
+        )
+    except TimeoutError:
+        pass
+    else:
+        return fail("VMware production runtime accepted a different version")
+    if wrong_runtime_console.commands != ["print-version"]:
+        return fail("VMware production runtime did not query the mismatched version")
+
+    late_lab_console = _LateLabBannerSession(
+        f"{runtime_marker}\r\nadmin@smoke-node>~> "
+    )
+    try:
+        vmware_update_ab.assert_production_runtime(
+            late_lab_console, timeout=1.0, expected_version="0.9.1+20260825"
+        )
+    except RuntimeError as exc:
+        if "lab trust override banner" not in str(exc):
+            return fail(f"unexpected post-query lab-banner failure: {exc}")
+    else:
+        return fail("VMware production runtime accepted a post-query lab banner")
+    if late_lab_console.commands != ["print-version"]:
+        return fail("VMware production runtime did not complete the guarded query")
 
     version_yaml = (
         "channels:\n"
@@ -566,6 +657,12 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
                 return fail("VMware A/B gate lost the guest/VMX MAC binding assertion")
             if 'expect=f"mac={expected_mac}"' not in driver:
                 return fail("VMware A/B gate no longer proves the guest station MAC")
+            if driver.count("assert_production_runtime(") != 5:
+                return fail("VMware production gate must bind all four boots to runtime")
+            if '"print-version"' not in driver:
+                return fail("VMware production gate no longer queries runtime identity")
+            if '[boot] Build:' in driver:
+                return fail("VMware production gate requires an unobservable boot marker")
 
     # Production manifests must keep refusing plain http; only the lab build,
     # which swaps the trust anchor, accepts it.

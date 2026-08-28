@@ -241,6 +241,19 @@ def compare_update_versions(candidate: str, current: str) -> int:
     return (candidate_key > current_key) - (candidate_key < current_key)
 
 
+def stable_runtime_identity_marker(version: str) -> str:
+    """Return the canonical ``print-version`` output for a stable runtime.
+
+    The runtime command intentionally reports the semantic version without
+    build metadata. Production identity remains bound separately to the pinned
+    predecessor ISO hash and the signed candidate payload hash.
+    """
+    major, minor, patch, rank, number = _runtime_version_key(version)
+    if rank != 4 or number != 0:
+        raise ValueError(f"production runtime must be stable: {version!r}")
+    return f"CapyOS {major}.{minor}.{patch} [stable]"
+
+
 def channel_extended_from_version_yaml(text: str, channel: str) -> str:
     """Extract one channel's extended version without accepting another block."""
     wanted_indent = None
