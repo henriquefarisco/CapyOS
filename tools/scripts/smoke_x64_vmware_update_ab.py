@@ -27,10 +27,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import os
+import re
 import shutil
+import subprocess
 import sys
 import uuid
+from itertools import chain
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +95,7 @@ from smoke_x64_vmware_installer import (  # noqa: E402
     write_vmx,
 )
 from smoke_x64_session import text_contains_pattern  # noqa: E402
+from update_ab_lab_config import vmnet_host_address  # noqa: E402
 from update_manifest_common import (  # noqa: E402
     PINNED_PUBLIC_KEY_HEX,
     ensure_regular_file,
@@ -101,6 +106,15 @@ from update_manifest_common import (  # noqa: E402
 )
 
 PRODUCTION_SOURCE = "github:henriquefarisco/CapyOS"
+
+
+def default_vmware_program_data() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "VMware"
+    return Path("/mnt/c/ProgramData/VMware")
+
+
+VMWARE_PROGRAM_DATA = default_vmware_program_data()
 
 
 def default_openssl() -> str:
@@ -149,6 +163,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--production-manifest", type=Path)
     parser.add_argument("--production-payload", type=Path)
     parser.add_argument("--expected-iso-sha256")
+    parser.add_argument("--vmnet", default="VMnet8")
+    parser.add_argument(
+        "--vmnet-nat-config",
+        type=Path,
+        default=VMWARE_PROGRAM_DATA / "vmnetnat.conf",
+    )
+    parser.add_argument(
+        "--vmnet-dhcp-config",
+        type=Path,
+        default=VMWARE_PROGRAM_DATA / "vmnetdhcp.conf",
+    )
     parser.add_argument("--openssl", default=default_openssl())
     parser.add_argument("--keep-vm", action="store_true")
     parser.add_argument("--verbose", action="store_true")
@@ -217,6 +242,300 @@ def assert_guest_uses_vmx_mac(console, timeout: float, vmx_path: Path) -> None:
         expect="driver=e1000 mode=dhcp detected=yes runtime=ready ready=yes",
         expect_ignore_line_breaks=True,
     )
+
+
+def validate_production_network_profile(
+    address: str, mask: str, gateway: str, dns: str
+) -> dict[str, str]:
+    try:
+        interface = ipaddress.IPv4Interface(f"{address}/{mask}")
+        gateway_ip = ipaddress.IPv4Address(gateway)
+        dns_ip = ipaddress.IPv4Address(dns)
+    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError) as exc:
+        raise ValueError(f"invalid production VMware IPv4 profile: {exc}") from exc
+    network = interface.network
+    if interface.ip in (network.network_address, network.broadcast_address):
+        raise ValueError("production VMware guest address is not usable")
+    if gateway_ip not in network or gateway_ip in (
+        network.network_address,
+        network.broadcast_address,
+        interface.ip,
+    ):
+        raise ValueError("production VMware gateway is not a distinct usable address")
+    if (
+        dns_ip.is_unspecified
+        or dns_ip.is_multicast
+        or dns_ip.is_loopback
+        or dns_ip.is_reserved
+        or (
+            dns_ip in network
+            and dns_ip in (network.network_address, network.broadcast_address)
+        )
+    ):
+        raise ValueError("production VMware DNS address is not usable")
+    return {
+        "address": str(interface.ip),
+        "mask": str(network.netmask),
+        "gateway": str(gateway_ip),
+        "dns": str(dns_ip),
+    }
+
+
+def production_network_from_vmware_configs(
+    nat_text: str, dhcp_text: str, vmnet: str, host_address: str
+) -> dict[str, str]:
+    host_sections = re.findall(
+        r"(?ims)^\s*\[host\]\s*(.*?)(?=^\s*\[|\Z)", nat_text
+    )
+    if len(host_sections) != 1:
+        raise ValueError("VMware NAT config must contain exactly one [host] section")
+    nat_ip_values = re.findall(
+        r"(?im)^\s*ip\s*=\s*([^\s#]+)", host_sections[0]
+    )
+    device_values = re.findall(
+        r"(?im)^\s*device\s*=\s*([^\s#]+)", host_sections[0]
+    )
+    if len(nat_ip_values) != 1 or len(device_values) != 1:
+        raise ValueError("VMware NAT [host] must define ip and device exactly once")
+    if device_values[0].lower() != vmnet.lower():
+        raise ValueError(
+            f"VMware NAT config targets {device_values[0]!r}, not {vmnet!r}"
+        )
+    try:
+        gateway_interface = ipaddress.IPv4Interface(nat_ip_values[0])
+        host_ip = ipaddress.IPv4Address(host_address)
+    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError) as exc:
+        raise ValueError(f"invalid VMware NAT address: {exc}") from exc
+    network = gateway_interface.network
+    if not 20 <= network.prefixlen <= 30:
+        raise ValueError("VMware NAT subnet prefix must be between /20 and /30")
+    if host_ip not in network or host_ip in (
+        network.network_address,
+        network.broadcast_address,
+        gateway_interface.ip,
+    ):
+        raise ValueError("VMware host adapter is not a distinct usable NAT address")
+    if gateway_interface.ip in (network.network_address, network.broadcast_address):
+        raise ValueError("VMware NAT gateway is not a usable address")
+
+    subnet_pattern = re.compile(
+        r"(?ims)^\s*subnet\s+([^\s]+)\s+netmask\s+([^\s]+)\s*\{"
+        r"(.*?)^\s*\}"
+    )
+    matching_subnets = []
+    for match in subnet_pattern.finditer(dhcp_text):
+        try:
+            candidate_network = ipaddress.IPv4Network(
+                f"{match.group(1)}/{match.group(2)}", strict=True
+            )
+        except (ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+            continue
+        if candidate_network == network:
+            matching_subnets.append(match.group(3))
+    if len(matching_subnets) != 1:
+        raise ValueError(
+            "VMware DHCP config must contain exactly one matching NAT subnet"
+        )
+    subnet_body = matching_subnets[0]
+
+    raw_ranges = re.findall(
+        r"(?im)^\s*range\s+([^\s;]+)\s+([^\s;]+)\s*;", subnet_body
+    )
+    if not raw_ranges:
+        raise ValueError("VMware DHCP subnet omits its dynamic range")
+    dhcp_ranges = []
+    for raw_start, raw_end in raw_ranges:
+        try:
+            start = ipaddress.IPv4Address(raw_start)
+            end = ipaddress.IPv4Address(raw_end)
+        except ipaddress.AddressValueError as exc:
+            raise ValueError(f"invalid VMware DHCP range: {exc}") from exc
+        if start not in network or end not in network or int(start) > int(end):
+            raise ValueError("VMware DHCP range is outside the NAT subnet")
+        dhcp_ranges.append((start, end))
+
+    router_values = re.findall(
+        r"(?im)^\s*option\s+routers\s+([^;]+);", subnet_body
+    )
+    if len(router_values) != 1:
+        raise ValueError("VMware DHCP subnet must define routers exactly once")
+    router_tokens = router_values[0].replace(",", " ").split()
+    if len(router_tokens) != 1:
+        raise ValueError("VMware DHCP subnet must define exactly one router")
+    try:
+        dhcp_router = ipaddress.IPv4Address(router_tokens[0])
+    except ipaddress.AddressValueError as exc:
+        raise ValueError(f"invalid VMware DHCP router: {exc}") from exc
+    if dhcp_router != gateway_interface.ip:
+        raise ValueError("VMware DHCP router differs from the NAT gateway")
+
+    dns_values = re.findall(
+        r"(?im)^\s*option\s+domain-name-servers\s+([^;]+);", subnet_body
+    )
+    if len(dns_values) != 1:
+        raise ValueError(
+            "VMware DHCP subnet must define domain-name-servers exactly once"
+        )
+    try:
+        dhcp_dns = {
+            ipaddress.IPv4Address(token)
+            for token in dns_values[0].replace(",", " ").split()
+        }
+    except ipaddress.AddressValueError as exc:
+        raise ValueError(f"invalid VMware DHCP DNS address: {exc}") from exc
+    if gateway_interface.ip not in dhcp_dns:
+        raise ValueError("VMware NAT gateway is not a declared DHCP DNS server")
+
+    fixed_addresses = set()
+    for fixed_value in re.findall(
+        r"(?im)^\s*fixed-address\s+([^;]+);", dhcp_text
+    ):
+        tokens = fixed_value.replace(",", " ").split()
+        if not tokens:
+            raise ValueError("VMware DHCP fixed-address reservation is empty")
+        try:
+            fixed_addresses.update(ipaddress.IPv4Address(token) for token in tokens)
+        except ipaddress.AddressValueError as exc:
+            raise ValueError(f"invalid VMware DHCP fixed address: {exc}") from exc
+
+    preferred = ipaddress.IPv4Address(int(network.network_address) + 15)
+    selected = None
+    for candidate in chain((preferred,), network.hosts()):
+        if candidate not in network:
+            continue
+        if candidate in (gateway_interface.ip, host_ip) or candidate in fixed_addresses:
+            continue
+        if any(int(start) <= int(candidate) <= int(end) for start, end in dhcp_ranges):
+            continue
+        if candidate in (network.network_address, network.broadcast_address):
+            continue
+        selected = candidate
+        break
+    if selected is None:
+        raise ValueError("VMware NAT subnet has no safe static guest address")
+    return validate_production_network_profile(
+        str(selected),
+        str(network.netmask),
+        str(gateway_interface.ip),
+        str(gateway_interface.ip),
+    )
+
+
+def discover_production_vmware_network(args: argparse.Namespace) -> dict[str, str]:
+    nat_text = args.vmnet_nat_config.read_text(encoding="utf-8", errors="strict")
+    dhcp_text = args.vmnet_dhcp_config.read_text(
+        encoding="utf-8", errors="strict"
+    )
+    completed = subprocess.run(
+        ["ipconfig.exe"],
+        check=True,
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    host_address = vmnet_host_address(completed.stdout, args.vmnet)
+    return production_network_from_vmware_configs(
+        nat_text, dhcp_text, args.vmnet, host_address
+    )
+
+
+def configure_production_vmware_network(
+    console, timeout: float, profile: dict[str, str]
+) -> None:
+    command = (
+        f"net-set {profile['address']} {profile['mask']} "
+        f"{profile['gateway']} {profile['dns']}"
+    )
+    expected = (
+        f"ipv4={profile['address']} mask={profile['mask']} "
+        f"gw={profile['gateway']} dns={profile['dns']}"
+    )
+    marker = console.marker()
+    run_cmd(
+        console,
+        command,
+        timeout,
+        expect=expected,
+        expect_ignore_line_breaks=True,
+    )
+    output = console.text_since(marker)
+    for warning in (
+        "Warning: could not save to /system/config.ini.",
+        "Aviso: no fue posible guardar en /system/config.ini.",
+        "Aviso: nao foi possivel salvar em /system/config.ini.",
+    ):
+        if warning in output:
+            raise RuntimeError("production VMware static network was not persisted")
+    if not text_contains_pattern(
+        output,
+        "driver=e1000 mode=static detected=yes runtime=ready ready=yes",
+        ignore_line_breaks=True,
+    ):
+        raise RuntimeError("production VMware network did not enter static mode")
+    assert_production_vmware_network_persisted(console, timeout, profile)
+
+
+def assert_production_vmware_network_persisted(
+    console, timeout: float, profile: dict[str, str]
+) -> None:
+    runtime_driver = "driver=e1000 mode=static detected=yes runtime=ready ready=yes"
+    runtime_ipv4 = (
+        f"ipv4={profile['address']} mask={profile['mask']} "
+        f"gw={profile['gateway']} dns={profile['dns']}"
+    )
+    marker = console.marker()
+    run_cmd(
+        console,
+        "net-status",
+        timeout,
+        expect=runtime_ipv4,
+        expect_ignore_line_breaks=True,
+    )
+    runtime_output = console.text_since(marker).replace("\r", "").replace("\n", "")
+    driver_matches = re.findall(
+        re.escape(runtime_driver) + r"(?=(?:mac=|dhcp=))", runtime_output
+    )
+    ipv4_matches = re.findall(re.escape(runtime_ipv4) + r"(?=arp_entries=)", runtime_output)
+    if len(driver_matches) != 1 or len(ipv4_matches) != 1:
+        raise RuntimeError(
+            "production VMware runtime did not restore the persisted static network"
+        )
+
+    marker = console.marker()
+    run_cmd(
+        console,
+        "print-file /system/config.ini",
+        timeout,
+        expect="network_mode=static",
+    )
+    output = console.text_since(marker)
+    expected = {
+        "network_mode": "static",
+        "ipv4": profile["address"],
+        "mask": profile["mask"],
+        "gateway": profile["gateway"],
+        "dns": profile["dns"],
+    }
+    observed = {}
+    for raw_line in output.splitlines():
+        key, separator, value = raw_line.strip().partition("=")
+        if not separator or key not in expected:
+            continue
+        if key in observed:
+            raise RuntimeError(
+                f"production VMware config contains duplicate {key!r}"
+            )
+        observed[key] = value
+    mismatched = [
+        f"{key}={expected_value}"
+        for key, expected_value in expected.items()
+        if observed.get(key) != expected_value
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "production VMware static network persistence mismatch: "
+            + ", ".join(mismatched)
+        )
 
 
 def collect_restage_failure_diagnostics(
@@ -410,9 +729,11 @@ def main() -> int:
         print(f"[err] ISO not found: {args.iso}", file=sys.stderr)
         return 2
 
+    production_network = None
     try:
         if args.production:
             material = prepare_production_material(args)
+            production_network = discover_production_vmware_network(args)
         else:
             require_lab_arguments(args)
         boot_media_sha256 = sha256_file(args.iso)
@@ -454,6 +775,12 @@ def main() -> int:
             print(
                 "[info] production materials verified without a private key; "
                 f"guest fetches {manifest_endpoint}"
+            )
+            print(
+                "[info] production guest network derived from "
+                f"{args.vmnet}: {production_network['address']}/"
+                f"{ipaddress.IPv4Network('0.0.0.0/' + production_network['mask']).prefixlen} "
+                f"gateway={production_network['gateway']}"
             )
         else:
             release_tag = release_tag_from_version_yaml(
@@ -544,6 +871,10 @@ def main() -> int:
                     )
                 require_boot_attempt(console.text(), 0, "confirmed")
                 assert_guest_uses_vmx_mac(console, args.step_timeout, vmx_path)
+                if args.production:
+                    configure_production_vmware_network(
+                        console, args.step_timeout, production_network
+                    )
                 assert_provider_ready(console, args.step_timeout)
                 run_cmd(
                     console,
@@ -552,10 +883,9 @@ def main() -> int:
                     expect=manifest_endpoint,
                     expect_ignore_line_breaks=True,
                 )
-                if not args.production:
-                    assert_http_endpoint_reachable(
-                        console, args.step_timeout, manifest_endpoint
-                    )
+                assert_http_endpoint_reachable(
+                    console, args.step_timeout, manifest_endpoint
+                )
                 stage_and_arm_update(
                     console,
                     args.step_timeout,
@@ -583,6 +913,9 @@ def main() -> int:
             )
             try:
                 login_shell(args, console)
+                assert_production_vmware_network_persisted(
+                    console, args.step_timeout, production_network
+                )
                 assert_production_runtime(console, args.step_timeout, version)
                 require_boot_attempt(console.text(), 1, "pending")
                 assert_attempt_pending(console, args.step_timeout)
@@ -596,6 +929,9 @@ def main() -> int:
             )
             try:
                 login_shell(args, console)
+                assert_production_vmware_network_persisted(
+                    console, args.step_timeout, production_network
+                )
                 assert_production_runtime(
                     console, args.step_timeout, args.current_version
                 )
@@ -706,8 +1042,15 @@ def main() -> int:
                 "second_attempt_slot": "1",
                 "boots_observed": str(boots + 3),
                 "cycle_order": PRODUCTION_CYCLE_ORDER,
+                "bootstrap_vmnet": args.vmnet,
+                "bootstrap_network_mode": "static",
+                "bootstrap_ipv4": production_network["address"],
+                "bootstrap_mask": production_network["mask"],
+                "bootstrap_gateway": production_network["gateway"],
+                "bootstrap_dns": production_network["dns"],
                 "lab_override_absent": "yes",
                 "public_latest_route": "yes",
+                "bootstrap_network_persisted": "yes",
                 "provider_ready": "yes",
                 "signed_manifest_accepted": "yes",
                 "payload_verified": "yes",
