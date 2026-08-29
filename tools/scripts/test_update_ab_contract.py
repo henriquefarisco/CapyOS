@@ -894,6 +894,7 @@ fixed-address 192.168.87.3;
         return fail("equal-release refusal did not prove fetch result and status")
 
     endpoint_session = _SlotStatusSession(
+        ">>> https://192.168.87.1 (?) ...\n"
         "status=200 host=192.168.87.1\nadmin@smoke-node>~> "
     )
     try:

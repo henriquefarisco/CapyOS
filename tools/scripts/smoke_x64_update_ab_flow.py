@@ -30,6 +30,7 @@ import threading
 from pathlib import Path
 
 from smoke_x64_helpers import run_cmd
+from smoke_x64_session import text_contains_pattern
 from smoke_x64_update_ab_contract import (
     APPLY_OK,
     APPLY_SUMMARY,
@@ -100,14 +101,13 @@ def assert_http_endpoint_reachable(
         raise ValueError("endpoint reachability attempts must be positive")
     for _attempt in range(attempts):
         marker = session.marker()
-        session.send_line(f"net-fetch {url}")
-        outcome = session.wait_for_any(
-            ("status=200", "diag:"),
-            timeout=min(timeout, 60.0),
-            start_at=marker,
+        run_cmd(
+            session,
+            f"net-fetch {url}",
+            min(timeout, 60.0),
+            expect=("status=200", "diag:"),
         )
-        session.wait_for("> ", timeout=min(timeout, 60.0), start_at=marker)
-        if outcome == "status=200":
+        if text_contains_pattern(session.text_since(marker), "status=200"):
             return
     for command in (
         "net-status",
