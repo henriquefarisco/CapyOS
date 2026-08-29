@@ -92,28 +92,34 @@ def assert_provider_ready(session, timeout: float) -> None:
     run_cmd(session, "print-boot-slot", timeout, expect=PROVIDER_READY_LINE)
 
 
-def assert_http_endpoint_reachable(session, timeout: float, url: str) -> None:
-    """Fail quickly with the guest's ARP/TCP diagnostic if a lab URL is blocked."""
-    marker = session.marker()
-    session.send_line(f"net-fetch {url}")
-    outcome = session.wait_for_any(
-        ("status=200", "diag:"),
-        timeout=min(timeout, 60.0),
-        start_at=marker,
-    )
-    session.wait_for("> ", timeout=min(timeout, 60.0), start_at=marker)
-    if outcome != "status=200":
-        for command in (
-            "net-status",
-            "net-ip",
-            "net-gw",
-            "hey gateway",
-        ):
-            run_cmd(session, command, min(timeout, 30.0))
-        raise RuntimeError(
-            "guest could not reach the signed-update lab endpoint:\n"
-            + session.tail(5200)
+def assert_http_endpoint_reachable(
+    session, timeout: float, url: str, *, attempts: int = 1
+) -> None:
+    """Require HTTP 200, tolerating only an explicitly bounded transient retry."""
+    if attempts < 1:
+        raise ValueError("endpoint reachability attempts must be positive")
+    for _attempt in range(attempts):
+        marker = session.marker()
+        session.send_line(f"net-fetch {url}")
+        outcome = session.wait_for_any(
+            ("status=200", "diag:"),
+            timeout=min(timeout, 60.0),
+            start_at=marker,
         )
+        session.wait_for("> ", timeout=min(timeout, 60.0), start_at=marker)
+        if outcome == "status=200":
+            return
+    for command in (
+        "net-status",
+        "net-ip",
+        "net-gw",
+        "hey gateway",
+    ):
+        run_cmd(session, command, min(timeout, 30.0))
+    raise RuntimeError(
+        "guest could not reach the signed-update lab endpoint after "
+        f"{attempts} attempt(s):\n" + session.tail(5200)
+    )
 
 
 def assert_armed_attempt_state(session, timeout: float) -> None:

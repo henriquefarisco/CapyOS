@@ -204,6 +204,50 @@ class _CommandSequenceSession(_SlotStatusSession):
     def marker(self) -> int:
         return self.offsets[min(len(self.commands), len(self.offsets) - 1)]
 
+    def _span(self, start_at: int) -> str:
+        try:
+            index = self.offsets.index(start_at)
+        except ValueError as exc:
+            raise AssertionError(f"unknown sequence marker {start_at}") from exc
+        end = self.offsets[min(index + 1, len(self.offsets) - 1)]
+        return self.output[start_at:end]
+
+    def text_since(self, start_at: int) -> str:
+        return self._span(start_at)
+
+    def wait_for(
+        self,
+        expected: str,
+        *,
+        timeout: float,
+        start_at: int,
+        ignore_line_breaks: bool = False,
+    ) -> None:
+        _ = timeout
+        self.waits.append((expected, start_at, ignore_line_breaks))
+        if not text_contains_pattern(
+            self._span(start_at),
+            expected,
+            ignore_line_breaks=ignore_line_breaks,
+        ):
+            raise TimeoutError(expected)
+
+    def wait_for_any(
+        self,
+        patterns,
+        *,
+        timeout: float,
+        start_at: int,
+    ) -> str:
+        _ = timeout
+        choices = tuple(patterns)
+        self.wait_any.append((choices, start_at))
+        span = self._span(start_at)
+        for pattern in choices:
+            if text_contains_pattern(span, pattern):
+                return pattern
+        raise TimeoutError(choices)
+
 
 class _LaggingDebugPromptSession(_SlotStatusSession):
     """Model a stale prompt arriving late on QEMU debugcon."""
@@ -858,6 +902,25 @@ fixed-address 192.168.87.3;
         )
     except RuntimeError as exc:
         return fail(f"lab endpoint probe rejected HTTP 200: {exc}")
+    retry_endpoint = _CommandSequenceSession(
+        "[erro] connection failed\ndiag: arp=3 syn-out=6 syn-ack=6\n"
+        "admin@smoke-node>~> ",
+        "status=200 host=github.com port=443\nadmin@smoke-node>~> ",
+    )
+    try:
+        flow.assert_http_endpoint_reachable(
+            retry_endpoint,
+            240.0,
+            "https://github.com/example/latest.ini",
+            attempts=2,
+        )
+    except RuntimeError as exc:
+        return fail(f"production endpoint probe rejected a bounded retry: {exc}")
+    if retry_endpoint.commands != [
+        "net-fetch https://github.com/example/latest.ini",
+        "net-fetch https://github.com/example/latest.ini",
+    ]:
+        return fail("production endpoint preflight did not perform exactly two probes")
     if endpoint_session.commands != [
         "net-fetch http://192.168.87.1:18083/latest.ini"
     ]:
@@ -902,6 +965,10 @@ fixed-address 192.168.87.3;
                 return fail("VMware production gate no longer applies its NAT profile")
             if driver.count("assert_http_endpoint_reachable(") != 1:
                 return fail("VMware production gate lost the public-route preflight")
+            if "attempts=3 if args.production else 1" not in driver:
+                return fail("VMware production gate lost its bounded HTTPS retry")
+            if '"net-resolve github.com"' not in driver:
+                return fail("VMware production gate lost its DNS warm-up proof")
             driver_tree = ast.parse(driver, filename=driver_name)
             main_nodes = [
                 node

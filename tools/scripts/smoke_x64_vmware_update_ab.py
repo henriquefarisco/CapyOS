@@ -883,8 +883,18 @@ def main() -> int:
                     expect=manifest_endpoint,
                     expect_ignore_line_breaks=True,
                 )
+                if args.production:
+                    run_cmd(
+                        console,
+                        "net-resolve github.com",
+                        args.step_timeout,
+                        expect="name=github.com ipv4=",
+                    )
                 assert_http_endpoint_reachable(
-                    console, args.step_timeout, manifest_endpoint
+                    console,
+                    args.step_timeout,
+                    manifest_endpoint,
+                    attempts=3 if args.production else 1,
                 )
                 stage_and_arm_update(
                     console,
