@@ -7,7 +7,8 @@ Indice das release notes mantidas no repositorio.
 - `capyos-0.9.2+20260826.md`
   - Corrige o aceite A/B pos-promocao com assets publicos e ordem
     rollback-then-confirm, sem chave privada ou flags de laboratorio; preserva
-    as ABIs e os pins dos modulos desacoplados.
+    as ABIs e os pins dos modulos desacoplados. A promocao imutavel e o gate
+    VMware de producao passaram em quatro boots, fechando a Etapa 8.
 
 ## Historico recente
 

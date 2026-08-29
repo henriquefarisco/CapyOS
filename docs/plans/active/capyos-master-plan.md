@@ -1,11 +1,11 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-08-26 (candidato stable 0.9.2)
+**Data de referência:** 2026-08-29 (stable 0.9.2 publicada, Latest e imutavel)
 **Versão atual:** `0.9.2+20260826`
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-7 oficialmente fechadas; 7/16 etapas concluídas; Etapa 8 em andamento.
+**Status:** Etapas 1-8 oficialmente fechadas; 8/16 etapas concluídas; Etapa 9 desbloqueada e próxima.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -86,8 +86,8 @@ Referências obrigatórias:
 | 5 | TLS userland real | Concluída (alpha.264) | Etapa 4 | BearSSL userland com handshake real validado |
 | 6 | Apps básicos do desktop maduros | Concluída (alpha.287) | Etapa 5 | apps essenciais, `CapyBrowse Text` para sites de texto/diagnóstico de rede, libcapy-ui inicial e localização PT-BR/ES |
 | 7 | Browser usável com web estática moderna | Concluída (alpha.312) | Etapa 6 | HTTPS real, HTML/CSS, imagens, toolbar, histórico, links, cache, limites, sem JavaScript |
-| 8 | Release/update gate oficial + instalador polido | Em andamento (candidato 0.9.2) | Etapa 7 | publicação Ed25519, ciclo A/B oficial e instalador wizard amigável |
-| 9 | Package manager + SDK + ABI estável | Bloqueada | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
+| 8 | Release/update gate oficial + instalador polido | Concluída (0.9.2) | Etapa 7 | publicação Ed25519 imutável, ciclo A/B oficial e instalador wizard amigável |
+| 9 | Package manager + SDK + ABI estável | Desbloqueada (próxima) | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
 | 10 | Áudio + multimídia básica | Bloqueada | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist e codecs por contrato |
 | 11 | WiFi + power management + suspend/resume | Bloqueada | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
 | 12 | JS engine sandboxed | Bloqueada | Etapa 11 | JavaScript isolado no browser com bridge DOM controlada e engine sem syscalls diretas |
@@ -539,12 +539,12 @@ processos. Os itens restantes são melhorias não bloqueantes do escopo estátic
 - `make smoke-x64-vmware-browser-https-static` (novo) com lista alvo de 5 sites.
 - `make smoke-x64-vmware-browser-text-fallback` (novo).
 
-## 11. Etapa 8 — Release/update gate oficial + instalador polido
+## 11. Etapa 8 — Release/update gate oficial + instalador polido (concluída na 0.9.2)
 
 **Objetivo:** fechar a release operacional com CI/smoke oficial, update HTTPS
-real e wizard de instalação amigável. O wiring A/B, o instalador e os blocos
-cripto já existem; falta publicar os materiais Ed25519 de produção e comprovar o
-ciclo apply/reboot/health/rollback no VMware oficial.
+real e wizard de instalação amigável. Objetivo concluído na `0.9.2`: os
+materiais Ed25519 foram publicados numa release imutável e o ciclo
+apply/reboot/rollback/reapply/health passou no VMware oficial.
 
 **ROI:** médio-alto — confiança e manutenção contínua para o usuário final.
 
@@ -790,7 +790,7 @@ de cancelamento valida e os discos target/guard precisam manter seus hashes. O
 wizard completo continua sendo um gate separado de instalacao, login,
 persistencia e reboot sobre exatamente o mesmo SHA-256.
 
-**Candidato `0.9.2` — gate A/B de producao executavel:** a publicacao imutavel
+**Release `0.9.2` — gate A/B de producao aprovado:** a publicacao imutavel
 da `0.9.1` confirmou os materiais Ed25519 e a rota Latest, mas revelou a
 invariante de bootstrap da nova ancora: a `0.9.0` possui o pin anterior e a
 `0.9.1` nao pode atualizar para si mesma. O novo modo VMware usa a ISO `0.9.1`
@@ -798,11 +798,22 @@ publicada como predecessor, recusa chave privada/flags lab, valida assinatura,
 URLs, tamanho, hashes e versoes dos assets publicos da `0.9.2`, e falha se o
 banner lab aparecer. Para respeitar o anti-downgrade, o primeiro ciclo fica sem
 confirmacao e prova rollback; ja no predecessor restaurado, o mesmo release e
-reaplicado e confirmado. A Etapa 8 somente fecha depois da promocao da `0.9.2`
-e dessa evidencia no VMware oficial. Os gates do mecanismo da candidata ja
-passaram em quatro boots VMware com E1000/DHCP nativos e em quatro boots
-QEMU/OVMF; o `release-check`, a ISO oficial e os checksums tambem passaram sem
-material de laboratorio.
+reaplicado e confirmado.
+
+A `0.9.2` foi promovida como Latest imutavel e o gate final passou em 2026-08-29
+no VMware Workstation 26.0.0 build 25388281, run `d87affe8b077`. O manifesto v2
+registra quatro boots, `rollback-then-confirm`, os dois arms no slot 1,
+reaplicacao via cache verificado com digest recalculado, confirmacao de saude e
+recusa de equal release. A ISO predecessora tem SHA-256
+`14f06f0c2127eb5547395e32cd56e53699b31ef90766e282b5780809043cf51c` e o
+payload publicado tem SHA-256
+`a3de2e5e0fbc21cef9d797c879202cd5e75f78bb06ca69a5c77585c97c47e5ee`.
+O bootstrap estatico derivado do VMnet8 prova compatibilidade ambiental da
+`0.9.1`, nao DHCP nela; o E1000/DHCP nativo da `0.9.2` foi provado
+separadamente pelo gate lab. Os gates do mecanismo tambem passaram em quatro
+boots VMware e quatro boots QEMU/OVMF; `release-check`, ISO oficial e checksums
+passaram sem material de laboratorio. Com essa evidencia, a Etapa 8 esta
+concluida.
 
 Como a chave dedicada de produção do `latest.ini`/update-agent é offline-only e
 nunca entra em runner automatizado, cada execução de laboratório gera um par
@@ -838,18 +849,16 @@ desatualizados desde o `alpha.318`.
 ### Critérios de aceite
 
 - [x] Smoke VMware+E1000 real passa no host oficial provisionado.
-- [ ] Update HTTPS baixa, valida e aplica payload assinado no slot inativo com
+- [x] Update HTTPS baixa, valida e aplica payload assinado no slot inativo com
   autorização geracional + flush durável; UEFI consome token de tentativa e o
   ciclo pós-reboot comprova health confirmation e rollback.
-  *(Implementação completa e host-provada em `alpha.318`; o gate automatizado que
-  produz a evidência existe desde `alpha.319`
-  (`smoke-x64-vmware-update-ab` + `smoke-x64-qemu-update-ab`). A regressão de
-  boot foi corrigida na `alpha.320` e quatro boots KVM mais o smoke oficial ISO
-  KVM e o smoke CLI TCG de dois boots passaram; o critério permanece aberto até
-  o ciclo A/B oficial VMware comprovar apply, rollback, reaplicacao e health
-  confirmation. A `0.9.1` publicou a cadeia Ed25519 e serve de predecessor com
-  a ancora corrente; a candidata `0.9.2` e o primeiro alvo que torna esse gate
-  de producao executavel.)*
+  *(Comprovado no run VMware de produção `d87affe8b077`, em quatro boots, pelo
+  manifesto v2 sanitizado: HTTP 200/TLS/assinatura, payload publicado com
+  SHA-256 `a3de2e5e0fbc21cef9d797c879202cd5e75f78bb06ca69a5c77585c97c47e5ee`,
+  apply no slot 1, tentativa consumida, rollback,
+  reaplicação do cache verificado com novo hash, confirmação de saúde e recusa
+  da mesma versão. O bootstrap estático da `0.9.1` é uma adaptação ambiental;
+  o E1000/DHCP nativo da `0.9.2` tem prova separada no gate lab.)*
 - [x] Instalador wizard completa fresh install + reboot + login + persistência.
 
 ### Gates externos recomendados
@@ -1245,7 +1254,7 @@ compositor, input, timers, sandbox, package install real, APIs nativas, gates de
 release). ABIs `capyos-base` v3 + `capyos-package-apply` v1.
 
 **Trilha de desenvolvimento:** governada integralmente pela sequência
-bloqueante de Etapas 1-16 (§3-§19). Etapas 1-7 concluídas; Etapa 8 em andamento.
+bloqueante de Etapas 1-16 (§3-§19). Etapas 1-8 concluídas; Etapa 9 é a próxima.
 
 **Critérios de desenvolvimento específicos:**
 
@@ -1392,7 +1401,8 @@ CapyUI possuem os adapters de kernel, capability e UI; o pacote publicado é
   promovida a gate de release, sem mudança do artifact v0.
 - **Entregue em 0.9.0:** publicação coordenada no índice imutável e validação
   remota dos nove assets por URL, tamanho e SHA-256.
-- **Pendente na Etapa 8:** autenticação Ed25519 de produção e ciclo A/B oficial.
+- **Concluído na Etapa 8:** autenticação Ed25519 de produção e ciclo A/B oficial;
+  o KAT externo do signer segue como condição da integração de pacotes na Etapa 9.
 
 **Critérios de aceite do módulo:**
 
@@ -1449,41 +1459,16 @@ de release. Integração gated pelas **Etapas 15-16**.
 
 ## 21. Próximo comando esperado
 
-Etapas 1-7 estão fechadas e a Etapa 8 permanece ativa com **um** critério aberto.
-O `alpha.319` entregou o gate que produz essa evidência. A `alpha.320` removeu o
-bloqueador de boot: o loader usa pilha real sem red zone, valida/copia/compara o
-ELF e recarrega a GDT; dois ciclos KVM focados (quatro boots) e o smoke oficial
-ISO KVM passaram com persistência. O smoke CLI TCG também passou em 86,2 s,
-com dois boots e persistência.
+Etapas 1-8 estão fechadas. A release `0.9.2+20260826` foi publicada como Latest
+imutável e o run VMware de produção `d87affe8b077` comprovou, em quatro boots,
+download público autenticado, apply no slot inativo, consumo da tentativa,
+rollback, reaplicação do cache verificado, confirmação de saúde e recusa da
+mesma versão. A evidência sanitizada v2 está versionada em
+[`../../releases/evidence/capyos-0.9.2+20260826-update-ab-production.manifest`](../../releases/evidence/capyos-0.9.2+20260826-update-ab-production.manifest).
 
-**Próxima ação bloqueante:** integrar a promoção assinada em duas fases, gerar
-os materiais com as duas chaves offline aprovadas e promover a próxima release.
-Depois, numa instalação oficial VMware + UEFI + E1000 e sem flags de
-laboratório, executar a sequência pública `update-fetch` → download → apply →
-reboot sem confirmação → rollback → reaplicação → reboot → confirmação de
-saúde. `make
-smoke-x64-vmware-update-ab` permanece o gate separado do mecanismo, com chave
-descartável e servidor hermético. A Etapa 8 só fecha quando a evidência de
-produção comprovar download e validação do payload, apply no slot inativo,
-consumo da tentativa, rollback e confirmação de saúde. A ISO predecessora
-`0.9.1` e seus 12 assets já foram comparados/validados remotamente.
-
-Nenhuma tag deve ser promovida como Latest antes de todos os gates de publicação
-prévia terminarem verdes: identidade exata, inventário, checksums, assinatura,
-fingerprint real versionado no commit da tag, manifestos, `latest.ini`, índice
-de módulos, snapshot sem mutação, imutabilidade habilitada, token de auditoria
-temporário e limitado ao repositório que exponha as três políticas completas e
-rulesets sem bypass de tag e de `main`.
-Durante a promoção vale a janela exclusiva sem mutação manual de assets, refs,
-imutabilidade ou rulesets; a proteção corrente de `main` não prova review
-histórico do commit. As verificações pelas URLs públicas e o ciclo A/B no VMware
-são aceites pós-promoção; qualquer falha mantém a Etapa 8 aberta e a workflow pode retomar
-as verificações sem repetir a mutação de publicação.
-
-Depois do fecho, a próxima ação pertence à Etapa 9 (§12): promover a fronteira
-alpha do `capypkg` a package manager com SDK e ABI estável, começando pelo
-`resolve-at-publish` desenhado na §11 (índice assinado endereçado por token de
-ABI + guarda anti-drift no `version-audit`), que elimina o pin manual de versão do
-first boot. O passo de operador restante é publicar os materiais assinados e
-repetir o ciclo de update com a chave offline de produção. A Etapa 9 continua
-bloqueada até o fechamento integral da Etapa 8.
+**Próxima ação:** iniciar a Etapa 9 (§12) numa branch própria, promovendo a
+fronteira alpha do `capypkg` a package manager com SDK e ABI estável. O primeiro
+slice é o `resolve-at-publish` desenhado na §11: índice assinado endereçado por
+token de ABI, guarda anti-drift no `version-audit` e eliminação do pin manual de
+versão do first boot. O KAT externo do signer CapyAgent permanece condição de
+integração da Etapa 9, não bloqueador retroativo da Etapa 8 concluída.
