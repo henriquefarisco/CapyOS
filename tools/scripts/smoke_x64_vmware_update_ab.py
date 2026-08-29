@@ -175,6 +175,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=VMWARE_PROGRAM_DATA / "vmnetdhcp.conf",
     )
+    parser.add_argument(
+        "--production-dns",
+        default="8.26.56.26",
+        help=(
+            "DNS resolver used by the released predecessor; TLS hostname/peer "
+            "and Ed25519 manifest verification remain mandatory"
+        ),
+    )
     parser.add_argument("--openssl", default=default_openssl())
     parser.add_argument("--keep-vm", action="store_true")
     parser.add_argument("--verbose", action="store_true")
@@ -435,8 +443,14 @@ def discover_production_vmware_network(args: argparse.Namespace) -> dict[str, st
         errors="replace",
     )
     host_address = vmnet_host_address(completed.stdout, args.vmnet)
-    return production_network_from_vmware_configs(
+    discovered = production_network_from_vmware_configs(
         nat_text, dhcp_text, args.vmnet, host_address
+    )
+    return validate_production_network_profile(
+        discovered["address"],
+        discovered["mask"],
+        discovered["gateway"],
+        args.production_dns,
     )
 
 
@@ -791,7 +805,8 @@ def main() -> int:
                 "[info] production guest network derived from "
                 f"{args.vmnet}: {production_network['address']}/"
                 f"{ipaddress.IPv4Network('0.0.0.0/' + production_network['mask']).prefixlen} "
-                f"gateway={production_network['gateway']}"
+                f"gateway={production_network['gateway']} "
+                f"dns={production_network['dns']}"
             )
         else:
             release_tag = release_tag_from_version_yaml(

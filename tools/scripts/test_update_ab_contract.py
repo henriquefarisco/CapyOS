@@ -1005,6 +1005,8 @@ fixed-address 192.168.87.3;
                 return fail("VMware production gate lost its bounded HTTPS retry")
             if '"net-resolve github.com"' not in driver:
                 return fail("VMware production gate lost its DNS warm-up proof")
+            if 'default="8.26.56.26"' not in driver:
+                return fail("VMware production gate lost its compatible public DNS")
             if driver.count("verify_production_public_route(") != 3:
                 return fail(
                     "VMware production gate must prove the public route "
