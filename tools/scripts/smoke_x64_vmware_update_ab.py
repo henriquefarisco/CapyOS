@@ -538,6 +538,16 @@ def assert_production_vmware_network_persisted(
         )
 
 
+def verify_production_public_route(console, timeout: float, endpoint: str) -> None:
+    run_cmd(
+        console,
+        "net-resolve github.com",
+        timeout,
+        expect="name=github.com ipv4=",
+    )
+    assert_http_endpoint_reachable(console, timeout, endpoint, attempts=3)
+
+
 def collect_restage_failure_diagnostics(
     console, timeout: float, payload_endpoint: str
 ) -> None:
@@ -884,18 +894,13 @@ def main() -> int:
                     expect_ignore_line_breaks=True,
                 )
                 if args.production:
-                    run_cmd(
-                        console,
-                        "net-resolve github.com",
-                        args.step_timeout,
-                        expect="name=github.com ipv4=",
+                    verify_production_public_route(
+                        console, args.step_timeout, manifest_endpoint
                     )
-                assert_http_endpoint_reachable(
-                    console,
-                    args.step_timeout,
-                    manifest_endpoint,
-                    attempts=3 if args.production else 1,
-                )
+                else:
+                    assert_http_endpoint_reachable(
+                        console, args.step_timeout, manifest_endpoint
+                    )
                 stage_and_arm_update(
                     console,
                     args.step_timeout,
@@ -948,6 +953,9 @@ def main() -> int:
                 require_boot_attempt(console.text(), 0, "rollback")
                 assert_rollback_reported(console, args.step_timeout)
                 assert_slot_state(console, args.step_timeout, "state=failed")
+                verify_production_public_route(
+                    console, args.step_timeout, manifest_endpoint
+                )
                 stage_and_arm_update(
                     console,
                     args.step_timeout,
@@ -972,6 +980,9 @@ def main() -> int:
                 confirm_boot_health(console, args.step_timeout)
                 assert_slot_state(
                     console, args.step_timeout, "health=confirmed [ACTIVE]"
+                )
+                verify_production_public_route(
+                    console, args.step_timeout, manifest_endpoint
                 )
                 assert_equal_release_refused(
                     console, args.step_timeout, current_version=version

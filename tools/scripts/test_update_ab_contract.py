@@ -964,12 +964,17 @@ fixed-address 192.168.87.3;
                 return fail("VMware A/B gate no longer proves the E1000 runtime")
             if driver.count("configure_production_vmware_network(") != 2:
                 return fail("VMware production gate no longer applies its NAT profile")
-            if driver.count("assert_http_endpoint_reachable(") != 1:
+            if driver.count("assert_http_endpoint_reachable(") != 2:
                 return fail("VMware production gate lost the public-route preflight")
-            if "attempts=3 if args.production else 1" not in driver:
+            if "endpoint, attempts=3" not in driver:
                 return fail("VMware production gate lost its bounded HTTPS retry")
             if '"net-resolve github.com"' not in driver:
                 return fail("VMware production gate lost its DNS warm-up proof")
+            if driver.count("verify_production_public_route(") != 4:
+                return fail(
+                    "VMware production gate must prove the public route "
+                    "before all three remote update phases"
+                )
             driver_tree = ast.parse(driver, filename=driver_name)
             main_nodes = [
                 node
