@@ -60,6 +60,7 @@ FETCH_OK = "[ok] remote manifest accepted into the local catalog"
 DOWNLOAD_OK = "[ok] update payload downloaded and verified"
 PREPARE_EXPLAIN_OK = "[ok] prepare preflight passed"
 PREPARE_EXPLAIN_CLEAN = "failing=-"
+PREPARE_DRY_RUN_OK = "[ok] update prepare dry-run passed"
 PREPARE_OK = "[ok] verified update prepared and armed for activation"
 APPLY_OK = "[ok] staged update verified and boot slot armed"
 APPLY_SUMMARY = "inactive slot written and armed for one boot attempt"
@@ -126,6 +127,7 @@ _PRODUCTION_REQUIRED_YES = (
     "lab_override_absent",
     "public_latest_route",
     "bootstrap_network_persisted",
+    "second_cycle_cache_reverified",
     "provider_ready",
     "signed_manifest_accepted",
     "payload_verified",
@@ -159,6 +161,7 @@ _PRODUCTION_REQUIRED_FIELDS = (
     "second_attempt_slot",
     "boots_observed",
     "cycle_order",
+    "second_cycle_source",
     "bootstrap_vmnet",
     "bootstrap_network_mode",
     "bootstrap_ipv4",
@@ -470,6 +473,8 @@ def validate_production_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError(
             f"production cycle_order must be {PRODUCTION_CYCLE_ORDER}"
         )
+    if fields["second_cycle_source"] != "verified-cache":
+        raise ValueError("production second cycle must use the verified cache")
     if not re.fullmatch(r"(?i:vmnet[0-9]+)", fields["bootstrap_vmnet"]):
         raise ValueError("production bootstrap_vmnet must identify one VMware VMnet")
     if fields["bootstrap_network_mode"] != "static":
@@ -572,6 +577,7 @@ __all__ = [
     "NO_ROLLBACK_SUMMARY",
     "PREPARE_EXPLAIN_CLEAN",
     "PREPARE_EXPLAIN_OK",
+    "PREPARE_DRY_RUN_OK",
     "PREPARE_OK",
     "PRODUCTION_CYCLE_ORDER",
     "PRODUCTION_EVIDENCE_FORMAT",

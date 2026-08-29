@@ -43,6 +43,7 @@ from smoke_x64_update_ab_contract import (
     LOCAL_HTTP_PORT,
     MANIFEST_NOT_NEWER_SUMMARY,
     PREPARE_EXPLAIN_CLEAN,
+    PREPARE_DRY_RUN_OK,
     PREPARE_OK,
     PROVIDER_READY_LINE,
     ROLLBACK_OK,
@@ -178,6 +179,43 @@ def stage_and_arm_update(
         expect=PREPARE_EXPLAIN_CLEAN,
     )
     run_cmd(session, "update-prepare", timeout * 8, expect=PREPARE_OK)
+    run_cmd(session, "update-apply", timeout * 4, expect=APPLY_OK)
+    run_cmd(session, "update-status", timeout, expect=APPLY_SUMMARY)
+    run_cmd(session, "update-status", timeout, expect="rc=0")
+
+
+def reapply_cached_update_after_rollback(
+    session,
+    timeout: float,
+    *,
+    expect_version: str,
+    expect_payload_url: str,
+    expect_payload_sha256: str,
+) -> None:
+    """Reverify and reapply the signed payload cache preserved by rollback."""
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect="stage=ready pending=no rc=0",
+        expect_ignore_line_breaks=True,
+    )
+    run_cmd(session, "update-status", timeout, expect=f"available={expect_version}")
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect=f"payload={expect_payload_url}",
+        expect_ignore_line_breaks=True,
+    )
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect=f"sha256={expect_payload_sha256}",
+        expect_ignore_line_breaks=True,
+    )
+    run_cmd(session, "update-prepare-dry-run", timeout * 4, expect=PREPARE_DRY_RUN_OK)
     run_cmd(session, "update-apply", timeout * 4, expect=APPLY_OK)
     run_cmd(session, "update-status", timeout, expect=APPLY_SUMMARY)
     run_cmd(session, "update-status", timeout, expect="rc=0")

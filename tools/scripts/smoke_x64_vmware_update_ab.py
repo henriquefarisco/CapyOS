@@ -83,6 +83,7 @@ from smoke_x64_update_ab_flow import (  # noqa: E402
     assert_rollback_reported,
     assert_slot_state,
     confirm_boot_health,
+    reapply_cached_update_after_rollback,
     require_boot_attempt,
     restage_and_arm_update,
     stage_and_arm_update,
@@ -953,10 +954,7 @@ def main() -> int:
                 require_boot_attempt(console.text(), 0, "rollback")
                 assert_rollback_reported(console, args.step_timeout)
                 assert_slot_state(console, args.step_timeout, "state=failed")
-                verify_production_public_route(
-                    console, args.step_timeout, manifest_endpoint
-                )
-                stage_and_arm_update(
+                reapply_cached_update_after_rollback(
                     console,
                     args.step_timeout,
                     expect_version=version,
@@ -1063,6 +1061,7 @@ def main() -> int:
                 "second_attempt_slot": "1",
                 "boots_observed": str(boots + 3),
                 "cycle_order": PRODUCTION_CYCLE_ORDER,
+                "second_cycle_source": "verified-cache",
                 "bootstrap_vmnet": args.vmnet,
                 "bootstrap_network_mode": "static",
                 "bootstrap_ipv4": production_network["address"],
@@ -1072,6 +1071,7 @@ def main() -> int:
                 "lab_override_absent": "yes",
                 "public_latest_route": "yes",
                 "bootstrap_network_persisted": "yes",
+                "second_cycle_cache_reverified": "yes",
                 "provider_ready": "yes",
                 "signed_manifest_accepted": "yes",
                 "payload_verified": "yes",

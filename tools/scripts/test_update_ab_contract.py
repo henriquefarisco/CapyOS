@@ -88,6 +88,7 @@ def _production_evidence(**overrides: str) -> dict[str, str]:
         "second_attempt_slot": "1",
         "boots_observed": "4",
         "cycle_order": contract.PRODUCTION_CYCLE_ORDER,
+        "second_cycle_source": "verified-cache",
         "bootstrap_vmnet": "VMnet8",
         "bootstrap_network_mode": "static",
         "bootstrap_ipv4": "192.168.87.15",
@@ -97,6 +98,7 @@ def _production_evidence(**overrides: str) -> dict[str, str]:
         "lab_override_absent": "yes",
         "public_latest_route": "yes",
         "bootstrap_network_persisted": "yes",
+        "second_cycle_cache_reverified": "yes",
         "provider_ready": "yes",
         "signed_manifest_accepted": "yes",
         "payload_verified": "yes",
@@ -876,6 +878,39 @@ fixed-address 192.168.87.3;
         if not matching_waits or not matching_waits[0][2]:
             return fail(f"material binding lost wrapped-console match for {expected!r}")
 
+    cached_reapply_output = (
+        "stage=ready pending=no rc=0\n"
+        "available=0.9.2+20260826\n"
+        f"payload={bound_payload_url}\n"
+        f"sha256={bound_payload_sha256}\n"
+        f"{contract.PREPARE_DRY_RUN_OK}\n"
+        f"{contract.APPLY_OK}\n"
+        f"{contract.APPLY_SUMMARY}\n"
+        "configured=yes rc=0\nadmin@smoke-node>~> "
+    )
+    cached_reapply_session = _SlotStatusSession(cached_reapply_output)
+    try:
+        flow.reapply_cached_update_after_rollback(
+            cached_reapply_session,
+            1.0,
+            expect_version="0.9.2+20260826",
+            expect_payload_url=bound_payload_url,
+            expect_payload_sha256=bound_payload_sha256,
+        )
+    except TimeoutError as exc:
+        return fail(f"verified-cache reapply rejected matching state: {exc}")
+    if cached_reapply_session.commands != [
+        "update-status",
+        "update-status",
+        "update-status",
+        "update-status",
+        "update-prepare-dry-run",
+        "update-apply",
+        "update-status",
+        "update-status",
+    ]:
+        return fail("verified-cache reapply did not preserve its exact command order")
+
     refusal_output = (
         f"{contract.MANIFEST_NOT_NEWER_SUMMARY}\n"
         "configured=yes rc=-20\n"
@@ -970,11 +1005,13 @@ fixed-address 192.168.87.3;
                 return fail("VMware production gate lost its bounded HTTPS retry")
             if '"net-resolve github.com"' not in driver:
                 return fail("VMware production gate lost its DNS warm-up proof")
-            if driver.count("verify_production_public_route(") != 4:
+            if driver.count("verify_production_public_route(") != 3:
                 return fail(
                     "VMware production gate must prove the public route "
-                    "before all three remote update phases"
+                    "before both remote update phases"
                 )
+            if driver.count("reapply_cached_update_after_rollback(") != 1:
+                return fail("VMware production gate lost the verified-cache reapply")
             driver_tree = ast.parse(driver, filename=driver_name)
             main_nodes = [
                 node
@@ -1067,6 +1104,8 @@ fixed-address 192.168.87.3;
     for key, bad in (
         ("lab_override_absent", "no"),
         ("public_latest_route", "no"),
+        ("second_cycle_cache_reverified", "no"),
+        ("second_cycle_source", "remote-refetch"),
         ("equal_release_refused", "no"),
         ("trust_anchor", "lab-ed25519"),
         ("provider", "qemu-ovmf"),
