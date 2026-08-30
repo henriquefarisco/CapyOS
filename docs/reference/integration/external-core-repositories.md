@@ -1,7 +1,7 @@
 # External core repositories
 
-**Status:** migration registry aligned to CapyOS `0.9.2+20260826` stable candidate;
-Etapas 1-7 closed and Etapa 8 active (7/16). Current pins and ABI status are
+**Status:** migration registry aligned to CapyOS `0.9.2+20260826` stable Latest;
+Etapas 1-8 closed and Etapa 9 unlocked as next (8/16). Current pins and ABI status are
 authoritative in the compatibility matrix.
 **Rule:** external repository progress does not count as CapyOS
 roadmap progress until the matching CapyOS stage integrates it through
@@ -192,9 +192,9 @@ External entry points:
   variable, no `capyos-legacy-migrated` target, no quarantined objects).
 - Modular installation architecture and component selection UI:
   Etapas 8-9.
-- CapyAgent in-tree adapter (`services/capypkg`): available; signer and verifier
-  are present, while production public-key trust + external KAT remain
-  fail-closed Etapa 8-9 gates.
+- CapyAgent in-tree adapter (`services/capypkg`): available; signer, verifier and
+  production public-key trust are present. The external KAT remains a
+  fail-closed Etapa 9 integration gate.
 - CapyBrowser text/static graphical core: Etapas 6-7 delivered.
 - CapyCodecs image codecs: Etapas 6-7 delivered through the dedicated adapter.
 - CapyUI widget/display-list/desktop model: Etapas 4, 6 and 7 delivered.

@@ -21,6 +21,7 @@ serve https) and is refused by `iso-uefi` outside a smoke target.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import subprocess
 from collections.abc import Mapping
@@ -44,7 +45,7 @@ QEMU_SLIRP_GATEWAY = "10.0.2.2"
 
 EVIDENCE_FORMAT = "capyos-signed-ab-update-evidence-manifest-v1"
 PRODUCTION_EVIDENCE_FORMAT = (
-    "capyos-production-signed-ab-update-evidence-manifest-v1"
+    "capyos-production-signed-ab-update-evidence-manifest-v2"
 )
 TRACK = "UEFI/GPT/x86_64"
 PROVIDERS = ("qemu-ovmf", "vmware-workstation")
@@ -59,6 +60,7 @@ FETCH_OK = "[ok] remote manifest accepted into the local catalog"
 DOWNLOAD_OK = "[ok] update payload downloaded and verified"
 PREPARE_EXPLAIN_OK = "[ok] prepare preflight passed"
 PREPARE_EXPLAIN_CLEAN = "failing=-"
+PREPARE_DRY_RUN_OK = "[ok] update prepare dry-run passed"
 PREPARE_OK = "[ok] verified update prepared and armed for activation"
 APPLY_OK = "[ok] staged update verified and boot slot armed"
 APPLY_SUMMARY = "inactive slot written and armed for one boot attempt"
@@ -124,6 +126,8 @@ _REQUIRED_FIELDS = (
 _PRODUCTION_REQUIRED_YES = (
     "lab_override_absent",
     "public_latest_route",
+    "bootstrap_network_persisted",
+    "second_cycle_cache_reverified",
     "provider_ready",
     "signed_manifest_accepted",
     "payload_verified",
@@ -157,6 +161,13 @@ _PRODUCTION_REQUIRED_FIELDS = (
     "second_attempt_slot",
     "boots_observed",
     "cycle_order",
+    "second_cycle_source",
+    "bootstrap_vmnet",
+    "bootstrap_network_mode",
+    "bootstrap_ipv4",
+    "bootstrap_mask",
+    "bootstrap_gateway",
+    "bootstrap_dns",
     *_PRODUCTION_REQUIRED_YES,
     "recovery_key_included",
 )
@@ -462,6 +473,50 @@ def validate_production_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError(
             f"production cycle_order must be {PRODUCTION_CYCLE_ORDER}"
         )
+    if fields["second_cycle_source"] != "verified-cache":
+        raise ValueError("production second cycle must use the verified cache")
+    if not re.fullmatch(r"(?i:vmnet[0-9]+)", fields["bootstrap_vmnet"]):
+        raise ValueError("production bootstrap_vmnet must identify one VMware VMnet")
+    if fields["bootstrap_network_mode"] != "static":
+        raise ValueError("production bootstrap network mode must be static")
+    try:
+        bootstrap_interface = ipaddress.IPv4Interface(
+            f"{fields['bootstrap_ipv4']}/{fields['bootstrap_mask']}"
+        )
+        bootstrap_gateway = ipaddress.IPv4Address(fields["bootstrap_gateway"])
+        bootstrap_dns = ipaddress.IPv4Address(fields["bootstrap_dns"])
+    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError) as exc:
+        raise ValueError(f"invalid production bootstrap IPv4 evidence: {exc}") from exc
+    if str(bootstrap_interface.network.netmask) != fields["bootstrap_mask"]:
+        raise ValueError("production bootstrap mask must be canonical")
+    if bootstrap_interface.ip in (
+        bootstrap_interface.network.network_address,
+        bootstrap_interface.network.broadcast_address,
+    ):
+        raise ValueError("production bootstrap guest IPv4 is not usable")
+    if bootstrap_gateway not in bootstrap_interface.network or bootstrap_gateway in (
+        bootstrap_interface.network.network_address,
+        bootstrap_interface.network.broadcast_address,
+        bootstrap_interface.ip,
+    ):
+        raise ValueError(
+            "production bootstrap gateway is not a distinct usable address"
+        )
+    if (
+        bootstrap_dns.is_unspecified
+        or bootstrap_dns.is_multicast
+        or bootstrap_dns.is_loopback
+        or bootstrap_dns.is_reserved
+        or (
+            bootstrap_dns in bootstrap_interface.network
+            and bootstrap_dns
+            in (
+                bootstrap_interface.network.network_address,
+                bootstrap_interface.network.broadcast_address,
+            )
+        )
+    ):
+        raise ValueError("production bootstrap DNS is not usable")
     for key in _PRODUCTION_REQUIRED_YES:
         if fields[key] != "yes":
             raise ValueError(f"production evidence field {key} must be 'yes'")
@@ -475,6 +530,10 @@ def validate_production_evidence(fields: Mapping[str, str]) -> None:
     for key in ("first_attempt_slot", "second_attempt_slot"):
         if fields[key] not in ("0", "1"):
             raise ValueError(f"{key} must be slot 0 or 1")
+    if (fields["first_attempt_slot"], fields["second_attempt_slot"]) != ("1", "1"):
+        raise ValueError(
+            "production rollback-then-confirm must reapply twice to inactive slot 1"
+        )
     if not _DECIMAL_RE.fullmatch(fields["boots_observed"]) or int(
         fields["boots_observed"]
     ) < 4:
@@ -518,6 +577,7 @@ __all__ = [
     "NO_ROLLBACK_SUMMARY",
     "PREPARE_EXPLAIN_CLEAN",
     "PREPARE_EXPLAIN_OK",
+    "PREPARE_DRY_RUN_OK",
     "PREPARE_OK",
     "PRODUCTION_CYCLE_ORDER",
     "PRODUCTION_EVIDENCE_FORMAT",

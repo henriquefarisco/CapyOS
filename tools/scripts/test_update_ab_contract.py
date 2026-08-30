@@ -88,8 +88,17 @@ def _production_evidence(**overrides: str) -> dict[str, str]:
         "second_attempt_slot": "1",
         "boots_observed": "4",
         "cycle_order": contract.PRODUCTION_CYCLE_ORDER,
+        "second_cycle_source": "verified-cache",
+        "bootstrap_vmnet": "VMnet8",
+        "bootstrap_network_mode": "static",
+        "bootstrap_ipv4": "192.168.87.15",
+        "bootstrap_mask": "255.255.255.0",
+        "bootstrap_gateway": "192.168.87.2",
+        "bootstrap_dns": "192.168.87.2",
         "lab_override_absent": "yes",
         "public_latest_route": "yes",
+        "bootstrap_network_persisted": "yes",
+        "second_cycle_cache_reverified": "yes",
         "provider_ready": "yes",
         "signed_manifest_accepted": "yes",
         "payload_verified": "yes",
@@ -181,6 +190,63 @@ class _SlotStatusSession:
         self.wait_any.append((choices, start_at))
         for pattern in choices:
             if text_contains_pattern(self.output[start_at:], pattern):
+                return pattern
+        raise TimeoutError(choices)
+
+
+class _CommandSequenceSession(_SlotStatusSession):
+    """Expose distinct console spans to consecutive command markers."""
+
+    def __init__(self, *outputs: str) -> None:
+        super().__init__("".join(outputs))
+        self.offsets = [0]
+        for output in outputs:
+            self.offsets.append(self.offsets[-1] + len(output))
+
+    def marker(self) -> int:
+        return self.offsets[min(len(self.commands), len(self.offsets) - 1)]
+
+    def _span(self, start_at: int) -> str:
+        try:
+            index = self.offsets.index(start_at)
+        except ValueError as exc:
+            raise AssertionError(f"unknown sequence marker {start_at}") from exc
+        end = self.offsets[min(index + 1, len(self.offsets) - 1)]
+        return self.output[start_at:end]
+
+    def text_since(self, start_at: int) -> str:
+        return self._span(start_at)
+
+    def wait_for(
+        self,
+        expected: str,
+        *,
+        timeout: float,
+        start_at: int,
+        ignore_line_breaks: bool = False,
+    ) -> None:
+        _ = timeout
+        self.waits.append((expected, start_at, ignore_line_breaks))
+        if not text_contains_pattern(
+            self._span(start_at),
+            expected,
+            ignore_line_breaks=ignore_line_breaks,
+        ):
+            raise TimeoutError(expected)
+
+    def wait_for_any(
+        self,
+        patterns,
+        *,
+        timeout: float,
+        start_at: int,
+    ) -> str:
+        _ = timeout
+        choices = tuple(patterns)
+        self.wait_any.append((choices, start_at))
+        span = self._span(start_at)
+        for pattern in choices:
+            if text_contains_pattern(span, pattern):
                 return pattern
         raise TimeoutError(choices)
 
@@ -399,6 +465,229 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     if late_lab_console.commands != ["print-version"]:
         return fail("VMware production runtime did not complete the guarded query")
 
+    vmware_update_ab.assert_boot_reported_vmx_mac(
+        "boot prefix 00:0C:29:\r\n70:F0:CF boot suffix",
+        "00:0C:29:70:F0:CF",
+    )
+    try:
+        vmware_update_ab.assert_boot_reported_vmx_mac(
+            "boot prefix 00:0C:29:70:F0:D0 boot suffix",
+            "00:0C:29:70:F0:CF",
+        )
+    except RuntimeError:
+        pass
+    else:
+        return fail("VMware production gate accepted a different guest MAC")
+
+    nat_config = """\
+[host]
+ip = 192.168.87.2/24
+device = vmnet8
+
+[dns]
+autodetect = 1
+"""
+    dhcp_config = """\
+subnet 192.168.87.0 netmask 255.255.255.0 {
+range 192.168.87.128 192.168.87.254;
+option domain-name-servers 192.168.87.2;
+option routers 192.168.87.2;
+}
+"""
+    production_network = vmware_update_ab.production_network_from_vmware_configs(
+        nat_config, dhcp_config, "VMnet8", "192.168.87.1"
+    )
+    expected_network = {
+        "address": "192.168.87.15",
+        "mask": "255.255.255.0",
+        "gateway": "192.168.87.2",
+        "dns": "192.168.87.2",
+    }
+    if production_network != expected_network:
+        return fail(f"VMware production network discovery: {production_network!r}")
+    try:
+        vmware_update_ab.production_network_from_vmware_configs(
+            nat_config.replace("device = vmnet8", "device = vmnet1"),
+            dhcp_config,
+            "VMnet8",
+            "192.168.87.1",
+        )
+    except ValueError:
+        pass
+    else:
+        return fail("VMware production network accepted a different vmnet")
+    try:
+        vmware_update_ab.production_network_from_vmware_configs(
+            nat_config + "\n[host]\nip = 192.168.87.3/24\ndevice = vmnet8\n",
+            dhcp_config,
+            "VMnet8",
+            "192.168.87.1",
+        )
+    except ValueError:
+        pass
+    else:
+        return fail("VMware production network accepted duplicate NAT host config")
+    try:
+        vmware_update_ab.production_network_from_vmware_configs(
+            nat_config,
+            dhcp_config.replace(
+                "option routers 192.168.87.2;",
+                "option routers 192.168.87.3;",
+            ),
+            "VMnet8",
+            "192.168.87.1",
+        )
+    except ValueError:
+        pass
+    else:
+        return fail("VMware production network accepted a mismatched DHCP router")
+    try:
+        vmware_update_ab.production_network_from_vmware_configs(
+            nat_config.replace("192.168.87.2/24", "10.0.0.2/8"),
+            dhcp_config,
+            "VMnet8",
+            "10.0.0.1",
+        )
+    except ValueError:
+        pass
+    else:
+        return fail("VMware production network accepted an oversized subnet")
+
+    collision_dhcp = dhcp_config.replace(
+        "range 192.168.87.128 192.168.87.254;",
+        "range 192.168.87.128 192.168.87.254;\n"
+        "range 192.168.87.15 192.168.87.20;",
+    ) + """\
+host reserved-static {
+fixed-address 192.168.87.3;
+}
+"""
+    collision_safe_network = (
+        vmware_update_ab.production_network_from_vmware_configs(
+            nat_config, collision_dhcp, "VMnet8", "192.168.87.1"
+        )
+    )
+    if collision_safe_network["address"] != "192.168.87.4":
+        return fail(
+            "VMware production network ignored an additional DHCP range "
+            "or fixed-address reservation"
+        )
+    try:
+        vmware_update_ab.production_network_from_vmware_configs(
+            nat_config,
+            dhcp_config.replace(
+                "range 192.168.87.128 192.168.87.254;",
+                "range 192.168.87.1 192.168.87.254;",
+            ),
+            "VMnet8",
+            "192.168.87.1",
+        )
+    except ValueError:
+        pass
+    else:
+        return fail("VMware production network selected inside the DHCP range")
+
+    net_set_output = (
+        "[ok] network configuration applied\r\n"
+        "driver=e1000 mode=static detected=yes runtime=ready ready=yes\r\n"
+        "ipv4=192.168.87.15 mask=255.255.255.0 "
+        "gw=192.168.87.2 dns=192.168.87.2\r\n"
+        "admin@smoke-node>~> "
+    )
+    persisted_config_output = (
+        "network_mode=static\r\n"
+        "ipv4=192.168.87.15\r\n"
+        "mask=255.255.255.0\r\n"
+        "gateway=192.168.87.2\r\n"
+        "dns=192.168.87.2\r\n"
+        "admin@smoke-node>~> "
+    )
+    runtime_network_output = (
+        "driver=e1000 mode=sta\r\ntic detected=yes runtime=ready ready=yes\r\n"
+        "dhcp=off attempts=2 last_error=-3\r\n"
+        "ipv4=192.168.87.15 mask=255.255.255.0 "
+        "gw=192.16\r\n8.87.2 dns=192.168.87.2\r\n"
+        "arp_entries=0 tx=0 rx=0 drop=0\r\n"
+        "admin@smoke-node>~> "
+    )
+    network_console = _CommandSequenceSession(
+        net_set_output, runtime_network_output, persisted_config_output
+    )
+    vmware_update_ab.configure_production_vmware_network(
+        network_console, 1.0, production_network
+    )
+    if network_console.commands != [
+        "net-set 192.168.87.15 255.255.255.0 192.168.87.2 192.168.87.2",
+        "net-status",
+        "print-file /system/config.ini",
+    ]:
+        return fail("VMware production network did not apply the discovered profile")
+    candidate_runtime_console = _CommandSequenceSession(
+        runtime_network_output.replace(
+            "dhcp=off attempts=2 last_error=-3",
+            "mac=00:0C:29:70:F0:CF\r\ndhcp=off attempts=0",
+        ),
+        persisted_config_output,
+    )
+    vmware_update_ab.assert_production_vmware_network_persisted(
+        candidate_runtime_console, 1.0, production_network
+    )
+    failed_persistence_console = _CommandSequenceSession(
+        net_set_output.replace(
+            "driver=e1000",
+            "Warning: could not save to /system/config.ini.\r\ndriver=e1000",
+        ),
+        runtime_network_output,
+        persisted_config_output,
+    )
+    try:
+        vmware_update_ab.configure_production_vmware_network(
+            failed_persistence_console, 1.0, production_network
+        )
+    except RuntimeError:
+        pass
+    else:
+        return fail("VMware production network accepted a failed persistent save")
+    prefix_mismatch_console = _CommandSequenceSession(
+        runtime_network_output,
+        persisted_config_output.replace("192.168.87.15", "192.168.87.150")
+    )
+    try:
+        vmware_update_ab.assert_production_vmware_network_persisted(
+            prefix_mismatch_console, 1.0, production_network
+        )
+    except RuntimeError:
+        pass
+    else:
+        return fail("VMware production network accepted a prefix-only config match")
+    duplicate_config_console = _CommandSequenceSession(
+        runtime_network_output,
+        persisted_config_output.replace(
+            "ipv4=192.168.87.15\r\n",
+            "ipv4=192.168.87.15\r\nipv4=192.168.87.15\r\n",
+        )
+    )
+    try:
+        vmware_update_ab.assert_production_vmware_network_persisted(
+            duplicate_config_console, 1.0, production_network
+        )
+    except RuntimeError:
+        pass
+    else:
+        return fail("VMware production network accepted duplicate persisted keys")
+    runtime_mismatch_console = _CommandSequenceSession(
+        runtime_network_output.replace("192.168.87.15", "192.168.87.150"),
+        persisted_config_output,
+    )
+    try:
+        vmware_update_ab.assert_production_vmware_network_persisted(
+            runtime_mismatch_console, 1.0, production_network
+        )
+    except (RuntimeError, TimeoutError):
+        pass
+    else:
+        return fail("VMware production network accepted a different runtime IPv4")
+
     version_yaml = (
         "channels:\n"
         "  alpha:\n"
@@ -589,6 +878,39 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         if not matching_waits or not matching_waits[0][2]:
             return fail(f"material binding lost wrapped-console match for {expected!r}")
 
+    cached_reapply_output = (
+        "stage=ready pending=no rc=0\n"
+        "available=0.9.2+20260826\n"
+        f"payload={bound_payload_url}\n"
+        f"sha256={bound_payload_sha256}\n"
+        f"{contract.PREPARE_DRY_RUN_OK}\n"
+        f"{contract.APPLY_OK}\n"
+        f"{contract.APPLY_SUMMARY}\n"
+        "configured=yes rc=0\nadmin@smoke-node>~> "
+    )
+    cached_reapply_session = _SlotStatusSession(cached_reapply_output)
+    try:
+        flow.reapply_cached_update_after_rollback(
+            cached_reapply_session,
+            1.0,
+            expect_version="0.9.2+20260826",
+            expect_payload_url=bound_payload_url,
+            expect_payload_sha256=bound_payload_sha256,
+        )
+    except TimeoutError as exc:
+        return fail(f"verified-cache reapply rejected matching state: {exc}")
+    if cached_reapply_session.commands != [
+        "update-status",
+        "update-status",
+        "update-status",
+        "update-status",
+        "update-prepare-dry-run",
+        "update-apply",
+        "update-status",
+        "update-status",
+    ]:
+        return fail("verified-cache reapply did not preserve its exact command order")
+
     refusal_output = (
         f"{contract.MANIFEST_NOT_NEWER_SUMMARY}\n"
         "configured=yes rc=-20\n"
@@ -607,6 +929,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         return fail("equal-release refusal did not prove fetch result and status")
 
     endpoint_session = _SlotStatusSession(
+        ">>> https://192.168.87.1 (?) ...\n"
         "status=200 host=192.168.87.1\nadmin@smoke-node>~> "
     )
     try:
@@ -615,6 +938,25 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         )
     except RuntimeError as exc:
         return fail(f"lab endpoint probe rejected HTTP 200: {exc}")
+    retry_endpoint = _CommandSequenceSession(
+        "[erro] connection failed\ndiag: arp=3 syn-out=6 syn-ack=6\n"
+        "admin@smoke-node>~> ",
+        "status=200 host=github.com port=443\nadmin@smoke-node>~> ",
+    )
+    try:
+        flow.assert_http_endpoint_reachable(
+            retry_endpoint,
+            240.0,
+            "https://github.com/example/latest.ini",
+            attempts=2,
+        )
+    except RuntimeError as exc:
+        return fail(f"production endpoint probe rejected a bounded retry: {exc}")
+    if retry_endpoint.commands != [
+        "net-fetch https://github.com/example/latest.ini",
+        "net-fetch https://github.com/example/latest.ini",
+    ]:
+        return fail("production endpoint preflight did not perform exactly two probes")
     if endpoint_session.commands != [
         "net-fetch http://192.168.87.1:18083/latest.ini"
     ]:
@@ -651,8 +993,27 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
                 return fail("VMware A/B gate may pass the flat VMDK as a descriptor")
             if "assert_guest_uses_vmx_mac(" not in driver:
                 return fail("VMware A/B gate lost the guest/VMX MAC binding assertion")
-            if 'expect=f"mac={expected_mac}"' not in driver:
+            if "assert_boot_reported_vmx_mac(console.text(), expected_mac)" not in driver:
                 return fail("VMware A/B gate no longer proves the guest station MAC")
+            if 'expect="driver=e1000 mode=dhcp detected=yes runtime=ready ready=yes"' not in driver:
+                return fail("VMware A/B gate no longer proves the E1000 runtime")
+            if driver.count("configure_production_vmware_network(") != 2:
+                return fail("VMware production gate no longer applies its NAT profile")
+            if driver.count("assert_http_endpoint_reachable(") != 2:
+                return fail("VMware production gate lost the public-route preflight")
+            if "endpoint, attempts=3" not in driver:
+                return fail("VMware production gate lost its bounded HTTPS retry")
+            if '"net-resolve github.com"' not in driver:
+                return fail("VMware production gate lost its DNS warm-up proof")
+            if 'default="8.26.56.26"' not in driver:
+                return fail("VMware production gate lost its compatible public DNS")
+            if driver.count("verify_production_public_route(") != 3:
+                return fail(
+                    "VMware production gate must prove the public route "
+                    "before both remote update phases"
+                )
+            if driver.count("reapply_cached_update_after_rollback(") != 1:
+                return fail("VMware production gate lost the verified-cache reapply")
             driver_tree = ast.parse(driver, filename=driver_name)
             main_nodes = [
                 node
@@ -745,6 +1106,8 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
     for key, bad in (
         ("lab_override_absent", "no"),
         ("public_latest_route", "no"),
+        ("second_cycle_cache_reverified", "no"),
+        ("second_cycle_source", "remote-refetch"),
         ("equal_release_refused", "no"),
         ("trust_anchor", "lab-ed25519"),
         ("provider", "qemu-ovmf"),
@@ -763,6 +1126,35 @@ def main() -> int:  # noqa: PLR0911 - one early return per violated invariant
         except ValueError:
             continue
         return fail(f"production evidence accepted {key}={bad!r}")
+    for bad_gateway in ("192.168.87.0", "192.168.87.15", "192.168.87.255"):
+        try:
+            contract.validate_production_evidence(
+                _production_evidence(bootstrap_gateway=bad_gateway)
+            )
+        except ValueError:
+            continue
+        return fail(
+            f"production evidence accepted unusable gateway={bad_gateway!r}"
+        )
+    for slot_override in (
+        {"first_attempt_slot": "0"},
+        {"second_attempt_slot": "0"},
+    ):
+        try:
+            contract.validate_production_evidence(
+                _production_evidence(**slot_override)
+            )
+        except ValueError:
+            continue
+        return fail(f"production evidence accepted incoherent slots={slot_override!r}")
+    for bad_dns in ("127.0.0.1", "192.168.87.255", "255.255.255.255"):
+        try:
+            contract.validate_production_evidence(
+                _production_evidence(bootstrap_dns=bad_dns)
+            )
+        except ValueError:
+            continue
+        return fail(f"production evidence accepted unusable DNS={bad_dns!r}")
 
     leaked = _evidence(manifest_version="ABCD-EFGH-IJKL-MNOP-QRST-UVWX")
     try:

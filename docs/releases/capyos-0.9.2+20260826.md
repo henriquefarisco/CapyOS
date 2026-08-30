@@ -77,10 +77,25 @@ o primeiro predecessor oficial apto ao gate e exatamente a `0.9.1`.
   serial interativa para reconhecer a conclusao de comandos, sem aceitar prompt
   antigo reapresentado pelo debugcon.
 - Varredura dos binarios oficiais -- nenhum banner, pin ou material de
-  laboratorio encontrado; SHA-256 da ISO candidata:
-  `2290955a931b52b7dd3f59df988a5b4b52cdb77f986ded1dff2f27dea5121d53`.
-- Gate VMware de producao `0.9.1` -> `0.9.2` -- obrigatoriamente
-  pos-promocao e, portanto, nao e antecipado por esta nota.
+  laboratorio encontrado. A release publica e imutavel e a Latest do canal
+  stable. SHA-256 da ISO publicada:
+  `7668613a9f7be7aa6ac8f1fb1b9af03f8ab688a4316f88625e1b795bf896e972`;
+  SHA-256 do `capyos64.bin` publicado:
+  `a3de2e5e0fbc21cef9d797c879202cd5e75f78bb06ca69a5c77585c97c47e5ee`.
+- Gate VMware de producao `0.9.1` -> `0.9.2` -- aprovado em 2026-08-29 no
+  VMware Workstation 26.0.0 build 25388281, run `d87affe8b077`, com quatro
+  boots. A ISO predecessora foi fixada ao SHA-256
+  `14f06f0c2127eb5547395e32cd56e53699b31ef90766e282b5780809043cf51c`;
+  as rotas publicas responderam HTTP 200 com TLS 1.2, SNI e peer validos; o
+  manifesto Ed25519 e o payload foram aceitos; o loader aplicou rollback; o
+  segundo ciclo reaplicou o cache verificado apos recalcular o digest; a saude
+  foi confirmada e a mesma release foi recusada pelo anti-downgrade. O
+  manifesto sanitizado v2 esta em
+  [`evidence/capyos-0.9.2+20260826-update-ab-production.manifest`](evidence/capyos-0.9.2+20260826-update-ab-production.manifest),
+  e `vmrun list` terminou com zero VMs.
+- O predecessor `0.9.1` precisou de bootstrap estatico derivado e validado a
+  partir do VMnet8; esse gate nao reivindica DHCP na `0.9.1`. O E1000/DHCP
+  nativo da `0.9.2` foi comprovado separadamente pelo gate VMware lab A/B.
 
 ## Compliance de versoes
 

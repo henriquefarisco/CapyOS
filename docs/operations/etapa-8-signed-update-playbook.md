@@ -1,10 +1,10 @@
 # Playbook — gate do ciclo A/B assinado (Etapa 8)
 
-> **Baseline atual: `0.9.2+20260826` (stable candidate).** A `0.9.1` publicou os
+> **Baseline atual: `0.9.2+20260826` (stable, Latest e imutavel).** A `0.9.1` publicou os
 > materiais Ed25519 e estabeleceu a ancora de producao corrente, mas e o
 > bootstrap dessa ancora: a `0.9.0` usa o pin anterior e a `0.9.1` nao pode
-> atualizar para si mesma. A Etapa 8 permanece aberta ate a candidata `0.9.2`
-> executar apply, reboot, rollback, reaplicacao e confirmacao de saude no VMware
+> atualizar para si mesma. A Etapa 8 foi fechada em 2026-08-29 quando a `0.9.2`
+> executou apply, reboot, rollback, reaplicacao e confirmacao de saude no VMware
 > oficial a partir da ISO `0.9.1` publicada.
 
 Este playbook cobre o gate que fecha o critério de update da Etapa 8: um
@@ -116,10 +116,11 @@ endereço do host na rede NAT do VMware (`VMnet8`) no gate oficial. Use
 O gate emite um manifesto de evidência em `build/ci/` e, quando promovido a
 release, uma cópia sanitizada vai para
 [`../releases/evidence/`](../releases/evidence/). O manifesto declara provider,
-âncora, versão/URL/hash do payload, os dois slots usados, o número de boots
-observados e os doze invariantes booleanos; `validate_evidence` recusa qualquer
-`no`, qualquer provider desconhecido e qualquer texto que contenha uma recovery
-key.
+âncora, versão/URL/hash do payload, os dois slots usados e o número de boots
+observados. O schema de produção v2 também fixa VMnet, modo/IP/máscara/gateway/
+DNS do bootstrap, persistência da rede, fonte do segundo ciclo e reverificação
+do cache; `validate_evidence` recusa qualquer invariante `no`, provider
+desconhecido ou texto que contenha uma recovery key.
 
 ## 4. Passo de operador com a chave de produção
 
@@ -192,6 +193,26 @@ O gate acima prova o mecanismo. Para provar a cadeia de publicação real, com a
    reaplica o mesmo release e então confirma saúde. A evidência declara
    `trust_anchor=production-ed25519`, `cycle_order=rollback-then-confirm`, hash da
    ISO predecessora e todos os invariantes de loader/updater.
+
+### Resultado oficial de 2026-08-29
+
+O aceite de produção passou no VMware Workstation 26.0.0 build 25388281, run
+`d87affe8b077`, em quatro boots, com `first_attempt_slot=1`,
+`second_attempt_slot=1` e ordem `rollback-then-confirm`. A ISO predecessora
+publicada tem SHA-256
+`14f06f0c2127eb5547395e32cd56e53699b31ef90766e282b5780809043cf51c`;
+o payload `0.9.2` tem SHA-256
+`a3de2e5e0fbc21cef9d797c879202cd5e75f78bb06ca69a5c77585c97c47e5ee`.
+O primeiro ciclo validou HTTP 200, TLS 1.2, SNI/peer, assinatura Ed25519, hash,
+escrita no slot B e rollback. No predecessor restaurado, o segundo ciclo usou
+`second_cycle_source=verified-cache`, recalculou o digest antes do apply,
+confirmou saúde e recusou a release igual. A evidência v2 sanitizada é
+[`../releases/evidence/capyos-0.9.2+20260826-update-ab-production.manifest`](../releases/evidence/capyos-0.9.2+20260826-update-ab-production.manifest).
+
+Para compatibilidade ambiental do predecessor, o harness derivou do VMnet8 e
+persistiu `192.168.87.15/24`, gateway `192.168.87.2` e DNS `8.26.56.26`. Isso
+não é evidência de DHCP na `0.9.1`; o E1000/DHCP nativo da `0.9.2` foi provado
+separadamente no gate VMware lab A/B. `vmrun list` terminou com zero VMs.
 
 ### Invariante de bootstrap da âncora
 

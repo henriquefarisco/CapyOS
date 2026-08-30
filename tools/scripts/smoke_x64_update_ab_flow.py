@@ -30,6 +30,7 @@ import threading
 from pathlib import Path
 
 from smoke_x64_helpers import run_cmd
+from smoke_x64_session import text_contains_pattern
 from smoke_x64_update_ab_contract import (
     APPLY_OK,
     APPLY_SUMMARY,
@@ -42,6 +43,7 @@ from smoke_x64_update_ab_contract import (
     LOCAL_HTTP_PORT,
     MANIFEST_NOT_NEWER_SUMMARY,
     PREPARE_EXPLAIN_CLEAN,
+    PREPARE_DRY_RUN_OK,
     PREPARE_OK,
     PROVIDER_READY_LINE,
     ROLLBACK_OK,
@@ -92,28 +94,33 @@ def assert_provider_ready(session, timeout: float) -> None:
     run_cmd(session, "print-boot-slot", timeout, expect=PROVIDER_READY_LINE)
 
 
-def assert_http_endpoint_reachable(session, timeout: float, url: str) -> None:
-    """Fail quickly with the guest's ARP/TCP diagnostic if a lab URL is blocked."""
-    marker = session.marker()
-    session.send_line(f"net-fetch {url}")
-    outcome = session.wait_for_any(
-        ("status=200", "diag:"),
-        timeout=min(timeout, 60.0),
-        start_at=marker,
-    )
-    session.wait_for("> ", timeout=min(timeout, 60.0), start_at=marker)
-    if outcome != "status=200":
-        for command in (
-            "net-status",
-            "net-ip",
-            "net-gw",
-            "hey gateway",
-        ):
-            run_cmd(session, command, min(timeout, 30.0))
-        raise RuntimeError(
-            "guest could not reach the signed-update lab endpoint:\n"
-            + session.tail(5200)
+def assert_http_endpoint_reachable(
+    session, timeout: float, url: str, *, attempts: int = 1
+) -> None:
+    """Require HTTP 200, tolerating only an explicitly bounded transient retry."""
+    if attempts < 1:
+        raise ValueError("endpoint reachability attempts must be positive")
+    for _attempt in range(attempts):
+        marker = session.marker()
+        run_cmd(
+            session,
+            f"net-fetch {url}",
+            min(timeout, 60.0),
+            expect=("status=200", "diag:"),
         )
+        if text_contains_pattern(session.text_since(marker), "status=200"):
+            return
+    for command in (
+        "net-status",
+        "net-ip",
+        "net-gw",
+        "hey gateway",
+    ):
+        run_cmd(session, command, min(timeout, 30.0))
+    raise RuntimeError(
+        "guest could not reach the signed-update lab endpoint after "
+        f"{attempts} attempt(s):\n" + session.tail(5200)
+    )
 
 
 def assert_armed_attempt_state(session, timeout: float) -> None:
@@ -172,6 +179,43 @@ def stage_and_arm_update(
         expect=PREPARE_EXPLAIN_CLEAN,
     )
     run_cmd(session, "update-prepare", timeout * 8, expect=PREPARE_OK)
+    run_cmd(session, "update-apply", timeout * 4, expect=APPLY_OK)
+    run_cmd(session, "update-status", timeout, expect=APPLY_SUMMARY)
+    run_cmd(session, "update-status", timeout, expect="rc=0")
+
+
+def reapply_cached_update_after_rollback(
+    session,
+    timeout: float,
+    *,
+    expect_version: str,
+    expect_payload_url: str,
+    expect_payload_sha256: str,
+) -> None:
+    """Reverify and reapply the signed payload cache preserved by rollback."""
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect="stage=ready pending=no rc=0",
+        expect_ignore_line_breaks=True,
+    )
+    run_cmd(session, "update-status", timeout, expect=f"available={expect_version}")
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect=f"payload={expect_payload_url}",
+        expect_ignore_line_breaks=True,
+    )
+    run_cmd(
+        session,
+        "update-status",
+        timeout,
+        expect=f"sha256={expect_payload_sha256}",
+        expect_ignore_line_breaks=True,
+    )
+    run_cmd(session, "update-prepare-dry-run", timeout * 4, expect=PREPARE_DRY_RUN_OK)
     run_cmd(session, "update-apply", timeout * 4, expect=APPLY_OK)
     run_cmd(session, "update-status", timeout, expect=APPLY_SUMMARY)
     run_cmd(session, "update-status", timeout, expect="rc=0")

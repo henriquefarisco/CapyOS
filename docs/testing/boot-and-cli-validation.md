@@ -68,25 +68,30 @@ o marker e, se o setup reiniciar antes do login, insere um boot adicional antes
 da releitura. O retorno desktop→TTY usa o sentinel real de `CTRL+ALT+F1`, nao um
 comando de terminal. A recovery key e redigida do log persistido. O gate QEMU e
 o full install networked da `alpha.316` passaram no host em 2026-07-17. Na
-`alpha.320`, o índice imutável declara exatamente nove módulos; o rerun
-networked e a validação remota de URL, tamanho e SHA-256 permanecem pendentes
-até a tag e os assets serem publicados. O preflight QEMU nao substitui nem
-fecha o gate oficial VMware multi-disco.
+`alpha.320`, o índice imutável passou a declarar exatamente nove módulos; a
+publicação `0.9.2` concluiu a validação remota de URL, tamanho e SHA-256. O
+preflight QEMU nao substitui nem fecha o gate oficial VMware multi-disco.
 
-### 1.1.1 Ciclo A/B assinado (Etapa 8, gate introduzido na `alpha.319`, candidato `alpha.320`)
+### 1.1.1 Ciclo A/B assinado (Etapa 8 fechada na `0.9.2`)
 
 ```bash
 make update-ab-selftest              # contrato host, tambem dentro de release-check
 make smoke-x64-qemu-update-ab        # preflight de desenvolvimento
-make smoke-x64-vmware-update-ab      # aceite oficial VMware + UEFI + E1000
+make smoke-x64-vmware-update-ab      # gate VMware do mecanismo com chave lab
+make smoke-x64-vmware-update-ab-production-existing-iso  # aceite publico
 ```
 
-Os dois gates instalam a ISO oficial num disco vazio e conduzem dois ciclos
+Os gates lab instalam a ISO oficial num disco vazio e conduzem dois ciclos
 completos em quatro power cycles: manifesto Ed25519 buscado por HTTP, payload
 verificado por tamanho declarado + SHA-256, escrita no slot inativo com
 autorizacao geracional e flush duravel, consumo da unica tentativa pelo loader,
 confirmacao de saude persistente e, no segundo ciclo deixado sem confirmar,
 rollback aplicado pelo loader e reportado por `update-rollback-check`.
+
+O aceite de producao usa a ISO predecessora publicada e a ordem
+`rollback-then-confirm`: primeiro aplica sem confirmar e observa o rollback;
+depois reaplica o mesmo payload a partir do predecessor restaurado e confirma
+saude. Ele recusa chave privada, flags lab e endpoints hermeticos.
 
 Cada execucao gera um par Ed25519 descartavel e recompila o kernel com
 `CAPYOS_UPDATE_LAB_TRUST_KEY_HEX` + `CAPYOS_UPDATE_LAB_MANIFEST_URL`, porque a
@@ -100,7 +105,9 @@ e o passo de operador com a chave de producao ficam em
 Asserts por boot: `Boot provider: ready=yes reason=ready` em `print-boot-slot` e
 `[boot] A/B attempt slot=<n> state=<confirmed|pending|rollback>` no boot log. O
 gate emite manifesto de evidencia em `build/ci/` e, quando promovido, uma copia
-sanitizada em [`../releases/evidence/`](../releases/evidence/).
+sanitizada em [`../releases/evidence/`](../releases/evidence/). O schema de
+producao v2 tambem fixa VMnet, perfil de rede persistido, fonte do segundo ciclo
+e reverificacao do cache.
 
 ### 1.2 First boot e desktop
 
@@ -246,11 +253,13 @@ make test
   focados passaram (quatro boots com persistência) e o smoke oficial ISO KVM
   passou em três boots, incluindo `marker:persist-ok`;
 - o smoke CLI TCG passou em 86,2 s, com dois boots e persistência;
-- o smoke oficial ISO TCG ainda não foi executado;
-- o preflight do ciclo update A/B e o aceite VMware oficial (apply, reboot,
-  confirmação e rollback) ainda não foram executados e mantêm a Etapa 8 aberta;
-- o índice imutável possui nove entradas, mas a verificação remota
-  pós-publicação depende da tag e dos assets;
+- o smoke oficial ISO TCG historico ainda nao foi executado, mas nao bloqueia o
+  track oficial VMware;
+- os gates A/B lab passaram em QEMU/OVMF e VMware; o aceite VMware de producao
+  passou em 2026-08-29, run `d87affe8b077`, com quatro boots, rollback,
+  reaplicacao de cache verificado, confirmacao de saude e recusa de release
+  igual. A Etapa 8 nao possui lacuna bloqueante;
+- o indice imutavel e seus assets foram publicados e verificados remotamente;
 - falhas apos o reboot pelo HDD instalado devem ser tratadas como problemas do
   runtime instalado, nao como ausencia do instalador;
 - USB HID/XHCI da Etapa 3 permanece como gate regressivo; a validacao externa
