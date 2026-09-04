@@ -425,6 +425,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/auth/session.o \
 	$(BUILD)/x86_64/auth/user_home.o \
 	$(BUILD)/x86_64/core/work_queue.o \
+	$(BUILD)/x86_64/audio/audio_mixer.o \
 	$(BUILD)/x86_64/services/capyai/capyai_system_actions.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
@@ -2300,6 +2301,7 @@ TEST_BIN    := $(BUILD)/tests/unit_tests
 #     tests/<domain>/ folder layout introduced on 2026-05-15.
 TEST_SRCS   := \
                tests/test_runner.c \
+               tests/audio/test_audio_mixer.c src/audio/audio_mixer.c \
                \
                tests/stubs/stub_kmem.c \
                tests/stubs/stub_context_switch.c \

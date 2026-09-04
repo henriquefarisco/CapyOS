@@ -106,6 +106,7 @@ int run_capybrowse_text_smoke_gate_tests(void);
 int run_capygfx_smoke_gate_tests(void);
 int run_capymultifetch_smoke_gate_tests(void);
 int run_apps_roundtrip_smoke_gate_tests(void);
+int run_audio_mixer_tests(void);
 
 int test_pmm_run(void);
 int test_task_run(void);
@@ -424,6 +425,7 @@ int main(int argc, char **argv) {
     failures += run_capygfx_smoke_gate_tests();
     failures += run_capymultifetch_smoke_gate_tests();
     failures += run_apps_roundtrip_smoke_gate_tests();
+    failures += run_audio_mixer_tests();
 
     failures += test_pmm_run();
     failures += test_task_run();
