@@ -17,13 +17,11 @@ for repo in CapyAgent CapyAI CapyBrowser CapyCodecs CapyUI CapyLang CapyBenchmar
   [[ -f "$workspace/$repo/Makefile" ]] || fail "$repo checkout is missing"
 done
 
-capyos_asset_base="https://github.com/henriquefarisco/CapyOS/releases/download/$release_tag"
 capyai_version="$(tr -d '\r\n' < "$workspace/CapyAI/VERSION")"
 [[ -n "$capyai_version" ]] || fail "CapyAI VERSION is empty"
 
 make -C "$workspace/CapyAgent" package-clean package
-make -C "$workspace/CapyAI" package-clean package \
-  PUBLISH_URL_BASE="$capyos_asset_base"
+make -C "$workspace/CapyAI" package-clean package
 make -C "$workspace/CapyBrowser" package-clean
 make -C "$workspace/CapyBrowser" package STAGE=text
 make -C "$workspace/CapyBrowser" package STAGE=core
