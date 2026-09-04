@@ -1026,11 +1026,14 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.9.2
-    extended: 0.9.2+20260826
+    current: 0.10.0
+    extended: 0.10.0+20260904
     stability: production
-    current_summary: "CapyOS 0.9.2 estavel: torna executavel e fail-closed o aceite A/B pos-promocao com a ISO 0.9.1 publicada como predecessora, assets publicos Latest, ancora Ed25519 de producao e ordem rollback-then-confirm compativel com anti-downgrade; nao recebe chave privada nem flags de laboratorio e preserva ABIs e pins dos repositorios irmaos."
+    current_summary: "CapyOS 0.10.0 stable: fecha a Etapa 9 com indice de modulos assinado, package manager, SDK e ABI capyos-base-v3; release publica imutavel com 12 assets e gate A/B VMware de producao."
     history:
+      - version: 0.10.0+20260904
+        date: 2026-09-04
+        summary: "Etapa 9 publicada como stable Latest imutavel: indice resolve-at-publish assinado, package manager, SDK e ABI capyos-base-v3."
       - version: 0.9.2+20260826
         date: 2026-08-26
         summary: "CapyOS 0.9.2 estavel: torna executavel e fail-closed o aceite A/B pos-promocao com a ISO 0.9.1 publicada como predecessora, assets publicos Latest, ancora Ed25519 de producao e ordem rollback-then-confirm compativel com anti-downgrade; nao recebe chave privada nem flags de laboratorio e preserva ABIs e pins dos repositorios irmaos."

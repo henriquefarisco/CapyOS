@@ -1,7 +1,7 @@
 # Cross-repo compatibility matrix
 
 **Status:** autoritativo; **revisao atual:** 2026-09-03, CapyOS
-`0.10.0-alpha.2+20260904` (desenvolvimento da Etapa 9; stable Latest permanece
+`0.10.0+20260904` (release stable da Etapa 9; Latest atual
 `0.9.2`), com CapyAgent `0.1.0`, CapyUI `2.25.0` e `capyos-base-v3`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
 **Atualizacao 0.10.0-alpha.1 (2026-09-03):** introduz resolve-at-publish
@@ -111,7 +111,7 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.10.0-alpha.2+20260904` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.10.0+20260904` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.1.0` | `capy-agent-component-index` v2; resolver publish-time SemVer/ABI/known-good e signer KAT externo | `0.1.0` | `0.1.0` |
 | `CapyBrowser` | `0.6.8` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.8` | `0.6.8` |
 | `CapyCodecs` | `0.0.13` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.13` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.13` |
