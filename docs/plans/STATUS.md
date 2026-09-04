@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-08-29 | **Versao:** `0.9.2+20260826` (stable, Latest e imutavel) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-09-04 | **Versao:** `0.10.0+20260904` (stable, Latest e imutavel) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -33,6 +33,14 @@
   `d87affe8b077` executou quatro boots a partir da ISO `0.9.1` publicada:
   download HTTP 200/TLS/assinatura, apply, rollback, reaplicacao de cache
   verificado, confirmacao de saude e recusa de equal release.
+
+- **Etapa 9 concluida na `0.10.0+20260904`:** índice resolve-at-publish
+  assinado, package manager com aplicação atômica e rollback, persistência,
+  CLI `pkg`, Software Center e SDK inicial. A release foi promovida como Latest
+  imutável; a ISO tem SHA-256
+  `4da49439261a71fdd53baed26da561c7f72e6297724a1dd566d1ad3dc317be21`
+  e o gate VMware de produção `51a809975d62` aprovou quatro boots a partir da
+  ISO pública `0.9.2`, na ordem rollback-then-confirm.
 
 - **Release stable `0.9.2+20260826`:** preserva ABI e pins dos repositorios
   irmaos. ISO publicada SHA-256
@@ -1070,8 +1078,8 @@ do display-list ou no pin do sister deve passar pelo workflow
 ## Histórico do bloqueio sequencial observado na Etapa 4
 
 Naquele snapshot, as Etapas 5-16 dependiam do fechamento integral da anterior.
-Hoje as Etapas 1-8 estão fechadas, a Etapa 9 está desbloqueada como próxima e
-somente as Etapas 10-16 permanecem bloqueadas. Repositórios apartados podem evoluir em paralelo (CapyUI já entregou v2.22.0 com
+Hoje as Etapas 1-9 estão fechadas, a Etapa 10 está desbloqueada como próxima e
+somente as Etapas 11-16 permanecem bloqueadas. Repositórios apartados podem evoluir em paralelo (CapyUI já entregou v2.22.0 com
 desktop session e widget/display-list schema v7; CapyLang já entregou S1-S7 host-only (lexer/parser/diagnostics/bytecode v0/VM/host bridge); demais permanecem em
 ABI host-only ou planejada) — mas só contam como progresso oficial
 quando a etapa correspondente abrir e o adapter + gate externo aceitarem

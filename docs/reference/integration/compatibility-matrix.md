@@ -1,8 +1,8 @@
 # Cross-repo compatibility matrix
 
-**Status:** autoritativo; **revisao atual:** 2026-09-03, CapyOS
-`0.10.0+20260904` (release stable da Etapa 9; Latest atual
-`0.9.2`), com CapyAgent `0.1.0`, CapyUI `2.25.0` e `capyos-base-v3`.
+**Status:** autoritativo; **revisao atual:** 2026-09-04, CapyOS
+`0.10.0+20260904` (release stable da Etapa 9, Latest e imutavel), com
+CapyAgent `0.1.0`, CapyUI `2.25.0` e `capyos-base-v3`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
 **Atualizacao 0.10.0-alpha.1 (2026-09-03):** introduz resolve-at-publish
 assinado, component-index v2, índice oficial com token/época/hash, pkgd/CLI,
@@ -184,7 +184,7 @@ incidente; documente no `STATUS.md`.
 | Etapa 4 (concluída em alpha.262) | mesmo escopo da Etapa 3 + adapter CapyOS-side para consumir `capy-ui-widget` v2.22 / display-list schema v7 do sister `CapyUI`; módulos remotos continuam em `--unsigned` durante o scaffolding | CapyCodecs (audio + image como módulo), CapyBrowser, CapyAgent assinado, CapyLang, CapyBenchmark |
 | Etapas 5-7 (concluídas) | CapyUI widget/desktop, CapyCodecs image v2, CapyBrowser estático textual/gráfico e CapyAI `capy-ai-core` v0 / `org.capyos.ai.assistant` integrados por seams/adapters versionados | CapyLang, CapyBenchmark |
 | Etapa 8 (concluída) | installer/update/release gate; `0.9.2` promovida como Latest imutável e ciclo A/B VMware público aprovado | CapyLang, CapyBenchmark |
-| Etapa 9 (em desenvolvimento) | package manager + SDK + ABI estável; primeiro candidato `0.10.0-alpha.1` em validação QEMU/VMware | CapyLang, CapyBenchmark |
+| Etapa 9 (concluída) | package manager + SDK + ABI estável; `0.10.0+20260904` promovida como Latest imutável e ciclo A/B VMware público aprovado | CapyLang, CapyBenchmark |
 | Etapa 10 | CapyCodecs audio | CapyLang, CapyBenchmark |
 | Etapa 15 | CapyLang VM e benchmarks | — |
 | Etapa 16 | baseline CapyBenchmark | — |
