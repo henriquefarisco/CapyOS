@@ -18,6 +18,10 @@ OVMF_CANDIDATES = (
     ("/usr/share/edk2-ovmf/x64/OVMF_CODE.fd", "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd"),
 )
 SERIAL_CHAR_DELAY = 0.002
+# Give the guest one poll interval to consume the final character before the
+# carriage return.  Under TCG, sending both too closely can make the shell see
+# the terminator first and drop the last character of an otherwise valid line.
+SERIAL_SUBMIT_DELAY = 0.020
 
 
 def qemu_accelerator() -> str:
@@ -309,7 +313,12 @@ class SmokeSession:
         for i, byte in enumerate(payload):
             self.sock.sendall(bytes([byte]))
             if i + 1 < len(payload):
-                time.sleep(SERIAL_CHAR_DELAY)
+                delay = (
+                    SERIAL_SUBMIT_DELAY
+                    if payload[i + 1] == ord("\r")
+                    else SERIAL_CHAR_DELAY
+                )
+                time.sleep(delay)
 
     def wait_for(
         self,
