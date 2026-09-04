@@ -84,8 +84,9 @@ class ModuleSpec:
 
 
 # External metadata is pinned to the digest and size reported by each immutable
-# GitHub Release asset.  CapyAI is the sole exception: its payload is staged in
-# the new CapyOS release and therefore remains derived from the local package.
+# producer GitHub Release asset.  The CapyOS bundle also stages the CapyAI
+# payload for update compatibility, but the package index resolves its canonical
+# publisher URL just like every other producer-owned module.
 MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
     ModuleSpec(
         "org.capyos.agent.core",
