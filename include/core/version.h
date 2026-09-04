@@ -6,10 +6,10 @@
 #define CAPYOS_VERSION_MINOR        10
 #define CAPYOS_VERSION_PATCH        0
 
-#define CAPYOS_VERSION_CHANNEL      "alpha"
-#define CAPYOS_VERSION_PRERELEASE   "alpha.2"
-#define CAPYOS_VERSION_EXTENDED     "0.10.0-alpha.2"
-#define CAPYOS_VERSION_FULL         "0.10.0-alpha.2+20260904"
+#define CAPYOS_VERSION_CHANNEL      "stable"
+#define CAPYOS_VERSION_PRERELEASE   ""
+#define CAPYOS_VERSION_EXTENDED     "0.10.0"
+#define CAPYOS_VERSION_FULL         "0.10.0+20260904"
 #define CAPYOS_FEATURE_HYPERV_RUNTIME "hvrt-20260328a"
 #define CAPYOS_FEATURE_NETWORK_DIAG   "netdiag-20260328a"
 /* Etapa 2 do roteiro de maturação do browser (2026-05-03):
@@ -18,6 +18,6 @@
 
 #define CAPYOS_VERSION_ALPHA        "0.10.0-alpha.2"
 #define CAPYOS_VERSION_BETA         "0.6.2-beta.3"
-#define CAPYOS_VERSION_STABLE       "0.9.2"
+#define CAPYOS_VERSION_STABLE       "0.10.0"
 
 #endif
