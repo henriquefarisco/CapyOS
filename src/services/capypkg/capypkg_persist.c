@@ -25,6 +25,64 @@ static int has_writer(void) {
     return g_capypkg_writer != NULL;
 }
 
+static void append_u32(char *buffer, size_t buffer_size, uint32_t value) {
+    char digits[10];
+    size_t count = 0u;
+    if (value == 0u) {
+        capypkg_local_append(buffer, buffer_size, "0");
+        return;
+    }
+    while (value > 0u && count < sizeof(digits)) {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (count > 0u) {
+        char ch[2] = {digits[--count], '\0'};
+        capypkg_local_append(buffer, buffer_size, ch);
+    }
+}
+
+static void append_contract_fields(char *buffer, size_t buffer_size,
+                                   const struct capypkg_entry *e) {
+    if (e->size_bytes) {
+        capypkg_local_append(buffer, buffer_size, "\npayload_size=");
+        append_u32(buffer, buffer_size, e->size_bytes);
+    }
+    if (e->signature_hex[0]) {
+        capypkg_local_append(buffer, buffer_size, "\nsignature_ed25519=");
+        capypkg_local_append(buffer, buffer_size, e->signature_hex);
+    }
+    capypkg_local_append(buffer, buffer_size, "\ninstall_root=");
+    capypkg_local_append(buffer, buffer_size, e->install_root);
+    if (e->provides_abi[0]) {
+        capypkg_local_append(buffer, buffer_size, "\nprovides_abi=");
+        capypkg_local_append(buffer, buffer_size, e->provides_abi);
+    }
+    if (e->abi_version[0]) {
+        capypkg_local_append(buffer, buffer_size, "\nabi_version=");
+        capypkg_local_append(buffer, buffer_size, e->abi_version);
+    }
+    if (e->core_abi_min) {
+        capypkg_local_append(buffer, buffer_size, "\ncore_abi_min=");
+        append_u32(buffer, buffer_size, e->core_abi_min);
+    }
+    if (e->core_abi_max) {
+        capypkg_local_append(buffer, buffer_size, "\ncore_abi_max=");
+        append_u32(buffer, buffer_size, e->core_abi_max);
+    }
+    if (e->provides_abi[0]) {
+        capypkg_local_append(buffer, buffer_size, "\nknown_good=");
+        append_u32(buffer, buffer_size, e->known_good);
+    }
+    if (e->dep_count) {
+        capypkg_local_append(buffer, buffer_size, "\ndepends=");
+        for (uint32_t d = 0u; d < e->dep_count; ++d) {
+            if (d) capypkg_local_append(buffer, buffer_size, ",");
+            capypkg_local_append(buffer, buffer_size, e->deps[d]);
+        }
+    }
+}
+
 int capypkg_db_serialize(char *buffer, size_t buffer_size, size_t *out_len) {
     size_t pos = 0u;
     if (!buffer || buffer_size == 0u) {
@@ -43,8 +101,7 @@ int capypkg_db_serialize(char *buffer, size_t buffer_size, size_t *out_len) {
         capypkg_local_append(buffer, buffer_size, e->payload_url);
         capypkg_local_append(buffer, buffer_size, "\npayload_sha256=");
         capypkg_local_append(buffer, buffer_size, e->payload_sha256);
-        capypkg_local_append(buffer, buffer_size, "\ninstall_root=");
-        capypkg_local_append(buffer, buffer_size, e->install_root);
+        append_contract_fields(buffer, buffer_size, e);
         if (e->source_repo[0]) {
             capypkg_local_append(buffer, buffer_size, "\nrepo=");
             capypkg_local_append(buffer, buffer_size, e->source_repo);
@@ -136,15 +193,7 @@ int capypkg_catalog_persist(void) {
         capypkg_local_append(buffer, sizeof(buffer), e->payload_url);
         capypkg_local_append(buffer, sizeof(buffer), "\npayload_sha256=");
         capypkg_local_append(buffer, sizeof(buffer), e->payload_sha256);
-        if (e->signature_hex[0]) {
-            capypkg_local_append(buffer, sizeof(buffer),
-                                 "\nsignature_ed25519=");
-            capypkg_local_append(buffer, sizeof(buffer), e->signature_hex);
-        }
-        if (e->install_root[0]) {
-            capypkg_local_append(buffer, sizeof(buffer), "\ninstall_root=");
-            capypkg_local_append(buffer, sizeof(buffer), e->install_root);
-        }
+        append_contract_fields(buffer, sizeof(buffer), e);
         if (e->source_repo[0]) {
             capypkg_local_append(buffer, sizeof(buffer), "\nrepo=");
             capypkg_local_append(buffer, sizeof(buffer), e->source_repo);

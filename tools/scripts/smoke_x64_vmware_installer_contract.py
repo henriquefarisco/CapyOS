@@ -8,7 +8,7 @@ from typing import Mapping
 RECOVERY_KEY_RE = re.compile(
     r"(?<![A-Z0-9])[A-Z0-9]{4}(?:-[A-Z0-9]{4}){5}(?![A-Z0-9])"
 )
-EVIDENCE_FORMAT = "capyos-installer-wizard-evidence-manifest-v3"
+EVIDENCE_FORMAT = "capyos-installer-wizard-evidence-manifest-v4"
 _REQUIRED_YES = (
     "iso_unchanged",
     "target_selected_explicitly",
@@ -57,6 +57,8 @@ _REQUIRED_FIELDS = (
     "login_completed",
     "persistence_marker_written",
     "persistence_marker_read_after_reboot",
+    "module_profile",
+    "module_install_completed",
     "recovery_key_redacted",
     "recovery_key_included",
     "marker_session_used",
@@ -243,6 +245,10 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError("installer evidence PathId is invalid")
     if fields.get("marker_session_used") not in ("yes", "no"):
         raise ValueError("installer evidence marker session state is invalid")
+    if fields.get("module_profile") not in ("core", "full"):
+        raise ValueError("installer evidence module profile is invalid")
+    if fields.get("module_install_completed") not in ("yes", "not-required"):
+        raise ValueError("installer evidence module installation state is invalid")
     for key in ("installer_log", "boot1_log", "marker_log", "boot2_log"):
         value = fields.get(key, "")
         if not re.fullmatch(r"[A-Za-z0-9._-]+\.log", value):

@@ -341,6 +341,7 @@ jobs:
             --index "$DRAFT_DIR/modules-index.txt" \
             --release-tag "$TAG" \
             --local-payload-dir "$DRAFT_DIR" \
+            --allow-unsigned-index \
             --attempts 5 \
             --backoff-seconds 1 \
             --timeout 45
@@ -353,7 +354,9 @@ jobs:
             echo "### Draft verified; offline signatures required"
             echo ""
             echo "The GitHub Release remains an unpublished draft by design."
-            echo "Upload the signed checksum, approved release public key, public manifests,"
-            echo "and signed latest.ini, then run the Promote Signed Release workflow."
+            echo "Replace modules-index.txt with its offline-signed form and recompute"
+            echo "modules.sha256 plus release-artifacts.sha256. Then upload the signed"
+            echo "checksum, approved release public key, public manifests and latest.ini"
+            echo "before running the Promote Signed Release workflow."
             echo "No tag workflow is allowed to mark an unsigned draft as Latest."
           } >> "$GITHUB_STEP_SUMMARY"

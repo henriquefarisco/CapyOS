@@ -513,7 +513,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[43];
+static struct shell_command g_system_control_commands[44];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -600,12 +600,14 @@ static void init_system_control_commands(void) {
   g_system_control_commands[38].handler = cmd_pkg_bootstrap;
   g_system_control_commands[39].name = "capy";
   g_system_control_commands[39].handler = cmd_capy;
-  g_system_control_commands[40].name = "power-schedule-reboot";
-  g_system_control_commands[40].handler = cmd_power_schedule_reboot;
-  g_system_control_commands[41].name = "power-schedule-status";
-  g_system_control_commands[41].handler = cmd_power_schedule_status;
-  g_system_control_commands[42].name = "power-schedule-cancel";
-  g_system_control_commands[42].handler = cmd_power_schedule_cancel;
+  g_system_control_commands[40].name = "pkg";
+  g_system_control_commands[40].handler = cmd_pkg;
+  g_system_control_commands[41].name = "power-schedule-reboot";
+  g_system_control_commands[41].handler = cmd_power_schedule_reboot;
+  g_system_control_commands[42].name = "power-schedule-status";
+  g_system_control_commands[42].handler = cmd_power_schedule_status;
+  g_system_control_commands[43].name = "power-schedule-cancel";
+  g_system_control_commands[43].handler = cmd_power_schedule_cancel;
   g_system_control_commands_initialized = 1;
 }
 
@@ -613,7 +615,7 @@ const struct shell_command *shell_commands_system_control(size_t *count) {
   /* keep the count in sync with the array size declared above. */
   init_system_control_commands();
   if (count) {
-    *count = 43;
+    *count = 44;
   }
   return g_system_control_commands;
 }

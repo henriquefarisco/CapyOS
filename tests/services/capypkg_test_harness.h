@@ -164,6 +164,19 @@ static int fs_remove(const char *path) {
     return 0;
 }
 
+static int fs_rename(const char *source, const char *destination) {
+    struct fake_file *src = fs_find(source);
+    struct fake_file *dst = fs_find(destination);
+    if (!src || src->is_dir || !fs_parent_dir_exists(destination)) return -1;
+    if (dst) {
+        if (dst->is_dir) return -1;
+        memset(dst, 0, sizeof(*dst));
+    }
+    strncpy(src->path, destination, sizeof(src->path) - 1u);
+    src->path[sizeof(src->path) - 1u] = '\0';
+    return 0;
+}
+
 static int fs_mkdir(const char *path) {
     char build[160];
     size_t build_len = 0u;
@@ -322,6 +335,7 @@ static void bind_runtime_adapters(int with_verifier) {
     capypkg_set_bytes_writer(fs_write_bytes);
     capypkg_set_remover(fs_remove);
     capypkg_set_mkdir(fs_mkdir);
+    capypkg_set_renamer(fs_rename);
     capypkg_set_text_fetcher(net_fetch_text);
     capypkg_set_bytes_fetcher(net_fetch_bytes);
     if (with_verifier) {
@@ -358,6 +372,10 @@ static void reset_state(int with_verifier) {
     capypkg_reset();
     bind_runtime_adapters(with_verifier);
     capypkg_init();
+    /* Existing package-signature tests use the legacy custom publisher path.
+     * Production's pinned stable URL separately requires a signed v2 index. */
+    (void)capypkg_repo_add("stable", "https://repo.capyos.test/v1/index.cap", 1);
+    fs_reset();
 }
 
 static void compute_sha256_hex(const uint8_t *data, size_t len,

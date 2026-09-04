@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import math
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +21,10 @@ from urllib.request import Request, urlopen
 try:  # Package import used by unittest.
     from .modules_index_catalog import (
         ALLOWED_FIELDS,
-        EXPECTED_MODULE_COUNT,
+        CORE_ABI_TOKEN,
+        INDEX_EPOCH,
+        INDEX_FORMAT,
+        EXPECTED_RESOLVED_COUNT,
         MODULE_BY_ID,
         MODULE_SPECS,
         RUNTIME_INDEX_BYTES,
@@ -31,15 +36,15 @@ try:  # Package import used by unittest.
         RUNTIME_SUMMARY_BYTES,
         RUNTIME_URL_BYTES,
         RUNTIME_VERSION_BYTES,
-        expected_payload_url,
-        pinned_payload_metadata,
-        release_tag_from_payload_url,
-        validate_release_tag,
+        resolved_payload_url,
     )
 except ImportError:  # Direct script/import from tools/scripts.
     from modules_index_catalog import (  # type: ignore
         ALLOWED_FIELDS,
-        EXPECTED_MODULE_COUNT,
+        CORE_ABI_TOKEN,
+        INDEX_EPOCH,
+        INDEX_FORMAT,
+        EXPECTED_RESOLVED_COUNT,
         MODULE_BY_ID,
         MODULE_SPECS,
         RUNTIME_INDEX_BYTES,
@@ -51,10 +56,7 @@ except ImportError:  # Direct script/import from tools/scripts.
         RUNTIME_SUMMARY_BYTES,
         RUNTIME_URL_BYTES,
         RUNTIME_VERSION_BYTES,
-        expected_payload_url,
-        pinned_payload_metadata,
-        release_tag_from_payload_url,
-        validate_release_tag,
+        resolved_payload_url,
     )
 
 MAX_INDEX_BYTES = RUNTIME_INDEX_BYTES
@@ -71,6 +73,9 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SIGNATURE_RE = re.compile(r"^[0-9a-f]{128}$")
 POSITIVE_DECIMAL_RE = re.compile(r"^[1-9][0-9]*$")
 PRINTABLE_RE = re.compile(r"^[\x20-\x7e]*$")
+INDEX_PUBLIC_KEY_RAW = bytes.fromhex(
+    "1c52cc62ac20b94bb0c64291b6cdc5453b9aee53392a25ed2799fc7e4a718ef2"
+)
 
 
 class ModulesIndexError(RuntimeError):
@@ -96,6 +101,11 @@ class ModuleEntry:
     install_root: str = ""
     depends: tuple[str, ...] = ()
     repo: str = ""
+    provides_abi: str = ""
+    abi_version: str = ""
+    core_abi_min: int = 0
+    core_abi_max: int = 0
+    known_good: int = 0
 
 
 @dataclass(frozen=True)
@@ -171,6 +181,11 @@ def _entry_from_fields(fields: dict[str, str], ordinal: int) -> ModuleEntry:
         "payload_sha256",
         "payload_size",
         "install_root",
+        "provides_abi",
+        "abi_version",
+        "core_abi_min",
+        "core_abi_max",
+        "known_good",
     )
     for key in required:
         if not fields.get(key):
@@ -218,6 +233,21 @@ def _entry_from_fields(fields: dict[str, str], ordinal: int) -> ModuleEntry:
 
     if fields["official"] != "1":
         raise ModulesIndexError(f"{label}: official must be 1")
+    try:
+        core_abi_min = int(fields["core_abi_min"])
+        core_abi_max = int(fields["core_abi_max"])
+        known_good = int(fields["known_good"])
+    except ValueError as exc:
+        raise ModulesIndexError(f"{label}: invalid ABI metadata") from exc
+    if (
+        str(core_abi_min) != fields["core_abi_min"]
+        or str(core_abi_max) != fields["core_abi_max"]
+        or str(known_good) != fields["known_good"]
+        or core_abi_min <= 0
+        or core_abi_min > core_abi_max
+        or known_good not in (0, 1)
+    ):
+        raise ModulesIndexError(f"{label}: invalid ABI metadata")
     repo = fields.get("repo", "")
     if repo:
         if not NAME_RE.fullmatch(repo):
@@ -235,53 +265,37 @@ def _entry_from_fields(fields: dict[str, str], ordinal: int) -> ModuleEntry:
         install_root=install_root,
         depends=_parse_dependencies(fields.get("depends", ""), label),
         repo=repo,
+        provides_abi=fields["provides_abi"],
+        abi_version=fields["abi_version"],
+        core_abi_min=core_abi_min,
+        core_abi_max=core_abi_max,
+        known_good=known_good,
     )
 
 
-def _validate_catalog(
-    entries: list[ModuleEntry], release_tag: str | None
-) -> None:
+def _validate_catalog(entries: list[ModuleEntry]) -> None:
     by_name = {entry.name: entry for entry in entries}
-    expected_names = set(MODULE_BY_ID)
+    resolved_specs = tuple(spec for spec in MODULE_SPECS if spec.known_good)
+    expected_names = {spec.module_id for spec in resolved_specs}
     actual_names = set(by_name)
     if actual_names != expected_names:
         raise ModulesIndexError(
             "modules index inventory differs from the official catalog"
         )
 
-    if release_tag is None:
-        ai_spec = next(spec for spec in MODULE_SPECS if spec.uses_capyos_release_tag)
-        try:
-            release_tag = release_tag_from_payload_url(
-                ai_spec, by_name[ai_spec.module_id].payload_url
-            )
-        except ValueError as exc:
-            raise ModulesIndexError(
-                f"module {ai_spec.module_id}: invalid release URL"
-            ) from exc
-    else:
-        try:
-            release_tag = validate_release_tag(release_tag)
-        except ValueError as exc:
-            raise ModulesIndexError(str(exc)) from exc
-
-    for spec in MODULE_SPECS:
+    for spec in resolved_specs:
         entry = by_name[spec.module_id]
         checks = [
             (entry.version, spec.version, "version"),
             (entry.install_root, spec.install_root, "install_root"),
             (entry.depends, spec.dependencies, "depends"),
-            (entry.payload_url, expected_payload_url(spec, release_tag), "payload_url"),
+            (entry.payload_url, resolved_payload_url(spec), "payload_url"),
+            (entry.provides_abi, spec.provides_abi, "provides_abi"),
+            (entry.abi_version, spec.abi_version, "abi_version"),
+            (entry.core_abi_min, spec.core_abi_min, "core_abi_min"),
+            (entry.core_abi_max, spec.core_abi_max, "core_abi_max"),
+            (entry.known_good, 1, "known_good"),
         ]
-        pinned_metadata = pinned_payload_metadata(spec)
-        if pinned_metadata is not None:
-            pinned_sha256, pinned_size = pinned_metadata
-            checks.extend(
-                (
-                    (entry.payload_sha256, pinned_sha256, "payload_sha256"),
-                    (entry.payload_size, pinned_size, "payload_size"),
-                )
-            )
         for actual, expected, field in checks:
             if actual != expected:
                 raise ModulesIndexError(
@@ -304,17 +318,90 @@ def _validate_catalog(
                 )
 
 
+def _split_and_verify_envelope(
+    text: str,
+    *,
+    verify_signature: bool = True,
+    allow_unsigned: bool = False,
+) -> str:
+    lines = text.splitlines(keepends=True)
+    if len(lines) < 5 or any(not line.endswith("\n") for line in lines[:4]):
+        raise ModulesIndexError("index envelope is incomplete")
+    expected_prefixes = (
+        f"#{INDEX_FORMAT}\n",
+        f"#index_abi_token={CORE_ABI_TOKEN}\n",
+        f"#index_epoch={INDEX_EPOCH}\n",
+        "#index_body_sha256=",
+    )
+    if lines[0] != expected_prefixes[0] or lines[1] != expected_prefixes[1] or lines[2] != expected_prefixes[2]:
+        raise ModulesIndexError("index format, ABI token or epoch mismatch")
+    if not lines[3].startswith(expected_prefixes[3]):
+        raise ModulesIndexError("index envelope fields are out of order")
+    body_hash = lines[3][len(expected_prefixes[3]):].strip()
+    if not SHA256_RE.fullmatch(body_hash):
+        raise ModulesIndexError("index body hash is malformed")
+
+    signature_prefix = "#index_signature_ed25519="
+    signature_hex: str | None = None
+    body_offset = 4
+    if len(lines) > 4 and lines[4].startswith(signature_prefix):
+        if not lines[4].endswith("\n"):
+            raise ModulesIndexError("signed index envelope is incomplete")
+        signature_hex = lines[4][len(signature_prefix):].strip()
+        if not SIGNATURE_RE.fullmatch(signature_hex):
+            raise ModulesIndexError("signed index signature is malformed")
+        body_offset = 5
+    elif not allow_unsigned:
+        raise ModulesIndexError("signed index signature is missing")
+
+    body = "".join(lines[body_offset:])
+    if hashlib.sha256(body.encode("ascii")).hexdigest() != body_hash:
+        raise ModulesIndexError("index body SHA-256 mismatch")
+    descriptor = (
+        f"format={INDEX_FORMAT}|abi_token={CORE_ABI_TOKEN}|"
+        f"epoch={INDEX_EPOCH}|body_sha256={body_hash}\n"
+    ).encode("ascii")
+    if verify_signature:
+        if signature_hex is None:
+            raise ModulesIndexError("signed index signature is missing")
+        public_der = bytes.fromhex("302a300506032b6570032100") + INDEX_PUBLIC_KEY_RAW
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "public.der").write_bytes(public_der)
+            (root / "descriptor.bin").write_bytes(descriptor)
+            (root / "signature.bin").write_bytes(bytes.fromhex(signature_hex))
+            result = subprocess.run(
+                ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(root / "public.der"),
+                 "-keyform", "DER", "-rawin", "-in", str(root / "descriptor.bin"),
+                 "-sigfile", str(root / "signature.bin")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        if result.returncode != 0:
+            raise ModulesIndexError("signed index Ed25519 verification failed")
+    return body
+
+
 def parse_modules_index(
     text: str,
-    expected_count: int = EXPECTED_MODULE_COUNT,
+    expected_count: int = EXPECTED_RESOLVED_COUNT,
     *,
     release_tag: str | None = None,
+    verify_signature: bool = True,
+    allow_unsigned: bool = False,
 ) -> list[ModuleEntry]:
     """Parse and validate the complete official inventory before I/O."""
-    if expected_count != EXPECTED_MODULE_COUNT:
+    del release_tag  # retained for command-line compatibility with older callers
+    if expected_count != EXPECTED_RESOLVED_COUNT:
         raise ValueError(
-            f"expected_count must equal the official count {EXPECTED_MODULE_COUNT}"
+            f"expected_count must equal the resolved count {EXPECTED_RESOLVED_COUNT}"
         )
+    text = _split_and_verify_envelope(
+        text,
+        verify_signature=verify_signature,
+        allow_unsigned=allow_unsigned,
+    )
     try:
         index_size = len(text.encode("utf-8"))
     except UnicodeEncodeError as exc:
@@ -371,7 +458,7 @@ def parse_modules_index(
         raise ModulesIndexError(
             f"modules index must contain exactly {expected_count} unique modules"
         )
-    _validate_catalog(entries, release_tag)
+    _validate_catalog(entries)
     return entries
 
 
@@ -541,8 +628,15 @@ def verify_modules_index_assets(
     local_assets_dir: Path | None = None,
     release_tag: str | None = None,
     retry_404_for_propagation: bool = False,
+    verify_signature: bool = True,
+    allow_unsigned: bool = False,
 ) -> list[VerificationResult]:
-    entries = parse_modules_index(text, release_tag=release_tag)
+    entries = parse_modules_index(
+        text,
+        release_tag=release_tag,
+        verify_signature=verify_signature,
+        allow_unsigned=allow_unsigned,
+    )
     if local_assets_dir is not None and not local_assets_dir.is_dir():
         raise ModulesIndexError("local assets directory does not exist")
 
@@ -645,6 +739,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--allow-unsigned-index",
+        action="store_true",
+        help=(
+            "accept a hash-bound but unsigned index only at the authenticated "
+            "pre-publication handoff boundary"
+        ),
+    )
+    parser.add_argument(
         "--retry-404",
         "--retry-404-for-propagation",
         dest="retry_404_for_propagation",
@@ -663,6 +765,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             local_assets_dir=args.local_assets_dir,
             release_tag=args.release_tag,
             retry_404_for_propagation=args.retry_404_for_propagation,
+            verify_signature=not args.allow_unsigned_index,
+            allow_unsigned=args.allow_unsigned_index,
         )
     except ModulesIndexError as exc:
         print(f"[error] {exc}", file=sys.stderr)

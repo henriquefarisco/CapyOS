@@ -91,6 +91,11 @@
 #define CAPYPKG_MAX_REPOS      4u
 #define CAPYPKG_PAYLOAD_MAX    (8u * 1024u * 1024u)
 #define CAPYPKG_REPO_NAME_MAX  32u
+#define CAPYPKG_ABI_NAME       "capyos-base"
+#define CAPYPKG_ABI_VERSION    3u
+#define CAPYPKG_ABI_TOKEN      "capyos-base-v3"
+#define CAPYPKG_INDEX_FORMAT   "capyos-modules-index-v2"
+#define CAPYPKG_INDEX_EPOCH    1u
 
 enum capypkg_state {
     CAPYPKG_STATE_AVAILABLE = 0,
@@ -117,6 +122,8 @@ enum capypkg_result {
     CAPYPKG_ERR_DEPENDENCY = -11,
     CAPYPKG_ERR_QUOTA = -12,
     CAPYPKG_ERR_DENIED = -13,
+    CAPYPKG_ERR_INDEX_TRUST = -14,
+    CAPYPKG_ERR_INCOMPATIBLE = -15,
 };
 
 struct capypkg_entry {
@@ -128,9 +135,15 @@ struct capypkg_entry {
     char payload_sha256[CAPYPKG_SHA256_HEX_MAX];
     char signature_hex[CAPYPKG_SIG_HEX_MAX];
     char install_root[CAPYPKG_PATH_MAX];
+    char provides_abi[CAPYPKG_NAME_MAX];
+    char abi_version[CAPYPKG_VERSION_MAX];
     char deps[CAPYPKG_MAX_DEPS][CAPYPKG_NAME_MAX];
     uint32_t dep_count;
     uint32_t size_bytes;
+    uint32_t core_abi_min;
+    uint32_t core_abi_max;
+    uint8_t known_good;
+    uint8_t catalog_authenticated;
     uint8_t state;
 };
 
@@ -161,6 +174,7 @@ typedef int (*capypkg_write_bytes_fn)(const char *path, const uint8_t *data,
                                       size_t len);
 typedef int (*capypkg_remove_file_fn)(const char *path);
 typedef int (*capypkg_mkdir_fn)(const char *path);
+typedef int (*capypkg_rename_fn)(const char *source, const char *destination);
 
 /* Pluggable transport. Production binds these to HTTPS via
  * `net/http.h`. Tests bind deterministic fakes. */
@@ -219,6 +233,7 @@ void capypkg_set_writer(capypkg_write_text_fn fn);
 void capypkg_set_bytes_writer(capypkg_write_bytes_fn fn);
 void capypkg_set_remover(capypkg_remove_file_fn fn);
 void capypkg_set_mkdir(capypkg_mkdir_fn fn);
+void capypkg_set_renamer(capypkg_rename_fn fn);
 
 void capypkg_set_text_fetcher(capypkg_fetch_text_fn fn);
 void capypkg_set_bytes_fetcher(capypkg_fetch_bytes_fn fn);
@@ -234,6 +249,8 @@ void capypkg_set_signature_verifier(capypkg_verify_signature_fn fn);
  * key is pinned, on NULL input, or on malformed hex. */
 int capypkg_ed25519_verify_signature(const char *signed_text, size_t signed_len,
                                      const char *signature_hex);
+int capypkg_verify_index_envelope(const char *text, size_t len,
+                                  const char **body, size_t *body_len);
 
 /* Pin / clear the trusted publisher Ed25519 public key (32 bytes) used by
  * capypkg_ed25519_verify_signature. Unset by default, so signed installs stay
@@ -242,6 +259,7 @@ int capypkg_ed25519_verify_signature(const char *signed_text, size_t signed_len,
  * NULL clears the key. */
 void capypkg_set_trusted_publisher_key(const uint8_t *key);
 void capypkg_clear_trusted_publisher_key(void);
+void capypkg_use_production_publisher_key(void);
 
 /* Install a fine-grained per-package install progress observer. NULL
  * disables it. The wizard installs this to drive its live status bar. */

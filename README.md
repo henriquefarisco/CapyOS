@@ -7,7 +7,7 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.9.2` (build `0.9.2+20260826`; canal `stable`; ver `VERSION.yaml`)
+Versao de referencia: `0.10.0-alpha.1` (build `0.10.0-alpha.1+20260903`; canal `alpha`; ver `VERSION.yaml`)
 
 ## Destaques
 
@@ -16,7 +16,7 @@ Versao de referencia: `0.9.2` (build `0.9.2+20260826`; canal `stable`; ver `VERS
   destrutivo literal antes do wipe.
 - Desktop CapyUI 2.24.2 com login grafico, taskbar, janelas, apps, terminal e
   isolamento de sessao para workers.
-- CapyAI 0.2.1 governado com TaskPlan, grants, audit, split sem leakage e gate
+- CapyAI 0.2.2 governado com TaskPlan, grants, audit, split sem leakage e gate
   massivo de risco; adapters tipados de
   arquivo/aplicativo/energia; capacidades restantes falham fechadas.
 - Persistencia em disco com CAPYFS e volume `DATA` cifrado.

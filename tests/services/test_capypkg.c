@@ -94,6 +94,7 @@ int run_capypkg_tests(void) {
 #endif
     test_install_accepts_payload_larger_than_one_mib();
     test_install_db_failure_rolls_back_and_retry_reinstalls();
+    test_update_db_failure_restores_previous_payload();
     test_capypkg_network_requires_address_and_dns();
     test_capypkg_network_prepare_advances_dhcp();
     test_capypkg_network_prepare_is_bounded();
@@ -126,6 +127,8 @@ int run_capypkg_tests(void) {
     test_signature_rejects_tampered_descriptor();
     test_signature_rejects_tampered_signature();
     test_signature_rejects_malformed_hex();
+    test_index_envelope_accepts_exact_token_hash_and_signature();
+    test_index_envelope_rejects_token_hash_and_verifier_failures();
     test_install_real_verifier_accepts_kat();
     test_install_real_verifier_rejects_tampered_kat();
     return g_test_failures;

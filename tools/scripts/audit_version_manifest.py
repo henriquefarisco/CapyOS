@@ -10,7 +10,7 @@ from pathlib import Path
 
 MODULES_INDEX_URL_TEMPLATE = (
     "https://github.com/henriquefarisco/CapyOS/releases/download/"
-    "{pin}/modules-index.txt"
+    "modules-{token}/modules-index.txt"
 )
 
 
@@ -95,34 +95,48 @@ def require_top_level_mapping_field(
     return raw_value
 
 
-def canonical_modules_index_url(pin: str) -> str:
-    return MODULES_INDEX_URL_TEMPLATE.format(pin=pin)
+def canonical_modules_index_url(token: str) -> str:
+    return MODULES_INDEX_URL_TEMPLATE.format(token=token)
 
 
 def audit_modules_index_contract(
-    version_yaml: str, modules_c: str, makefile: str
+    version_yaml: str, modules_c: str, makefile: str,
+    compatibility_matrix: str | None = None,
 ) -> list[str]:
-    """Validate every maintained copy of the stable modules-index pin."""
+    """Validate the ABI-token module index contract and every literal copy."""
 
     errors: list[str] = []
-    expected_pin: str | None = None
+    expected_token: str | None = None
     expected_url: str | None = None
 
     try:
-        stable_extended = require_channel_field(version_yaml, "stable", "extended")
-        expected_pin = f"v{stable_extended}"
-        expected_url = canonical_modules_index_url(expected_pin)
+        if compatibility_matrix is None:
+            declared = require_top_level_mapping_field(
+                version_yaml, "modules_index", "token"
+            )
+            match = re.fullmatch(r"capyos-base-v([1-9][0-9]*)", declared)
+            if not match:
+                raise RuntimeError("modules_index.token deve ser capyos-base-v<N>")
+            expected_token = declared
+        else:
+            abi_version = require_unique_match(
+                r"^\|[ \t]*`capyos-base`[ \t]*\|[ \t]*CapyOS[ \t]*\|[ \t]*v([1-9][0-9]*)[ \t]*\|",
+                compatibility_matrix,
+                "compatibility-matrix capyos-base ABI",
+            )
+            expected_token = f"capyos-base-v{abi_version}"
+        expected_url = canonical_modules_index_url(expected_token)
     except RuntimeError as exc:
         errors.append(str(exc))
 
     try:
-        declared_pin = require_top_level_mapping_field(
-            version_yaml, "modules_index", "pin"
+        declared_token = require_top_level_mapping_field(
+            version_yaml, "modules_index", "token"
         )
-        if expected_pin is not None and declared_pin != expected_pin:
+        if expected_token is not None and declared_token != expected_token:
             errors.append(
-                f"modules_index.pin={declared_pin} difere de "
-                f"v<stable.extended>={expected_pin}"
+                f"modules_index.token={declared_token} difere da ABI "
+                f"autoritativa={expected_token}"
             )
     except RuntimeError as exc:
         errors.append(str(exc))
@@ -134,7 +148,7 @@ def audit_modules_index_contract(
         if expected_url is not None and declared_url != expected_url:
             errors.append(
                 f"modules_index.url={declared_url} difere da URL canonica "
-                f"derivada do pin={expected_url}"
+                f"derivada do token={expected_url}"
             )
     except RuntimeError as exc:
         errors.append(str(exc))
@@ -249,7 +263,14 @@ def main() -> int:
     # version bump cannot leave first boot or the network smoke on stale data.
     modules_c = read_text(repo / "src/config/first_boot/modules.c")
     makefile = read_text(repo / "Makefile")
-    errors.extend(audit_modules_index_contract(version_yaml, modules_c, makefile))
+    compatibility_matrix = read_text(
+        repo / "docs/reference/integration/compatibility-matrix.md"
+    )
+    errors.extend(
+        audit_modules_index_contract(
+            version_yaml, modules_c, makefile, compatibility_matrix
+        )
+    )
 
     if errors:
         print("[err] auditoria de versao encontrou divergencias:")

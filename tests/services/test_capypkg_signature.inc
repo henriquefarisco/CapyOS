@@ -102,6 +102,71 @@ static void test_signature_rejects_malformed_hex(void) {
     capypkg_clear_trusted_publisher_key();
 }
 
+static void test_index_envelope_accepts_exact_token_hash_and_signature(void) {
+    static const char body[] =
+        "name=org.capyos.agent.core\nversion=1.2.3\n---\n";
+    char body_sha[65];
+    char envelope[1024];
+    const char *verified_body = NULL;
+    size_t verified_len = 0u;
+    compute_sha256_hex((const uint8_t *)body, strlen(body), body_sha);
+    snprintf(envelope, sizeof(envelope),
+             "#capyos-modules-index-v2\n"
+             "#index_abi_token=capyos-base-v3\n"
+             "#index_epoch=1\n"
+             "#index_body_sha256=%s\n"
+             "#index_signature_ed25519=%0128d\n%s",
+             body_sha, 0, body);
+    g_signature_rc = 0;
+    g_signature_calls = 0;
+    capypkg_set_signature_verifier(signature_verifier_ok);
+    EXPECT(capypkg_verify_index_envelope(envelope, strlen(envelope),
+                                         &verified_body, &verified_len) ==
+               CAPYPKG_OK,
+           "signed index envelope must accept exact token, hash and signature");
+    EXPECT(verified_body != NULL && verified_len == strlen(body) &&
+               memcmp(verified_body, body, verified_len) == 0,
+           "signed index envelope must expose only authenticated body bytes");
+    EXPECT(g_signature_calls == 1,
+           "signed index envelope must invoke Ed25519 verifier exactly once");
+}
+
+static void test_index_envelope_rejects_token_hash_and_verifier_failures(void) {
+    static const char body[] = "name=org.capyos.agent.core\n---\n";
+    char body_sha[65];
+    char envelope[1024];
+    const char *verified_body = NULL;
+    size_t verified_len = 0u;
+    compute_sha256_hex((const uint8_t *)body, strlen(body), body_sha);
+    snprintf(envelope, sizeof(envelope),
+             "#capyos-modules-index-v2\n#index_abi_token=wrong-v3\n"
+             "#index_epoch=1\n#index_body_sha256=%s\n"
+             "#index_signature_ed25519=%0128d\n%s",
+             body_sha, 0, body);
+    capypkg_set_signature_verifier(signature_verifier_ok);
+    EXPECT(capypkg_verify_index_envelope(envelope, strlen(envelope),
+                                         &verified_body, &verified_len) ==
+               CAPYPKG_ERR_INDEX_TRUST,
+           "signed index envelope must reject a different ABI token");
+    snprintf(envelope, sizeof(envelope),
+             "#capyos-modules-index-v2\n#index_abi_token=capyos-base-v3\n"
+             "#index_epoch=1\n#index_body_sha256=%s\n"
+             "#index_signature_ed25519=%0128d\n%s",
+             body_sha, 0, body);
+    envelope[strlen(envelope) - 2u] ^= 1;
+    EXPECT(capypkg_verify_index_envelope(envelope, strlen(envelope),
+                                         &verified_body, &verified_len) ==
+               CAPYPKG_ERR_INDEX_TRUST,
+           "signed index envelope must reject a tampered body");
+    envelope[strlen(envelope) - 2u] ^= 1;
+    g_signature_rc = -1;
+    EXPECT(capypkg_verify_index_envelope(envelope, strlen(envelope),
+                                         &verified_body, &verified_len) ==
+               CAPYPKG_ERR_INDEX_TRUST,
+           "signed index envelope must reject verifier failure");
+    g_signature_rc = 0;
+}
+
 /* End-to-end through the install gate with the REAL verifier registered. This
  * uniquely exercises build_signed_descriptor (capypkg_install.c): the manifest
  * carries the KAT name/version/payload_sha256/payload_url, the fake fetcher

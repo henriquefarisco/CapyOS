@@ -824,6 +824,7 @@ APPS_OBJS := \
 	$(BUILD)/x86_64/capyui-apps/text_editor.o \
 	$(BUILD)/x86_64/capyui-apps/task_manager.o \
 	$(BUILD)/x86_64/capyui-apps/capyai_chat.o \
+	$(BUILD)/x86_64/capyui-apps/software_center.o \
 	$(BUILD)/x86_64/capyui-apps/settings.o \
 	$(BUILD)/x86_64/capyui-apps/settings_view.o \
 	$(BUILD)/x86_64/capyui-apps/settings_actions.o
@@ -1844,10 +1845,12 @@ endif
 iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
 	python3 tools/scripts/verify_official_boot_config.py $(BOOT_CONFIG_BIN)
 	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
+	    [ "$(CAPYOS_LOCAL_MODULES)" != "1" ] && \
 	    strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] capyai-gui-async ready'; then \
 		echo "[err] production ISO contains CAPYOS_CAPYAI_GUI_ASYNC_SMOKE"; exit 2; \
 	fi
 	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
+	    [ "$(CAPYOS_LOCAL_MODULES)" != "1" ] && \
 	    strings "$(CAPYOS_ELF64)" | grep -Fq '[lab] update trust anchor overridden'; then \
 		echo "[err] production ISO contains CAPYOS_UPDATE_LAB_TRUST_KEY_HEX"; exit 2; \
 	fi
@@ -2991,7 +2994,7 @@ $(TEST_CAPYGFX_TOOLBAR_BIN): $(TEST_CAPYGFX_TOOLBAR_SRCS) | $(BUILD)
 test-browser-shell: test-capygfx-toolbar
 endif
 
-.PHONY: modules-index verify-modules-index-assets
+.PHONY: modules-index modules-index-signed verify-modules-index-assets
 # modules-index: aggregate per-repo capypkg manifests (produced by
 # `make package` in each sibling repository) into a single index file
 # the CapyOS in-tree adapter consumes. Output:
@@ -3002,10 +3005,24 @@ modules-index:
 	python3 tools/scripts/build_modules_index.py \
 	  --output build/capypkg/modules-index.txt
 
+# Production publisher gate. CAPYPKG_SIGNING_KEY is deliberately mandatory;
+# private key material is never inferred from or copied into the repository.
+modules-index-signed:
+	@test -n "$(CAPYPKG_SIGNING_KEY)" || { echo "CAPYPKG_SIGNING_KEY is required" >&2; exit 2; }
+	python3 tools/scripts/sign_modules_index.py \
+	  --workspace "$(abspath ..)" \
+	  --private-key "$(CAPYPKG_SIGNING_KEY)" \
+	  --output build/capypkg/modules-index.txt
+
 verify-modules-index-assets:
 	@echo "Verificando todos os payloads referenciados pelo indice de modulos..."
 	python3 tools/scripts/verify_modules_index_assets.py \
 	  --index build/capypkg/modules-index.txt
+
+.PHONY: sdk-check
+sdk-check:
+	$(HOST_CC) -std=c99 -Wall -Wextra -Werror -pedantic \
+	  -Isdk/include -fsyntax-only sdk/samples/hello-package/main.c
 
 .PHONY: local-modules-index
 local-modules-index:
@@ -3420,12 +3437,12 @@ smoke-x64-qemu-browser-multifetch:
 # Local QEMU+OVMF mirror of smoke-x64-vmware-apps-basic-roundtrip (dev
 # feedback / CI pre-flight; VMware + UEFI + E1000 stays the official
 # release-acceptance gate). The gated in-kernel orchestrator emits the
-# marker pre-login, so no network is needed. REQUIRED_APPS=5 must match
+# marker pre-login, so no network is needed. REQUIRED_APPS=6 must match
 # CapyUI's apps_smoke_roundtrip_total().
 smoke-x64-qemu-apps-basic-roundtrip:
 	@echo "Executando smoke QEMU apps-basic-roundtrip (dev feedback / CI pre-flight)..."
 	$(MAKE) clean
-	$(MAKE) all64 PROFILE=full CAPYOS_APPS_ROUNDTRIP_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=5'
+	$(MAKE) all64 PROFILE=full CAPYOS_APPS_ROUNDTRIP_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=6'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] apps-basic-roundtrip ready" --timeout 300 --log build/ci/smoke_x64_qemu_apps_roundtrip.log $(SMOKE_X64_QEMU_MARKER_ARGS)
@@ -3640,7 +3657,7 @@ smoke-x64-qemu-capygfx-lifecycle:
 # smoke and the latch emits "[smoke] apps-basic-roundtrip ready" on COM1 once
 # APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes are observed. The set now
 # covers all five basic desktop apps -- calculator, task_manager, file_manager,
-# text_editor, settings (REQUIRED_APPS=5). This value MUST equal CapyUI's
+# text_editor, settings, software_center (REQUIRED_APPS=6). This value MUST equal CapyUI's
 # apps_smoke_roundtrip_total(); the orchestrator refuses to run (gate fails) on a
 # mismatch. Requires the CapyUI sibling.
 .PHONY: smoke-x64-vmware-apps-basic-roundtrip
@@ -3649,7 +3666,7 @@ smoke-x64-vmware-apps-basic-roundtrip:
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full \
 		CAPYOS_APPS_ROUNDTRIP_SMOKE=1 \
-		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=5'
+		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=6'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
@@ -4035,6 +4052,20 @@ smoke-x64-vmware-installer-wizard-existing-iso:
 	ISO_WIN="$$(wslpath -w "$(EXISTING_ISO)")"; \
 	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" $(SMOKE_X64_VMWARE_INSTALLER_ARGS)
 
+.PHONY: smoke-x64-vmware-pkg-install
+smoke-x64-vmware-pkg-install:
+	$(MAKE) iso-uefi-local-modules TOOLCHAIN64="$(TOOLCHAIN64)" \
+	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
+	  LOCAL_MODULES_REPOS="$(LOCAL_MODULES_REPOS)"
+	@echo "Executando gate VMware Etapa 9: install FULL + reboot + persistencia..."
+	@ISO_PATH="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
+	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer.py)"; \
+	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
+	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" \
+	  --module-profile full --require-module-install \
+	  --evidence build/ci/vmware-pkg-install-evidence.manifest \
+	  $(SMOKE_X64_VMWARE_INSTALLER_ARGS)
+
 .PHONY: smoke-x64-qemu-installer-wizard
 smoke-x64-qemu-installer-wizard: all64 iso-uefi manifest64
 	@echo "Executando preflight QEMU multi-disco do installer wizard..."
@@ -4135,7 +4166,7 @@ smoke-x64-vmware-update-ab-production-existing-iso:
 # so the first-boot bootstrap fetches the aggregated index + payloads over
 # DNS+TLS+redirect, then asserts the modules actually installed. Guards the bug
 # class fixed in alpha.286 (sin_addr byte-order). Needs outbound network.
-SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/v0.9.2+20260826/modules-index.txt
+SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/modules-capyos-base-v3/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
 	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)

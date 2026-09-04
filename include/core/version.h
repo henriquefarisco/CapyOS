@@ -3,20 +3,20 @@
 
 /* Version macros exported to the runtime and host tooling. */
 #define CAPYOS_VERSION_MAJOR        0
-#define CAPYOS_VERSION_MINOR        9
-#define CAPYOS_VERSION_PATCH        2
+#define CAPYOS_VERSION_MINOR        10
+#define CAPYOS_VERSION_PATCH        0
 
-#define CAPYOS_VERSION_CHANNEL      "stable"
-#define CAPYOS_VERSION_PRERELEASE   ""
-#define CAPYOS_VERSION_EXTENDED     "0.9.2"
-#define CAPYOS_VERSION_FULL         "0.9.2+20260826"
+#define CAPYOS_VERSION_CHANNEL      "alpha"
+#define CAPYOS_VERSION_PRERELEASE   "alpha.1"
+#define CAPYOS_VERSION_EXTENDED     "0.10.0-alpha.1"
+#define CAPYOS_VERSION_FULL         "0.10.0-alpha.1+20260903"
 #define CAPYOS_FEATURE_HYPERV_RUNTIME "hvrt-20260328a"
 #define CAPYOS_FEATURE_NETWORK_DIAG   "netdiag-20260328a"
 /* Etapa 2 do roteiro de maturação do browser (2026-05-03):
  * pipe 64 KiB + log forward + kill imediato + janela 480x384. */
 #define CAPYOS_FEATURE_BROWSER_RUNTIME "browser-20260712a"
 
-#define CAPYOS_VERSION_ALPHA        "0.8.0-alpha.321"
+#define CAPYOS_VERSION_ALPHA        "0.10.0-alpha.1"
 #define CAPYOS_VERSION_BETA         "0.6.2-beta.3"
 #define CAPYOS_VERSION_STABLE       "0.9.2"
 

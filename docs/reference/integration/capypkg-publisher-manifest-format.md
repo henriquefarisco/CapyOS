@@ -1,6 +1,6 @@
 # capypkg publisher manifest format
 
-**Status:** autoritativo desde 2026-05-19.
+**Status:** autoritativo; formato v2 desde 2026-09-03.
 **Audiência:** quem publica pacotes Capy remotos consumidos pelo
 adapter in-tree `services/capypkg` do CapyOS core.
 **Fonte da verdade do parser:** `CapyOS/include/services/capypkg.h` e
@@ -65,8 +65,29 @@ depends=org.capyos.codecs.image-basic
 | `install_root` | absoluto; sob `/var/capypkg` ou `/opt/`; sem segmento `..`; directory boundary respeitado | `CAPYPKG_ERR_DENIED` |
 | `depends` | lista separada por vírgula; cada item segue alfabeto do `name`; ≤ 8 itens | `CAPYPKG_ERR_PARSE` ou `CAPYPKG_ERR_DENIED` |
 | `repo` | não preencha; é setado pelo adapter no fetch | n/a |
+| `provides_abi` | nome ASCII do ABI publicado | `CAPYPKG_ERR_PARSE` |
+| `abi_version` | versão opaca não vazia do ABI | `CAPYPKG_ERR_PARSE` |
+| `core_abi_min` / `core_abi_max` | intervalo decimal inclusivo; deve conter o ABI 3 | `CAPYPKG_ERR_INCOMPATIBLE` |
+| `known_good` | `0` ou `1`; só `1` entra no índice oficial resolvido | `CAPYPKG_ERR_INCOMPATIBLE` |
 
-## 4. Regras globais de valor
+## 4. Envelope oficial resolve-at-publish
+
+O índice oficial começa, em ordem exata, com cinco linhas autenticadas:
+
+```text
+#capyos-modules-index-v2
+#index_abi_token=capyos-base-v3
+#index_epoch=1
+#index_body_sha256=<64 hex>
+#index_signature_ed25519=<128 hex>
+```
+
+O SHA-256 cobre todos os bytes após a quinta linha. A assinatura Ed25519 cobre
+`format=capyos-modules-index-v2|abi_token=capyos-base-v3|epoch=1|body_sha256=<H>\n`.
+O resolver do CapyAgent escolhe a versão SemVer mais nova compatível e
+known-good antes da assinatura; o CapyOS apenas verifica e aplica esse plano.
+
+## 5. Regras globais de valor
 
 - **Printable ASCII obrigatório:** qualquer byte fora de 0x20-0x7E em
   qualquer valor causa `CAPYPKG_ERR_DENIED`. Isso fecha a vetor de
@@ -78,7 +99,7 @@ depends=org.capyos.codecs.image-basic
   segmento; o adapter recusa por directory boundary
   (`/var/capypkg` vs `/var/capypkgsneak` não passa).
 
-## 5. Descriptor canônico para assinatura Ed25519
+## 6. Descriptor canônico por pacote (repos customizados)
 
 A assinatura Ed25519 cobre **exatamente** este byte string sem espaços
 adicionais, com `|` literais e `\n` final:
@@ -94,11 +115,9 @@ documentadas:
 - ordem fixa: `name` → `version` → `payload_sha256` → `payload_url`;
 - terminação: um único `\n` (LF; não CRLF).
 
-A chave pública do signer deve estar embutida no verifier que o
-publisher externo (`CapyAgent`) registra via
-`capypkg_set_signature_verifier`. Até esse verifier ser plugado, o
-adapter rejeita instalações de repos `signed` com
-`CAPYPKG_ERR_SIGNATURE`.
+A chave pública do publisher oficial está pinada no CapyOS. Repositórios
+customizados assinados usam o descritor por pacote abaixo; o índice oficial v2
+usa o envelope da seção 4 e falha fechado com `CAPYPKG_ERR_INDEX_TRUST`.
 
 ### Exemplo (pseudo-código)
 
@@ -115,7 +134,7 @@ signature_ed25519=" + hex_lower(signature) + "
 ..."
 ```
 
-## 6. Onde publicar
+## 7. Onde publicar
 
 | Recurso | Endpoint | Conteúdo |
 |---|---|---|
@@ -129,13 +148,12 @@ o índice agregado como asset operacional para o wizard e para `pkg-fetch`.
 Os arquivos automáticos `Source code .zip` e `.tar.gz` do GitHub não são
 índices nem payloads capypkg.
 
-## 7. Tamanho máximo de payload
+## 8. Tamanho máximo de payload
 
-O alpha runtime fetcha até 1 MiB em buffer estático. `CAPYPKG_PAYLOAD_MAX`
-(8 MiB) será o teto real quando o streaming writer landar. Publishers
-devem manter pacotes abaixo de 1 MiB até essa entrega.
+`CAPYPKG_PAYLOAD_MAX` é 8 MiB. O runtime dimensiona a alocação pelo tamanho
+autenticado e recusa excesso antes da ativação.
 
-## 8. Workflow recomendado para publishers
+## 9. Workflow recomendado para publishers
 
 1. **Build do artefato** — produzir o `.bin` (sem nenhuma execução
    esperada pelo adapter; o conteúdo é opaco até a etapa de loader
@@ -153,7 +171,7 @@ devem manter pacotes abaixo de 1 MiB até essa entrega.
 8. **Atualizar** [`compatibility-matrix.md`](compatibility-matrix.md)
    com a nova versão, ABI e canal.
 
-## 9. Validação antes de publicar
+## 10. Validação antes de publicar
 
 Sem rodar comandos nesta máquina (review/edit only):
 
@@ -174,7 +192,7 @@ make test-capypkg                         # parser + verifier host-side
 make smoke-x64-vmware-pkg-install         # quando Etapa 9 abrir
 ```
 
-## 10. Mapeamento para o descritor JSON de alto nível do CapyAgent
+## 11. Mapeamento para o descritor JSON de alto nível do CapyAgent
 
 `CapyAgent/docs/component-index-example.md` descreve um **registro
 org-style** (`id`, `tag`, `artifact`, `sha256`, `activation_class`,
@@ -191,14 +209,14 @@ A correspondência desejada quando CapyAgent integrar:
 | `sha256` | `payload_sha256` | mesmo valor em lowercase hex |
 | `permissions` | não tem correspondente direto | adapter alpha ignora; usar para UI/UX futura |
 | `dependencies` | `depends` | mesma semântica; ≤ 8 itens |
-| `required_abis` | não tem correspondente | adapter alpha não aplica filter ABI; usar para UI |
+| `required_abis` | `provides_abi`, `abi_version`, `core_abi_min`, `core_abi_max` | resolver publica apenas candidatos compatíveis |
 
 CapyAgent deve emitir tanto o registro JSON (alto nível, para
 descoberta UI) quanto um manifest line-oriented por release (baixo
 nível, para o adapter consumir). Documente o algoritmo de tradução
 no próprio CapyAgent quando o gerador for implementado.
 
-## 11. Referência cruzada
+## 12. Referência cruzada
 
 - [`compatibility-matrix.md`](compatibility-matrix.md)
 - [`compatibility-audit-2026-05-19.md`](compatibility-audit-2026-05-19.md)

@@ -38,6 +38,7 @@ extern capypkg_write_text_fn  g_capypkg_writer;
 extern capypkg_write_bytes_fn g_capypkg_bytes_writer;
 extern capypkg_remove_file_fn g_capypkg_remover;
 extern capypkg_mkdir_fn       g_capypkg_mkdir;
+extern capypkg_rename_fn      g_capypkg_renamer;
 
 extern capypkg_fetch_text_fn          g_capypkg_text_fetcher;
 extern capypkg_fetch_bytes_fn         g_capypkg_bytes_fetcher;
@@ -77,10 +78,15 @@ struct capypkg_repo  *capypkg_find_repo(const char *name);
 int capypkg_manifest_parse_entry(const char *text, size_t len,
                                  struct capypkg_entry *entry,
                                  size_t *consumed);
+int capypkg_entry_runtime_compatible(const struct capypkg_entry *entry);
 
 /* Verify a freshly downloaded package payload against the entry. */
 int capypkg_verify_payload(const struct capypkg_entry *entry,
                            const uint8_t *payload, size_t payload_len);
+
+/* Verify the v2 signed-index envelope and return the authenticated body. */
+int capypkg_verify_index_envelope(const char *text, size_t len,
+                                  const char **body, size_t *body_len);
 
 /* Repository persistence helpers. */
 int capypkg_repo_serialize(char *buffer, size_t buffer_size, size_t *out_len);

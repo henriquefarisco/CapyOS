@@ -99,6 +99,7 @@ int cmd_pkg_source_list(struct shell_context *ctx, int argc, char **argv);
 int cmd_pkg_source_add(struct shell_context *ctx, int argc, char **argv);
 int cmd_pkg_source_remove(struct shell_context *ctx, int argc, char **argv);
 int cmd_pkg_bootstrap(struct shell_context *ctx, int argc, char **argv);
+int cmd_pkg(struct shell_context *ctx, int argc, char **argv);
 /* The programmatic bootstrap entry point lives in
  * `include/services/capypkg_bootstrap.h` and is included above. */
 

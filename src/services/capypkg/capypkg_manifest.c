@@ -273,6 +273,26 @@ static int apply_kv(struct capypkg_entry *entry,
     } else if (key_is(key, key_len, "install_root")) {
         copy_field(entry->install_root, sizeof(entry->install_root),
                    value, value_len);
+    } else if (key_is(key, key_len, "provides_abi")) {
+        copy_field(entry->provides_abi, sizeof(entry->provides_abi),
+                   value, value_len);
+    } else if (key_is(key, key_len, "abi_version")) {
+        copy_field(entry->abi_version, sizeof(entry->abi_version),
+                   value, value_len);
+    } else if (key_is(key, key_len, "core_abi_min")) {
+        if (parse_uint32(value, value_len, &entry->core_abi_min) != 0) {
+            return CAPYPKG_ERR_PARSE;
+        }
+    } else if (key_is(key, key_len, "core_abi_max")) {
+        if (parse_uint32(value, value_len, &entry->core_abi_max) != 0) {
+            return CAPYPKG_ERR_PARSE;
+        }
+    } else if (key_is(key, key_len, "known_good")) {
+        uint32_t flag = 0u;
+        if (parse_uint32(value, value_len, &flag) != 0 || flag > 1u) {
+            return CAPYPKG_ERR_PARSE;
+        }
+        entry->known_good = (uint8_t)flag;
     } else if (key_is(key, key_len, "depends")) {
         return append_dependency(entry, value, value_len);
     } else if (key_is(key, key_len, "repo")) {
@@ -282,6 +302,14 @@ static int apply_kv(struct capypkg_entry *entry,
     /* Unknown keys are tolerated forward-compat; CapyAgent may add
      * fields the core does not consume yet. */
     return CAPYPKG_OK;
+}
+
+int capypkg_entry_runtime_compatible(const struct capypkg_entry *entry) {
+    return entry && entry->provides_abi[0] && entry->abi_version[0] &&
+           name_is_safe(entry->provides_abi) && entry->known_good == 1u &&
+           entry->core_abi_min > 0u &&
+           entry->core_abi_min <= CAPYPKG_ABI_VERSION &&
+           entry->core_abi_max >= CAPYPKG_ABI_VERSION;
 }
 
 /* Package names are concatenated into install paths and on-disk

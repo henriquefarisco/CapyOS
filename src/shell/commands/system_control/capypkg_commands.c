@@ -258,6 +258,34 @@ int cmd_pkg_update(struct shell_context *ctx, int argc, char **argv) {
     return rc == CAPYPKG_OK ? 0 : -1;
 }
 
+int cmd_pkg(struct shell_context *ctx, int argc, char **argv) {
+    const char *language = shell_current_language();
+    if (argc < 2 || shell_help_requested(argc, argv)) {
+        shell_print(trilang(
+            language,
+            "Uso: pkg <list|info|fetch|install|remove|update|source> [args]\n",
+            "Usage: pkg <list|info|fetch|install|remove|update|source> [args]\n",
+            "Uso: pkg <list|info|fetch|install|remove|update|source> [args]\n"));
+        return argc < 2 ? -1 : 0;
+    }
+    if (shell_string_equal(argv[1], "list")) return cmd_pkg_list(ctx, argc - 1, argv + 1);
+    if (shell_string_equal(argv[1], "info")) return cmd_pkg_info(ctx, argc - 1, argv + 1);
+    if (shell_string_equal(argv[1], "fetch")) return cmd_pkg_fetch(ctx, argc - 1, argv + 1);
+    if (shell_string_equal(argv[1], "install")) return cmd_pkg_install(ctx, argc - 1, argv + 1);
+    if (shell_string_equal(argv[1], "remove")) return cmd_pkg_remove(ctx, argc - 1, argv + 1);
+    if (shell_string_equal(argv[1], "update")) return cmd_pkg_update(ctx, argc - 1, argv + 1);
+    if (shell_string_equal(argv[1], "source") && argc >= 3) {
+        if (shell_string_equal(argv[2], "list")) return cmd_pkg_source_list(ctx, argc - 2, argv + 2);
+        if (shell_string_equal(argv[2], "add")) return cmd_pkg_source_add(ctx, argc - 2, argv + 2);
+        if (shell_string_equal(argv[2], "remove")) return cmd_pkg_source_remove(ctx, argc - 2, argv + 2);
+    }
+    shell_print_error(trilang(language, "subcomando pkg invalido",
+                              "invalid pkg subcommand",
+                              "subcomando pkg invalido"));
+    shell_newline();
+    return -1;
+}
+
 int cmd_pkg_source_list(struct shell_context *ctx, int argc, char **argv) {
     const char *language = shell_current_language();
     (void)ctx;

@@ -44,12 +44,44 @@ repositórios irmãos. Alterações cross-repo devem respeitar os pins de
      ordem lexicográfica.
 
 O workflow também preserva por 14 dias um artifact de handoff com esses bytes e
-`latest.unsigned.ini`. Ele não publica o draft nem o marca como Latest.
+`latest.unsigned.ini`. Nesse ponto `modules-index.txt` é deliberadamente sem
+assinatura: o workflow valida corpo canônico, hashes e payloads somente com o
+opt-in explícito de pré-publicação. Ele não publica o draft nem o marca como
+Latest.
 
 ## 3. Handoff e assinatura offline
 
-Baixe os sete assets-base do draft para um diretório isolado. Não execute
-`make sign-release-checksums` nesse diretório: esse alvo regenera o checksum
+Baixe os sete assets-base do draft para um diretório isolado. Primeiro substitua
+o índice do handoff autenticado pela forma assinada offline com a chave dedicada
+do publisher CapyPKG e recalcule os dois arquivos de checksum:
+
+```sh
+python3 tools/scripts/sign_modules_index.py \
+  --workspace "$(dirname "$PWD")" \
+  --private-key "$OFFLINE_CAPYPKG_PUBLISHER_KEY" \
+  --release-tag "$TAG" \
+  --output "$BUNDLE/modules-index.txt"
+(
+  cd "$BUNDLE"
+  sha256sum modules-index.txt org.capyos.ai.assistant-*.bin > modules.sha256
+  mapfile -t PAYLOADS < <(
+    find . -maxdepth 1 -type f \
+      ! -name release-artifacts.sha256 \
+      ! -name 'release-*.sig' \
+      ! -name 'release-*.pem' \
+      ! -name 'release-*.manifest' \
+      ! -name latest.ini \
+      -printf '%f\n' | LC_ALL=C sort
+  )
+  test "${#PAYLOADS[@]}" -eq 6
+  sha256sum "${PAYLOADS[@]}" > release-artifacts.sha256
+)
+```
+
+A saída deve ser reconstruída dos tags imutáveis exatos pinados pelo tag do
+CapyOS. O signer confirma que a chave privada corresponde à âncora pública
+compilada no kernel taggeado. Não execute `make sign-release-checksums` nesse
+diretório: esse alvo regenera o checksum
 local de cinco artefatos e não representa o conjunto público de seis payloads.
 Defina a identidade exata do handoff e derive `PUBLISHED_AT` pelo mesmo contrato
 do workflow: metadata `+YYYYMMDD`, quando presente; caso contrário, data do
