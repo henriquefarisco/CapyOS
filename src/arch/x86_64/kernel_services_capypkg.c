@@ -15,6 +15,9 @@
 #include <stdint.h>
 
 #include "arch/x86_64/kernel_main_internal.h"
+#if !defined(CAPYOS_PROFILE_CORE_ONLY)
+#include "apps/software_center.h"
+#endif
 #include "auth/session.h"
 #include "fs/vfs.h"
 #include "kernel/log/klog.h"
@@ -28,6 +31,34 @@
 #include "services/service_manager.h"
 
 extern uint64_t pit_ticks(void);
+
+#if !defined(CAPYOS_PROFILE_CORE_ONLY)
+static void capypkg_ui_copy(char *dst, size_t dst_size, const char *src) {
+  size_t i = 0u;
+  if (!dst || dst_size == 0u) return;
+  while (src && src[i] && i + 1u < dst_size) { dst[i] = src[i]; ++i; }
+  dst[i] = '\0';
+}
+
+static int capypkg_ui_refresh(void) { return capypkg_fetch_index(); }
+static size_t capypkg_ui_count(void) { return capypkg_available_count(); }
+static int capypkg_ui_get(size_t index, struct software_center_package *out) {
+  struct capypkg_entry entry;
+  struct capypkg_entry installed;
+  if (!out || capypkg_available_get_at(index, &entry) != CAPYPKG_OK) return -1;
+  capypkg_ui_copy(out->name, sizeof(out->name), entry.name);
+  capypkg_ui_copy(out->version, sizeof(out->version), entry.version);
+  capypkg_ui_copy(out->summary, sizeof(out->summary), entry.summary);
+  out->installed = capypkg_installed_get(entry.name, &installed) == CAPYPKG_OK;
+  return 0;
+}
+static int capypkg_ui_install(const char *name) { return capypkg_install(name); }
+static int capypkg_ui_remove(const char *name) { return capypkg_remove(name); }
+static const struct software_center_backend g_capypkg_ui_backend = {
+  capypkg_ui_refresh, capypkg_ui_count, capypkg_ui_get,
+  capypkg_ui_install, capypkg_ui_remove
+};
+#endif
 
 /* VFS-backed adapters; mirror update_agent's pattern but kept local
  * because the function signatures are slightly different. */
@@ -127,6 +158,15 @@ static int capypkg_runtime_remove(const char *path) {
   }
   rc = vfs_unlink(path);
 done:
+  session_set_active(previous_session);
+  return rc;
+}
+
+static int capypkg_runtime_rename(const char *source, const char *destination) {
+  struct session_context *previous_session = session_active();
+  int rc;
+  session_set_active(NULL);
+  rc = vfs_rename(source, destination);
   session_set_active(previous_session);
   return rc;
 }
@@ -356,16 +396,19 @@ void kernel_capypkg_bind_runtime_adapters(void) {
   capypkg_set_bytes_writer(capypkg_runtime_write_bytes);
   capypkg_set_remover(capypkg_runtime_remove);
   capypkg_set_mkdir(capypkg_runtime_mkdir);
+  capypkg_set_renamer(capypkg_runtime_rename);
   capypkg_set_text_fetcher(capypkg_runtime_fetch_text);
   capypkg_set_bytes_fetcher(capypkg_runtime_fetch_bytes);
   capypkg_set_bytes_fetcher_progress(capypkg_runtime_fetch_bytes_progress);
-  /* Register the real CapyOS-side Ed25519 descriptor verifier (over the kernel
-   * ed25519_verify). It stays fail-closed until an operator pins the official
-   * offline-generated publisher key via capypkg_set_trusted_publisher_key();
-   * none is pinned here, so signed repos still fail with CAPYPKG_ERR_SIGNATURE
-   * in production (the publicly-known KAT test key is never trusted). */
+  /* Bind the audited verifier and the public half of the dedicated offline
+   * CapyPKG publisher key. Package trust is intentionally separate from the
+   * update-agent and release-checksum keys. */
+  capypkg_use_production_publisher_key();
   capypkg_set_signature_verifier(capypkg_ed25519_verify_signature);
   (void)capypkg_init();
+#if !defined(CAPYOS_PROFILE_CORE_ONLY)
+  software_center_set_backend(&g_capypkg_ui_backend);
+#endif
   g_capypkg_bound = 1;
 }
 

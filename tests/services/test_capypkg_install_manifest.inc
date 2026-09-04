@@ -69,6 +69,8 @@ static void test_install_db_failure_rolls_back_and_retry_reinstalls(void) {
            "failed installed-db write must roll back the in-memory entry");
     EXPECT(fs_find("/var/capypkg/retry.commit/installed") == NULL,
            "failed installed-db write must remove the activation marker");
+    EXPECT(fs_find("/var/capypkg/retry.commit/retry.commit.bin") == NULL,
+           "failed new install must remove the promoted payload");
     EXPECT(g_payload_fetch_calls == 1,
            "the failed commit must have performed one real payload fetch");
 
@@ -84,6 +86,71 @@ static void test_install_db_failure_rolls_back_and_retry_reinstalls(void) {
     EXPECT(fs_read(CAPYPKG_DB_FILE, db_text, sizeof(db_text), &db_len) == 0 &&
                db_len > 0u && strstr(db_text, "name=retry.commit") != NULL,
            "successful retry must persist the installed package in db.idx");
+}
+
+static void test_update_db_failure_restores_previous_payload(void) {
+    static char idx[1024];
+    static const char old_payload[] = "old-package-payload";
+    static const char new_payload[] = "new-package-payload";
+    char old_hex[65];
+    char new_hex[65];
+    struct fake_file *target;
+    int rc;
+
+    reset_state(1);
+    compute_sha256_hex((const uint8_t *)old_payload, strlen(old_payload), old_hex);
+    snprintf(idx, sizeof(idx),
+             "name=atomic.update\nversion=1.0.0\n"
+             "payload_url=https://example.com/atomic-v1.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/atomic.update\n---\n",
+             old_hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    g_index_text = idx;
+    g_index_rc = 0;
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "atomic update v1 manifest must populate catalog");
+    g_payload_bytes = (const uint8_t *)old_payload;
+    g_payload_len = strlen(old_payload);
+    g_payload_rc = 0;
+    EXPECT(capypkg_install("atomic.update") == CAPYPKG_OK,
+           "atomic update fixture must install v1");
+
+    compute_sha256_hex((const uint8_t *)new_payload, strlen(new_payload), new_hex);
+    snprintf(idx, sizeof(idx),
+             "name=atomic.update\nversion=2.0.0\n"
+             "payload_url=https://example.com/atomic-v2.bin\n"
+             "payload_sha256=%s\nsignature_ed25519=%s\n"
+             "install_root=/var/capypkg/atomic.update\n---\n",
+             new_hex,
+             "abababababababababababababababababababababababababababababababab"
+             "abababababababababababababababababababababababababababababababab");
+    EXPECT(capypkg_fetch_index() == CAPYPKG_OK,
+           "atomic update v2 manifest must replace available catalog");
+    g_payload_bytes = (const uint8_t *)new_payload;
+    g_payload_len = strlen(new_payload);
+    g_text_write_fail_path = CAPYPKG_DB_FILE;
+    g_text_write_fail_remaining = 1;
+
+    rc = capypkg_update("atomic.update");
+    EXPECT(rc == CAPYPKG_ERR_STORAGE,
+           "failed update metadata commit must report storage failure");
+    target = fs_find("/var/capypkg/atomic.update/atomic.update.bin");
+    EXPECT(target && target->bytes_len == strlen(old_payload) &&
+               memcmp(target->bytes, old_payload, strlen(old_payload)) == 0,
+           "failed update metadata commit must restore the previous payload");
+    EXPECT(fs_find("/var/capypkg/atomic.update/atomic.update.bin.previous") == NULL,
+           "failed update rollback must consume the backup artifact");
+
+    EXPECT(capypkg_update("atomic.update") == CAPYPKG_OK,
+           "atomic update retry must install v2");
+    target = fs_find("/var/capypkg/atomic.update/atomic.update.bin");
+    EXPECT(target && target->bytes_len == strlen(new_payload) &&
+               memcmp(target->bytes, new_payload, strlen(new_payload)) == 0,
+           "successful update must activate the new payload");
+    EXPECT(fs_find("/var/capypkg/atomic.update/atomic.update.bin.previous") == NULL,
+           "successful update must remove the backup artifact");
 }
 
 static void test_install_fail_closed_without_verifier(void) {
@@ -661,6 +728,12 @@ static void test_state_and_result_labels_are_well_formed(void) {
     EXPECT(strcmp(capypkg_result_label(CAPYPKG_ERR_NO_SOURCE),
                   "no-repository-configured") == 0,
            "result label for NO_SOURCE must be 'no-repository-configured'");
+    EXPECT(strcmp(capypkg_result_label(CAPYPKG_ERR_INDEX_TRUST),
+                  "index-trust-failed") == 0,
+           "result label for INDEX_TRUST must be explicit");
+    EXPECT(strcmp(capypkg_result_label(CAPYPKG_ERR_INCOMPATIBLE),
+                  "abi-incompatible") == 0,
+           "result label for INCOMPATIBLE must be explicit");
 }
 
 static void test_install_observer_reports_phases(void) {

@@ -1,0 +1,16 @@
+name=org.capyos.sdk.hello
+version=1.0.0
+summary=Minimal CapyOS SDK package
+official=0
+payload_url=https://example.invalid/org.capyos.sdk.hello-1.0.0.bin
+payload_sha256=0000000000000000000000000000000000000000000000000000000000000000
+payload_size=1
+install_root=/var/capypkg/org.capyos.sdk.hello
+provides_abi=capyos-sdk-sample
+abi_version=1
+core_abi_min=3
+core_abi_max=3
+known_good=0
+depends=
+repo=example
+---

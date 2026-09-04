@@ -84,6 +84,9 @@ static void rebuild_signed_flag(void) {
 
 static int signature_required(const struct capypkg_entry *entry) {
     if (!entry) return 0;
+    /* A verified v2 index signature already authenticates this entry's exact
+     * URL and digest. Requiring a second per-payload signature adds no trust. */
+    if (entry->catalog_authenticated) return 0;
     if (entry->source_repo[0]) {
         struct capypkg_repo *repo = capypkg_find_repo(entry->source_repo);
         if (repo) return repo->require_signature ? 1 : 0;
@@ -219,13 +222,26 @@ int capypkg_fetch_index(void) {
             last_rc = CAPYPKG_ERR_FETCH;
             continue;
         }
+        const char *catalog_text = buffer;
+        size_t catalog_len = len;
+        uint8_t catalog_authenticated = 0u;
+        if (repo->require_signature &&
+            capypkg_local_equal(repo->index_url, CAPYPKG_DEFAULT_REPO_URL)) {
+            int trust_rc = capypkg_verify_index_envelope(
+                buffer, len, &catalog_text, &catalog_len);
+            if (trust_rc != CAPYPKG_OK) {
+                last_rc = trust_rc;
+                continue;
+            }
+            catalog_authenticated = 1u;
+        }
         size_t cursor = 0u;
-        while (cursor < len &&
+        while (cursor < catalog_len &&
                g_capypkg.available_count < CAPYPKG_MAX_AVAILABLE) {
             struct capypkg_entry entry;
             size_t consumed = 0u;
             int parse_rc = capypkg_manifest_parse_entry(
-                &buffer[cursor], len - cursor, &entry, &consumed);
+                &catalog_text[cursor], catalog_len - cursor, &entry, &consumed);
             if (parse_rc != CAPYPKG_OK) {
                 if (consumed == 0u) break;
                 cursor += consumed;
@@ -235,6 +251,13 @@ int capypkg_fetch_index(void) {
                 capypkg_local_copy(entry.source_repo,
                                    sizeof(entry.source_repo), repo->name);
             }
+            if (catalog_authenticated &&
+                !capypkg_entry_runtime_compatible(&entry)) {
+                last_rc = CAPYPKG_ERR_INCOMPATIBLE;
+                cursor += consumed;
+                continue;
+            }
+            entry.catalog_authenticated = catalog_authenticated;
             int append_rc = append_available(&entry);
             if (append_rc != CAPYPKG_OK) {
                 last_rc = append_rc;
@@ -509,6 +532,15 @@ static int build_payload_staging(const struct capypkg_entry *entry,
     return 0;
 }
 
+static int build_payload_backup(const char *target, char *out, size_t out_size) {
+    size_t target_len = capypkg_local_len(target);
+    static const char suffix[] = ".previous";
+    if (!target || !out || target_len + sizeof(suffix) > out_size) return -1;
+    capypkg_local_copy(out, out_size, target);
+    capypkg_local_append(out, out_size, suffix);
+    return 0;
+}
+
 static int ensure_install_dirs(const struct capypkg_entry *entry) {
     if (!g_capypkg_mkdir) return CAPYPKG_OK;
     (void)g_capypkg_mkdir(CAPYPKG_DIR_SYSTEM);
@@ -580,10 +612,6 @@ int capypkg_install(const char *name) {
 
     avail->state = CAPYPKG_STATE_FETCHING;
 
-    /* Make sure the staging directory exists before we even hit the
-     * network: an mkdir failure now is easier to surface (we can
-     * still try the legacy direct-write path) than after several
-     * megabytes of payload have been pulled. */
     (void)ensure_install_dirs(avail);
 
     /* Keep host tests deterministic, but allocate in-kernel so the
@@ -644,8 +672,6 @@ int capypkg_install(const char *name) {
 #endif
         return CAPYPKG_ERR_FETCH;
     }
-    /* Download complete: report 100% of the phase for both fetch paths
-     * (the plain fetcher emits no intermediate progress). */
     capypkg_emit_install_phase(avail->name, CAPYPKG_INSTALL_PHASE_DOWNLOAD,
                                (uint64_t)payload_len, (uint64_t)payload_len);
 
@@ -699,6 +725,9 @@ int capypkg_install(const char *name) {
 
     capypkg_emit_install_phase(avail->name, CAPYPKG_INSTALL_PHASE_STAGE, 0, 0);
     char target[CAPYPKG_PATH_MAX];
+    char backup[CAPYPKG_PATH_MAX];
+    int atomic_payload_commit = 0;
+    int backup_created = 0;
     if (build_payload_target(avail, target, sizeof(target)) != 0) {
         if (staged) cleanup_payload_staging(avail);
 #if !defined(UNIT_TEST)
@@ -706,7 +735,23 @@ int capypkg_install(const char *name) {
 #endif
         return CAPYPKG_ERR_INVALID_ARG;
     }
-    if (g_capypkg_bytes_writer(target, payload_buffer, payload_len) != 0) {
+    backup[0] = '\0';
+    if (staged && g_capypkg_renamer &&
+        build_payload_backup(target, backup, sizeof(backup)) == 0) {
+        if (g_capypkg_remover) (void)g_capypkg_remover(backup);
+        if (existing_installed && g_capypkg_renamer(target, backup) == 0) {
+            backup_created = 1;
+        }
+        if (g_capypkg_renamer(staging, target) == 0) {
+            atomic_payload_commit = 1;
+            staged = 0;
+        } else if (backup_created) {
+            (void)g_capypkg_renamer(backup, target);
+            backup_created = 0;
+        }
+    }
+    if (!atomic_payload_commit &&
+        g_capypkg_bytes_writer(target, payload_buffer, payload_len) != 0) {
         if (g_capypkg_remover) {
             (void)g_capypkg_remover(target);
         }
@@ -726,19 +771,25 @@ int capypkg_install(const char *name) {
              "[audit] [capypkg] payload stored in split parts");
     }
 
-    /* Happy path: the bytes are committed in install_root and the
-     * staging copy is now redundant. Hygienise the staging directory
-     * so a steady-state system never accumulates leftover payloads. */
     if (staged) {
         cleanup_payload_staging(avail);
     }
 
     rc = commit_install_metadata(avail, payload_len);
     if (rc != CAPYPKG_OK) {
+        if (atomic_payload_commit && g_capypkg_remover) {
+            (void)g_capypkg_remover(target);
+        }
+        if (backup_created && g_capypkg_renamer) {
+            (void)g_capypkg_renamer(backup, target);
+        }
 #if !defined(UNIT_TEST)
         kfree(payload_buffer);
 #endif
         return rc;
+    }
+    if (backup_created && g_capypkg_remover) {
+        (void)g_capypkg_remover(backup);
     }
     klog(KLOG_INFO,
          "[audit] [capypkg] payload-sha256 verified; package installed");
@@ -817,8 +868,6 @@ int capypkg_update(const char *name) {
     if (capypkg_local_equal(installed->version, avail->version)) {
         return CAPYPKG_ERR_ALREADY;
     }
-    /* Re-installing replaces the entry in installed[] with the new
-     * descriptor and persists. */
     return capypkg_install(name);
 }
 

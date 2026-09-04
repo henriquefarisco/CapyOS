@@ -110,9 +110,9 @@ void service_manager_bootstrap_defaults(void) {
   seed_service(SYSTEM_SERVICE_UPDATE_AGENT, "update-agent", 0,
                SYSTEM_SERVICE_STARTUP_MANUAL, SYSTEM_SERVICE_STATE_STOPPED,
                "update catalog idle");
-  seed_service(SYSTEM_SERVICE_CAPYPKG, "capypkg", 0,
+  seed_service(SYSTEM_SERVICE_CAPYPKG, "pkgd", 0,
                SYSTEM_SERVICE_STARTUP_MANUAL, SYSTEM_SERVICE_STATE_STOPPED,
-               "package adapter idle");
+               "package daemon idle");
   seed_target(SYSTEM_SERVICE_TARGET_CORE, "core",
               (1u << SYSTEM_SERVICE_LOGGER));
   seed_target(SYSTEM_SERVICE_TARGET_NETWORK, "network",

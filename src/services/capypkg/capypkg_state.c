@@ -18,6 +18,7 @@ capypkg_write_text_fn  g_capypkg_writer = NULL;
 capypkg_write_bytes_fn g_capypkg_bytes_writer = NULL;
 capypkg_remove_file_fn g_capypkg_remover = NULL;
 capypkg_mkdir_fn       g_capypkg_mkdir = NULL;
+capypkg_rename_fn      g_capypkg_renamer = NULL;
 
 capypkg_fetch_text_fn          g_capypkg_text_fetcher = NULL;
 capypkg_fetch_bytes_fn         g_capypkg_bytes_fetcher = NULL;
@@ -38,7 +39,8 @@ void capypkg_emit_install_phase(const char *name,
 
 const char *const CAPYPKG_DEFAULT_REPO_NAME = "stable";
 const char *const CAPYPKG_DEFAULT_REPO_URL =
-    "https://repo.capyos.org/capypkg/v1/index.cap";
+    "https://github.com/henriquefarisco/CapyOS/releases/download/"
+    "modules-capyos-base-v3/modules-index.txt";
 
 void capypkg_local_zero(void *ptr, size_t len) {
     uint8_t *dst = (uint8_t *)ptr;
@@ -142,6 +144,7 @@ void capypkg_reset(void) {
     g_capypkg_bytes_writer = NULL;
     g_capypkg_remover = NULL;
     g_capypkg_mkdir = NULL;
+    g_capypkg_renamer = NULL;
     g_capypkg_text_fetcher = NULL;
     g_capypkg_bytes_fetcher = NULL;
     g_capypkg_bytes_fetcher_progress = NULL;
@@ -190,6 +193,7 @@ void capypkg_set_bytes_writer(capypkg_write_bytes_fn fn) {
 }
 void capypkg_set_remover(capypkg_remove_file_fn fn) { g_capypkg_remover = fn; }
 void capypkg_set_mkdir(capypkg_mkdir_fn fn) { g_capypkg_mkdir = fn; }
+void capypkg_set_renamer(capypkg_rename_fn fn) { g_capypkg_renamer = fn; }
 
 void capypkg_set_text_fetcher(capypkg_fetch_text_fn fn) {
     g_capypkg_text_fetcher = fn;
@@ -355,6 +359,8 @@ const char *capypkg_result_label(int rc) {
     case CAPYPKG_ERR_DEPENDENCY:  return "dependency-unresolved";
     case CAPYPKG_ERR_QUOTA:       return "quota-exceeded";
     case CAPYPKG_ERR_DENIED:      return "policy-denied";
+    case CAPYPKG_ERR_INDEX_TRUST: return "index-trust-failed";
+    case CAPYPKG_ERR_INCOMPATIBLE:return "abi-incompatible";
     default:                      return "error";
     }
 }

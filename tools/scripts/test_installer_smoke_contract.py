@@ -574,7 +574,7 @@ def main() -> int:
         digest_a = "a" * 64
         digest_b = "b" * 64
         evidence = {
-            "format": "capyos-installer-wizard-evidence-manifest-v3",
+            "format": "capyos-installer-wizard-evidence-manifest-v4",
             "release_tag": "0.8.0-alpha.315+20260715",
             "track": "UEFI/GPT/x86_64",
             "provider": "vmware-workstation",
@@ -607,6 +607,8 @@ def main() -> int:
             "login_completed": "yes",
             "persistence_marker_written": "yes",
             "persistence_marker_read_after_reboot": "yes",
+            "module_profile": "full",
+            "module_install_completed": "yes",
             "recovery_key_redacted": "yes",
             "recovery_key_included": "no",
             "marker_session_used": "yes",

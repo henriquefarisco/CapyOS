@@ -19,7 +19,12 @@ try:  # Package import used by unittest.
     from .modules_index_catalog import (
         ALLOWED_FIELDS,
         CANONICAL_FIELDS,
+        CORE_ABI_TOKEN,
+        CORE_ABI_VERSION,
         DEFAULT_REPOS,
+        EXPECTED_RESOLVED_COUNT,
+        INDEX_EPOCH,
+        INDEX_FORMAT,
         MODULE_BY_ID,
         MODULE_SPECS,
         RUNTIME_INDEX_BYTES,
@@ -34,14 +39,19 @@ try:  # Package import used by unittest.
         RUNTIME_VERSION_BYTES,
         ModuleSpec,
         expected_payload_url,
-        pinned_payload_metadata,
+        resolved_payload_url,
         validate_release_tag,
     )
 except ImportError:  # Direct script/import from tools/scripts.
     from modules_index_catalog import (  # type: ignore
         ALLOWED_FIELDS,
         CANONICAL_FIELDS,
+        CORE_ABI_TOKEN,
+        CORE_ABI_VERSION,
         DEFAULT_REPOS,
+        EXPECTED_RESOLVED_COUNT,
+        INDEX_EPOCH,
+        INDEX_FORMAT,
         MODULE_BY_ID,
         MODULE_SPECS,
         RUNTIME_INDEX_BYTES,
@@ -56,7 +66,7 @@ except ImportError:  # Direct script/import from tools/scripts.
         RUNTIME_VERSION_BYTES,
         ModuleSpec,
         expected_payload_url,
-        pinned_payload_metadata,
+        resolved_payload_url,
         validate_release_tag,
     )
 
@@ -68,6 +78,11 @@ REQUIRED_FIELDS: Tuple[str, ...] = (
     "payload_sha256",
     "payload_size",
     "install_root",
+    "provides_abi",
+    "abi_version",
+    "core_abi_min",
+    "core_abi_max",
+    "known_good",
     "depends",
 )
 
@@ -75,6 +90,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SIG_RE = re.compile(r"^[0-9a-f]{128}$")
 POSITIVE_DECIMAL_RE = re.compile(r"^[1-9][0-9]*$")
+NONNEGATIVE_DECIMAL_RE = re.compile(r"^(0|[1-9][0-9]*)$")
 PRINTABLE_RE = re.compile(r"^[\x20-\x7e]*$")
 CAPYOS_VERSION_RE = re.compile(
     r'^\s*#define\s+CAPYOS_VERSION_FULL\s+"([^"]+)"\s*$'
@@ -182,6 +198,8 @@ def validate_manifest(path: Path, fields: Dict[str, str]) -> None:
     _ascii_limit(path, "summary", fields["summary"], RUNTIME_SUMMARY_BYTES)
     _ascii_limit(path, "payload_url", fields["payload_url"], RUNTIME_URL_BYTES)
     _ascii_limit(path, "install_root", fields["install_root"], RUNTIME_PATH_BYTES)
+    _ascii_limit(path, "provides_abi", fields["provides_abi"], RUNTIME_NAME_BYTES)
+    _ascii_limit(path, "abi_version", fields["abi_version"], RUNTIME_VERSION_BYTES)
 
     try:
         parsed = urlsplit(fields["payload_url"])
@@ -227,6 +245,15 @@ def validate_manifest(path: Path, fields: Dict[str, str]) -> None:
         raise ManifestError(f"{path}: install_root is outside runtime scope")
 
     manifest_dependencies(path, fields)
+    if not NAME_RE.fullmatch(fields["provides_abi"]):
+        raise ManifestError(f"{path}: invalid provides_abi")
+    for key in ("core_abi_min", "core_abi_max"):
+        if not POSITIVE_DECIMAL_RE.fullmatch(fields[key]):
+            raise ManifestError(f"{path}: {key} must be a canonical positive decimal")
+    if int(fields["core_abi_min"]) > int(fields["core_abi_max"]):
+        raise ManifestError(f"{path}: invalid core ABI range")
+    if fields["known_good"] not in ("0", "1"):
+        raise ManifestError(f"{path}: known_good must be 0 or 1")
     if fields.get("official", "1") != "1":
         raise ManifestError(f"{path}: official must be 1")
     if "repo" in fields:
@@ -256,6 +283,11 @@ def validate_catalog_manifest(
         "version": spec.version,
         "payload_url": expected_payload_url(spec, release_tag),
         "install_root": spec.install_root,
+        "provides_abi": spec.provides_abi,
+        "abi_version": spec.abi_version,
+        "core_abi_min": str(spec.core_abi_min),
+        "core_abi_max": str(spec.core_abi_max),
+        "known_good": str(spec.known_good),
         "depends": ",".join(spec.dependencies),
     }
     for key, expected in expected_values.items():
@@ -298,6 +330,19 @@ def emit_entry(fields: Dict[str, str], out_lines: List[str]) -> None:
         if value != "":
             out_lines.append(f"{key}={value}")
     out_lines.append("---")
+
+
+def index_descriptor(abi_token: str, epoch: int, body_sha256: str) -> bytes:
+    if abi_token != CORE_ABI_TOKEN:
+        raise ManifestError(f"index ABI token must be {CORE_ABI_TOKEN}")
+    if epoch < 1:
+        raise ManifestError("index epoch must be positive")
+    if not SHA256_RE.fullmatch(body_sha256):
+        raise ManifestError("invalid index body SHA-256")
+    return (
+        f"format={INDEX_FORMAT}|abi_token={abi_token}|epoch={epoch}|"
+        f"body_sha256={body_sha256}\n"
+    ).encode("ascii")
 
 
 def _capyos_release_tag(workspace: Path) -> str:
@@ -343,6 +388,10 @@ def build_index(
     repos: List[str],
     output: Path,
     release_tag: str | None = None,
+    abi_token: str = CORE_ABI_TOKEN,
+    epoch: int = INDEX_EPOCH,
+    signature_hex: str | None = None,
+    descriptor_output: Path | None = None,
 ) -> int:
     _validate_repo_selection(repos)
     if release_tag is None:
@@ -383,49 +432,66 @@ def build_index(
     if len(manifests_by_id) > RUNTIME_MAX_ENTRIES:
         raise ManifestError("module count exceeds CAPYPKG_MAX_AVAILABLE")
 
-    out_lines: List[str] = [
-        "# CapyOS modules index, generated by build_modules_index.py",
-        f"# Official inventory: {len(MODULE_SPECS)} immutable modules",
-    ]
+    body_lines: List[str] = []
+    emitted = 0
     for spec in MODULE_SPECS:
         path, fields = manifests_by_id[spec.module_id]
         validate_catalog_manifest(path, fields, spec, release_tag)
+        if not spec.known_good:
+            continue
         rendered = dict(fields)
         rendered["official"] = "1"
-        pinned_metadata = pinned_payload_metadata(spec)
-        if pinned_metadata is not None:
-            pinned_sha256, pinned_size = pinned_metadata
-            rendered["payload_sha256"] = pinned_sha256
-            rendered["payload_size"] = str(pinned_size)
-            # A signature emitted by a local rebuild cannot authenticate the
-            # different immutable payload referenced by the official index.
-            rendered.pop("signature_ed25519", None)
-        emit_entry(rendered, out_lines)
+        rendered["payload_url"] = resolved_payload_url(spec)
+        emit_entry(rendered, body_lines)
+        emitted += 1
         print(
             f"[ok] {spec.repo}: {spec.module_id}@{spec.version} "
             f"({rendered['payload_sha256'][:12]}...)"
         )
 
-    index_text = "\n".join(out_lines) + "\n"
-    if len(index_text.encode("utf-8")) > RUNTIME_INDEX_BYTES:
+    if emitted != EXPECTED_RESOLVED_COUNT:
+        raise ManifestError("resolved module count does not match policy")
+    body = ("\n".join(body_lines) + "\n").encode("utf-8")
+    body_sha256 = hashlib.sha256(body).hexdigest()
+    descriptor = index_descriptor(abi_token, epoch, body_sha256)
+    if signature_hex is not None and not SIG_RE.fullmatch(signature_hex):
+        raise ManifestError("index signature must be 64 lowercase hex bytes")
+    header = [
+        f"#{INDEX_FORMAT}",
+        f"#index_abi_token={abi_token}",
+        f"#index_epoch={epoch}",
+        f"#index_body_sha256={body_sha256}",
+    ]
+    if signature_hex is not None:
+        header.append(f"#index_signature_ed25519={signature_hex}")
+    index_text = "\n".join(header).encode("ascii") + b"\n" + body
+    if len(index_text) > RUNTIME_INDEX_BYTES:
         raise ManifestError(
             f"modules index exceeds the runtime limit of {RUNTIME_INDEX_BYTES} bytes"
         )
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(index_text, encoding="utf-8")
-    print(f"[ok] wrote {len(MODULE_SPECS)} entries to {output}")
+    output.write_bytes(index_text)
+    if descriptor_output is not None:
+        descriptor_output.parent.mkdir(parents=True, exist_ok=True)
+        descriptor_output.write_bytes(descriptor)
+    print(f"[ok] wrote {emitted} resolved entries to {output}")
     return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build the exact nine-entry official CapyOS module index."
+        description="Resolve and build the ABI-token CapyOS module index."
     )
     parser.add_argument(
         "--workspace",
         default=None,
         help="parent directory containing CapyOS and all sibling repositories",
     )
+    parser.add_argument("--abi-token", default=CORE_ABI_TOKEN)
+    parser.add_argument("--epoch", type=int, default=INDEX_EPOCH)
+    parser.add_argument("--signature-hex", default=None)
+    parser.add_argument("--signature-file", default=None)
+    parser.add_argument("--descriptor-output", default=None)
     parser.add_argument(
         "--output",
         default="build/capypkg/modules-index.txt",
@@ -453,6 +519,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     output = Path(args.output)
     if not output.is_absolute():
         output = capyos_root / output
+    descriptor_output = Path(args.descriptor_output) if args.descriptor_output else None
+    if descriptor_output is not None and not descriptor_output.is_absolute():
+        descriptor_output = capyos_root / descriptor_output
+    signature_hex = args.signature_hex
+    if args.signature_file:
+        if signature_hex is not None:
+            parser.error("use only one of --signature-hex and --signature-file")
+        signature_hex = Path(args.signature_file).read_text(encoding="ascii").strip()
 
     try:
         return build_index(
@@ -460,6 +534,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             list(args.repos),
             output,
             release_tag=args.release_tag,
+            abi_token=args.abi_token,
+            epoch=args.epoch,
+            signature_hex=signature_hex,
+            descriptor_output=descriptor_output,
         )
     except (ManifestError, OSError, UnicodeError) as exc:
         print(f"[error] {exc}", file=sys.stderr)

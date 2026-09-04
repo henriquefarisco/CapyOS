@@ -14,11 +14,11 @@ import audit_version_manifest as audit  # noqa: E402
 
 
 STABLE_EXTENDED = "0.9.2+20260826"
-PIN = f"v{STABLE_EXTENDED}"
-CANONICAL_URL = audit.canonical_modules_index_url(PIN)
+TOKEN = "capyos-base-v3"
+CANONICAL_URL = audit.canonical_modules_index_url(TOKEN)
 
 
-def version_yaml(*, pin: str = PIN, url: str = CANONICAL_URL) -> str:
+def version_yaml(*, token: str = TOKEN, url: str = CANONICAL_URL) -> str:
     return (
         "channels:\n"
         "  alpha:\n"
@@ -28,7 +28,8 @@ def version_yaml(*, pin: str = PIN, url: str = CANONICAL_URL) -> str:
         "    current: 0.9.2\n"
         f"    extended: {STABLE_EXTENDED}\n"
         "modules_index:\n"
-        f'  pin: "{pin}"\n'
+        f'  token: "{token}"\n'
+        "  epoch: 1\n"
         f'  url: "{url}"\n'
     )
 
@@ -80,15 +81,15 @@ class ModulesIndexAuditTests(unittest.TestCase):
             ),
         )
 
-    def test_pin_must_equal_stable_extended(self) -> None:
+    def test_token_must_be_canonical(self) -> None:
         self.assert_contract_error(
-            "modules_index.pin",
-            version_yaml(pin="v0.9.1+20260825"),
+            "modules_index.token",
+            version_yaml(token="v0.9.1+20260825"),
             modules_c(),
             makefile(),
         )
 
-    def test_yaml_url_must_be_derived_from_pin(self) -> None:
+    def test_yaml_url_must_be_derived_from_token(self) -> None:
         self.assert_contract_error(
             "modules_index.url",
             version_yaml(url="https://example.invalid/modules-index.txt"),
@@ -129,12 +130,12 @@ class ModulesIndexAuditTests(unittest.TestCase):
             f"# SMOKE_X64_MODULES_INDEX_URL ?= {CANONICAL_URL}\n",
         )
 
-    def test_nested_pin_cannot_satisfy_direct_field(self) -> None:
+    def test_nested_token_cannot_satisfy_direct_field(self) -> None:
         yaml_text = version_yaml().replace(
-            f'  pin: "{PIN}"\n', f'  nested:\n    pin: "{PIN}"\n', 1
+            f'  token: "{TOKEN}"\n', f'  nested:\n    token: "{TOKEN}"\n', 1
         )
         self.assert_contract_error(
-            "campo ausente: modules_index.pin", yaml_text, modules_c(), makefile()
+            "campo ausente: modules_index.token", yaml_text, modules_c(), makefile()
         )
 
     def test_duplicate_smoke_field_fails_closed(self) -> None:
@@ -145,11 +146,12 @@ class ModulesIndexAuditTests(unittest.TestCase):
             makefile() + f"SMOKE_X64_MODULES_INDEX_URL ?= {CANONICAL_URL}\n",
         )
 
-    def test_missing_stable_channel_fails_closed(self) -> None:
-        yaml_text = version_yaml().replace("  stable:\n", "  preview:\n", 1)
-        self.assert_contract_error(
-            "canal ausente: channels.stable", yaml_text, modules_c(), makefile()
+    def test_compatibility_matrix_is_authoritative_for_token(self) -> None:
+        matrix = "| `capyos-base` | CapyOS | v4 | always present |\n"
+        errors = audit.audit_modules_index_contract(
+            version_yaml(), modules_c(), makefile(), matrix
         )
+        self.assertTrue(any("modules_index.token" in error for error in errors))
 
 
 if __name__ == "__main__":

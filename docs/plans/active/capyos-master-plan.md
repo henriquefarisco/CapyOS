@@ -5,7 +5,7 @@
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-8 oficialmente fechadas; 8/16 etapas concluídas; Etapa 9 desbloqueada e próxima.
+**Status:** Etapas 1-8 oficialmente fechadas; 8/16 etapas concluídas; Etapa 9 em desenvolvimento na `0.10.0-alpha.1`.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -921,11 +921,11 @@ release/instalador) e na Etapa 9 (package manager / ABI estável).
 
 **ROI:** alto (médio-prazo) — ecossistema cresce sem releases monolíticas.
 
-**Status:** bloqueada por Etapas 3-8. A **fronteira de recepção alpha**
-já está in-tree, validada e auditável (veja "Entrega antecipatória"
-abaixo), mas isso **não fecha a etapa** — os critérios de aceite
-permanecem abertos até o resolver desacoplado, o Software Center
-gráfico e o gate VMware oficial entrarem.
+**Status:** implementação e gates concluídos na branch da etapa em 2026-09-04.
+O resolver desacoplado, índice assinado v2, pkgd/CLI, Software Center, aplicação
+atômica e SDK estão in-tree; QEMU e VMware validaram instalação FULL e
+persistência após reboot. A etapa permanece aberta administrativamente até a
+integração/publicação desta branch.
 
 ### Entrega antecipatória (capypkg adapter alpha)
 
@@ -990,13 +990,18 @@ abrir.
 
 ### Critérios de aceite
 
-- [ ] Instalar, listar, atualizar e remover pacote sobrevive reboot.
-- [ ] ABI pública tem versionamento e política de compatibilidade.
-- [ ] App Software Center instala um pacote via UI sem CLI.
-- [ ] Resolver/manifest ficam host-testáveis fora do sistema; CapyOS só aplica plano validado.
-- [ ] Verificador Ed25519 do `CapyAgent` plugado no adapter via
+- [x] Instalar, listar, atualizar e remover pacote sobrevive reboot.
+- [x] ABI pública tem versionamento e política de compatibilidade.
+- [x] App Software Center instala um pacote via UI sem CLI.
+- [x] Resolver/manifest ficam host-testáveis fora do sistema; CapyOS só aplica plano validado.
+- [x] Verificador Ed25519 do `CapyAgent` plugado no adapter via
       `capypkg_set_signature_verifier` antes do primeiro `pkg-install`
       real; até lá, repos `signed` permanecem fail-closed.
+
+Evidência local de aceite: `make smoke-x64-iso-local-modules` e
+`make smoke-x64-vmware-pkg-install` passaram com perfil FULL, reboot e
+persistência; o manifesto VMware usa o contrato
+`capyos-installer-wizard-evidence-manifest-v4`.
 
 ### Gates externos recomendados
 

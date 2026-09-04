@@ -18,12 +18,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import modules_index_catalog as catalog  # noqa: E402
 import verify_modules_index_assets as verifier  # noqa: E402
 
-RELEASE_TAG = "v0.8.0-alpha.320+20260730"
-AI_INDEX = next(
-    index
-    for index, spec in enumerate(catalog.MODULE_SPECS)
-    if spec.uses_capyos_release_tag
-)
+RELEASE_TAG = "v0.10.0-alpha.1"
+RESOLVED_SPECS = tuple(spec for spec in catalog.MODULE_SPECS if spec.known_good)
+AI_INDEX = 0
 
 
 class FakeResponse:
@@ -72,21 +69,22 @@ def make_entry(
     payload: bytes,
     **overrides: str,
 ) -> str:
-    pinned_metadata = catalog.pinned_payload_metadata(spec)
-    if pinned_metadata is None:
-        payload_sha256 = hashlib.sha256(payload).hexdigest()
-        payload_size = len(payload)
-    else:
-        payload_sha256, payload_size = pinned_metadata
+    payload_sha256 = hashlib.sha256(payload).hexdigest()
+    payload_size = len(payload)
     fields = {
         "name": spec.module_id,
         "version": spec.version,
         "summary": f"fixture for {spec.module_id}",
         "official": "1",
-        "payload_url": catalog.expected_payload_url(spec, RELEASE_TAG),
+        "payload_url": catalog.resolved_payload_url(spec),
         "payload_sha256": payload_sha256,
         "payload_size": str(payload_size),
         "install_root": spec.install_root,
+        "provides_abi": spec.provides_abi,
+        "abi_version": spec.abi_version,
+        "core_abi_min": str(spec.core_abi_min),
+        "core_abi_max": str(spec.core_abi_max),
+        "known_good": str(spec.known_good),
         "depends": ",".join(spec.dependencies),
     }
     fields.update(overrides)
@@ -104,17 +102,26 @@ def make_index(
     entries = [
         make_entry(spec, payload, **changes.get(index, {}))
         for index, (spec, payload) in enumerate(
-            zip(catalog.MODULE_SPECS, payloads), start=1
+            zip(RESOLVED_SPECS, payloads), start=1
         )
     ]
-    return "# offline official fixture\n" + "\n".join(entries) + "\n"
+    body = "\n".join(entries) + "\n"
+    digest = hashlib.sha256(body.encode("ascii")).hexdigest()
+    return (
+        f"#{catalog.INDEX_FORMAT}\n"
+        f"#index_abi_token={catalog.CORE_ABI_TOKEN}\n"
+        f"#index_epoch={catalog.INDEX_EPOCH}\n"
+        f"#index_body_sha256={digest}\n"
+        f"#index_signature_ed25519={'ab' * 64}\n"
+        + body
+    )
 
 
 class VerifyModulesIndexAssetsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.payloads = [
             f"payload-{index}".encode("ascii")
-            for index in range(1, catalog.EXPECTED_MODULE_COUNT + 1)
+            for index in range(1, catalog.EXPECTED_RESOLVED_COUNT + 1)
         ]
 
     def test_success_verifies_exact_official_inventory(self) -> None:
@@ -128,13 +135,15 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                 make_index(self.payloads),
                 sleeper=lambda _: None,
                 release_tag=RELEASE_TAG,
+                verify_signature=False,
             )
-        self.assertEqual(len(results), catalog.EXPECTED_MODULE_COUNT)
-        self.assertEqual(verify_remote.call_count, catalog.EXPECTED_MODULE_COUNT)
+        self.assertEqual(len(results), catalog.EXPECTED_RESOLVED_COUNT)
+        self.assertEqual(verify_remote.call_count, catalog.EXPECTED_RESOLVED_COUNT)
         self.assertTrue(all(result.attempts == 1 for result in results))
 
         entries = verifier.parse_modules_index(
-            make_index(self.payloads), release_tag=RELEASE_TAG
+            make_index(self.payloads), release_tag=RELEASE_TAG,
+            verify_signature=False
         )
         ai_entry = entries[AI_INDEX]
         ai_payload = self.payloads[AI_INDEX]
@@ -153,10 +162,11 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
             verifier.verify_modules_index_assets(
                 make_index(
                     self.payloads,
-                    overrides={catalog.EXPECTED_MODULE_COUNT: {"name": duplicate}},
+                    overrides={catalog.EXPECTED_RESOLVED_COUNT: {"name": duplicate}},
                 ),
                 opener=opener,
                 release_tag=RELEASE_TAG,
+                verify_signature=False,
             )
         self.assertEqual(opener.calls, [])
 
@@ -170,8 +180,11 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                 "https://github.com/henriquefarisco/Wrong/releases/"
                 "download/v1/wrong.bin"
             ),
-            "payload_sha256": "0" * 64,
-            "payload_size": "133121",
+            "provides_abi": "wrong-abi",
+            "abi_version": "99",
+            "core_abi_min": "4",
+            "core_abi_max": "4",
+            "known_good": "0",
         }
         for field, value in cases.items():
             with self.subTest(field=field):
@@ -183,21 +196,23 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                         ),
                         opener=opener,
                         release_tag=RELEASE_TAG,
+                        verify_signature=False,
                     )
                 self.assertEqual(opener.calls, [])
 
     def test_unknown_and_duplicate_fields_are_rejected(self) -> None:
         base = make_index(self.payloads)
         cases = (
-            base.replace("version=0.0.10", "unknown=x\nversion=0.0.10", 1),
+            base.replace("version=0.1.0", "unknown=x\nversion=0.1.0", 1),
             base.replace(
-                "version=0.0.10", "version=0.0.10\nversion=0.0.10", 1
+                "version=0.1.0", "version=0.1.0\nversion=0.1.0", 1
             ),
         )
         for text in cases:
             with self.subTest():
                 with self.assertRaises(verifier.ModulesIndexError):
-                    verifier.parse_modules_index(text, release_tag=RELEASE_TAG)
+                    verifier.parse_modules_index(text, release_tag=RELEASE_TAG,
+                                                 verify_signature=False)
 
     def test_noncanonical_and_oversize_payload_sizes_are_rejected(self) -> None:
         for size in ("0", "01", str(verifier.MAX_PAYLOAD_BYTES + 1)):
@@ -211,6 +226,7 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                             overrides={1: {"payload_size": size}},
                         ),
                         release_tag=RELEASE_TAG,
+                        verify_signature=False,
                     )
 
     def test_sha_mismatch_does_not_expose_payload(self) -> None:
@@ -223,6 +239,7 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                 overrides={AI_INDEX + 1: {"payload_sha256": "0" * 64}},
             ),
             release_tag=RELEASE_TAG,
+            verify_signature=False,
         )[AI_INDEX]
         opener = FakeOpener({entry.payload_url: [FakeResponse(secret)]})
         with self.assertRaises(verifier.ModulesIndexError) as raised:
@@ -240,6 +257,7 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                 },
             ),
             release_tag=RELEASE_TAG,
+            verify_signature=False,
         )[AI_INDEX]
         opener = FakeOpener({entry.payload_url: [FakeResponse(payload)]})
         with self.assertRaisesRegex(
@@ -250,7 +268,8 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
 
     def test_http_404_is_not_retried_by_default(self) -> None:
         entry = verifier.parse_modules_index(
-            make_index(self.payloads), release_tag=RELEASE_TAG
+            make_index(self.payloads), release_tag=RELEASE_TAG,
+            verify_signature=False
         )[AI_INDEX]
         opener = FakeOpener(
             {
@@ -272,7 +291,8 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
 
     def test_http_404_retry_requires_explicit_propagation_flag(self) -> None:
         entry = verifier.parse_modules_index(
-            make_index(self.payloads), release_tag=RELEASE_TAG
+            make_index(self.payloads), release_tag=RELEASE_TAG,
+            verify_signature=False
         )[AI_INDEX]
         opener = FakeOpener(
             {
@@ -298,7 +318,8 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
 
     def test_http_5xx_retries_with_bounded_backoff(self) -> None:
         entry = verifier.parse_modules_index(
-            make_index(self.payloads), release_tag=RELEASE_TAG
+            make_index(self.payloads), release_tag=RELEASE_TAG,
+            verify_signature=False
         )[AI_INDEX]
         opener = FakeOpener(
             {
@@ -329,7 +350,7 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
         self.assertEqual(sleeps, [0.25, 0.5])
 
     def test_local_draft_asset_overrides_only_matching_remote(self) -> None:
-        ai_spec = catalog.MODULE_SPECS[AI_INDEX]
+        ai_spec = RESOLVED_SPECS[AI_INDEX]
         remote_names: list[str] = []
 
         def verified(entry: verifier.ModuleEntry, **_: object) -> verifier.VerificationResult:
@@ -347,10 +368,11 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
                     sleeper=lambda _: None,
                     local_assets_dir=local_dir,
                     release_tag=RELEASE_TAG,
+                    verify_signature=False,
                 )
         local = [result for result in results if result.source == "local"]
         self.assertEqual([result.name for result in local], [ai_spec.module_id])
-        self.assertEqual(len(remote_names), catalog.EXPECTED_MODULE_COUNT - 1)
+        self.assertEqual(len(remote_names), catalog.EXPECTED_RESOLVED_COUNT - 1)
         self.assertNotIn(ai_spec.module_id, remote_names)
 
 

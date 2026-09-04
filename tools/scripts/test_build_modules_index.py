@@ -31,6 +31,11 @@ def _manifest_text(
         "payload_sha256": hashlib.sha256(payload).hexdigest(),
         "payload_size": str(len(payload)),
         "install_root": spec.install_root,
+        "provides_abi": spec.provides_abi,
+        "abi_version": spec.abi_version,
+        "core_abi_min": str(spec.core_abi_min),
+        "core_abi_max": str(spec.core_abi_max),
+        "known_good": str(spec.known_good),
         "depends": ",".join(spec.dependencies),
     }
     fields.update(overrides)
@@ -102,25 +107,13 @@ class BuildModulesIndexTests(unittest.TestCase):
         self.assertTrue(callable(local_bundle.validate_manifest))
         self.assertTrue(callable(local_bundle.emit_entry))
 
-    def test_capyui_2_24_2_release_metadata_is_exact(self) -> None:
-        expected = {
-            "org.capyos.ui.widget-core": (
-                "b0e7e07335f45faea42c50ead69e8f51"
-                "c59fe9c96d6cf928fcef3218ab85ce04",
-                1177600,
-            ),
-            "org.capyos.ui.desktop-session": (
-                "3bcc5dda0023f417dff9292ed4a3a492"
-                "48278c691973c191d0ce08dbd1f49de7",
-                1413120,
-            ),
-        }
-        for module_id, metadata in expected.items():
-            with self.subTest(module_id=module_id):
-                spec = catalog.MODULE_BY_ID[module_id]
-                self.assertEqual(spec.version, "2.24.2")
-                self.assertEqual(catalog.pinned_payload_metadata(spec), metadata)
-                self.assertIn("/download/v2.24.2/", catalog.expected_payload_url(spec))
+    def test_resolved_payloads_are_rehosted_under_abi_token(self) -> None:
+        for spec in catalog.MODULE_SPECS:
+            with self.subTest(module_id=spec.module_id):
+                self.assertIn(
+                    "/download/modules-capyos-base-v3/",
+                    catalog.resolved_payload_url(spec),
+                )
 
     def test_success_builds_exact_inventory_and_capylang_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -128,26 +121,24 @@ class BuildModulesIndexTests(unittest.TestCase):
             output = Path(directory) / "modules-index.txt"
             self.assertEqual(self._build(workspace, output), 0)
             text = output.read_text(encoding="utf-8")
-            self.assertEqual(text.count("\nname="), catalog.EXPECTED_MODULE_COUNT)
-            self.assertEqual(text.count("\nofficial=1"), catalog.EXPECTED_MODULE_COUNT)
-            self.assertIn("name=org.capyos.lang.runtime", text)
+            self.assertEqual(text.count("\nname="), catalog.EXPECTED_RESOLVED_COUNT)
+            self.assertEqual(text.count("\nofficial=1"), catalog.EXPECTED_RESOLVED_COUNT)
+            self.assertNotIn("name=org.capyos.lang.runtime", text)
+            self.assertNotIn("name=org.capyos.benchmark.harness", text)
+            self.assertIn("#capyos-modules-index-v2\n", text)
+            self.assertIn("#index_abi_token=capyos-base-v3\n", text)
 
             for spec in catalog.MODULE_SPECS:
+                if not spec.known_good:
+                    continue
                 entry = index_entry(text, spec.module_id)
-                pinned_metadata = catalog.pinned_payload_metadata(spec)
                 local_payload = payloads[spec.module_id].read_bytes()
                 local_sha256 = hashlib.sha256(local_payload).hexdigest()
-                if pinned_metadata is None:
-                    self.assertIn(f"payload_sha256={local_sha256}\n", entry)
-                    self.assertIn(f"payload_size={len(local_payload)}\n", entry)
-                else:
-                    pinned_sha256, pinned_size = pinned_metadata
-                    self.assertNotEqual(local_sha256, pinned_sha256)
-                    self.assertIn(f"payload_sha256={pinned_sha256}\n", entry)
-                    self.assertIn(f"payload_size={pinned_size}\n", entry)
-                    self.assertNotIn(f"payload_sha256={local_sha256}\n", entry)
+                self.assertIn(f"payload_sha256={local_sha256}\n", entry)
+                self.assertIn(f"payload_size={len(local_payload)}\n", entry)
+                self.assertIn(f"payload_url={catalog.resolved_payload_url(spec)}\n", entry)
 
-    def test_external_local_signature_is_not_attached_to_pinned_payload(self) -> None:
+    def test_payload_signature_is_preserved_for_rehosted_exact_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace, manifests, _ = populate_workspace(Path(directory))
             module_id = "org.capyos.agent.core"
@@ -157,7 +148,33 @@ class BuildModulesIndexTests(unittest.TestCase):
             output = Path(directory) / "modules-index.txt"
             self.assertEqual(self._build(workspace, output), 0)
             entry = index_entry(output.read_text(encoding="utf-8"), module_id)
-            self.assertNotIn("signature_ed25519=", entry)
+            self.assertIn("signature_ed25519=" + "a" * 128, entry)
+
+    def test_descriptor_and_index_signature_are_canonical(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace, _, _ = populate_workspace(Path(directory))
+            output = Path(directory) / "modules-index.txt"
+            descriptor = Path(directory) / "modules-index.descriptor"
+            self.assertEqual(
+                builder.build_index(
+                    workspace,
+                    list(catalog.DEFAULT_REPOS),
+                    output,
+                    release_tag=RELEASE_TAG,
+                    signature_hex="a" * 128,
+                    descriptor_output=descriptor,
+                ),
+                0,
+            )
+            text = output.read_text(encoding="utf-8")
+            body = text.split("#index_signature_ed25519=" + "a" * 128 + "\n", 1)[1]
+            body_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            self.assertIn(f"#index_body_sha256={body_sha}\n", text)
+            self.assertEqual(
+                descriptor.read_text(encoding="ascii"),
+                f"format=capyos-modules-index-v2|abi_token=capyos-base-v3|"
+                f"epoch=1|body_sha256={body_sha}\n",
+            )
 
     def test_missing_repo_or_manifest_fails_without_output(self) -> None:
         for missing in ("repo", "manifest"):
@@ -187,8 +204,8 @@ class BuildModulesIndexTests(unittest.TestCase):
                     text = manifest.read_text(encoding="utf-8")
                     manifest.write_text(
                         text.replace(
-                            "version=0.0.10",
-                            "version=0.0.10\nversion=0.0.10",
+                            "version=0.1.0",
+                            "version=0.1.0\nversion=0.1.0",
                         ),
                         encoding="utf-8",
                     )
@@ -279,15 +296,16 @@ class BuildModulesIndexTests(unittest.TestCase):
                 with self.assertRaises(builder.ManifestError):
                     self._build(workspace, Path(directory) / "index.txt")
 
-    def test_release_tag_controls_capyai_url(self) -> None:
+    def test_wrong_abi_token_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace, _, _ = populate_workspace(Path(directory))
-            with self.assertRaisesRegex(builder.ManifestError, "payload_url"):
+            with self.assertRaisesRegex(builder.ManifestError, "ABI token"):
                 builder.build_index(
                     workspace,
                     list(catalog.DEFAULT_REPOS),
                     Path(directory) / "index.txt",
-                    release_tag="v0.8.0-alpha.999+20990101",
+                    release_tag=RELEASE_TAG,
+                    abi_token="capyos-base-v999",
                 )
 
 

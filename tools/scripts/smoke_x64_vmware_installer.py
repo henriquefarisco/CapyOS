@@ -24,6 +24,7 @@ from smoke_x64_auth import (
     installer_select_target_by_size,
     login,
     maybe_run_first_boot_setup,
+    module_install_completed,
 )
 from smoke_x64_boot import smoke_first_boot, smoke_second_boot
 from smoke_x64_helpers import ensure_shell_after_login
@@ -366,6 +367,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step-timeout", type=float, default=180.0)
     parser.add_argument("--user", default="admin")
     parser.add_argument("--password", default="vmware-installer-pass")
+    parser.add_argument("--module-profile", choices=("basic", "full", "custom"), default="basic")
+    parser.add_argument("--require-module-install", action="store_true")
     parser.add_argument("--keep-vm", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
@@ -546,7 +549,7 @@ def main() -> int:
         try:
             setup_result = maybe_run_first_boot_setup(
                 boot1, args.step_timeout, args.user, args.password, "us",
-                volume_key=recovery_key, module_profile="basic",
+                volume_key=recovery_key, module_profile=args.module_profile,
                 require_interactive=True,
             )
             if setup_result != "rebooted":
@@ -556,13 +559,17 @@ def main() -> int:
                 marker_written = True
         finally:
             boot1.stop()
+        if args.require_module_install:
+            boot1_text = boot1_log.read_text(encoding="latin-1", errors="replace")
+            if marker_written or not module_install_completed(boot1_text):
+                raise RuntimeError("required VMware module installation did not complete and reboot")
         if not marker_written:
             marker_session_used = True
             marker_session = start_console(vmrun, vmx, pipe_name, marker_log, secrets=(recovery_key,), verbose=args.verbose)
             try:
                 setup_result = maybe_run_first_boot_setup(
                     marker_session, args.step_timeout, args.user, args.password, "us",
-                    volume_key=recovery_key, module_profile="basic",
+                    volume_key=recovery_key, module_profile=args.module_profile,
                     require_interactive=False,
                 )
                 if setup_result == "rebooted":
@@ -598,7 +605,7 @@ def main() -> int:
         if not all(path.is_file() for path in public_logs):
             raise RuntimeError("VMware installer public logs are incomplete")
         fields = {
-            "format": "capyos-installer-wizard-evidence-manifest-v3",
+            "format": "capyos-installer-wizard-evidence-manifest-v4",
             "release_tag": current_release_tag(repo_root),
             "track": "UEFI/GPT/x86_64",
             "provider": "vmware-workstation",
@@ -631,6 +638,8 @@ def main() -> int:
             "login_completed": "yes",
             "persistence_marker_written": "yes",
             "persistence_marker_read_after_reboot": "yes",
+            "module_profile": args.module_profile,
+            "module_install_completed": "yes" if args.require_module_install else "not-required",
             "recovery_key_redacted": "yes",
             "recovery_key_included": "no",
             "marker_session_used": "yes" if marker_session_used else "no",

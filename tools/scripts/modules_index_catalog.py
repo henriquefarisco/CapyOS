@@ -14,6 +14,12 @@ from urllib.parse import urlsplit
 
 GITHUB_OWNER: Final = "henriquefarisco"
 EXPECTED_MODULE_COUNT: Final = 9
+EXPECTED_RESOLVED_COUNT: Final = 7
+CORE_ABI_VERSION: Final = 3
+CORE_ABI_TOKEN: Final = f"capyos-base-v{CORE_ABI_VERSION}"
+INDEX_FORMAT: Final = "capyos-modules-index-v2"
+INDEX_EPOCH: Final = 1
+INDEX_RELEASE_TAG: Final = f"modules-{CORE_ABI_TOKEN}"
 
 # Keep these values in lockstep with include/services/capypkg.h and
 # src/services/capypkg/internal/capypkg_internal.h.  The C structs reserve one
@@ -39,6 +45,11 @@ CANONICAL_FIELDS: Final = (
     "payload_size",
     "signature_ed25519",
     "install_root",
+    "provides_abi",
+    "abi_version",
+    "core_abi_min",
+    "core_abi_max",
+    "known_good",
     "depends",
     "repo",
 )
@@ -56,6 +67,11 @@ class ModuleSpec:
     asset: str
     dependencies: tuple[str, ...]
     install_root: str
+    provides_abi: str
+    abi_version: str
+    core_abi_min: int
+    core_abi_max: int
+    known_good: int
     official: int = 1
     release_repo: str | None = None
     uses_capyos_release_tag: bool = False
@@ -74,15 +90,16 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
     ModuleSpec(
         "org.capyos.agent.core",
         "CapyAgent",
-        "0.0.10",
-        "org.capyos.agent.core-0.0.10.bin",
+        "0.1.0",
+        "org.capyos.agent.core-0.1.0.bin",
         (),
         "/var/capypkg/org.capyos.agent.core",
+        "capy-agent-component-index", "2", 3, 3, 1,
         published_payload_sha256=(
-            "36b33570cdd648c1649ad0ef48c661da"
-            "7281da4d978cb241ba813a3ef4db348e"
+            "3b891b4bcc8d726e029badc0f96dae91"
+            "e427fbba506a2ecfdea36768e7a41390"
         ),
-        published_payload_size=133120,
+        published_payload_size=143360,
     ),
     ModuleSpec(
         "org.capyos.ai.assistant",
@@ -91,8 +108,12 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "org.capyos.ai.assistant-0.2.1.bin",
         (),
         "/var/capypkg/org.capyos.ai.assistant",
-        release_repo="CapyOS",
-        uses_capyos_release_tag=True,
+        "capy-ai-core", "0", 3, 3, 1,
+        published_payload_sha256=(
+            "a64f4ec21521ac5f863174d868b2923e"
+            "f83c2326dde7a35fbd149957305efa4c"
+        ),
+        published_payload_size=37753,
     ),
     ModuleSpec(
         "org.capyos.browser.core",
@@ -101,9 +122,10 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "org.capyos.browser.core-0.6.7.bin",
         ("org.capyos.codecs.image-basic",),
         "/var/capypkg/org.capyos.browser.core",
+        "capy-browser-core", "1", 3, 3, 1,
         published_payload_sha256=(
-            "e0ae30e5c2e5322b551283602ecb56c1"
-            "11298aff9b1c2bfcfa08d524a893571c"
+            "783f546023ffd232741eca8cb223a76b"
+            "b5a437c0c1711dbd79c048126410344b"
         ),
         published_payload_size=307200,
     ),
@@ -114,9 +136,10 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "org.capyos.browser.text-0.6.7.bin",
         (),
         "/var/capypkg/org.capyos.browser.text",
+        "capy-browser-core", "1", 3, 3, 1,
         published_payload_sha256=(
-            "e0ae30e5c2e5322b551283602ecb56c1"
-            "11298aff9b1c2bfcfa08d524a893571c"
+            "68c0bf65284143fe6fc07bde3ba55b2"
+            "057a831045c095f846b175fc142a04f9e"
         ),
         published_payload_size=307200,
     ),
@@ -127,35 +150,38 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "org.capyos.codecs.image-basic-0.0.12.bin",
         (),
         "/var/capypkg/org.capyos.codecs.image-basic",
+        "capy-codec-image", "2", 3, 3, 1,
         published_payload_sha256=(
-            "f13dabc089abc933269c9a1e548aca1b"
-            "f02ca64a024fc81f4ade3d1018806aea"
+            "1ee635dde0be9b9254db475b8c8fd6a"
+            "2ecfb321747abb7c187c5bed0b2bd5329"
         ),
         published_payload_size=174080,
     ),
     ModuleSpec(
         "org.capyos.ui.desktop-session",
         "CapyUI",
-        "2.24.2",
+        "2.25.0",
         "org.capyos.ui.desktop-session.bin",
         ("org.capyos.ui.widget-core",),
         "/var/capypkg/org.capyos.ui.desktop-session",
+        "capy-ui-desktop-session", "1", 3, 3, 1,
         published_payload_sha256=(
-            "b2a827a1e09950927d0f08ba099b3650"
-            "f9cb37ce5e7b453d1a421e8d5c374f91"
+            "5882e68c9b55c534fdc79ff76541c5d0"
+            "5dbdfdd66ee54147bea7bd212ed20133"
         ),
-        published_payload_size=1413120,
+        published_payload_size=1423360,
     ),
     ModuleSpec(
         "org.capyos.ui.widget-core",
         "CapyUI",
-        "2.24.2",
+        "2.25.0",
         "org.capyos.ui.widget-core.bin",
         (),
         "/var/capypkg/org.capyos.ui.widget-core",
+        "capy-ui-widget", "2.22", 3, 3, 1,
         published_payload_sha256=(
-            "513abc63aac309e2704a1c529e5bf285"
-            "c5d7a59e46eb366860037c286e66e83f"
+            "129573b41c20067eec24066a8bc63db7"
+            "abfd2827faa2647e1daa593672b325dc"
         ),
         published_payload_size=1177600,
     ),
@@ -166,9 +192,10 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "org.capyos.lang.runtime-0.1.12.bin",
         (),
         "/var/capypkg/org.capyos.lang.runtime",
+        "capy-lang-host", "0", 3, 3, 0,
         published_payload_sha256=(
-            "e41e24d53634bce8926c3eb0814cd63e"
-            "959c9970caf8cc48a66fd554cc3d4ba7"
+            "4cbd1858919d081e8b7ca21a5e6e0e1"
+            "e03c4ef124de3d7f42c4e1b46dce5605b"
         ),
         published_payload_size=952320,
     ),
@@ -179,9 +206,10 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "org.capyos.benchmark.harness-0.0.11.bin",
         (),
         "/var/capypkg/org.capyos.benchmark.harness",
+        "capy-benchmark-report", "1", 3, 3, 0,
         published_payload_sha256=(
-            "143e6b1d2ed5a6001f78a8450020bd1a"
-            "7ad04e6cdb4f4e45c448901ce7ef1ebc"
+            "7d0259bca5d718cf634acd8b1bf5f0bc"
+            "1d7a62206ab41fe667ca4c6776c3dfdf"
         ),
         published_payload_size=61440,
     ),
@@ -212,6 +240,14 @@ def expected_payload_url(
     return (
         f"https://github.com/{GITHUB_OWNER}/{spec.github_repo}/releases/"
         f"download/{tag}/{spec.asset}"
+    )
+
+
+def resolved_payload_url(spec: ModuleSpec) -> str:
+    """Return the immutable ABI-token release URL emitted to CapyOS clients."""
+    return (
+        f"https://github.com/{GITHUB_OWNER}/CapyOS/releases/download/"
+        f"{INDEX_RELEASE_TAG}/{spec.asset}"
     )
 
 
@@ -262,6 +298,12 @@ def _validate_catalog() -> None:
     for spec in MODULE_SPECS:
         if spec.official != 1:
             raise RuntimeError(f"{spec.module_id}: official must be 1")
+        if not spec.provides_abi or not spec.abi_version:
+            raise RuntimeError(f"{spec.module_id}: ABI metadata is missing")
+        if not 0 < spec.core_abi_min <= spec.core_abi_max:
+            raise RuntimeError(f"{spec.module_id}: invalid core ABI range")
+        if spec.known_good not in (0, 1):
+            raise RuntimeError(f"{spec.module_id}: known_good must be 0 or 1")
         if len(spec.dependencies) > RUNTIME_MAX_DEPS:
             raise RuntimeError(f"{spec.module_id}: too many dependencies")
         missing = set(spec.dependencies) - ids
@@ -294,6 +336,8 @@ def _validate_catalog() -> None:
         if identity in assets:
             raise RuntimeError(f"{spec.module_id}: duplicate release asset")
         assets.add(identity)
+    if sum(spec.known_good for spec in MODULE_SPECS) != EXPECTED_RESOLVED_COUNT:
+        raise RuntimeError("resolved catalog count does not match policy")
 
 
 _validate_catalog()
