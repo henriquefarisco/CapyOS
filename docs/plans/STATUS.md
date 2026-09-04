@@ -271,11 +271,11 @@ e o snapshot técnico atual está em
 |---|---|---|---|
 | [`CapyUI`](../../../CapyUI) | `2.25.0` | widget 2.22/schema 7, desktop-session v1 e Software Center com backend injetado | Etapas 4, 6, 7 e 9 |
 | [`CapyAgent`](../../../CapyAgent) | `0.1.0` | formato `.capypkg`, component-index v2, resolver publish-time e signer Ed25519 com KAT externo | Etapas 8-9 |
-| [`CapyBrowser`](../../../CapyBrowser) | `0.6.7` | core textual e grafico estatico, pipeline de pagina versionado e release reproduzivel | Etapas 6-7 |
-| [`CapyAI`](../../../CapyAI) | `0.2.1` | orquestrador governado, modelo on-device e core C freestanding reproduzivel (`capy-ai-core` artifact v0), split sem leakage e gate massivo de risco | Etapas 7-8 |
-| [`CapyCodecs`](../../../CapyCodecs) | `0.0.12` | image codecs portáveis (`capy-codec-image` v2: per-call limits, detect/generic, metadata, QOI) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
-| [`CapyLang`](../../../CapyLang) | `0.1.12` | S1-S7 + S6.3 structs/enums entregues (host-only; `capy-lang-host` v0 parcial; +opcodes de array 0x60-0x6A + traps V0017-V0019, 43 opcodes; métodos de array no frontend S10) | Etapa 15 |
-| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.11` | harness + baseline (`capy-benchmark-report` v1 planejado; +serialização report/eval/replay) | Etapas 15-16 |
+| [`CapyBrowser`](../../../CapyBrowser) | `0.6.8` | core textual e grafico estatico, pipeline de pagina versionado e release reproduzivel | Etapas 6-7 |
+| [`CapyAI`](../../../CapyAI) | `0.2.2` | orquestrador governado, modelo on-device e core C freestanding reproduzivel (`capy-ai-core` artifact v0), split sem leakage e metadados capypkg da Etapa 9 | Etapas 7-9 |
+| [`CapyCodecs`](../../../CapyCodecs) | `0.0.13` | image codecs portáveis (`capy-codec-image` v2: per-call limits, detect/generic, metadata, QOI) | Etapas 6-7 (imagem); Etapa 10 (áudio/vídeo) |
+| [`CapyLang`](../../../CapyLang) | `0.1.13` | S1-S7 + S6.3 structs/enums entregues (host-only; `capy-lang-host` v0 parcial; +opcodes de array 0x60-0x6A + traps V0017-V0019, 43 opcodes; métodos de array no frontend S10) | Etapa 15 |
+| [`CapyBenchmark`](../../../CapyBenchmark) | `0.0.12` | harness + baseline (`capy-benchmark-report` v1 planejado; +serialização report/eval/replay) | Etapas 15-16 |
 
 Regras gerais (válidas mesmo antes da etapa abrir):
 

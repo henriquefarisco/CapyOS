@@ -1321,7 +1321,7 @@ bloqueante de Etapas 1-16 (§3-§19). Etapas 1-8 concluídas; Etapa 9 é a próx
 - [ ] Mudança de dispatcher (ex.: input bridge ring-3) travada por teste de
       regressão + bump de versão + matriz atualizada antes de virar contrato.
 
-### 20.3 CapyBrowser — `0.6.7` (ABI `capy-browser-core` v1)
+### 20.3 CapyBrowser — `0.6.8` (ABI `capy-browser-core` v1)
 
 **Papel:** core HTML/CSS/layout/display-list e subset text-to-HTML, todo
 host-injected. Publica `org.capyos.browser.text`; o core gráfico (display-list)
@@ -1345,7 +1345,7 @@ host-injected. Publica `org.capyos.browser.text`; o core gráfico (display-list)
       ou de outros módulos: `capy-codec-image` é do CapyCodecs).
 - [ ] Golden fixtures de host + `test-browser-pipeline` (CapyOS-side) verdes.
 
-### 20.4 CapyCodecs — `0.0.12` (ABI `capy-codec-image` v2)
+### 20.4 CapyCodecs — `0.0.13` (ABI `capy-codec-image` v2)
 
 **Papel:** biblioteca portátil de cores de codec. Não vira subsistema de IO,
 render, áudio, sandbox ou package do CapyOS.
@@ -1367,7 +1367,7 @@ render, áudio, sandbox ou package do CapyOS.
 - [ ] Nenhum decoder aloca por API de plataforma escondida.
 - [ ] Harness de validação executável (golden + fuzz) cobre cada contrato novo.
 
-### 20.5 CapyAgent — `0.0.10` (ABI `capy-agent-component-index` v1)
+### 20.5 CapyAgent — `0.1.0` (ABI `capy-agent-component-index` v2)
 
 **Papel:** dono do formato de pacote, component-index, resolver e signer Ed25519
 que produzem os artefatos consumidos pelo adapter in-tree `services/capypkg`.
@@ -1379,9 +1379,9 @@ que produzem os artefatos consumidos pelo adapter in-tree `services/capypkg`.
   mapeamento JSON → manifest line-oriented; **signer Ed25519 host-side**
   publicado; verifier CapyOS-side registrado + KAT host-validado (fail-closed
   até o trust anchor de produção).
-- **Pendente (Etapas 8-9):** KAT externo do signer; chave offline de release
-  pinada; agregador `build_modules_index.py` resolvendo índice **assinado e
-  endereçado por token de ABI** + guarda anti-drift no `version-audit` (§11).
+- **Entregue na Etapa 9:** KAT externo do signer, chave offline de publisher
+  pinada, resolver publish-time SemVer/ABI/known-good e índice **assinado e
+  endereçado por token de ABI** com guarda anti-drift no `version-audit` (§11).
 
 **Critérios de aceite do módulo:**
 
@@ -1392,7 +1392,7 @@ que produzem os artefatos consumidos pelo adapter in-tree `services/capypkg`.
 - [ ] Resolução escolhe a versão **mais nova assinada + compatível + known-good**,
       nunca a mais nova cega.
 
-### 20.6 CapyAI — `0.2.1` (ABI `capy-ai-core` artifact v0)
+### 20.6 CapyAI — `0.2.2` (ABI `capy-ai-core` artifact v0)
 
 **Papel:** core/modelo on-device reproduzível e orquestrador governado. CapyOS e
 CapyUI possuem os adapters de kernel, capability e UI; o pacote publicado é
@@ -1404,6 +1404,8 @@ CapyUI possuem os adapters de kernel, capability e UI; o pacote publicado é
   aplicativo e energia, chat gráfico assíncrono e modelo fixed-point embutível.
 - **Entregue em 0.2.1:** split sem leakage e campanha massiva de comando/risco
   promovida a gate de release, sem mudança do artifact v0.
+- **Entregue em 0.2.2:** metadados capypkg de ABI/faixa compatível exigidos
+  pelo índice assinado da Etapa 9, sem mudança dos bytes do modelo.
 - **Entregue em 0.9.0:** publicação coordenada no índice imutável e validação
   remota dos nove assets por URL, tamanho e SHA-256.
 - **Concluído na Etapa 8:** autenticação Ed25519 de produção e ciclo A/B oficial;
@@ -1417,7 +1419,7 @@ CapyUI possuem os adapters de kernel, capability e UI; o pacote publicado é
 - [x] Índice 0.9.0 e seus nove assets publicados e consumidos pelo gate
       networked oficial, com URL, tamanho e SHA-256 validados.
 
-### 20.7 CapyLang — `0.1.12` (ABI `capy-lang-host` v0, roadmap-blocked)
+### 20.7 CapyLang — `0.1.13` (ABI `capy-lang-host` v0, roadmap-blocked)
 
 **Papel:** linguagem própria + VM bytecode; workspace Rust puro, desacoplado.
 Integração oficial só na **Etapa 15**.
@@ -1441,7 +1443,7 @@ Integração oficial só na **Etapa 15**.
 - [ ] `make rust-validate` (fmt + clippy `-D warnings` + tests + doctests) verde.
 - [ ] Sem kernel headers/syscalls; integração só por host ABI versionada na Etapa 15.
 
-### 20.8 CapyBenchmark — `0.0.11` (ABI `capy-benchmark-report` v1, roadmap-blocked)
+### 20.8 CapyBenchmark — `0.0.12` (ABI `capy-benchmark-report` v1, roadmap-blocked)
 
 **Papel:** harness portátil de benchmark, modelo de report e lógica de baseline.
 Não possui relógios reais, instrumentação de scheduler nem orquestração de gate

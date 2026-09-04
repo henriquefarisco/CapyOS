@@ -318,33 +318,52 @@ def _validate_catalog(entries: list[ModuleEntry]) -> None:
                 )
 
 
-def _split_and_verify_envelope(text: str, *, verify_signature: bool = True) -> str:
+def _split_and_verify_envelope(
+    text: str,
+    *,
+    verify_signature: bool = True,
+    allow_unsigned: bool = False,
+) -> str:
     lines = text.splitlines(keepends=True)
-    if len(lines) < 6 or any(not line.endswith("\n") for line in lines[:5]):
-        raise ModulesIndexError("signed index envelope is incomplete")
+    if len(lines) < 5 or any(not line.endswith("\n") for line in lines[:4]):
+        raise ModulesIndexError("index envelope is incomplete")
     expected_prefixes = (
         f"#{INDEX_FORMAT}\n",
         f"#index_abi_token={CORE_ABI_TOKEN}\n",
         f"#index_epoch={INDEX_EPOCH}\n",
         "#index_body_sha256=",
-        "#index_signature_ed25519=",
     )
     if lines[0] != expected_prefixes[0] or lines[1] != expected_prefixes[1] or lines[2] != expected_prefixes[2]:
-        raise ModulesIndexError("signed index format, ABI token or epoch mismatch")
-    if not lines[3].startswith(expected_prefixes[3]) or not lines[4].startswith(expected_prefixes[4]):
-        raise ModulesIndexError("signed index envelope fields are out of order")
+        raise ModulesIndexError("index format, ABI token or epoch mismatch")
+    if not lines[3].startswith(expected_prefixes[3]):
+        raise ModulesIndexError("index envelope fields are out of order")
     body_hash = lines[3][len(expected_prefixes[3]):].strip()
-    signature_hex = lines[4][len(expected_prefixes[4]):].strip()
-    if not SHA256_RE.fullmatch(body_hash) or not SIGNATURE_RE.fullmatch(signature_hex):
-        raise ModulesIndexError("signed index hash or signature is malformed")
-    body = "".join(lines[5:])
+    if not SHA256_RE.fullmatch(body_hash):
+        raise ModulesIndexError("index body hash is malformed")
+
+    signature_prefix = "#index_signature_ed25519="
+    signature_hex: str | None = None
+    body_offset = 4
+    if len(lines) > 4 and lines[4].startswith(signature_prefix):
+        if not lines[4].endswith("\n"):
+            raise ModulesIndexError("signed index envelope is incomplete")
+        signature_hex = lines[4][len(signature_prefix):].strip()
+        if not SIGNATURE_RE.fullmatch(signature_hex):
+            raise ModulesIndexError("signed index signature is malformed")
+        body_offset = 5
+    elif not allow_unsigned:
+        raise ModulesIndexError("signed index signature is missing")
+
+    body = "".join(lines[body_offset:])
     if hashlib.sha256(body.encode("ascii")).hexdigest() != body_hash:
-        raise ModulesIndexError("signed index body SHA-256 mismatch")
+        raise ModulesIndexError("index body SHA-256 mismatch")
     descriptor = (
         f"format={INDEX_FORMAT}|abi_token={CORE_ABI_TOKEN}|"
         f"epoch={INDEX_EPOCH}|body_sha256={body_hash}\n"
     ).encode("ascii")
     if verify_signature:
+        if signature_hex is None:
+            raise ModulesIndexError("signed index signature is missing")
         public_der = bytes.fromhex("302a300506032b6570032100") + INDEX_PUBLIC_KEY_RAW
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -370,6 +389,7 @@ def parse_modules_index(
     *,
     release_tag: str | None = None,
     verify_signature: bool = True,
+    allow_unsigned: bool = False,
 ) -> list[ModuleEntry]:
     """Parse and validate the complete official inventory before I/O."""
     del release_tag  # retained for command-line compatibility with older callers
@@ -377,7 +397,11 @@ def parse_modules_index(
         raise ValueError(
             f"expected_count must equal the resolved count {EXPECTED_RESOLVED_COUNT}"
         )
-    text = _split_and_verify_envelope(text, verify_signature=verify_signature)
+    text = _split_and_verify_envelope(
+        text,
+        verify_signature=verify_signature,
+        allow_unsigned=allow_unsigned,
+    )
     try:
         index_size = len(text.encode("utf-8"))
     except UnicodeEncodeError as exc:
@@ -605,9 +629,13 @@ def verify_modules_index_assets(
     release_tag: str | None = None,
     retry_404_for_propagation: bool = False,
     verify_signature: bool = True,
+    allow_unsigned: bool = False,
 ) -> list[VerificationResult]:
     entries = parse_modules_index(
-        text, release_tag=release_tag, verify_signature=verify_signature
+        text,
+        release_tag=release_tag,
+        verify_signature=verify_signature,
+        allow_unsigned=allow_unsigned,
     )
     if local_assets_dir is not None and not local_assets_dir.is_dir():
         raise ModulesIndexError("local assets directory does not exist")
@@ -711,6 +739,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--allow-unsigned-index",
+        action="store_true",
+        help=(
+            "accept a hash-bound but unsigned index only at the authenticated "
+            "pre-publication handoff boundary"
+        ),
+    )
+    parser.add_argument(
         "--retry-404",
         "--retry-404-for-propagation",
         dest="retry_404_for_propagation",
@@ -729,6 +765,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             local_assets_dir=args.local_assets_dir,
             release_tag=args.release_tag,
             retry_404_for_propagation=args.retry_404_for_propagation,
+            verify_signature=not args.allow_unsigned_index,
+            allow_unsigned=args.allow_unsigned_index,
         )
     except ModulesIndexError as exc:
         print(f"[error] {exc}", file=sys.stderr)

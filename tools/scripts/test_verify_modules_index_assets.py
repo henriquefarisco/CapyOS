@@ -117,6 +117,12 @@ def make_index(
     )
 
 
+def make_unsigned_index(payloads: list[bytes]) -> str:
+    return make_index(payloads).replace(
+        f"#index_signature_ed25519={'ab' * 64}\n", "", 1
+    )
+
+
 class VerifyModulesIndexAssetsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.payloads = [
@@ -152,6 +158,20 @@ class VerifyModulesIndexAssetsTests(unittest.TestCase):
         )
         result = verifier.verify_payload(ai_entry, opener=opener)
         self.assertEqual(result.payload_size, len(ai_payload))
+
+    def test_unsigned_index_requires_explicit_handoff_opt_in(self) -> None:
+        unsigned = make_unsigned_index(self.payloads)
+        with self.assertRaisesRegex(
+            verifier.ModulesIndexError, "signature is missing"
+        ):
+            verifier.parse_modules_index(unsigned)
+
+        entries = verifier.parse_modules_index(
+            unsigned,
+            verify_signature=False,
+            allow_unsigned=True,
+        )
+        self.assertEqual(len(entries), catalog.EXPECTED_RESOLVED_COUNT)
 
     def test_duplicate_name_is_rejected_before_network(self) -> None:
         opener = FakeOpener({})

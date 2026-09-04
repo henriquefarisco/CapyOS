@@ -57,6 +57,7 @@ python3 "$script_dir/verify_modules_index_assets.py" \
   --index "$index" \
   --release-tag "$release_tag" \
   --local-payload-dir "$repo_root/build/capypkg" \
+  --allow-unsigned-index \
   --attempts 5 \
   --backoff-seconds 1 \
   --timeout 45

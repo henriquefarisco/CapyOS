@@ -21,7 +21,7 @@ class VerifyReleasePromotionBundleTests(unittest.TestCase):
             "manifest.bin": b"manifest",
             "modules-index.txt": b"index",
             "modules.sha256": b"modules",
-            "org.capyos.ai.assistant-0.2.1.bin": b"ai",
+            "org.capyos.ai.assistant-0.2.2.bin": b"ai",
         }
         for name, data in payloads.items():
             (bundle / name).write_bytes(data)
@@ -65,7 +65,7 @@ class VerifyReleasePromotionBundleTests(unittest.TestCase):
     def test_rejects_multiple_ai_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bundle = self.make_bundle(Path(tmp))
-            (bundle / "org.capyos.ai.assistant-0.2.2.bin").write_bytes(b"ai-2")
+            (bundle / "org.capyos.ai.assistant-0.2.3.bin").write_bytes(b"ai-2")
             with self.assertRaisesRegex(PromotionBundleError, "exactly one CapyAI"):
                 verify_bundle(bundle)
 

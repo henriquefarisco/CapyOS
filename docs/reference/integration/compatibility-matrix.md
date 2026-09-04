@@ -111,14 +111,14 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.9.2+20260826` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.10.0-alpha.1+20260903` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.1.0` | `capy-agent-component-index` v2; resolver publish-time SemVer/ABI/known-good e signer KAT externo | `0.1.0` | `0.1.0` |
-| `CapyBrowser` | `0.6.7` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.7` | `0.6.7` |
-| `CapyCodecs` | `0.0.12` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.12` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.12` |
+| `CapyBrowser` | `0.6.8` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.8` | `0.6.8` |
+| `CapyCodecs` | `0.0.13` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.13` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.13` |
 | `CapyUI` | `2.25.0` | `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1; Software Center com backend capypkg injetado | `2.25.0` | `2.25.0` |
-| `CapyAI` | `0.2.1` | `capy-ai-core` artifact v0; orquestrador governado, modelo fixed-point reproduzivel, split sem leakage, gate massivo de risco e pacote `org.capyos.ai.assistant` | `0.2.1` | `0.2.1` |
-| `CapyLang` | `0.1.12` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes de array 0x60-0x6A incl. push/pop/insert/remove, traps V0017-V0019, 43 opcodes congelados; metodos de array no frontend S10 (a.push/pop/insert/remove/get/set/len, E0022); host-only no sister) | n/a (roadmap-blocked) | n/a |
-| `CapyBenchmark` | `0.0.11` | `capy-benchmark-report` v1 (planejada; serialização report/eval/replay + thresholds derivadas de baseline) | n/a (roadmap-blocked) | n/a |
+| `CapyAI` | `0.2.2` | `capy-ai-core` artifact v0; orquestrador governado, modelo fixed-point reproduzivel, split sem leakage, gate massivo de risco e pacote `org.capyos.ai.assistant` | `0.2.2` | `0.2.2` |
+| `CapyLang` | `0.1.13` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes de array 0x60-0x6A incl. push/pop/insert/remove, traps V0017-V0019, 43 opcodes congelados; metodos de array no frontend S10 (a.push/pop/insert/remove/get/set/len, E0022); host-only no sister) | n/a (roadmap-blocked) | n/a |
+| `CapyBenchmark` | `0.0.12` | `capy-benchmark-report` v1 (planejada; serialização report/eval/replay + thresholds derivadas de baseline) | n/a (roadmap-blocked) | n/a |
 
 > **Regra de pinagem:** "versão mínima compatível" só conta quando o
 > repositório externo entrega contrato versionado, runner host, testes
@@ -143,7 +143,7 @@ instaláveis devem declarar `required_abis` por nome.
 | `capy-browser-core` | CapyBrowser | v1 text subset publicado em CapyBrowser `0.6.0`; core grafico (display-list) consumido na Etapa 7 -- `0.6.6` faz o no IMAGE carregar o `src` resolvido (aditivo em v1, `CAPY_DL_VERSION` inalterado) | adapter CapyOS-side: app ring-3 `capybrowse` (texto) + pipeline/rasterizador/decode graficos (`browser_pipeline`/`browser_render_pixel`/`browser_image`) consumindo o display-list; build-validado (`make test`, `test-browser-pipeline` 19/19, `make all64` clean); runtime grafico via `smoke-x64-qemu-capygfx` (QEMU), gate VMware `smoke-x64-vmware-browser-graphical` mapeado |
 | `capy-ui-widget` | CapyUI | v2.22 (display-list schema v7; v1.x LTS preservado no sister) | Etapa 4 consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side; ops básicos 2D renderizam no core, ops sem provider (`IMAGE_REF`, transforms, plugins) ficam fail-safe/skip até providers dedicados |
 | `capy-ui-desktop-session` | CapyUI | v1 (publicado em `alpha.241`) | aceita via capypkg `org.capyos.ui.desktop-session`; consultado pelo `kernel/module_gate.c` no boot |
-| `capy-ai-core` | CapyAI | artifact v0 | core/modelo reproduzível consumido pelo seam `CAPYAI_DIR`; v0.2.1 preserva a ABI, elimina leakage do split e torna a campanha massiva um gate de release; pacote `org.capyos.ai.assistant`; adapters kernel/UI pertencem ao CapyOS/CapyUI |
+| `capy-ai-core` | CapyAI | artifact v0 | core/modelo reproduzível consumido pelo seam `CAPYAI_DIR`; v0.2.2 preserva a ABI e publica metadados de compatibilidade da Etapa 9 sobre o modelo leakage-free; pacote `org.capyos.ai.assistant`; adapters kernel/UI pertencem ao CapyOS/CapyUI |
 | `capy-lang-host` | CapyLang + CapyOS | v0 (parcial: S1-S7 + S6.3 structs/enums; opcodes de array 0x60-0x6A, traps V0017-V0019 e 43 opcodes congelados; métodos de array no frontend S10; host-only no sister; host ABI de integração ainda planejada) | aceita só após Etapa 15 |
 | `capy-benchmark-report` | CapyBenchmark | v1 (planejada) | aceita só após Etapa 15-16 |
 

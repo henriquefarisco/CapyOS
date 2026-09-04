@@ -96,16 +96,16 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "/var/capypkg/org.capyos.agent.core",
         "capy-agent-component-index", "2", 3, 3, 1,
         published_payload_sha256=(
-            "3b891b4bcc8d726e029badc0f96dae91"
-            "e427fbba506a2ecfdea36768e7a41390"
+            "515326e19dbce4990abc2d75399f0a22"
+            "5c52521485eb21bfeae1e176d4528f5d"
         ),
         published_payload_size=143360,
     ),
     ModuleSpec(
         "org.capyos.ai.assistant",
         "CapyAI",
-        "0.2.1",
-        "org.capyos.ai.assistant-0.2.1.bin",
+        "0.2.2",
+        "org.capyos.ai.assistant-0.2.2.bin",
         (),
         "/var/capypkg/org.capyos.ai.assistant",
         "capy-ai-core", "0", 3, 3, 1,
@@ -118,42 +118,42 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
     ModuleSpec(
         "org.capyos.browser.core",
         "CapyBrowser",
-        "0.6.7",
-        "org.capyos.browser.core-0.6.7.bin",
+        "0.6.8",
+        "org.capyos.browser.core-0.6.8.bin",
         ("org.capyos.codecs.image-basic",),
         "/var/capypkg/org.capyos.browser.core",
         "capy-browser-core", "1", 3, 3, 1,
         published_payload_sha256=(
-            "783f546023ffd232741eca8cb223a76b"
-            "b5a437c0c1711dbd79c048126410344b"
+            "bb50beb17740f2855e0477c507b0da7e"
+            "eda80504611fa82641d0d2a90ed772f8"
         ),
         published_payload_size=307200,
     ),
     ModuleSpec(
         "org.capyos.browser.text",
         "CapyBrowser",
-        "0.6.7",
-        "org.capyos.browser.text-0.6.7.bin",
+        "0.6.8",
+        "org.capyos.browser.text-0.6.8.bin",
         (),
         "/var/capypkg/org.capyos.browser.text",
         "capy-browser-core", "1", 3, 3, 1,
         published_payload_sha256=(
-            "68c0bf65284143fe6fc07bde3ba55b2"
-            "057a831045c095f846b175fc142a04f9e"
+            "bb50beb17740f2855e0477c507b0da7e"
+            "eda80504611fa82641d0d2a90ed772f8"
         ),
         published_payload_size=307200,
     ),
     ModuleSpec(
         "org.capyos.codecs.image-basic",
         "CapyCodecs",
-        "0.0.12",
-        "org.capyos.codecs.image-basic-0.0.12.bin",
+        "0.0.13",
+        "org.capyos.codecs.image-basic-0.0.13.bin",
         (),
         "/var/capypkg/org.capyos.codecs.image-basic",
         "capy-codec-image", "2", 3, 3, 1,
         published_payload_sha256=(
-            "1ee635dde0be9b9254db475b8c8fd6a"
-            "2ecfb321747abb7c187c5bed0b2bd5329"
+            "c79a7496d7959d9f20dbd197748a2846"
+            "406a17b45e4dfc774494f2c18568ccd4"
         ),
         published_payload_size=174080,
     ),
@@ -166,8 +166,8 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "/var/capypkg/org.capyos.ui.desktop-session",
         "capy-ui-desktop-session", "1", 3, 3, 1,
         published_payload_sha256=(
-            "5882e68c9b55c534fdc79ff76541c5d0"
-            "5dbdfdd66ee54147bea7bd212ed20133"
+            "2066d92ca32d0e56ab264eaa4b5f5c31"
+            "a563e7ab8977745ce6efc8dd200cdb97"
         ),
         published_payload_size=1423360,
     ),
@@ -180,36 +180,36 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
         "/var/capypkg/org.capyos.ui.widget-core",
         "capy-ui-widget", "2.22", 3, 3, 1,
         published_payload_sha256=(
-            "129573b41c20067eec24066a8bc63db7"
-            "abfd2827faa2647e1daa593672b325dc"
+            "547ef9af818249c24ddce75271f6bf34"
+            "fb001ee885a3a6eece29d07b755f010d"
         ),
         published_payload_size=1177600,
     ),
     ModuleSpec(
         "org.capyos.lang.runtime",
         "CapyLang",
-        "0.1.12",
-        "org.capyos.lang.runtime-0.1.12.bin",
+        "0.1.13",
+        "org.capyos.lang.runtime-0.1.13.bin",
         (),
         "/var/capypkg/org.capyos.lang.runtime",
         "capy-lang-host", "0", 3, 3, 0,
         published_payload_sha256=(
-            "4cbd1858919d081e8b7ca21a5e6e0e1"
-            "e03c4ef124de3d7f42c4e1b46dce5605b"
+            "c6fa1866ce298f11dace478e600c86d1"
+            "6c57542722e493cbe72a745771bdf6ab"
         ),
         published_payload_size=952320,
     ),
     ModuleSpec(
         "org.capyos.benchmark.harness",
         "CapyBenchmark",
-        "0.0.11",
-        "org.capyos.benchmark.harness-0.0.11.bin",
+        "0.0.12",
+        "org.capyos.benchmark.harness-0.0.12.bin",
         (),
         "/var/capypkg/org.capyos.benchmark.harness",
         "capy-benchmark-report", "1", 3, 3, 0,
         published_payload_sha256=(
-            "7d0259bca5d718cf634acd8b1bf5f0bc"
-            "1d7a62206ab41fe667ca4c6776c3dfdf"
+            "28ca2e27dabae47e0c3dc1acbce4dc84"
+            "8d408ec5cf17c64fc788eab40e9daf9a"
         ),
         published_payload_size=61440,
     ),
