@@ -124,12 +124,18 @@ def run_self_test() -> int:
     return 0
 
 
-def wait_for_markers(log_path: Path, markers: tuple[str, ...], timeout: float, poll: float) -> tuple[bool, str, str]:
+def find_failure(text: str, extra: tuple[str, ...]) -> str:
+    return first_failure_marker(text) or next(
+        (marker for marker in extra if marker.lower() in text.lower()), "")
+
+
+def wait_for_markers(log_path: Path, markers: tuple[str, ...], timeout: float, poll: float,
+                     fail_markers: tuple[str, ...] = ()) -> tuple[bool, str, str]:
     deadline = time.monotonic() + timeout
     last = ""
     while time.monotonic() < deadline:
         last = read_log(log_path)
-        failure_marker = first_failure_marker(last)
+        failure_marker = find_failure(last, fail_markers)
         if failure_marker:
             return False, last, failure_marker
         if markers_in_order(last, markers):
@@ -145,6 +151,7 @@ def wait_for_govc_markers(
     markers: tuple[str, ...],
     timeout: float,
     poll: float,
+    fail_markers: tuple[str, ...] = (),
 ) -> tuple[bool, str, str]:
     deadline = time.monotonic() + timeout
     last = ""
@@ -155,7 +162,7 @@ def wait_for_govc_markers(
             last = proc.stderr + proc.stdout
         else:
             last = read_log(local_log)
-            failure_marker = first_failure_marker(last)
+            failure_marker = find_failure(last, fail_markers)
             if failure_marker:
                 return False, last, failure_marker
             if markers_in_order(last, markers):
@@ -218,6 +225,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--poll", type=float, default=2.0)
     parser.add_argument("--marker", action="append", dest="markers", help="Required marker in serial log; repeatable")
+    parser.add_argument("--fail-marker", action="append", default=[],
+                        help="Additional failure marker; takes precedence over success")
     parser.add_argument("--no-artifact-check", action="store_true")
     parser.add_argument("--no-poweroff", action="store_true")
     parser.add_argument("--gui", action="store_true", help="Use vmrun gui mode instead of nogui")
@@ -243,6 +252,9 @@ def main() -> int:
     markers = unique_markers(tuple(args.markers) if args.markers else DEFAULT_MARKERS)
     if any(not marker for marker in markers):
         return fail("--marker vazio nao e permitido")
+    fail_markers = unique_markers(tuple(args.fail_marker))
+    if any(not marker for marker in fail_markers):
+        return fail("--fail-marker vazio nao e permitido")
 
     if not args.no_artifact_check:
         rc = require_artifacts(repo_root, iso, disk)
@@ -269,7 +281,7 @@ def main() -> int:
             rc = vmrun_start(vmrun, vmx, not args.gui, vmx_password)
             if rc != 0:
                 return rc
-            ok, log, failure_marker = wait_for_markers(serial_log, markers, args.timeout, args.poll)
+            ok, log, failure_marker = wait_for_markers(serial_log, markers, args.timeout, args.poll, fail_markers)
         finally:
             if not args.no_poweroff:
                 vmrun_stop(vmrun, vmx, vmx_password)
@@ -288,7 +300,7 @@ def main() -> int:
             rc = govc_power_on(govc, args.vm_name)
             if rc != 0:
                 return rc
-            ok, log, failure_marker = wait_for_govc_markers(govc, args.govc_serial_log, serial_log, markers, args.timeout, args.poll)
+            ok, log, failure_marker = wait_for_govc_markers(govc, args.govc_serial_log, serial_log, markers, args.timeout, args.poll, fail_markers)
         finally:
             if not args.no_poweroff:
                 govc_power_off(govc, args.vm_name)

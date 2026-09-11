@@ -81,5 +81,8 @@ int desktop_launch_capyai(void);
 #ifdef CAPYOS_CAPYAI_GUI_ASYNC_SMOKE
 int desktop_capyai_gui_async_smoke_run(void);
 #endif
+#ifdef CAPYOS_MEDIA_PLAYER_SMOKE
+int desktop_media_player_smoke_run(void);
+#endif
 
 #endif /* GUI_DESKTOP_RUNTIME_H */

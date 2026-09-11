@@ -64,6 +64,7 @@ SUCCESS_MARKERS = (
 )
 FAILURE_MARKERS = (
     "panic",
+    "[fp-corrupt]",
     "[user_init] hello spawn returned without entering Ring 3.",
 )
 
@@ -132,7 +133,10 @@ def poll_debugcon(debugcon_log: Path, timeout: float,
         try:
             text = debugcon_log.read_text(encoding="latin-1",
                                           errors="replace")
-        except FileNotFoundError:
+        except OSError:
+            # DrvFS can transiently report ENODATA while QEMU owns the
+            # debugcon file. Treat it exactly like an empty poll and retry;
+            # marker and timeout requirements remain unchanged.
             text = ""
         bad = any_failure_marker_present(text)
         if bad is not None:

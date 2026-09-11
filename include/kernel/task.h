@@ -39,6 +39,11 @@ struct task_context {
   uint64_t rip;
   uint64_t rflags;
   uint64_t cr3;
+  /* Complete legacy x87/MMX/SSE state consumed by FXSAVE64/FXRSTOR64.
+   * The architectural instructions require a 16-byte-aligned 512-byte
+   * region. Keeping it inside the switched context makes ownership task-local
+   * and preserves the existing general-register offsets (0x00..0x48). */
+  _Alignas(16) uint8_t fx_state[512];
 };
 
 struct task {

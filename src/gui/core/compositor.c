@@ -276,6 +276,7 @@ void compositor_init(uint32_t *framebuffer, uint32_t width, uint32_t height,
 }
 
 void compositor_shutdown(void) {
+  compositor_set_service_hook(NULL);
   for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
     release_window(&comp_windows[i], 1);
   }

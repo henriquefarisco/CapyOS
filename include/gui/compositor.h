@@ -226,4 +226,9 @@ void compositor_toggle_maximize_window(uint32_t window_id,
 void compositor_set_cursor(enum comp_cursor_kind kind);
 enum comp_cursor_kind compositor_cursor_kind(void);
 
+/* Same foreground owner, while the frame preemption guard stays held.
+ * Hook must be bounded, non-yielding and must NEVER mutate compositor/window
+ * state or re-enter rendering. Cleared by shutdown. Used for DMA servicing. */
+void compositor_set_service_hook(void (*hook)(void));
+
 #endif /* GUI_COMPOSITOR_H */

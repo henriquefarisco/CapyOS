@@ -53,6 +53,18 @@ static void task_name_copy(char *dst, const char *src, size_t max) {
   dst[i] = '\0';
 }
 
+static void task_context_init_fx(struct task_context *context) {
+  /* Architectural reset image for FXRSTOR. Reserved bytes remain zero.
+   * FCW=0x037f masks x87 exceptions; MXCSR=0x1f80 masks SSE exceptions and
+   * selects round-to-nearest. Do not inherit the creator's live FP state. */
+  for (size_t i = 0; i < sizeof(context->fx_state); ++i)
+    context->fx_state[i] = 0;
+  context->fx_state[0] = 0x7f;
+  context->fx_state[1] = 0x03;
+  context->fx_state[24] = 0x80;
+  context->fx_state[25] = 0x1f;
+}
+
 struct task *task_create(const char *name, task_entry_fn entry, void *arg,
                          enum task_priority priority) {
   struct task *t = task_alloc();
@@ -128,6 +140,7 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg,
   t->context.r14 = 0;
   t->context.r15 = 0;
   t->context.cr3 = kernel_cr3;
+  task_context_init_fx(&t->context);
 
   t->state = TASK_STATE_READY;
   task_active_count++;

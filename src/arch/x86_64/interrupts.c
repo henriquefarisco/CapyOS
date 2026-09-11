@@ -1,6 +1,7 @@
 #include "arch/x86_64/fault_classify.h"
 #include "arch/x86_64/framebuffer_console.h"
 #include "arch/x86_64/interrupts.h"
+#include "arch/x86_64/irq_dispatch.h"
 #include "arch/x86_64/panic.h"
 #include "kernel/process.h"
 #include "memory/vmm.h"
@@ -92,6 +93,7 @@ static struct x64_descriptor_ptr g_gdtr;
 static struct x64_idt_entry g_idt[IDT_ENTRIES];
 static struct x64_descriptor_ptr g_idtr;
 static void (*g_irq_handlers[16])(void);
+static void (*g_irq_after_eoi[16])(void);
 static int g_platform_tables_active = 0;
 static int g_platform_tables_bridge_active = 0;
 static const char *g_platform_tables_status = "not-initialized";
@@ -309,6 +311,11 @@ void irq_install_handler(int irq, void (*handler)(void)) {
     return;
   }
   g_irq_handlers[irq] = handler;
+  g_irq_after_eoi[irq] = NULL;
+}
+
+void x64_irq_set_after_eoi(int irq, void (*handler)(void)) {
+  if (irq >= 0 && irq < 16) g_irq_after_eoi[irq] = handler;
 }
 
 void irq_uninstall_handler(int irq) {
@@ -316,6 +323,7 @@ void irq_uninstall_handler(int irq) {
     return;
   }
   g_irq_handlers[irq] = NULL;
+  g_irq_after_eoi[irq] = NULL;
 }
 
 void pic_remap(uint8_t master_offset, uint8_t slave_offset) {
@@ -444,10 +452,7 @@ x64_exception_dispatch(struct x64_exception_frame *frame) {
   if (vector >= 32u && vector <= 47u) {
     int irq = (int)(vector - 32u);
     void (*handler)(void) = g_irq_handlers[irq];
-    if (handler) {
-      handler();
-    }
-    pic_send_eoi(vector);
+    x64_irq_dispatch_ordered(vector, handler, pic_send_eoi, g_irq_after_eoi[irq]);
     return;
   }
 

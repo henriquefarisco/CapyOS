@@ -72,6 +72,11 @@ def require_first_boot_wizard(marker: str, required: bool) -> None:
         raise RuntimeError("fresh install reached login without first-boot wizard")
 
 
+def require_desktop_after_login(mode: str, required: bool) -> None:
+    if required and mode != "desktop":
+        raise RuntimeError("installed FULL profile reached the shell instead of the desktop")
+
+
 MODULE_INSTALL_DONE_MARKERS = [
     "Instalacao concluida. Reinicie para ativar.",
     "Install complete. Reboot to activate.",

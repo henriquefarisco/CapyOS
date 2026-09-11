@@ -30,7 +30,7 @@ from smoke_x64_common import (
     run_build_if_requested,
     validate_iso_artifact,
 )
-from smoke_x64_auth import module_install_completed
+from smoke_x64_auth import module_install_completed, require_desktop_after_login
 from smoke_x64_flow import (
     complete_iso_install,
     ensure_shell_after_login,
@@ -125,6 +125,11 @@ def parse_args() -> argparse.Namespace:
         "--require-module-install",
         action="store_true",
         help="Fail unless first boot completed at least one module and rebooted",
+    )
+    parser.add_argument(
+        "--require-desktop-after-login",
+        action="store_true",
+        help="Fail unless the installed system starts the desktop after login",
     )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
     return parser.parse_args()
@@ -342,6 +347,7 @@ def run_boot1(
             password=parsed.password,
             allow_desktop=True,
         )
+        require_desktop_after_login(mode, parsed.require_desktop_after_login)
         ensure_shell_after_login(session, parsed.step_timeout, mode)
         smoke_first_boot(
             session=session,
@@ -402,6 +408,7 @@ def run_marker_write_boot(
             password=parsed.password,
             allow_desktop=True,
         )
+        require_desktop_after_login(mode, parsed.require_desktop_after_login)
         ensure_shell_after_login(session, parsed.step_timeout, mode)
         smoke_first_boot(
             session=session,
@@ -453,6 +460,7 @@ def run_boot2(
             password=parsed.password,
             allow_desktop=True,
         )
+        require_desktop_after_login(mode, parsed.require_desktop_after_login)
         ensure_shell_after_login(session, parsed.step_timeout, mode)
         smoke_second_boot(
             session=session,

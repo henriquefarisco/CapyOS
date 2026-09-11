@@ -25,6 +25,7 @@ from smoke_x64_auth import (
     login,
     maybe_run_first_boot_setup,
     module_install_completed,
+    require_desktop_after_login,
 )
 from smoke_x64_boot import smoke_first_boot, smoke_second_boot
 from smoke_x64_helpers import ensure_shell_after_login
@@ -369,6 +370,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default="vmware-installer-pass")
     parser.add_argument("--module-profile", choices=("basic", "full", "custom"), default="basic")
     parser.add_argument("--require-module-install", action="store_true")
+    parser.add_argument("--require-desktop-after-login", action="store_true")
     parser.add_argument("--keep-vm", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
@@ -554,6 +556,7 @@ def main() -> int:
             )
             if setup_result != "rebooted":
                 mode = login(boot1, args.step_timeout, args.user, args.password, allow_desktop=True)
+                require_desktop_after_login(mode, args.require_desktop_after_login)
                 ensure_shell_after_login(boot1, args.step_timeout, mode)
                 smoke_first_boot(boot1, args.step_timeout, args.user, args.password, "persist-ok")
                 marker_written = True
@@ -575,6 +578,7 @@ def main() -> int:
                 if setup_result == "rebooted":
                     raise RuntimeError("VMware first boot rebooted twice before persistence marker")
                 mode = login(marker_session, args.step_timeout, args.user, args.password, allow_desktop=True)
+                require_desktop_after_login(mode, args.require_desktop_after_login)
                 ensure_shell_after_login(marker_session, args.step_timeout, mode)
                 smoke_first_boot(marker_session, args.step_timeout, args.user, args.password, "persist-ok")
             finally:
@@ -584,6 +588,7 @@ def main() -> int:
         boot2 = start_console(vmrun, vmx, pipe_name, boot2_log, secrets=(recovery_key,), verbose=args.verbose)
         try:
             mode = login(boot2, args.step_timeout, args.user, args.password, allow_desktop=True)
+            require_desktop_after_login(mode, args.require_desktop_after_login)
             ensure_shell_after_login(boot2, args.step_timeout, mode)
             smoke_second_boot(
                 boot2,

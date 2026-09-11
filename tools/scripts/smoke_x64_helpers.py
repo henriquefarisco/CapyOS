@@ -25,6 +25,20 @@ def _primary_text_since(session: SmokeSession, start_at: object) -> str:
     return session.text_since(start_at)
 
 
+def _text_after_command_echo(text: str, command: str) -> str | None:
+    """Return output after the echoed command, tolerating console wrapping.
+
+    The serial reader is asynchronous.  A prompt that was already on screen can
+    therefore land just after ``marker()`` and must not be mistaken for the
+    prompt produced by the command being submitted.
+    """
+    wrapped_command = r"[\r\n]*".join(re.escape(char) for char in command)
+    match = re.search(wrapped_command, text)
+    if match is None:
+        return None
+    return text[match.end():]
+
+
 def _wait_for_primary_any(
     session: SmokeSession,
     patterns: list[str],
@@ -32,10 +46,16 @@ def _wait_for_primary_any(
     timeout: float,
     start_at: object,
     ignore_line_breaks: bool = False,
+    command_echo: str | None = None,
 ) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         text = _primary_text_since(session, start_at)
+        if command_echo is not None:
+            text = _text_after_command_echo(text, command_echo)
+            if text is None:
+                time.sleep(0.05)
+                continue
         for pattern in patterns:
             if pattern == SHELL_PROMPT_TOKEN:
                 matched = _contains_shell_prompt(text)
@@ -51,6 +71,10 @@ def _wait_for_primary_any(
         time.sleep(0.05)
 
     text = _primary_text_since(session, start_at)
+    if command_echo is not None:
+        text = _text_after_command_echo(text, command_echo)
+        if text is None:
+            raise TimeoutError(f"timeout waiting for command echo: {command_echo!r}")
     for pattern in patterns:
         if pattern == SHELL_PROMPT_TOKEN:
             matched = _contains_shell_prompt(text)
@@ -84,6 +108,7 @@ def run_cmd(
                     timeout=timeout,
                     start_at=mk,
                     ignore_line_breaks=expect_ignore_line_breaks,
+                    command_echo=cmd,
                 )
                 if found == SHELL_PROMPT_TOKEN and not expect_optional:
                     raise RuntimeError(
@@ -97,6 +122,7 @@ def run_cmd(
                     timeout=timeout,
                     start_at=mk,
                     ignore_line_breaks=expect_ignore_line_breaks,
+                    command_echo=cmd,
                 )
             elif expect_ignore_line_breaks:
                 session.wait_for(
@@ -112,6 +138,7 @@ def run_cmd(
                     timeout=timeout,
                     start_at=mk,
                     ignore_line_breaks=expect_ignore_line_breaks,
+                    command_echo=cmd,
                 )
                 if found == SHELL_PROMPT_TOKEN:
                     raise RuntimeError(
@@ -126,7 +153,11 @@ def run_cmd(
     if _contains_shell_prompt(_primary_text_since(session, mk)):
         return
     _wait_for_primary_any(
-        session, [SHELL_PROMPT_TOKEN], timeout=timeout, start_at=mk
+        session,
+        [SHELL_PROMPT_TOKEN],
+        timeout=timeout,
+        start_at=mk,
+        command_echo=cmd,
     )
 
 

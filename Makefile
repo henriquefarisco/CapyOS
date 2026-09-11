@@ -426,9 +426,13 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/auth/user_home.o \
 	$(BUILD)/x86_64/core/work_queue.o \
 	$(BUILD)/x86_64/audio/audio_mixer.o \
+	$(BUILD)/x86_64/audio/audio_service.o \
+	$(BUILD)/x86_64/audio/audio_runtime.o \
 	$(BUILD)/x86_64/services/capyai/capyai_system_actions.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
+	$(BUILD)/x86_64/drivers/audio/hda_core.o \
+	$(BUILD)/x86_64/drivers/audio/hda.o \
 	$(BUILD)/x86_64/drivers/net/e1000.o \
 	$(BUILD)/x86_64/drivers/net/efi_snp.o \
 	$(BUILD)/x86_64/drivers/net/netvsc_backend.o \
@@ -826,6 +830,7 @@ APPS_OBJS := \
 	$(BUILD)/x86_64/capyui-apps/task_manager.o \
 	$(BUILD)/x86_64/capyui-apps/capyai_chat.o \
 	$(BUILD)/x86_64/capyui-apps/software_center.o \
+	$(BUILD)/x86_64/capyui-apps/media_player.o \
 	$(BUILD)/x86_64/capyui-apps/settings.o \
 	$(BUILD)/x86_64/capyui-apps/settings_view.o \
 	$(BUILD)/x86_64/capyui-apps/settings_actions.o
@@ -937,23 +942,23 @@ USERLAND_DIR = userland
 #   make capylibc CAPYLIBC_BUILD_DIR=/tmp/capyos_capylibc
 CAPYLIBC_BUILD_DIR ?= $(BUILD)/userland
 BEARSSL_USERLAND_OBJS := $(patsubst $(BEARSSL_DIR)/%.c,$(CAPYLIBC_BUILD_DIR)/third_party/bearssl/%.o,$(BEARSSL_SRCS))
-# Ring-3 task switches do not preserve XMM/YMM state yet. BearSSL's per-function
-# target attributes otherwise bypass USERLAND_CFLAGS=-mno-sse and select
-# AES-NI/PCLMUL/SSE2 on some HTTPS cipher paths. Keep the constant-time scalar
-# implementations until architectural FPU/SIMD context switching exists.
+# BearSSL remains on its constant-time scalar implementations until a separate
+# CPUID-dispatched acceleration gate exists. The scheduler now preserves XMM
+# state, but that alone does not prove AES-NI/PCLMUL availability on every VM.
 BEARSSL_USERLAND_CFLAGS := -DBR_AES_X86NI=0 -DBR_SSE2=0
 
 # User-space C flags: drop -mno-red-zone (user code can use the red
 # zone; SYSCALL itself does not clobber it) and add the userland
 # include path so user binaries can `#include <capylibc/capylibc.h>`.
-# Keep generated user code off FPU/SSE/MMX instructions: CapyOS does
-# not save/restore those states for ring-3 tasks yet.
+# AMD64 user code may use scalar SSE2 floating point. The scheduler owns a
+# 16-byte-aligned FXSAVE area per task and restores it on every switch; x87 and
+# MMX stay disabled so the supported compiler contract remains narrow.
 USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
                   -fno-asynchronous-unwind-tables -fno-unwind-tables \
                   -fcf-protection=none -fno-pic -fno-pie -fno-plt \
                   -fno-omit-frame-pointer -fno-strict-aliasing \
-                  -fno-stack-protector -mno-sse -mno-sse2 -mno-mmx \
-                  -mno-80387 -msoft-float \
+                  -fno-stack-protector -msse2 -mfpmath=sse -mno-mmx \
+                  -mno-80387 \
                   -Iinclude -Iuserland/include -Ithird_party/bearssl/inc
 
 $(CAPYLIBC_BUILD_DIR)/%.o: $(USERLAND_DIR)/%.S
@@ -1169,6 +1174,24 @@ CAPYCODECS_IMAGE_SRCS := \
 	$(CAPYCODECS_DIR)/src/image/jpeg_decode.c \
 	$(CAPYCODECS_DIR)/src/image/qoi_decode.c \
 	$(CAPYCODECS_DIR)/src/image/ico_decode.c
+
+# Etapa 10: pure bounded WAV codec consumed by the CapyOS audio service. The
+# codec owns no file/device I/O; CapyOS supplies the allocator, policy and HDA
+# output. Only this small WAV contract is linked into the base kernel.
+CAPYCODECS_AUDIO_AVAILABLE :=
+ifneq ($(strip $(CAPYCODECS_DIR)),)
+  ifneq ($(wildcard $(CAPYCODECS_DIR)/src/audio/capy_audio.h),)
+    CAPYCODECS_AUDIO_AVAILABLE := 1
+    CFLAGS64 += -DCAPYOS_HAVE_CAPYCODECS_AUDIO -I$(CAPYCODECS_DIR)/src/audio
+    CAPYOS64_OBJS += $(BUILD)/x86_64/capycodecs-audio/audio.o \
+                     $(BUILD)/x86_64/capycodecs-audio/wav_decode.o
+    $(info [build] CapyCodecs audio core (capy-codec-audio v1) detected)
+  endif
+endif
+
+$(BUILD)/x86_64/capycodecs-audio/%.o: $(CAPYCODECS_DIR)/src/audio/%.c | $(BUILD) $(BUILD_GEN)
+	@mkdir -p $(dir $@)
+	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
 TINF_IMAGE_SRCS := \
 	third_party/tinf/tinflate.c \
 	third_party/tinf/tinfzlib.c \
@@ -1258,7 +1281,7 @@ CAPYLIBC_TLS_OBJS = \
 # BearSSL has a dedicated userland object set. Reusing $(BEARSSL_OBJS) would
 # leak kernel-only flags (notably stack-canary references) into ring-3 static
 # binaries and break the freestanding link. The separate objects consistently
-# inherit USERLAND_CFLAGS, including the no-FPU/SSE contract. The in-tree trust
+# inherit USERLAND_CFLAGS, including the task-local SSE2 contract. The in-tree trust
 # anchors are compiled as userland too; br_prng_seeder_system is provided by
 # capy_tls_backend.c.
 CAPYOS_TLS_USERLAND_HANDSHAKE ?= 1
@@ -1845,6 +1868,11 @@ endif
 
 iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
 	python3 tools/scripts/verify_official_boot_config.py $(BOOT_CONFIG_BIN)
+	@if [ "$(ISO_IMG_EFI)" = "build/CapyOS-Installer-UEFI.iso" ] && \
+	    { strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] audio-playback-roundtrip starting' || \
+	      strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] media-player-playlist starting'; }; then \
+		echo "[err] canonical installer ISO cannot contain Etapa 10 smoke boot hooks"; exit 2; \
+	fi
 	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
 	    [ "$(CAPYOS_LOCAL_MODULES)" != "1" ] && \
 	    strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] capyai-gui-async ready'; then \
@@ -1863,7 +1891,7 @@ iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) 
 	cp $(MANIFEST64) $(ISO_DIR_EFI)/boot/manifest.bin
 	cp $(BOOT_CONFIG_BIN) $(ISO_DIR_EFI)/boot/capycfg.bin
 	$(MK_EFIBOOT_HOST) --out $(EFI_BOOT)/efiboot.img --size 8M --spc 2 --label EFIBOOT --bootx64 $(UEFI_LOADER) --kernel $(CAPYOS_ELF64) --manifest $(MANIFEST64) --bootcfg $(BOOT_CONFIG_BIN)
-	@set -e; ISO_OUT="$(ISO_IMG_EFI)"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); test -s "$$ISO_OUT"; printf '%s\n' "$$ISO_OUT" > $(BUILD)/CapyOS-Installer-UEFI.last-built.txt.tmp; mv $(BUILD)/CapyOS-Installer-UEFI.last-built.txt.tmp $(BUILD)/CapyOS-Installer-UEFI.last-built.txt; echo "[ok] ISO UEFI gerada em $$ISO_OUT"; echo "[ok] Ultima ISO registrada em $(BUILD)/CapyOS-Installer-UEFI.last-built.txt"
+	@set -e; ISO_OUT="$(ISO_IMG_EFI)"; LAST_BUILT="$(ISO_LAST_BUILT_FILE)"; mkdir -p "$$(dirname "$$ISO_OUT")" "$$(dirname "$$LAST_BUILT")"; if [ -e "$$ISO_OUT" ] && ! rm -f "$$ISO_OUT" 2>/dev/null; then ISO_OUT_ALT="$$ISO_OUT.$$(date +%s).iso"; echo "[warn] Nao foi possivel sobrescrever $$ISO_OUT (provavel lock/perm). Gerando $$ISO_OUT_ALT"; ISO_OUT="$$ISO_OUT_ALT"; fi; xorriso -as mkisofs -R -f -e EFI/BOOT/efiboot.img -no-emul-boot -o "$$ISO_OUT" $(ISO_DIR_EFI); test -s "$$ISO_OUT"; printf '%s\n' "$$ISO_OUT" > "$$LAST_BUILT.tmp"; mv "$$LAST_BUILT.tmp" "$$LAST_BUILT"; echo "[ok] ISO UEFI gerada em $$ISO_OUT"; echo "[ok] Ultima ISO registrada em $$LAST_BUILT"
 
 # Manifest 64-bit (para BOOT partition GPT) - LBA relativo default = 1 (logo apÃƒÆ’Ã‚Â³s o manifest)
 $(MANIFEST64): $(CAPYOS_ELF64) | $(BUILD)
@@ -2233,6 +2261,7 @@ GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
 
 ISO_DIR_EFI ?= build/iso-uefi-root
 ISO_IMG_EFI ?= build/CapyOS-Installer-UEFI.iso
+ISO_LAST_BUILT_FILE ?= $(BUILD)/CapyOS-Installer-UEFI.last-built.txt
 RELEASE_SHA256 := $(BUILD)/release-artifacts.sha256
 RELEASE_SIGNATURE := $(RELEASE_SHA256).sig
 RELEASE_PUBLIC_KEY_MANIFEST := $(BUILD)/release-public-key.manifest
@@ -2480,6 +2509,7 @@ TEST_SRCS   := \
                    userland/lib/capylibc-tls/capy_tls.c \
                \
                tests/drivers/test_keyboard_layouts.c src/drivers/input/keyboard/layouts/br_abnt2.c src/drivers/input/keyboard/layouts/us.c \
+               tests/drivers/test_hda_core.c src/drivers/audio/hda_core.c \
                tests/drivers/test_hyperv_vmbus_stage.c src/drivers/hyperv/hyperv_stage.c \
                tests/drivers/test_vmbus_ring.c src/drivers/hyperv/vmbus_ring.c \
                tests/drivers/test_vmbus_mouse_protocol.c src/drivers/hyperv/vmbus_mouse_protocol.c \
@@ -3067,7 +3097,7 @@ smoke-x64-iso-local-modules:
 	$(MAKE) iso-uefi-local-modules TOOLCHAIN64="$(TOOLCHAIN64)" \
 	  LOCAL_MODULES_WORKSPACE="$(LOCAL_MODULES_WORKSPACE)" \
 	  LOCAL_MODULES_REPOS="$(LOCAL_MODULES_REPOS)"
-	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --require-module-install $(SMOKE_X64_ISO_ARGS)
+	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --require-module-install --require-desktop-after-login $(SMOKE_X64_ISO_ARGS)
 	@if grep -q "Desktop module not installed" build/ci/smoke_x64_iso_install.boot1.debugcon.log; then \
 	  echo "[FAIL] local-bundle modules did not install (FULL profile)"; exit 1; fi
 	@echo "[ok] local-bundle FULL module install validated"
@@ -3439,12 +3469,12 @@ smoke-x64-qemu-browser-multifetch:
 # Local QEMU+OVMF mirror of smoke-x64-vmware-apps-basic-roundtrip (dev
 # feedback / CI pre-flight; VMware + UEFI + E1000 stays the official
 # release-acceptance gate). The gated in-kernel orchestrator emits the
-# marker pre-login, so no network is needed. REQUIRED_APPS=6 must match
+# marker pre-login, so no network is needed. REQUIRED_APPS=7 must match
 # CapyUI's apps_smoke_roundtrip_total().
 smoke-x64-qemu-apps-basic-roundtrip:
 	@echo "Executando smoke QEMU apps-basic-roundtrip (dev feedback / CI pre-flight)..."
 	$(MAKE) clean
-	$(MAKE) all64 PROFILE=full CAPYOS_APPS_ROUNDTRIP_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=6'
+	$(MAKE) all64 PROFILE=full CAPYOS_APPS_ROUNDTRIP_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=7'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_qemu_marker.py --marker "[smoke] apps-basic-roundtrip ready" --timeout 300 --log build/ci/smoke_x64_qemu_apps_roundtrip.log $(SMOKE_X64_QEMU_MARKER_ARGS)
@@ -3658,8 +3688,9 @@ smoke-x64-qemu-capygfx-lifecycle:
 # (kernel_boot_run_apps_roundtrip) runs each app's headless primary-function
 # smoke and the latch emits "[smoke] apps-basic-roundtrip ready" on COM1 once
 # APPS_ROUNDTRIP_SMOKE_REQUIRED_APPS clean passes are observed. The set now
-# covers all five basic desktop apps -- calculator, task_manager, file_manager,
-# text_editor, settings, software_center (REQUIRED_APPS=6). This value MUST equal CapyUI's
+# covers all seven basic desktop apps -- calculator, task_manager, file_manager,
+# text_editor, settings, software_center and media_player (REQUIRED_APPS=7).
+# This value MUST equal CapyUI's
 # apps_smoke_roundtrip_total(); the orchestrator refuses to run (gate fails) on a
 # mismatch. Requires the CapyUI sibling.
 .PHONY: smoke-x64-vmware-apps-basic-roundtrip
@@ -3668,11 +3699,99 @@ smoke-x64-vmware-apps-basic-roundtrip:
 	$(MAKE) clean
 	$(MAKE) all64 PROFILE=full \
 		CAPYOS_APPS_ROUNDTRIP_SMOKE=1 \
-		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=6'
+		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=7'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_vmware.py \
 		--marker "[smoke] apps-basic-roundtrip ready" \
+		$(SMOKE_X64_VMWARE_ARGS)
+
+# Etapa 10 audio acceptance. The marker is emitted only after the HDA output
+# stream is configured, started and its DMA position has advanced. QEMU is the
+# deterministic development pre-flight; VMware is the official platform gate
+# and its VMX must expose the default virtual HDA device.
+.PHONY: audio-selftest
+audio-selftest:
+	@mkdir -p $(BUILD)/tests
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude tests/audio/test_irq_dispatch.c -o $(BUILD)/tests/audio_irq_tests
+	$(BUILD)/tests/audio_irq_tests
+	@mkdir -p $(BUILD)/tests
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude -DHDA_CORE_STANDALONE_TEST \
+		src/drivers/audio/hda_core.c tests/drivers/test_hda_core.c \
+		-o $(BUILD)/tests/hda_core_tests
+	$(BUILD)/tests/hda_core_tests
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude -I$(CAPYCODECS_DIR)/src/audio \
+		-DCAPYOS_HAVE_CAPYCODECS_AUDIO tests/audio/test_audio_service.c \
+		src/audio/audio_service.c src/audio/audio_runtime.c src/audio/audio_mixer.c \
+		tests/audio/stub_audio_runtime.c \
+		src/drivers/audio/hda_core.c \
+		$(CAPYCODECS_DIR)/src/audio/audio.c $(CAPYCODECS_DIR)/src/audio/wav_decode.c \
+		-o $(BUILD)/tests/audio_service_tests
+	$(BUILD)/tests/audio_service_tests
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude tests/audio/test_media_player.c \
+		-o $(BUILD)/tests/media_player_tests
+	$(BUILD)/tests/media_player_tests
+	python3 tools/scripts/test_audio_smoke_contract.py
+
+.PHONY: smoke-x64-qemu-audio-playback-roundtrip
+smoke-x64-qemu-audio-playback-roundtrip:
+	@echo "Executando smoke QEMU HDA audio-playback-roundtrip..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_AUDIO_PLAYBACK_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_AUDIO_PLAYBACK_SMOKE'
+	@mkdir -p $(BUILD)/ci
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1 EXTRA_CFLAGS64='-DCAPYOS_AUDIO_PLAYBACK_SMOKE' \
+		ISO_IMG_EFI=$(BUILD)/ci/CapyOS-Smoke-Audio-UEFI.iso \
+		ISO_LAST_BUILT_FILE=$(BUILD)/ci/CapyOS-Smoke-Audio-UEFI.last-built.txt
+	$(MAKE) manifest64
+	@strings $(CAPYOS_ELF64) | grep -Fq '[smoke] audio-playback-roundtrip ready' || { echo '[err] kernel sem smoke de audio'; exit 2; }
+	python3 tools/scripts/smoke_x64_qemu_marker.py \
+		--audio-hda \
+		--audio-capture build/ci/smoke_x64_qemu_audio_playback.wav \
+		--audio-stream-fixture \
+		--marker "[smoke] audio-playback-roundtrip ready" \
+		--fail-marker "[smoke] audio-playback-roundtrip FAIL" \
+		--timeout 300 \
+		--log build/ci/smoke_x64_qemu_audio_playback.log \
+		$(SMOKE_X64_QEMU_MARKER_ARGS)
+
+.PHONY: smoke-x64-qemu-media-player-playlist
+smoke-x64-qemu-media-player-playlist:
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_AUDIO_PLAYBACK_SMOKE -DCAPYOS_MEDIA_PLAYER_SMOKE'
+	@mkdir -p $(BUILD)/ci
+	$(MAKE) iso-uefi PROFILE=full ISO_REUSE_X64_VARIANT=1 EXTRA_CFLAGS64='-DCAPYOS_AUDIO_PLAYBACK_SMOKE -DCAPYOS_MEDIA_PLAYER_SMOKE' \
+		ISO_IMG_EFI=$(BUILD)/ci/CapyOS-Smoke-Media-Player-UEFI.iso \
+		ISO_LAST_BUILT_FILE=$(BUILD)/ci/CapyOS-Smoke-Media-Player-UEFI.last-built.txt
+	$(MAKE) manifest64
+	@strings $(CAPYOS_ELF64) | grep -Fq '[smoke] media-player-playlist ready' || { echo '[err] kernel sem smoke de playlist'; exit 2; }
+	python3 tools/scripts/smoke_x64_qemu_marker.py \
+		--audio-hda \
+		--marker "[smoke] media-player-playlist ready" \
+		--fail-marker "[smoke] media-player-playlist FAIL" \
+		--fail-marker "[smoke] audio-playback-roundtrip FAIL" \
+		--timeout 300 \
+		--log build/ci/smoke_x64_qemu_media_player.log \
+		--audio-capture build/ci/smoke_x64_qemu_media_player.wav --audio-playlist-fixture \
+		$(SMOKE_X64_QEMU_MARKER_ARGS)
+
+.PHONY: smoke-x64-vmware-audio-playback-roundtrip
+smoke-x64-vmware-audio-playback-roundtrip:
+	@if [ -z "$(SMOKE_X64_VMWARE_ARGS)" ]; then echo "[err] informe SMOKE_X64_VMWARE_ARGS com VMX HDA + serial log"; exit 2; fi
+	@echo "Executando gate oficial VMware HDA audio-playback-roundtrip..."
+	$(MAKE) clean
+	$(MAKE) all64 PROFILE=full CAPYOS_AUDIO_PLAYBACK_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_AUDIO_PLAYBACK_SMOKE'
+	@mkdir -p $(BUILD)/ci
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1 EXTRA_CFLAGS64='-DCAPYOS_AUDIO_PLAYBACK_SMOKE' \
+		ISO_IMG_EFI=$(BUILD)/ci/CapyOS-Smoke-Audio-UEFI.iso \
+		ISO_LAST_BUILT_FILE=$(BUILD)/ci/CapyOS-Smoke-Audio-UEFI.last-built.txt
+	$(MAKE) manifest64
+	@strings $(CAPYOS_ELF64) | grep -Fq '[smoke] audio-playback-roundtrip ready' || { echo '[err] kernel sem smoke de audio'; exit 2; }
+	python3 tools/scripts/smoke_x64_vmware.py \
+		--iso $(BUILD)/ci/CapyOS-Smoke-Audio-UEFI.iso \
+		--marker "[smoke] audio-stream-wav file-loaded" \
+		--marker "[smoke] audio-stream-wav eof frames=144000" \
+		--marker "[smoke] audio-playback-roundtrip ready" \
+		--fail-marker "[smoke] audio-playback-roundtrip FAIL" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
 .PHONY: etapa-6-qemu-preflight etapa-6-vmware-gates
@@ -3857,6 +3976,25 @@ smoke-x64-preemptive-user-2task:
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
 	python3 tools/scripts/smoke_x64_preemptive_user_2task.py $(SMOKE_X64_PREEMPTIVE_USER_2TASK_ARGS)
+
+# Etapa 10: two switched ring-3 tasks retain distinct values in XMM0. The
+# existing harness rejects [fp-corrupt], proving task-local x87/MMX/SSE state
+# isolation instead of merely proving that context switches survive. Explicit
+# ring-3 yields make the gate deterministic before the early UEFI path arms a
+# periodic timer; both paths use the same context_switch assembly.
+.PHONY: smoke-x64-fp-context
+smoke-x64-fp-context:
+	@echo "Executando smoke x64 de contexto FP/SIMD por tarefa..."
+	$(MAKE) clean
+	$(MAKE) all64 TOOLCHAIN64=elf EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO -DCAPYOS_BOOT_RUN_TWO_BUSY' \
+	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY -DCAPYOS_HELLO_FP_STATE'
+	$(MAKE) iso-uefi TOOLCHAIN64=elf ISO_REUSE_X64_VARIANT=1
+	$(MAKE) manifest64 TOOLCHAIN64=elf
+	python3 tools/scripts/smoke_x64_preemptive_user_2task.py \
+	  --log build/ci/smoke_x64_fp_context.log \
+	  --debugcon-log build/ci/smoke_x64_fp_context.debugcon.log \
+	  --disk build/ci/smoke_x64_fp_context.img \
+	  $(SMOKE_X64_FP_CONTEXT_ARGS)
 
 # M5 phase A.7: SYS_FORK + CoW end-to-end smoke.
 # Builds the kernel with `-DCAPYOS_PREEMPTIVE_SCHEDULER
@@ -4064,7 +4202,7 @@ smoke-x64-vmware-pkg-install:
 	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_installer.py)"; \
 	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
 	py.exe -3 "$$SCRIPT_WIN" --iso "$$ISO_WIN" \
-	  --module-profile full --require-module-install \
+	  --module-profile full --require-module-install --require-desktop-after-login \
 	  --evidence build/ci/vmware-pkg-install-evidence.manifest \
 	  $(SMOKE_X64_VMWARE_INSTALLER_ARGS)
 
@@ -4171,7 +4309,7 @@ smoke-x64-vmware-update-ab-production-existing-iso:
 SMOKE_X64_MODULES_INDEX_URL ?= https://github.com/henriquefarisco/CapyOS/releases/download/modules-capyos-base-v3/modules-index.txt
 smoke-x64-iso-modules-net: all64 iso-uefi manifest64
 	@echo "Gate de download real de modulos (instalacao completa networked)..."
-	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
+	python3 tools/scripts/smoke_x64_iso_install.py --module-profile full --first-boot-net --require-module-install --require-desktop-after-login --modules-index-url $(SMOKE_X64_MODULES_INDEX_URL) --step-timeout 300 $(SMOKE_X64_ISO_ARGS)
 	@if grep -q "Install complete" build/ci/smoke_x64_iso_install.boot1.debugcon.log; then echo "[ok] download real de modulos validado (Install complete)"; else echo "[FAIL] modulos nao instalaram no full-install networked"; exit 1; fi
 
 # Host-side GPT/ESP/BOOT audit for installed disks or disk images.

@@ -155,7 +155,9 @@ int kernel_boot_run_embedded_hello(void) {
  * 2. Arm process_b's main thread via the synthetic IRET frame
  *    builder with rank=1 so context_switch can dispatch it via
  *    `x64_user_first_dispatch`.
- * 3. Add process_b's main thread to the scheduler run queue.
+ * 3. Add both main threads to the scheduler run queue. The running task must
+ *    remain linked there so round-robin can find it again after its first
+ *    preemption.
  * 4. Set process_a's main thread as task_current() and refresh the
  *    arch RSP0/cpu_local.kernel_rsp to point at process_a's per-task
  *    kernel stack (this is what 8f.2 wires for kernel-mode tasks;
@@ -203,10 +205,11 @@ int kernel_boot_run_two_busy_users(void) {
   user_task_arm_for_first_dispatch_with_rax(pb->main_thread, pb_rip,
                                             pb_rsp, 1u);
 
-  /* Add pb to the run queue so scheduler_pick_next will find it
-   * once pa's quantum runs out. pa is NOT added: it is the
-   * "current" task by virtue of the iretq below, and adding it to
-   * the queue would let pick_next return it twice. */
+  /* Keep both tasks in the run queue. scheduler_pick_next_after() starts at
+   * current->next and wraps before current, so the running entry is not
+   * selected twice; retaining pa is what makes it runnable again after pb's
+   * first quantum. */
+  scheduler_add(pa->main_thread);
   scheduler_add(pb->main_thread);
 
   /* Mark pa as the running task so the first APIC tick from ring 3
@@ -219,6 +222,13 @@ int kernel_boot_run_two_busy_users(void) {
     task_set_current(pa->main_thread);
     arch_sched_apply_kernel_stack(pa->main_thread);
   }
+
+  /* This boot hook runs before the platform timer is allowed to own IRQ0.
+   * The FP isolation gate therefore drives the same context_switch path with
+   * explicit ring-3 yields. Marking the scheduler live here is also required
+   * by the preemptive variant: its timer may be armed after this helper on
+   * platforms that defer IRQ ownership until firmware handoff completes. */
+  scheduler_set_running(1);
 
   /* Drop into ring 3 for pa. process_enter_user_mode is noreturn on
    * success (existing iretq path). When the scheduler later swaps
@@ -552,6 +562,9 @@ int kernel_boot_run_capygfx_desktop_spawn_smoke(void) {
    * pa's per-task kernel stack (same as kernel_boot_run_two_busy_users). */
   if (pa->main_thread) {
     extern void task_set_current(struct task *t);
+    /* As in kernel_boot_run_two_busy_users(), a directly-entered task still
+     * belongs in the run queue or it cannot be selected after preemption. */
+    scheduler_add(pa->main_thread);
     pa->main_thread->state = TASK_STATE_RUNNING;
     task_set_current(pa->main_thread);
     arch_sched_apply_kernel_stack(pa->main_thread);

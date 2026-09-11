@@ -69,6 +69,10 @@
 #include "kernel/pipe.h"
 #include "kernel/stdin_buf.h"
 #include "kernel/user_init.h"
+#ifdef CAPYOS_AUDIO_PLAYBACK_SMOKE
+#include "audio/audio_service.h"
+#include "drivers/audio/hda.h"
+#endif
 #if defined(CAPYOS_GFX_SMOKE) || \
     defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE) || \
     defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
@@ -80,7 +84,7 @@
 #include "gui/compositor.h"
 #include "kernel/syscall_gfx.h"
 #endif
-#ifdef CAPYOS_CAPYAI_GUI_ASYNC_SMOKE
+#if defined(CAPYOS_CAPYAI_GUI_ASYNC_SMOKE) || defined(CAPYOS_MEDIA_PLAYER_SMOKE)
 #include "gui/desktop_runtime.h"
 #endif
 #include "memory/pmm.h"
@@ -189,6 +193,137 @@ static void __attribute__((unused)) dbgcon_write(const char *s) {
     dbgcon_putc((uint8_t)*s++);
   }
 }
+
+#ifdef CAPYOS_AUDIO_PLAYBACK_SMOKE
+#include "fs/vfs.h"
+
+static void audio_smoke_log(const char *message) {
+  com1_puts(message);
+  dbgcon_write(message);
+}
+
+static int audio_smoke_fixture(const char *path, const uint8_t *data, size_t size) {
+  struct file *fixture;
+  size_t written = 0;
+  if (vfs_create(path, VFS_MODE_FILE, 0) != VFS_OK) return -1;
+  fixture = vfs_open(path, VFS_OPEN_WRITE);
+  if (fixture) {
+    while (written < size) {
+      size_t request = size - written;
+      long count;
+      if (request > 65536u) request = 65536u;
+      count = vfs_write(fixture, data + written, request);
+      if (count <= 0 || (size_t)count > request) break;
+      written += (size_t)count;
+    }
+    vfs_close(fixture);
+  }
+  if (written == size) return 0;
+  (void)vfs_unlink(path);
+  return -1;
+}
+
+static int kernel_boot_run_audio_playback_smoke(void) {
+  /* Three distinct one-second sections prove source progression across many
+   * DMA ring wraps, instead of replaying one short preloaded tone forever. */
+  static uint8_t wav[44u + 48000u * 3u * 4u] = {
+    'R','I','F','F',0,0,0,0,'W','A','V','E',
+    'f','m','t',' ',16,0,0,0,1,0,2,0,0x80,0xbb,0,0,
+    0,0xee,2,0,4,0,16,0,'d','a','t','a',0,0,0,0
+  };
+  struct hda_runtime_status status;
+  struct audio_service_status audio;
+  uint32_t spin;
+  uint32_t previous_position;
+  uint32_t started;
+  uint32_t wraps = 0;
+  uint64_t host_started;
+
+  for (uint32_t i = 0; i < 4u; ++i) {
+    wav[4u+i] = (uint8_t)((sizeof(wav) - 8u) >> (i * 8u));
+    wav[40u+i] = (uint8_t)((sizeof(wav) - 44u) >> (i * 8u));
+  }
+  for (uint32_t i = 0; i < 144000u; ++i) {
+    uint32_t period = i < 48000u ? 200u : (i < 96000u ? 160u : 120u);
+    uint16_t sample = (uint16_t)((i % period) < period / 2u ? 6000 : -6000);
+    wav[44u+i*4u] = wav[46u+i*4u] = (uint8_t)sample;
+    wav[45u+i*4u] = wav[47u+i*4u] = (uint8_t)(sample >> 8);
+  }
+
+  audio_smoke_log("[smoke] audio-playback-roundtrip starting\n");
+  /* Lab-only disposable-disk fixture. Never overwrite a pre-existing path. */
+  if (audio_smoke_fixture("/audio-smoke.wav", wav, sizeof(wav)) != 0) {
+    audio_smoke_log("[smoke] audio-playback-roundtrip FAIL fixture-create\n");
+    return -1;
+  }
+#ifdef CAPYOS_MEDIA_PLAYER_SMOKE
+  {
+    int rc;
+    if (audio_smoke_fixture("/audio-smoke-next.wav", wav, sizeof(wav)) != 0) {
+      (void)vfs_unlink("/audio-smoke.wav");
+      audio_smoke_log("[smoke] media-player-playlist FAIL fixture\n");
+      return -1;
+    }
+    rc = desktop_media_player_smoke_run();
+    audio_service_stop();
+    if (vfs_unlink("/audio-smoke.wav") != VFS_OK) rc = -1;
+    if (vfs_unlink("/audio-smoke-next.wav") != VFS_OK) rc = -1;
+    audio_smoke_log(rc == 0 ? "[smoke] media-player-playlist ready\n" :
+                              "[smoke] media-player-playlist FAIL cleanup-or-desktop\n");
+    return rc;
+  }
+#endif
+  if (audio_service_play_wav_file(0x534d4b45u, "/audio-smoke.wav") != 0 ||
+      hda_get_status(&status) != 0 || status.state != HDA_STATE_PLAYING) {
+    audio_service_stop();
+    (void)vfs_unlink("/audio-smoke.wav");
+    audio_smoke_log("[smoke] audio-playback-roundtrip FAIL start\n");
+    klog_dump(audio_smoke_log);
+    return -1;
+  }
+  audio_smoke_log("[smoke] audio-stream-wav file-loaded\n");
+  previous_position = status.position_bytes;
+  started = status.wallclock_ticks;
+  host_started = x64_timebase_ticks_100hz();
+  /* Use elapsed time for the timeout: a fixed spin count can finish before
+   * two seconds on an accelerated VMware CPU but last much longer in TCG. */
+  for (spin = 0; x64_timebase_ticks_100hz() - host_started < 500u; ++spin) {
+    if ((spin & 0x3ffu) == 0u) {
+      audio_service_poll();
+      if (hda_get_status(&status) != 0) break;
+      if (audio_service_get_status(&audio) != 0 || audio.last_error) break;
+      uint32_t elapsed = status.wallclock_ticks - started;
+      if (audio.completed && !audio.playing && audio.played_frames == 144000u &&
+          elapsed >= 48000000u && wraps >= 2u && status.state == HDA_STATE_READY) {
+        if (vfs_unlink("/audio-smoke.wav") != VFS_OK) break;
+        audio_smoke_log("[smoke] audio-stream-wav eof frames=144000\n");
+        audio_smoke_log("[smoke] audio-playback-roundtrip ready\n");
+        return 0;
+      }
+      if (status.state != HDA_STATE_PLAYING || (status.stream_status & 0x18u) ||
+          !status.buffer_bytes || status.position_bytes > status.buffer_bytes)
+        break;
+      /* LPIB may expose CBL itself before wrapping to zero (Intel HDA
+       * SDLPIB register contract). Count only a later observed decrease. */
+      if (status.position_bytes < previous_position) ++wraps;
+      previous_position = status.position_bytes;
+      if (elapsed >= 120000000u) break;
+    }
+    __asm__ volatile("pause");
+  }
+  klog_dec(KLOG_WARN, "[audio-smoke] position=", status.position_bytes);
+  klog_dec(KLOG_WARN, "[audio-smoke] buffer=", status.buffer_bytes);
+  klog_dec(KLOG_WARN, "[audio-smoke] wallclock-elapsed=", status.wallclock_ticks - started);
+  klog_dec(KLOG_WARN, "[audio-smoke] wraps=", wraps);
+  klog_dec(KLOG_WARN, "[audio-smoke] spins=", spin);
+  klog_hex(KLOG_WARN, "[audio-smoke] stream-status=", status.stream_status);
+  audio_service_stop();
+  (void)vfs_unlink("/audio-smoke.wav");
+  audio_smoke_log("[smoke] audio-playback-roundtrip FAIL dma-stalled-or-error\n");
+  klog_dump(audio_smoke_log);
+  return -1;
+}
+#endif
 
 struct efi_memory_descriptor64 {
   uint32_t type;
@@ -440,6 +575,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
 #if defined(CAPYOS_BOOT_RUN_CAPYSH)
     int hello_rc = kernel_boot_run_capysh();
 #elif defined(CAPYOS_BOOT_RUN_TWO_BUSY)
+    dbgcon_write("[user_init] CAPYOS_BOOT_RUN_TWO_BUSY defined; spawning two.\n");
     int hello_rc = kernel_boot_run_two_busy_users();
 #else
     int hello_rc = kernel_boot_run_embedded_hello();
@@ -836,6 +972,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     int apps_roundtrip_rc = kernel_boot_run_apps_roundtrip();
     (void)apps_roundtrip_rc;
   }
+#endif
+#ifdef CAPYOS_AUDIO_PLAYBACK_SMOKE
+  /* Etapa 10: require codec configuration, a live output stream and observed
+   * DMA-position progress before publishing the playback marker. */
+  dbgcon_write("[user_init] CAPYOS_AUDIO_PLAYBACK_SMOKE; probing HDA DMA.\n");
+  (void)kernel_boot_run_audio_playback_smoke();
 #endif
 #ifdef CAPYOS_CAPYAI_GUI_ASYNC_SMOKE
   /* Build-only end-to-end regression for the CapyAI VM freeze. It enters the

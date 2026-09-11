@@ -50,6 +50,18 @@ void test_task_create(void) {
   } else {
     FAIL("trampoline stack would misalign a C worker entry");
   }
+
+
+  TEST("fresh task owns architectural reset FP/SIMD state");
+  if (t && ((uintptr_t)t->context.fx_state & 0xFu) == 0u &&
+      t->context.fx_state[0] == 0x7fu &&
+      t->context.fx_state[1] == 0x03u &&
+      t->context.fx_state[24] == 0x80u &&
+      t->context.fx_state[25] == 0x1fu) {
+    PASS();
+  } else {
+    FAIL("invalid FXSAVE reset image or alignment");
+  }
 }
 
 void test_kernel_task_binds_kernel_cr3(void) {

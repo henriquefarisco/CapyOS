@@ -67,7 +67,16 @@ x64_exception_common:
     mov rdi, rsp
     mov r12, rsp
     and rsp, -16
+    # entry64 enables OSFXSR before installing the native IDT. Compiler C
+    # handlers and scheduled tasks use XMM registers; preserve the interrupted
+    # x87/SSE state on THIS interrupt stack across deferred task dispatch.
+    # The kernel does not enable/use AVX, so the 512-byte FXSAVE64 image covers
+    # its enabled extended state. Keep the image aligned and outside the
+    # public exception-frame layout addressed by RDI/R12.
+    sub rsp, 512
+    fxsave64 [rsp]
     call x64_exception_dispatch
+    fxrstor64 [rsp]
     mov rsp, r12
     POP_REGS
     add rsp, 16

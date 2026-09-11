@@ -47,6 +47,9 @@ enter_user_mode:
     pushq $USER_CS_RPL3       # CS
     pushq %rdi                # RIP
 
+    # crt0 forwards RAX to main() as the boot-only rank channel. Direct entry
+    # is rank 0; do not leak a compiler/caller residue into user space.
+    xorl %eax, %eax
     iretq
 
 .size enter_user_mode, .-enter_user_mode

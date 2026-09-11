@@ -66,8 +66,8 @@ static void reset_world(void) {
 /* -------------------- 1. Layout invariants ----------------------------- */
 
 static void test_layout_locks_asm_contract(void) {
-    TEST("sizeof(struct task_context) == 0x50 (10 x 8 bytes)");
-    if (sizeof(struct task_context) == 0x50u) PASS();
+    TEST("sizeof(struct task_context) == 0x250");
+    if (sizeof(struct task_context) == 0x250u) PASS();
     else FAIL("size drift between C and asm");
 
     TEST("offsetof(rsp) == 0x00");
@@ -109,6 +109,11 @@ static void test_layout_locks_asm_contract(void) {
     TEST("offsetof(cr3) == 0x48");
     if (offsetof(struct task_context, cr3) == 0x48u) PASS();
     else FAIL("cr3 offset drift");
+
+    TEST("offsetof(fx_state) == 0x50 and is 16-byte aligned");
+    if (offsetof(struct task_context, fx_state) == 0x50u &&
+        _Alignof(struct task_context) >= 16u) PASS();
+    else FAIL("FXSAVE area offset/alignment drift");
 }
 
 /* The host scheduler uses stub_context_switch.c, so runtime C tests alone
@@ -146,6 +151,15 @@ static void test_asm_captures_rflags_before_cli(void) {
     } else {
         FAIL("expected pushfq -> cli -> popq -> old.rflags ordering");
     }
+
+    const char *fxsave = entry ? strstr(entry,
+        "\n    fxsave64 0x50(%rdi)\n") : NULL;
+    const char *fxrestore = entry ? strstr(entry,
+        "\n    fxrstor64 0x50(%rsi)\n") : NULL;
+    TEST("context_switch saves old and restores new FP/SIMD state");
+    if (fxsave && fxrestore && save < fxsave && fxsave < fxrestore)
+        PASS();
+    else FAIL("missing or misordered task-local FXSAVE/FXRSTOR");
 
     const char *frame_rsp_load = entry ?
         strstr(entry, "\n    movq 0x00(%rsi), %rdx\n") : NULL;
@@ -186,17 +200,43 @@ static void test_asm_captures_rflags_before_cli(void) {
         "\n    pushq 0x38(%rdi)\n") : NULL;
     const char *first_iret = first ? strstr(first, "\n    iretq\n") : NULL;
     const char *first_popfq = first ? strstr(first, "\n    popfq\n") : NULL;
+    const char *first_fxrestore = first ? strstr(first,
+        "\n    fxrstor64 0x50(%rdi)\n") : NULL;
 
     TEST("first task dispatch also restores the full AMD64 frame");
     if (first_rsp_load && first_ss && first_rsp && first_flags && first_cs &&
         first_rip && first_iret && first_rsp_load < first_ss &&
         first_ss < first_rsp && first_rsp < first_flags &&
         first_flags < first_cs && first_cs < first_rip &&
-        first_rip < first_iret && first_popfq == NULL) {
+        first_rip < first_iret && first_popfq == NULL && first_fxrestore &&
+        first_fxrestore < first_rsp_load) {
         PASS();
     } else {
         FAIL("first dispatch must build all five IRETQ fields");
     }
+}
+
+static void test_direct_user_entry_sets_rank_zero(void) {
+    char source[4096];
+    FILE *f = fopen("src/arch/x86_64/cpu/user_mode_entry.S", "rb");
+    if (!f) f = fopen("../../src/arch/x86_64/cpu/user_mode_entry.S", "rb");
+
+    TEST("direct user entry source is available for rank contract");
+    if (!f) {
+        FAIL("cannot open user_mode_entry.S");
+        return;
+    }
+    size_t n = fread(source, 1, sizeof(source) - 1u, f);
+    fclose(f);
+    source[n] = '\0';
+    PASS();
+
+    const char *entry = strstr(source, "\nenter_user_mode:\n");
+    const char *clear_rax = entry ? strstr(entry, "\n    xorl %eax, %eax\n") : NULL;
+    const char *iret = entry ? strstr(entry, "\n    iretq\n") : NULL;
+    TEST("direct user entry clears RAX before IRETQ (rank=0)");
+    if (clear_rax && iret && clear_rax < iret) PASS();
+    else FAIL("direct entry can leak a non-zero rank to crt0");
 }
 
 /* -------------------- 2. scheduler_init / pick_next -------------------- */
@@ -869,6 +909,7 @@ int test_context_switch_run(void) {
     tests_passed = 0;
     test_layout_locks_asm_contract();
     test_asm_captures_rflags_before_cli();
+    test_direct_user_entry_sets_rank_zero();
     test_init_resets_stats();
     test_pick_next_priority();
     test_pick_next_cooperative();

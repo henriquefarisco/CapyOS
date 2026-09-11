@@ -50,6 +50,19 @@ static const char k_fault_marker[] = "before-fault\n";
  * emit only [busyU0]. */
 static const char k_busy_marker_0[] = "[busyU0]\n";
 static const char k_busy_marker_1[] = "[busyU1]\n";
+#ifdef CAPYOS_HELLO_FP_STATE
+static const char k_fp_corrupt_marker[] = "[fp-corrupt]\n";
+
+static void fp_state_write(uint32_t value) {
+    __asm__ volatile("movd %0, %%xmm0" : : "r"(value) : "xmm0");
+}
+
+static uint32_t fp_state_read(void) {
+    uint32_t value;
+    __asm__ volatile("movd %%xmm0, %0" : "=r"(value));
+    return value;
+}
+#endif
 #endif
 #ifdef CAPYOS_HELLO_EXEC
 /* M5 phase B.7: SYS_EXEC end-to-end smoke body.
@@ -210,11 +223,27 @@ int main(int rank) {
     size_t marker_len =
         (rank == 0) ? sizeof(k_busy_marker_0) - 1u
                     : sizeof(k_busy_marker_1) - 1u;
+#ifdef CAPYOS_HELLO_FP_STATE
+    const uint32_t fp_cookie = rank == 0 ? 0x46503030u : 0x46503131u;
+    fp_state_write(fp_cookie);
+#endif
     for (;;) {
         for (volatile uint64_t spin = 0; spin < 0x80000ULL; ++spin) {
             __asm__ volatile("pause");
         }
+#ifdef CAPYOS_HELLO_FP_STATE
+        if (fp_state_read() != fp_cookie) {
+            capy_write(1, k_fp_corrupt_marker,
+                       sizeof(k_fp_corrupt_marker) - 1u);
+            return 2;
+        }
+#endif
         capy_write(1, marker, marker_len);
+#ifdef CAPYOS_HELLO_FP_STATE
+        /* Deterministically exercise multiple save/restore cycles even on the
+         * early UEFI boot path where the periodic timer is not armed yet. */
+        capy_yield();
+#endif
     }
     /* Unreachable: the loop is intentionally infinite so the smoke
      * has an unlimited window of opportunity to observe the marker.

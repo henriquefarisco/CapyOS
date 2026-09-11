@@ -421,7 +421,9 @@ def make_qemu_cmd(
     iso_path: Path | None = None,
     boot_from: str = "disk",
     networking: bool = False,
+    audio_hda: bool = False,
     extra_disks: tuple[Path, ...] = (),
+    audio_capture: Path | None = None,
 ) -> list[str]:
     cmd = [
         qemu_bin,
@@ -466,6 +468,22 @@ def make_qemu_cmd(
         # QEMU implicit default user-net NIC with full internet access.
         cmd.extend(["-netdev", "user,id=net0,restrict=on",
                     "-device", "e1000,netdev=net0"])
+
+    if audio_hda:
+        # A null backend keeps the gate hermetic while retaining the complete
+        # Intel HDA controller/codec/DMA path in the guest.
+        backend = "driver=none,id=audio0"
+        if audio_capture is not None:
+            escaped_path = str(audio_capture).replace(",", ",,")
+            backend = (f"driver=wav,id=audio0,path={escaped_path},"
+                       "out.frequency=48000,out.channels=2,out.format=s16")
+        cmd.extend([
+            "-audiodev", backend,
+            "-device", "intel-hda",
+            "-device", "hda-duplex,audiodev=audio0",
+        ])
+    elif audio_capture is not None:
+        raise ValueError("audio_capture requires audio_hda")
 
     if debugcon_log is not None:
         cmd.extend(

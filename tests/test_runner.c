@@ -3,6 +3,7 @@
 int run_block_wrapper_tests(void);
 int run_partition_tests(void);
 int run_keyboard_layout_tests(void);
+int run_hda_core_tests(void);
 int run_grub_cfg_builder_tests(void);
 int run_boot_manifest_tests(void);
 int run_boot_writer_tests(void);
@@ -322,6 +323,7 @@ int main(int argc, char **argv) {
     failures += run_block_wrapper_tests();
     failures += run_partition_tests();
     failures += run_keyboard_layout_tests();
+    failures += run_hda_core_tests();
     failures += run_grub_cfg_builder_tests();
     failures += run_boot_manifest_tests();
     failures += run_boot_writer_tests();
