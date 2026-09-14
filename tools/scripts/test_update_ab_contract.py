@@ -158,6 +158,13 @@ class _SlotStatusSession:
     def text_since(self, start_at: int) -> str:
         return self.output[start_at:]
 
+    def serial_text_since(self, start_at: int) -> str:
+        # Real interactive sessions echo the submitted command. Model that
+        # boundary explicitly instead of making run_cmd accept an unechoed
+        # (potentially stale) response. Delayed-echo doubles override this.
+        echo = self.commands[-1] + "\r\n" if self.commands else ""
+        return echo + self.text_since(start_at)
+
     def text(self) -> str:
         return self.output
 

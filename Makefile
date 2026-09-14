@@ -1764,13 +1764,23 @@ $(BUILD)/x86_64/third_party/tinf/%.o: third_party/tinf/%.c | $(BUILD) $(BUILD_GE
 	@mkdir -p $(dir $@)
 	$(CC64) $(CFLAGS64) $(DEPFLAGS64) -c $< -o $@
 
-$(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD)
+.PHONY: check-desktop-sources
+check-desktop-sources:
+	@set -e; for source in \
+	  $(patsubst $(BUILD)/x86_64/capyui-desktop/%.o,$(DESKTOP_SRC_ROOT)/%.c,$(DESKTOP_OBJS)) \
+	  $(patsubst $(BUILD)/x86_64/capyui-window/%.o,$(WINDOW_SRC_ROOT)/%.c,$(WINDOW_OBJS)) \
+	  $(patsubst $(BUILD)/x86_64/capyui-apps/%.o,$(APPS_SRC_ROOT)/%.c,$(APPS_OBJS)); do \
+	    test -f "$$source" || { echo "[err] incomplete desktop source integration: $$source"; exit 2; }; \
+	  done
+
+# An existing object/kernel must not hide missing sibling sources.
+$(CAPYOS_ELF64): $(CAPYOS64_OBJS) $(SRC_DIR)/arch/x86_64/linker64.ld | $(BUILD) check-desktop-sources
 	$(LD64) -T $(LINKER64_SCRIPT) $(LDFLAGS64) -o $@ $(CAPYOS64_OBJS)
 
 X64_BUILD_VARIANT_FILE := $(BUILD)/.x64-build-variant
 
 .PHONY: prepare-x64-toolchain
-prepare-x64-toolchain: | $(BUILD)
+prepare-x64-toolchain: check-desktop-sources | $(BUILD)
 	@mkdir -p $(BUILD)/x86_64
 	@{ \
 		printf '%s\n' 'toolchain=$(TOOLCHAIN64)'; \
@@ -1868,11 +1878,9 @@ endif
 
 iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
 	python3 tools/scripts/verify_official_boot_config.py $(BOOT_CONFIG_BIN)
-	@if [ "$(ISO_IMG_EFI)" = "build/CapyOS-Installer-UEFI.iso" ] && \
-	    { strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] audio-playback-roundtrip starting' || \
-	      strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] media-player-playlist starting'; }; then \
-		echo "[err] canonical installer ISO cannot contain Etapa 10 smoke boot hooks"; exit 2; \
-	fi
+	python3 tools/scripts/verify_installer_variant.py --kernel "$(CAPYOS_ELF64)" \
+		--variant "$(X64_BUILD_VARIANT_FILE)" --iso "$(ISO_IMG_EFI)" \
+		--last-built "$(ISO_LAST_BUILT_FILE)" --reuse "$(ISO_REUSE_X64_VARIANT)"
 	@if [ "$(ISO_REUSE_X64_VARIANT)" != "1" ] && \
 	    [ "$(CAPYOS_LOCAL_MODULES)" != "1" ] && \
 	    strings "$(CAPYOS_ELF64)" | grep -Fq '[smoke] capyai-gui-async ready'; then \
@@ -2260,8 +2268,17 @@ GRUB_CFG_ISO := $(BUILD)/grub.iso.cfg
 GRUB_CFG_DISK := $(BUILD)/grub.disk.cfg
 
 ISO_DIR_EFI ?= build/iso-uefi-root
+SMOKE_ISO_IMG_EFI := $(BUILD)/ci/CapyOS-Smoke-UEFI.iso
+SMOKE_ISO_LAST_BUILT_FILE := $(BUILD)/ci/CapyOS-Smoke-UEFI.last-built.txt
+# Reusing a diagnostic kernel must never publish it as the installer, even
+# when a legacy smoke target does not supply its own output names.
+ifeq ($(ISO_REUSE_X64_VARIANT),1)
+ISO_IMG_EFI ?= $(SMOKE_ISO_IMG_EFI)
+ISO_LAST_BUILT_FILE ?= $(SMOKE_ISO_LAST_BUILT_FILE)
+else
 ISO_IMG_EFI ?= build/CapyOS-Installer-UEFI.iso
 ISO_LAST_BUILT_FILE ?= $(BUILD)/CapyOS-Installer-UEFI.last-built.txt
+endif
 RELEASE_SHA256 := $(BUILD)/release-artifacts.sha256
 RELEASE_SIGNATURE := $(RELEASE_SHA256).sig
 RELEASE_PUBLIC_KEY_MANIFEST := $(BUILD)/release-public-key.manifest
@@ -2723,7 +2740,7 @@ $(GRUB_CFG_ISO): $(GRUB_CFG_GEN) | $(BUILD)
 $(GRUB_CFG_DISK): $(GRUB_CFG_GEN) | $(BUILD)
 	$(GRUB_CFG_GEN) $@ disk
 
-test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety test-release-promotion-contract test-vmware-installer-no-uart-contract
+test: $(TEST_BIN) test-capyai test-browser-shell test-modules-index-assets test-smoke-path-safety test-release-promotion-contract test-vmware-installer-no-uart-contract test-installer-variant
 	@echo "Executando testes unitarios de host..."
 	$(TEST_BIN)
 ifneq ($(strip $(CAPYBROWSER_CORE_AVAILABLE)),)
@@ -3257,7 +3274,7 @@ smoke-x64-vmware-scheduler-fairness:
 	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] storage-stack ready" \
 		--marker "[smoke] gui-session ready" \
@@ -3296,7 +3313,7 @@ smoke-x64-vmware-thread-crash-survives:
 	$(MAKE) all64 PROFILE=full EXTRA_CFLAGS64='-DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] gui-session ready" \
 		--marker "[smoke] thread-crash-survives ready" \
@@ -3338,7 +3355,7 @@ smoke-x64-vmware-etapa-4:
 		EXTRA_CFLAGS64='-DCAPYOS_SCHEDULER_FAIRNESS_SMOKE -DCAPYOS_THREAD_CRASH_SURVIVES_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] gui-session ready" \
 		--marker "[smoke] scheduler-fairness ready" \
@@ -3370,7 +3387,7 @@ smoke-x64-vmware-tls-handshake:
 		EXTRA_CFLAGS64='-DCAPYOS_TLS_HANDSHAKE_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] tls-handshake ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
@@ -3398,7 +3415,7 @@ smoke-x64-vmware-capybrowse-text:
 		EXTRA_CFLAGS64='-DCAPYOS_CAPYBROWSE_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] capybrowse-text ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
@@ -3444,7 +3461,7 @@ smoke-x64-vmware-browser-multifetch:
 		EXTRA_CFLAGS64='-DCAPYOS_MULTIFETCH_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[net] DHCP: lease acquired." \
 		--marker "[smoke] browser-multifetch ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
@@ -3510,7 +3527,7 @@ smoke-x64-vmware-browser-graphical:
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
 # Etapa 7 / Slice 7.5 (alpha.303) external validation gate -- capygfx network
 # sub-resource fetch. Same image/marker as smoke-x64-vmware-browser-graphical
@@ -3527,7 +3544,7 @@ smoke-x64-vmware-capygfx-net-image:
 	$(MAKE) all64 PROFILE=full CAPYOS_GFX_SMOKE=1 EXTRA_CFLAGS64='-DCAPYOS_GFX_SMOKE' EXTRA_USERLAND_CFLAGS='-DCAPYGFX_NET_IMAGE_SMOKE'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
 # Local QEMU+OVMF mirror of smoke-x64-vmware-capygfx-net-image (development
 # feedback only; VMware + UEFI + E1000 stays the official release-acceptance
@@ -3626,7 +3643,7 @@ smoke-x64-vmware-capygfx-desktop-spawn:
 	$(MAKE) all64 PROFILE=full CAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE=1 CAPYOS_DESKTOP_GRAPHICAL_BROWSER=1 EXTRA_CFLAGS64='-DCAPYOS_DESKTOP_GRAPHICAL_BROWSER_SMOKE -DCAPYOS_DESKTOP_GRAPHICAL_BROWSER'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" --marker "[smoke] capygfx ready" $(SMOKE_X64_VMWARE_ARGS)
 
 # Local QEMU+OVMF mirror of smoke-x64-vmware-capygfx-desktop-spawn (development
 # feedback only; VMware + UEFI + E1000 stays the official release-acceptance
@@ -3657,13 +3674,13 @@ smoke-x64-vmware-capygfx-lifecycle:
 		if [ -z "$(SMOKE_X64_VMWARE_SERIAL_LOG)" ]; then \
 			echo "[err] informe SMOKE_X64_VMWARE_SERIAL_LOG com SMOKE_X64_VMWARE_VMX"; exit 2; \
 		fi; \
-		python3 tools/scripts/smoke_x64_vmware.py \
+		python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 			--marker "[smoke] capygfx-lifecycle ok" \
 			--vmx "$(SMOKE_X64_VMWARE_VMX)" \
 			--serial-log "$(SMOKE_X64_VMWARE_SERIAL_LOG)" \
 			--timeout "$(or $(SMOKE_X64_VMWARE_TIMEOUT),300)"; \
 	else \
-		python3 tools/scripts/smoke_x64_vmware.py \
+		python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 			--marker "[smoke] capygfx-lifecycle ok" \
 			$(SMOKE_X64_VMWARE_ARGS); \
 	fi
@@ -3702,7 +3719,7 @@ smoke-x64-vmware-apps-basic-roundtrip:
 		EXTRA_CFLAGS64='-DCAPYOS_APPS_ROUNDTRIP_SMOKE -DAPPS_ROUNDTRIP_SMOKE_REQUIRED_APPS=7'
 	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
 	$(MAKE) manifest64
-	python3 tools/scripts/smoke_x64_vmware.py \
+	python3 tools/scripts/smoke_x64_vmware.py --iso "$(SMOKE_ISO_IMG_EFI)" \
 		--marker "[smoke] apps-basic-roundtrip ready" \
 		$(SMOKE_X64_VMWARE_ARGS)
 
@@ -3710,6 +3727,11 @@ smoke-x64-vmware-apps-basic-roundtrip:
 # stream is configured, started and its DMA position has advanced. QEMU is the
 # deterministic development pre-flight; VMware is the official platform gate
 # and its VMX must expose the default virtual HDA device.
+.PHONY: test-installer-variant
+test-installer-variant:
+	python3 tools/scripts/test_installer_variant.py
+	python3 tools/scripts/test_desktop_source_contract.py
+
 .PHONY: audio-selftest
 audio-selftest:
 	@mkdir -p $(BUILD)/tests
@@ -3732,6 +3754,7 @@ audio-selftest:
 		-o $(BUILD)/tests/media_player_tests
 	$(BUILD)/tests/media_player_tests
 	python3 tools/scripts/test_audio_smoke_contract.py
+	$(MAKE) test-installer-variant
 
 .PHONY: smoke-x64-qemu-audio-playback-roundtrip
 smoke-x64-qemu-audio-playback-roundtrip:
@@ -3978,17 +4001,20 @@ smoke-x64-preemptive-user-2task:
 	python3 tools/scripts/smoke_x64_preemptive_user_2task.py $(SMOKE_X64_PREEMPTIVE_USER_2TASK_ARGS)
 
 # Etapa 10: two switched ring-3 tasks retain distinct values in XMM0. The
-# existing harness rejects [fp-corrupt], proving task-local x87/MMX/SSE state
-# isolation instead of merely proving that context switches survive. Explicit
+# existing harness rejects [fp-corrupt], checking a task-local XMM0 cookie.
+# This does not cover the full FP register set or FP control state. Explicit
 # ring-3 yields make the gate deterministic before the early UEFI path arms a
 # periodic timer; both paths use the same context_switch assembly.
 .PHONY: smoke-x64-fp-context
 smoke-x64-fp-context:
 	@echo "Executando smoke x64 de contexto FP/SIMD por tarefa..."
-	$(MAKE) clean
+	# The variant fingerprint rebuilds affected objects without deleting the
+	# canonical installer or earlier test evidence.
 	$(MAKE) all64 TOOLCHAIN64=elf EXTRA_CFLAGS64='-DCAPYOS_PREEMPTIVE_SCHEDULER -DCAPYOS_BOOT_RUN_HELLO -DCAPYOS_BOOT_RUN_TWO_BUSY' \
 	              EXTRA_USERLAND_CFLAGS='-DCAPYOS_HELLO_BUSY -DCAPYOS_HELLO_FP_STATE'
-	$(MAKE) iso-uefi TOOLCHAIN64=elf ISO_REUSE_X64_VARIANT=1
+	$(MAKE) iso-uefi TOOLCHAIN64=elf ISO_REUSE_X64_VARIANT=1 \
+		ISO_IMG_EFI=$(BUILD)/ci/CapyOS-Smoke-FP-UEFI.iso \
+		ISO_LAST_BUILT_FILE=$(BUILD)/ci/CapyOS-Smoke-FP-UEFI.last-built.txt
 	$(MAKE) manifest64 TOOLCHAIN64=elf
 	python3 tools/scripts/smoke_x64_preemptive_user_2task.py \
 	  --log build/ci/smoke_x64_fp_context.log \
@@ -4249,6 +4275,7 @@ smoke-x64-qemu-update-ab:
 		CAPYOS_UPDATE_LAB_MANIFEST_URL="$$LAB_MANIFEST_URL" \
 		ISO_REUSE_X64_VARIANT=1; \
 	python3 tools/scripts/smoke_x64_qemu_update_ab.py \
+		--iso "$(SMOKE_ISO_IMG_EFI)" \
 		--private-key "$$LAB_PRIVATE_KEY" \
 		--expected-public-key-hex "$$LAB_PUBLIC_KEY_HEX" \
 		--host "$$LAB_HOST" \
@@ -4265,7 +4292,7 @@ smoke-x64-vmware-update-ab:
 		CAPYOS_UPDATE_LAB_TRUST_KEY_HEX="$$LAB_PUBLIC_KEY_HEX" \
 		CAPYOS_UPDATE_LAB_MANIFEST_URL="$$LAB_MANIFEST_URL" \
 		ISO_REUSE_X64_VARIANT=1; \
-	ISO_PATH="$$(cat $(BUILD)/CapyOS-Installer-UEFI.last-built.txt)"; \
+	ISO_PATH="$$(cat $(SMOKE_ISO_LAST_BUILT_FILE))"; \
 	SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_update_ab.py)"; \
 	ISO_WIN="$$(wslpath -w "$$ISO_PATH")"; \
 	KEY_WIN="$$(wslpath -w "$$LAB_PRIVATE_KEY")"; \

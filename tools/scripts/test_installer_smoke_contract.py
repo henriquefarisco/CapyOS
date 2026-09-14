@@ -235,6 +235,25 @@ def main() -> int:
     else:
         print("[FAIL] ambiguous installer target capacity was accepted")
         return 1
+    for mirrored in (candidate_text + serial_candidate_text,
+                     serial_candidate_text + candidate_text):
+        if installer_select_target_by_size(mirrored, 2048) != (1, "0123456789abcdef"):
+            print("[FAIL] exact display/serial mirror was not coalesced")
+            return 1
+    for ambiguous in (
+        candidate_text + serial_candidate_text + candidate_text,
+        serial_candidate_text + candidate_text + serial_candidate_text,
+        candidate_text + serial_candidate_text.replace("size-mib=2048", "size-mib=4096"),
+        candidate_text + serial_candidate_text.replace("0123456789abcdef", "1111111111111111"),
+        candidate_text.replace("3072 MiB", "2048 MiB"),
+    ):
+        try:
+            installer_select_target_by_size(ambiguous, 2048)
+        except RuntimeError:
+            pass
+        else:
+            print("[FAIL] contradictory/repeated/ambiguous target evidence accepted")
+            return 1
     try:
         require_installer_target_count("[installer] eligible-targets=1\n", 2)
     except RuntimeError:

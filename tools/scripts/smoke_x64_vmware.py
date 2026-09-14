@@ -60,6 +60,10 @@ def resolve_iso(repo_root: Path, requested: Path | None) -> Path | None:
         return None
     if requested.exists():
         return requested
+    # An explicitly selected diagnostic ISO must not fall back to an older
+    # canonical installer and accidentally validate the wrong build.
+    if (repo_root / requested).resolve() != (repo_root / "build/CapyOS-Installer-UEFI.iso").resolve():
+        return requested
     sidecar = repo_root / "build/CapyOS-Installer-UEFI.last-built.txt"
     if sidecar.exists():
         recorded = sidecar.read_text(encoding="utf-8", errors="ignore").strip()

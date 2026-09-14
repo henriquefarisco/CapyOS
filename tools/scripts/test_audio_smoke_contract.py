@@ -20,10 +20,7 @@ class AudioSmokeContract(unittest.TestCase):
         )
         self.assertIn("CapyOS-Smoke-Audio-UEFI.iso", makefile)
         self.assertIn("CapyOS-Smoke-Media-Player-UEFI.iso", makefile)
-        self.assertIn(
-            "canonical installer ISO cannot contain Etapa 10 smoke boot hooks",
-            makefile,
-        )
+        self.assertIn("verify_installer_variant.py", makefile)
 
     def test_playlist_capture_requires_two_complete_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:

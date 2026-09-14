@@ -34,19 +34,32 @@ def installer_eligible_targets(text: str) -> tuple[tuple[int, str, int], ...]:
         r"^\[installer\] target-index=(\d+) pathid=([0-9A-Fa-f]{16}) size-mib=(\d+)$"
     )
     targets: list[tuple[int, str, int]] = []
+    seen: set[tuple[str, tuple[int, str, int]]] = set()
     for line in text.splitlines():
         match = display_pattern.match(line)
+        source = "display"
         if match is None:
             match = serial_pattern.match(line.strip())
+            source = "serial"
         if match:
-            targets.append(
-                (int(match.group(1), 10), match.group(2).lower(), int(match.group(3), 10))
-            )
+            target = (int(match.group(1), 10), match.group(2).lower(), int(match.group(3), 10))
+            other = "serial" if source == "display" else "display"
+            # OVMF mirrors the display table to serial alongside the loader's
+            # machine-readable inventory. Coalesce only the first exact pair
+            # of different formats; repeated records in one format stay
+            # ambiguous and must still fail the destructive-target selection.
+            mirrored = (source, target) not in seen and (other, target) in seen
+            seen.add((source, target))
+            if not mirrored:
+                targets.append(target)
     return tuple(targets)
 
 
 def installer_select_target_by_size(text: str, size_mib: int) -> tuple[int, str]:
-    matches = [target for target in installer_eligible_targets(text) if target[2] == size_mib]
+    targets = installer_eligible_targets(text)
+    if len({target[0] for target in targets}) != len(targets):
+        raise RuntimeError("installer inventory contains repeated or conflicting target indices")
+    matches = [target for target in targets if target[2] == size_mib]
     if len(matches) != 1:
         raise RuntimeError(
             f"installer smoke expected one {size_mib} MiB target, got {len(matches)}"

@@ -4,6 +4,45 @@ Development branch: `feature/etapa-10-audio-multimedia` in CapyOS,
 CapyCodecs and CapyUI. This is development evidence, not a release acceptance
 record. The published Etapa 9 release is not replaced by these lab artifacts.
 
+## Review fixes (2026-09-13, unreleased)
+
+- `ISO_REUSE_X64_VARIANT=1` defaults to `build/ci/CapyOS-Smoke-UEFI.iso`
+  and its own last-built pointer. VMware and A/B diagnostic consumers select
+  these outputs explicitly; a missing diagnostic ISO cannot fall back to an
+  older official image. The canonical installer rejects reused variants,
+  diagnostic flags and known boot hooks, including FP/TWO_BUSY.
+- `smoke-x64-fp-context` has dedicated FP ISO/pointer names and no global clean.
+  The variant fingerprint rebuilds its affected objects while preserving the
+  canonical ISO. Its XMM0 cookie tests cooperative context switches, not the
+  complete FP control/register state or all preemptive/SMP paths.
+- Full desktop builds check source completeness even when the kernel/object
+  cache exists. CapyUI owns the player and its desktop wiring; the coordinated
+  local source commits are CapyUI `1bfcb24321ccc9ff592e8186df703b7a00d7be95`
+  and CapyCodecs `551f24050957631d4d8199034cda8e9e55ad541c` (2026-09-14).
+  A clean-source build must use these owners, not the older published sources.
+  Do not make the player optional to hide an incomplete export.
+- Private Vorbis synthesis sizes overlap scratch for both the previous and
+  current block. Residue decoding expands a full classword before selecting
+  its partial-group prefix. Regression gates cover block transitions,
+  multiclass residues and an Ogg with transients against FFmpeg.
+- The full QEMU installer harness now recognizes an exact display/serial pair
+  as one disk. Same-format repeats, conflicting indices/identities and equal
+  capacities remain rejected. This fixes a harness refusal before disk writes,
+  not an installer storage-policy relaxation. A/B console test doubles now
+  model the command echo required by the existing anti-stale-response policy.
+
+Run `make test-installer-variant`, `make audio-selftest`, CapyUI `make validate`
+and `make lint-desktop-session`, and CapyCodecs `make validate`,
+`make vorbis-reference-test` and `make vorbis-pcm-reference-test`.
+These fixes do not expose Ogg in the public WAV-only ABI/player, change signing
+policy, or close the Etapa 10 acceptance criteria. Local runtime evidence and
+remaining delivery boundaries are recorded in the review-fix report under
+`build/fix-review-20260913/`.
+
+The coordinated commits are local development closure only: no push, merge,
+tag or publication is implied. Public versions and immutable package pins stay
+unchanged; a later release must coordinate them through the publishing gates.
+
 ## Implemented surface
 
 - CapyCodecs owns pure `capy-codec-audio` ABI v1 and bounded WAV decoding.
