@@ -192,6 +192,12 @@ class AudioSmokeContract(unittest.TestCase):
         self.assertIn("intel-hda", audio)
         self.assertIn("hda-duplex,audiodev=audio0", audio)
         self.assertIn("driver=none,id=audio0", audio)
+        captured = make_qemu_cmd(**args, audio_hda=True,
+                                 audio_capture=Path("out.wav"))
+        self.assertIn("hda-duplex,audiodev=audio0,use-timer=off", captured)
+        self.assertNotIn("hda-duplex,audiodev=audio0", captured)
+        self.assertTrue(any(a.startswith("driver=wav,id=audio0,path=")
+                            for a in captured))
 
     def test_ac97_is_explicit_hermetic_and_exclusive(self):
         args = dict(qemu_bin="qemu", ovmf_code="code.fd",
