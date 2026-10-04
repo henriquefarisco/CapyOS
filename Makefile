@@ -3225,6 +3225,15 @@ check-toolchain:
 	@echo "[ok] Todas as dependencias encontradas."
 
 .PHONY: release-check
+.PHONY: verify-update-payload-budget test-update-payload-budget
+verify-update-payload-budget:
+	python3 tools/scripts/verify_update_payload_budget.py --payload $(CAPYOS_ELF64)
+
+test-update-payload-budget:
+	python3 tools/scripts/test_update_payload_budget.py
+
+test: test-update-payload-budget
+
 release-check:
 	@echo "Executando gates de release robusta..."
 	@if [ "$(CAPYOS_LOCAL_MODULES)" = "1" ]; then echo "[err] CAPYOS_LOCAL_MODULES=1 e lab-only; release-check deve usar artefatos oficiais remotos."; exit 2; fi
@@ -3237,6 +3246,7 @@ release-check:
 	$(MAKE) smoke-marker-policy-selftest
 	$(MAKE) update-ab-selftest
 	$(MAKE) all64 TOOLCHAIN64=elf
+	$(MAKE) verify-update-payload-budget TOOLCHAIN64=elf
 	$(MAKE) iso-uefi TOOLCHAIN64=elf
 	$(MAKE) verify-release-checksums TOOLCHAIN64=elf
 	@if strings $(CAPYOS_ELF64) | grep -Fq '[lab] update trust anchor overridden'; then \

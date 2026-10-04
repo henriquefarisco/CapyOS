@@ -1,5 +1,9 @@
 # CapyOS 0.11.0+20261003
 
+Superseded candidate: workflow 37167270217 rejected the 9,734,792-byte kernel
+against the updater's 8 MiB limit before draft creation. The tag is retained;
+no OS release was published. Continue with [0.11.1](capyos-0.11.1+20261004.md).
+
 Candidate `0.11.0+20261003`; signed publication and final-artifact acceptance
 remain pending. The currently published stable release is not changed by this
 document.

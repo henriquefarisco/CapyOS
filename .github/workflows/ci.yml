@@ -88,6 +88,7 @@ jobs:
           make version-audit
           make boot-perf-baseline-selftest
           make all64 TOOLCHAIN64=host
+          make verify-update-payload-budget TOOLCHAIN64=host
           make iso-uefi TOOLCHAIN64=host
           make verify-release-checksums TOOLCHAIN64=host
 

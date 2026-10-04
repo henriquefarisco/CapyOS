@@ -1,6 +1,6 @@
 # Cross-repo compatibility matrix
 
-**Candidato coordenado 2026-10-03:** CapyOS `0.11.0+20261003` consome os tags
+**Candidato coordenado 2026-10-04:** CapyOS `0.11.1+20261004` consome os tags
 `CapyUI v2.27.0` e `CapyCodecs v0.1.1`. Os demais pins ficam inalterados.
 `capy-codec-audio` v1, desktop-session v1, widget v2.22 e `capyos-base` v3
 permanecem compativeis. O limite de PCM decodificado passa a 40 MiB, heap do
@@ -10,12 +10,17 @@ Instalacao Full/desktop/persistencia passou em QEMU e VMware para o artefato de
 desenvolvimento. A tabela publicada abaixo permanece historicamente valida;
 promocao da nova release e aceite dos bytes finais ainda pendentes.
 
-O snapshot candidato `modules-capyos-base-v3-r2` tem revisao de publicacao 2,
+O snapshot publicado `modules-capyos-base-v3-r2` tem revisao de publicacao 2,
 sem mudar token `capyos-base-v3`, envelope v2 ou epoca de assinatura 1. O catalogo
 tem 10 pacotes e resolve 8 known-good, incluindo `org.capyos.codecs.audio-wav`
 0.1.1 (WAV/Vorbis). CapyLang e CapyBenchmark continuam fora do resolved set.
 Os payloads sao os bytes publicados pinados por SHA-256/tamanho; nao sao
 reempacotados. O snapshot imutavel anterior permanece intacto.
+
+A tag 0.11.0 foi retida sem release: seu kernel excedeu o limite de 8 MiB do
+atualizador. O candidato 0.11.1 reduz somente as copias musicais para Vorbis q0;
+taxa/duracao/estereo, WAVs originais e PCM do boot sao preservados. Nenhuma
+politica de tamanho, assinatura ou confianca foi relaxada.
 
 **Status:** autoritativo; **revisao atual:** 2026-09-04, CapyOS
 `0.10.0+20260904` (release stable da Etapa 9, Latest e imutavel), com

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare deterministic 48 kHz stereo PCM copies; never modify supplied WAVs."""
+"""Prepare bounded 48 kHz stereo assets; never modify supplied WAVs."""
 import argparse
 import hashlib
 import json
@@ -13,6 +13,7 @@ SOUNDS = {
     "Capy Opera.wav": "Capy Opera.ogg",
     "Capy Sound.wav": "Capy Sound.ogg",
 }
+MUSIC_VORBIS_QUALITY = "0"
 
 
 def digest(path):
@@ -50,7 +51,7 @@ def prepare(source, output, ffmpeg="ffmpeg"):
         if target.suffix == ".ogg":
             subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(pcm_target),
                             "-map_metadata", "-1", "-fflags", "+bitexact", "-flags:a", "+bitexact",
-                            "-c:a", "libvorbis", "-q:a", "3", str(target)],
+                            "-c:a", "libvorbis", "-q:a", MUSIC_VORBIS_QUALITY, str(target)],
                            check=True, timeout=120)
             if target.stat().st_size > 4 * 1024 * 1024:
                 raise ValueError(f"music exceeds CapyFS seed limit: {name}")

@@ -2,7 +2,7 @@
 
 **Data de referência:** 2026-09-04 (0.10.0 stable publicada, Latest e imutável)
 **Versão atual:** `0.10.0+20260904`
-**Candidato em preparacao:** `0.11.0+20261003` (audio, boot sonoro e musicas;
+**Candidato em preparacao:** `0.11.1+20261004` (audio, boot sonoro e musicas;
 nao publicado; a versao publica acima permanece vigente).
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
