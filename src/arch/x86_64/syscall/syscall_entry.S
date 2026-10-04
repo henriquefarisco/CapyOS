@@ -70,8 +70,8 @@ syscall_entry:
 
     # Build syscall_frame on kernel stack
     pushq %r11                 # rflags
-    pushq %rcx                 # rip (return address)
     pushq %gs:CPU_LOCAL_USER_RSP_SCRATCH_OFFSET   # user rsp
+    pushq %rcx                 # rip (return address)
     pushq %r11                 # r11 (saved rflags duplicate)
     pushq %rcx                 # rcx (saved rip duplicate)
     pushq %r9
@@ -84,7 +84,7 @@ syscall_entry:
 
     # Call C dispatcher: syscall_dispatch(frame)
     movq %rsp, %rdi
-    call syscall_dispatch
+    call x64_syscall_dispatch_fp
 
     # Return value is in RAX, it stays there for userspace
 
@@ -98,12 +98,39 @@ syscall_entry:
     popq %r9
     popq %rcx                  # rcx duplicate
     popq %r11                  # r11 duplicate
+    addq $8, %rsp              # skip frame.rip; RCX is the SYSRET target
     popq %rsp                  # restore user RSP directly
     # RCX and R11 already have user RIP and RFLAGS from above pops
 
     sysretq
 
 .size syscall_entry, .-syscall_entry
+
+# Kept as a callable assembly boundary so the exact dispatch path can be
+# exercised by a native register-clobber oracle without executing SYSRET/MSRs.
+.global x64_syscall_dispatch_fp
+.type x64_syscall_dispatch_fp, @function
+x64_syscall_dispatch_fp:
+    # SysV function entry has RSP mod 16 == 8. The extra eight bytes align
+    # the 512-byte image and the C call, without changing syscall_frame/RDI.
+    # A blocking/yielding syscall keeps this image on its owning task stack.
+    subq $520, %rsp
+    fxsave64 (%rsp)
+    # User rounding modes or unmasked exceptions must not govern kernel C.
+    fninit
+    ldmxcsr .Lsyscall_kernel_mxcsr(%rip)
+    movq %rsp, %rsi            # owning boundary's user FXSAVE image
+    call syscall_dispatch_with_fp
+    fxrstor64 (%rsp)
+    addq $520, %rsp
+    ret
+.size x64_syscall_dispatch_fp, .-x64_syscall_dispatch_fp
+
+.pushsection .rodata
+.balign 4
+.Lsyscall_kernel_mxcsr:
+    .long 0x1f80
+.popsection
 
 # Mark stack as non-executable to satisfy modern binutils hardening
 .section .note.GNU-stack,"",@progbits

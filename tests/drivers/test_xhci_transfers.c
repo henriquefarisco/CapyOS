@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "internal/test_xhci_helpers.h"
+extern void kfree_aligned(void *ptr);
 
 static int g_failures = 0;
 
@@ -61,7 +62,10 @@ static void test_control_transfer_queues_get_descriptor_trbs(void) {
     if (((ep0_ring[0].control >> 10) & 0x3Fu) != TRB_TYPE_SETUP) fail("first EP0 TRB must be setup");
     if (((ep0_ring[0].control >> 16) & 0x3u) != 3u) fail("setup TRB must declare IN data stage");
     if ((ep0_ring[0].control & 1u) != 1u) fail("setup TRB must carry EP0 cycle bit");
-    if (ep0_ring[1].param != (uint64_t)(uintptr_t)data) fail("data TRB must point at data buffer");
+    if (!xhci.ep0_buffers[3] || ep0_ring[1].param != (uint64_t)(uintptr_t)xhci.ep0_buffers[3])
+        fail("data TRB must point at persistent controller buffer");
+    if (ep0_ring[1].param == (uint64_t)(uintptr_t)data)
+        fail("DMA must not use caller stack buffer");
     if (ep0_ring[1].status != sizeof(data)) fail("data TRB must encode length");
     if (((ep0_ring[1].control >> 10) & 0x3Fu) != TRB_TYPE_DATA) fail("second EP0 TRB must be data");
     if (((ep0_ring[1].control >> 16) & 1u) != 1u) fail("data TRB must be IN");
@@ -69,6 +73,7 @@ static void test_control_transfer_queues_get_descriptor_trbs(void) {
     if (((ep0_ring[2].control >> 16) & 1u) != 0u) fail("status TRB must be OUT for IN transfer");
     if (xhci.ep0_ring_idx[3] != 3u) fail("EP0 ring index must advance by three TRBs");
     if (doorbells[3] != 1u) fail("control transfer must ring slot doorbell for EP0");
+    kfree_aligned(xhci.ep0_buffers[3]);
 }
 
 static void test_control_transfer_wraps_ep0_ring(void) {
@@ -108,6 +113,7 @@ static void test_control_transfer_wraps_ep0_ring(void) {
     }
     if (xhci.ep0_ring_idx[4] != 2u) fail("EP0 ring index must wrap and advance");
     if (xhci.ep0_ring_cycle[4] != 0) fail("EP0 ring cycle must toggle on wrap");
+    kfree_aligned(xhci.ep0_buffers[4]);
 }
 
 static void test_control_transfer_set_configuration_no_data(void) {
@@ -259,7 +265,7 @@ static void test_configure_interrupt_endpoint_queues_command_and_primes_ring(voi
     memset(cmd_ring, 0, sizeof(cmd_ring));
     memset(evt_ring, 0, sizeof(evt_ring));
     memset(doorbells, 0xFF, sizeof(doorbells));
-    seed_command_completion(evt_ring, 0, 0u);
+    seed_command_completion(evt_ring, 0, 0u, &cmd_ring[0]);
     ep.address = 0x81u;
     ep.type = 3u;
     ep.max_packet_size = 8u;

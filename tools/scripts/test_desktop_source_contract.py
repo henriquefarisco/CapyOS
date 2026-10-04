@@ -1,6 +1,7 @@
 """A cached kernel cannot hide an incomplete desktop source export."""
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -8,6 +9,8 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[2]
+MAKE_ENV = {key: value for key, value in os.environ.items()
+            if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES")}
 
 
 @unittest.skipUnless(shutil.which("make"), "GNU make is required")
@@ -26,10 +29,10 @@ class DesktopSourceContract(unittest.TestCase):
                 "APPS_OBJS=build/x86_64/capyui-apps/media_player.o",
                 f"APPS_SRC_ROOT={root}",
             ]
-            good = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
+            good = subprocess.run(command, cwd=REPO, env=MAKE_ENV, capture_output=True, text=True)
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
             source.unlink()
-            missing = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
+            missing = subprocess.run(command, cwd=REPO, env=MAKE_ENV, capture_output=True, text=True)
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("incomplete desktop source integration", missing.stdout)
             self.assertIn("media_player.c", missing.stdout)
@@ -39,7 +42,7 @@ class DesktopSourceContract(unittest.TestCase):
         result = subprocess.run(
             ["make", "--no-print-directory", "-s", "check-desktop-sources",
              "PROFILE=core-only", "CAPYUI_DIR=/nonexistent-capyui-contract-fixture"],
-            cwd=REPO, capture_output=True, text=True,
+            cwd=REPO, env=MAKE_ENV, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

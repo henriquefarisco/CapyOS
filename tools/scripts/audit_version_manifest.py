@@ -95,8 +95,11 @@ def require_top_level_mapping_field(
     return raw_value
 
 
-def canonical_modules_index_url(token: str) -> str:
-    return MODULES_INDEX_URL_TEMPLATE.format(token=token)
+def canonical_modules_index_url(token: str, revision: int = 1) -> str:
+    if not isinstance(revision, int) or isinstance(revision, bool) or not 1 <= revision <= 0xFFFFFFFF:
+        raise RuntimeError("modules_index.revision deve ser uint32 positivo")
+    suffix = "" if revision == 1 else f"-r{revision}"
+    return MODULES_INDEX_URL_TEMPLATE.format(token=token + suffix)
 
 
 def audit_modules_index_contract(
@@ -125,7 +128,10 @@ def audit_modules_index_contract(
                 "compatibility-matrix capyos-base ABI",
             )
             expected_token = f"capyos-base-v{abi_version}"
-        expected_url = canonical_modules_index_url(expected_token)
+        revision_text = require_top_level_mapping_field(version_yaml, "modules_index", "revision")
+        if not re.fullmatch(r"[1-9][0-9]*", revision_text):
+            raise RuntimeError("modules_index.revision deve ser uint32 positivo")
+        expected_url = canonical_modules_index_url(expected_token, int(revision_text))
     except RuntimeError as exc:
         errors.append(str(exc))
 

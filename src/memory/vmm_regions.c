@@ -17,9 +17,10 @@
  *   - vmm_address_space_rss    : read the per-AS RSS counter
  *
  * The actual page-fault servicing (allocate physical page, zero, map)
- * lives in src/memory/vmm.c::vmm_handle_page_fault, which calls the
+ * lives in src/memory/vmm_fault.c::vmm_handle_page_fault, which calls the
  * find/rss helpers exposed here. Splitting this way keeps the
- * arch-dependent parts (cr3, invlpg, PTE walking) in vmm.c while the
+ * arch-dependent parts (cr3 in vmm.c; invlpg in memory/internal/
+ * vmm_internal.h; PTE walking in vmm.c/vmm_fault.c) kernel-only while the
  * host-testable parts (registry, RSS counter access) live here.
  */
 #include "kernel/process.h"

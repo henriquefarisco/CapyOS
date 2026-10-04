@@ -1,6 +1,7 @@
 """Regression gates for diagnostic ISO and canonical-pointer isolation."""
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -77,6 +78,8 @@ class InstallerVariantTests(unittest.TestCase):
         for macro in (
             "CAPYOS_BOOT_RUN_HELLO", "CAPYOS_BOOT_RUN_TWO_BUSY",
             "CAPYOS_BOOT_RUN_FUTURE_TEST", "CAPYOS_HELLO_FP_STATE",
+            "CAPYOS_FP_CONTEXT_SMOKE",
+            "CAPYOS_FP_TIMER_SMOKE", "CAPYOS_HELLO_FP_TIMER",
             "CAPYOS_AUDIO_PLAYBACK_SMOKE", "CAPYOS_MEDIA_PLAYER_SMOKE",
             "CAPYOS_SMOKE_CAPYAI", "CAPYOS_PREEMPTIVE_DEMO",
             "CAPYOS_UPDATE_LAB_TRUST_KEY_HEX",
@@ -97,6 +100,10 @@ class InstallerVariantTests(unittest.TestCase):
         recipe = (".PHONY: review-print-iso-paths\nreview-print-iso-paths:\n"
                   "\t@echo REVIEW_ISO=$(ISO_IMG_EFI)\n"
                   "\t@echo REVIEW_POINTER=$(ISO_LAST_BUILT_FILE)\n")
+        # Inspect defaults, not BUILD/CC overrides inherited from an outer
+        # sanitizer make. Preserve the actual Makefile and both reuse cases.
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES")}
         for reuse, iso, pointer in (
             ("0", "build/CapyOS-Installer-UEFI.iso",
              "build/CapyOS-Installer-UEFI.last-built.txt"),
@@ -106,7 +113,8 @@ class InstallerVariantTests(unittest.TestCase):
             result = subprocess.run(
                 ["make", "--no-print-directory", "-s", "-f", "Makefile", "-f", "-",
                  "review-print-iso-paths", f"ISO_REUSE_X64_VARIANT={reuse}"],
-                input=recipe, cwd=REPO, capture_output=True, text=True, check=True,
+                input=recipe, cwd=REPO, env=environment,
+                capture_output=True, text=True, check=True,
             )
             self.assertIn(f"REVIEW_ISO={iso}\n", result.stdout)
             self.assertIn(f"REVIEW_POINTER={pointer}\n", result.stdout)

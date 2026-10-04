@@ -22,11 +22,29 @@
  * .bss). Single SYS_WRITE + SYS_EXIT (the latter via crt0).
  */
 #include <capylibc/capylibc.h>
+#ifdef CAPYOS_HELLO_FP_LIFECYCLE
+#pragma GCC target("general-regs-only")
+#endif
 
 static const char k_msg[] = "[exec-ok]\n";
 
 int main(int rank) {
     (void)rank;
+#ifdef CAPYOS_HELLO_FP_LIFECYCLE
+    _Alignas(16) unsigned char state[512];
+    __asm__ volatile("fxsave64 %0" : "=m"(state));
+    for (unsigned i = 0; i < 416; ++i) {
+        int significant = i < 5 || (i >= 24 && i < 28) || i >= 160 ||
+            (i >= 32 && (i - 32) % 16 < 10);
+        unsigned char expected = i == 0 ? 0x7f : i == 1 ? 3 :
+                                 i == 24 ? 0x80 : i == 25 ? 0x1f : 0;
+        if (significant && state[i] != expected) {
+            capy_write(1, "[fp-corrupt] exec\n", sizeof("[fp-corrupt] exec\n") - 1);
+            return 2;
+        }
+    }
+    capy_write(1, "[fp-exec] reset\n", sizeof("[fp-exec] reset\n") - 1);
+#endif
     capy_write(1, k_msg, sizeof(k_msg) - 1);
     return 0;
 }

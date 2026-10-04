@@ -119,6 +119,9 @@ int usb_parse_configuration_descriptor(const uint8_t *buf, size_t len,
     }
     off += dlen;
   }
+  /* Audio alternates are independent of the HID interface selected above.
+   * Unsupported/malformed audio clears only this optional capability. */
+  (void)usb_audio_parse_configuration(buf, total, &parsed.audio_output);
   *dev = parsed;
   return 0;
 }

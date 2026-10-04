@@ -1,6 +1,6 @@
 # CapyOS Driver Support Matrix
 
-Last updated: 2026-04-28
+Last updated: 2026-09-21
 
 ## Status Definitions
 
@@ -57,6 +57,21 @@ Last updated: 2026-04-28
 | `vmbus_keyboard` | Hyper-V VMBus HID | **Fora de suporte** | Segue trilha Hyper-V |
 | USB HID (`xhci` + `usb_hid`) | USB HID via xHCI | **Experimental** | Slice 3D entregue por código/testes host-side; validação VMware pendente |
 | Mouse (PS/2 / USB) | Mouse | **Experimental** | Codigo presente; integrado ao compositor GUI |
+
+---
+
+## Áudio (Etapa 10, aceite local concluído)
+
+[Gates atuais e limites](../operations/etapa10-acceptance-20261002.md): HDA com
+captura PCM real em dois boots VMware; HDA/AC97/USB no QEMU. HDA configura a
+rota do codec e ganho anunciado; VMware 15ad:1977 usa 64 ms de priming e 192 ms
+de drain. Certificação de hardware físico e release pública continuam separadas.
+
+| Driver | Hardware / Backend | Status | Notas |
+|--------|--------------------|--------|-------|
+| `hda` | Intel High Definition Audio (PCI 04/03) | **Laboratorio** | Saida PCM 48 kHz S16 estereo por anel DMA de 64 KiB; smokes `smoke-x64-qemu-audio-playback-roundtrip` e `smoke-x64-vmware-audio-playback-roundtrip` aprovados em desenvolvimento (ver `docs/operations/etapa-10-audio-development.md`); backend preferido da tabela `audio_output` do servico |
+| `ac97` | Intel ICH AC'97 (PCI 04/01; QEMU `-device AC97`) | **Laboratorio** | Fallback PIO/DMA; playback e mistura/volume com captura PCM passaram no QEMU. [Evidência](../operations/audio-multi-validation-20260929.md). VMware usa HDA; hardware físico não certificado. |
+| USB Audio class | UAC1 full-speed via xHCI | **Laboratorio** | Stereo S16/48 kHz, OUT adaptativo/síncrono, sem feedback; PCM capturado, mistura/volume, HID simultâneo e unplug contido passaram no QEMU. [Evidência e limites](../operations/usb-output-validation-20261001.md). Sem UAC2, resampling ou recuperação após falha. |
 
 ---
 

@@ -130,6 +130,9 @@ int vmm_unmap_page(struct vmm_address_space *as, uint64_t virt);
 int vmm_map_range(struct vmm_address_space *as, uint64_t virt, uint64_t phys,
                   size_t count, uint64_t flags);
 int vmm_unmap_range(struct vmm_address_space *as, uint64_t virt, size_t count);
+/* Task-context, permanent supervisor UC/NX device mapping. NULL on invalid
+ * range, unavailable window or allocation failure. Never maps user memory. */
+void *vmm_map_device(uint64_t physical, size_t bytes);
 uint64_t vmm_virt_to_phys(struct vmm_address_space *as, uint64_t virt);
 int vmm_handle_page_fault(uint64_t fault_addr, uint64_t error_code);
 void vmm_stats_get(struct vmm_stats *out);

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import sys
 import tempfile
@@ -91,6 +92,30 @@ def index_entry(text: str, module_id: str) -> str:
 
 
 class BuildModulesIndexTests(unittest.TestCase):
+    def test_installer_checklist_matches_catalog(self):
+        source = (SCRIPT_DIR.parents[1] / "src/config/first_boot/modules.c").read_text()
+        count = re.search(r"#define MODULES_OFFICIAL_COUNT ([0-9]+)u", source)
+        self.assertIsNotNone(count)
+        entries = re.findall(r'\{"(org\.capyos\.[^"\n]+)"', source)
+        self.assertEqual(int(count.group(1)), len(entries))
+        self.assertEqual(len(entries), len(set(entries)))
+        self.assertEqual(set(entries), set(catalog.MODULE_BY_ID))
+
+    def test_snapshot_revision_matches_all_consumers(self):
+        import audit_version_manifest as audit
+        root = SCRIPT_DIR.parents[1]
+        version = (root / "VERSION.yaml").read_text()
+        field = lambda key: audit.require_top_level_mapping_field(version, "modules_index", key)
+        self.assertEqual(int(field("epoch")), catalog.INDEX_EPOCH)
+        self.assertEqual(int(field("revision")), catalog.INDEX_REVISION)
+        url = audit.canonical_modules_index_url(catalog.CORE_ABI_TOKEN, catalog.INDEX_REVISION)
+        self.assertEqual(field("url"), url)
+        self.assertIn("/" + catalog.INDEX_RELEASE_TAG + "/", url)
+        source = (root / "src/services/capypkg/capypkg_state.c").read_text()
+        literal = re.search(r'CAPYPKG_DEFAULT_REPO_URL\s*=\s*((?:"[^"\n]*"\s*)+);', source)
+        self.assertIsNotNone(literal)
+        self.assertEqual("".join(re.findall(r'"([^"\n]*)"', literal.group(1))), url)
+
     def _build(self, workspace: Path, output: Path) -> int:
         return builder.build_index(
             workspace,
@@ -111,7 +136,7 @@ class BuildModulesIndexTests(unittest.TestCase):
         for spec in catalog.MODULE_SPECS:
             with self.subTest(module_id=spec.module_id):
                 self.assertIn(
-                    "/download/modules-capyos-base-v3/",
+                    "/download/modules-capyos-base-v3-r2/",
                     catalog.resolved_payload_url(spec),
                 )
 

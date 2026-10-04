@@ -131,6 +131,7 @@ int usb_hid_init(void) {
   }
 
   g_hid.initialized = 1;
+  if (g_hid.kbd_configured_count) usb_hid_keyboard_smoke_emit_configured();
   return (g_hid.kbd_slot >= 0 || g_hid.mouse_slot >= 0) ? 0 : -1;
 }
 

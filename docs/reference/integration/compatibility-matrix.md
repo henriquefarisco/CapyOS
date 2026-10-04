@@ -1,9 +1,50 @@
 # Cross-repo compatibility matrix
 
+**Candidato coordenado 2026-10-03:** CapyOS `0.11.0+20261003` consome os tags
+`CapyUI v2.27.0` e `CapyCodecs v0.1.1`. Os demais pins ficam inalterados.
+`capy-codec-audio` v1, desktop-session v1, widget v2.22 e `capyos-base` v3
+permanecem compativeis. O limite de PCM decodificado passa a 40 MiB, heap do
+kernel a 96 MiB e reserva UEFI a 128 MiB; entradas de audio continuam limitadas
+a 8 MiB. As musicas OGG instaladas ficam abaixo do limite por arquivo do CapyFS.
+Instalacao Full/desktop/persistencia passou em QEMU e VMware para o artefato de
+desenvolvimento. A tabela publicada abaixo permanece historicamente valida;
+promocao da nova release e aceite dos bytes finais ainda pendentes.
+
+O snapshot candidato `modules-capyos-base-v3-r2` tem revisao de publicacao 2,
+sem mudar token `capyos-base-v3`, envelope v2 ou epoca de assinatura 1. O catalogo
+tem 10 pacotes e resolve 8 known-good, incluindo `org.capyos.codecs.audio-wav`
+0.1.1 (WAV/Vorbis). CapyLang e CapyBenchmark continuam fora do resolved set.
+Os payloads sao os bytes publicados pinados por SHA-256/tamanho; nao sao
+reempacotados. O snapshot imutavel anterior permanece intacto.
+
 **Status:** autoritativo; **revisao atual:** 2026-09-04, CapyOS
 `0.10.0+20260904` (release stable da Etapa 9, Latest e imutavel), com
 CapyAgent `0.1.0`, CapyUI `2.25.0` e `capyos-base-v3`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
+
+**Checkpoint local 2026-10-01 (não publicado):** CapyUI `2.26.0` acrescenta
+medidores PCM estéreo usando a API aditiva `audio_service_get_app_levels` do
+kernel desta branch. CapyCodecs permanece `0.1.1`; estruturas de status e ABIs
+de pacote desktop/widget são preservadas. Os pins publicados abaixo não mudam.
+[Saída USB validada](../../operations/usb-output-validation-20261001.md) supera
+a pendência de transporte USB abaixo; preparação concorrente também passou
+([evidência](../../operations/audio-prepare-validation-20261001.md)).
+**Aceite local renovado em 2026-10-02:** medidores/playlist e áudio real passaram
+em QEMU HDA/AC97/USB e em dois boots VMware após correções de rota/ganho e
+startup/drain HDA. Testes completos, sanitizadores e validações dos produtores
+passaram. [Evidências atuais](../../operations/etapa10-acceptance-20261002.md).
+Etapa 10 concluída localmente; os checkpoints anteriores abaixo são históricos.
+As versões publicadas/known-good não são promovidas por este aceite de branch.
+
+**Checkpoint local Etapa 10 (2026-09-29, não publicado):** CapyCodecs `0.1.1`
+adiciona Ogg/Vorbis limitado à API genérica de áudio v1; CapyUI `2.25.1` adiciona
+roteamento `.ogg` ao Media Player sem mudar ABI de desktop/widget. O consumo
+build-time deste checkpoint exige ambos os siblings nessas versões. A tabela
+known-good publicada abaixo não é promovida por esse teste local. Decode Ogg e
+EOF passaram no QEMU/HDA e VMware/HDA; áudio capturado foi verificado no QEMU.
+Ver [evidência Ogg](../../operations/audio-ogg-validation-20260929.md), incluindo
+playlist gráfica Ogg/WAV aprovada em QEMU/HDA e VMware/HDA. USB Audio,
+concorrência de decode e demais gates finais da Etapa 10 seguem abertos.
 **Atualizacao 0.10.0-alpha.1 (2026-09-03):** introduz resolve-at-publish
 assinado, component-index v2, índice oficial com token/época/hash, pkgd/CLI,
 Software Center, instalação atômica e SDK. CapyLang e CapyBenchmark continuam

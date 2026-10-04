@@ -18,8 +18,8 @@
 
 static inline void seed_command_completion(struct xhci_trb *evt_ring,
                                            uint32_t evt_idx,
-                                           uint8_t slot_id) {
-    evt_ring[evt_idx].param = 0;
+                                           uint8_t slot_id, const struct xhci_trb *command) {
+    evt_ring[evt_idx].param = (uintptr_t)command;
     evt_ring[evt_idx].status = (uint32_t)XHCI_TRB_CC_SUCCESS << 24;
     evt_ring[evt_idx].control = (TRB_TYPE_CMD_COMPLETE << 10) |
                                 ((uint32_t)slot_id << 24) | 1u;

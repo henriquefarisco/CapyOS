@@ -1,5 +1,5 @@
 meta:
-  generated: 2026-09-04
+  generated: 2026-10-03
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
@@ -1026,10 +1026,10 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.10.0
-    extended: 0.10.0+20260904
+    current: 0.11.0
+    extended: 0.11.0+20261003
     stability: production
-    current_summary: "CapyOS 0.10.0 stable: fecha a Etapa 9 com indice de modulos assinado, package manager, SDK e ABI capyos-base-v3; release publica imutavel com 12 assets e gate A/B VMware de producao."
+    current_summary: "Candidato 0.11.0: audio HDA/AC97/USB, Media Player WAV/OGG, som de boot com splash e tres musicas predefinidas; imagem EFI de 16 MiB com capacidade validada. Publicacao assinada e aceite dos bytes finais pendentes."
     history:
       - version: 0.10.0+20260904
         date: 2026-09-04
@@ -1057,4 +1057,5 @@ modules_index:
   # the signed index chooses exact compatible, known-good module versions.
   token: "capyos-base-v3"
   epoch: 1
-  url: "https://github.com/henriquefarisco/CapyOS/releases/download/modules-capyos-base-v3/modules-index.txt"
+  revision: 2
+  url: "https://github.com/henriquefarisco/CapyOS/releases/download/modules-capyos-base-v3-r2/modules-index.txt"

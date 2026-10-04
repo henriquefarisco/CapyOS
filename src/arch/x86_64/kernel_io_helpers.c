@@ -17,6 +17,7 @@
 #include "arch/x86_64/storage_runtime.h"
 #include "arch/x86_64/input_runtime.h"
 #include "boot/handoff.h"
+#include "boot/boot_config.h"
 #include "core/system_init.h"
 #include "drivers/timer/pit.h"
 #include "fs/block.h"
@@ -141,6 +142,9 @@ int handoff_splash_enabled(void) {
   if (!g_h || g_h->version < 8) {
     return -1;
   }
+  /* Legacy/provisioned configs carry no explicit setup preference. Zero in
+   * their padding is not a request to disable the startup screen. */
+  if (!(g_h->boot_cfg_flags & BOOT_CONFIG_FLAG_HAS_SETUP_DATA)) return 1;
   return g_h->boot_splash_enabled ? 1 : 0;
 }
 

@@ -1,5 +1,6 @@
 /* Real codec + service + mixer; only hardware and host I/O are replaced. */
 #include "audio/audio_service.h"
+#include "drivers/audio/ac97.h"
 #include "drivers/audio/hda.h"
 #include "fs/vfs.h"
 #include <assert.h>
@@ -40,6 +41,22 @@ void kfree(void *p) { assert(!in_irq); if (p) { --allocations; free(p); } }
 void klog(int level, const char *msg) { assert(!in_irq); (void)level; (void)msg; }
 void kmemzero(void *ptr, size_t size) { memset(ptr, 0, size); }
 int hda_init(void) { assert(!in_irq); return 0; }
+/* HDA always initializes here, so the service never selects the AC'97
+ * backend; its entry points exist so the selection table links and any
+ * unexpected fallback call fails loudly (see
+ * test_audio_service_backend_probe.c for the fallback path). */
+int ac97_init(void) { assert(!in_irq); return -1; }
+int ac97_play_stereo_s16(const int16_t *samples, size_t frames) {
+    (void)samples; (void)frames; assert(0); return -1;
+}
+void ac97_stop(void) { assert(0); }
+void ac97_request_stop(void) { assert(0); }
+int ac97_refill_fragment(uint32_t fragment, const int16_t *samples) {
+    (void)fragment; (void)samples; assert(0); return -1;
+}
+int ac97_get_status(struct ac97_runtime_status *status) {
+    (void)status; assert(0); return -1;
+}
 void hda_stop(void) { assert(!in_irq); ++stops; hardware_state = HDA_STATE_READY; }
 void hda_request_stop(void) { ++stop_requests; }
 int hda_get_status(struct hda_runtime_status *status) {
@@ -135,15 +152,14 @@ struct file *vfs_open(const char *path, uint32_t flags) {
 int vfs_close(struct file *file) { assert(file == &fake_file); ++closes; return 0; }
 long vfs_read(struct file *file, void *buf, size_t size) {
     assert(file == &fake_file);
-    /* Simulate the worker arriving during foreground I/O: it must skip,
-     * not deadlock, mutate status, scale buffers or free owned memory. */
+    /* Timer/worker and snapshots remain available during request-local I/O.
+     * This fixture is idle, so polling must not touch hardware or free data. */
     struct audio_service_status concurrent;
     unsigned old_polls = polls, old_stops = stops, old_allocations = allocations;
     in_irq = 1; audio_mock_timer_service(); in_irq = 0;
     audio_service_poll();
-    assert(audio_service_get_status(&concurrent) == -1);
-    assert(audio_service_set_global_volume(123) == -1);
-    audio_service_stop();
+    assert(audio_service_get_status(&concurrent) == 0);
+    assert(audio_service_play_wav_file(99, "/recursive.wav") == -1);
     assert(polls == old_polls && stops == old_stops && allocations == old_allocations);
     if (file->position >= file_read_limit) return 0;
     if (size > 7) size = 7; /* Legal short reads must be accumulated. */
@@ -257,7 +273,8 @@ int main(void) {
     assert(audio_service_set_app_volume(0, 100) == -1);
     assert(audio_service_play_wav_memory(1, wav, sizeof(wav) - 1) == -1);
     assert(audio_service_get_status(&status) == 0);
-    assert(!status.playing && status.active_app_id == 0 && stops > 0);
+    assert(status.playing && status.active_app_id == 1 && allocations == 1);
+    assert(status.last_error != 0); /* Invalid replacement preserves old PCM. */
     fail_play = 1;
     assert(audio_service_play_test_tone(1) == -1);
     assert(audio_service_get_status(&status) == 0 && !status.playing);

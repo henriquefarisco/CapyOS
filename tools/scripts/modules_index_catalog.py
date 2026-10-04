@@ -13,13 +13,14 @@ from typing import Final
 from urllib.parse import urlsplit
 
 GITHUB_OWNER: Final = "henriquefarisco"
-EXPECTED_MODULE_COUNT: Final = 9
-EXPECTED_RESOLVED_COUNT: Final = 7
+EXPECTED_MODULE_COUNT: Final = 10
+EXPECTED_RESOLVED_COUNT: Final = 8
 CORE_ABI_VERSION: Final = 3
 CORE_ABI_TOKEN: Final = f"capyos-base-v{CORE_ABI_VERSION}"
 INDEX_FORMAT: Final = "capyos-modules-index-v2"
 INDEX_EPOCH: Final = 1
-INDEX_RELEASE_TAG: Final = f"modules-{CORE_ABI_TOKEN}"
+INDEX_REVISION: Final = 2
+INDEX_RELEASE_TAG: Final = f"modules-{CORE_ABI_TOKEN}-r{INDEX_REVISION}"
 
 # Keep these values in lockstep with include/services/capypkg.h and
 # src/services/capypkg/internal/capypkg_internal.h.  The C structs reserve one
@@ -77,6 +78,7 @@ class ModuleSpec:
     uses_capyos_release_tag: bool = False
     published_payload_sha256: str | None = None
     published_payload_size: int | None = None
+    published_payload_mirror: str | None = None
 
     @property
     def github_repo(self) -> str:
@@ -115,6 +117,12 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
             "f83c2326dde7a35fbd149957305efa4c"
         ),
         published_payload_size=37753,
+        # The producer is private; these exact pinned bytes are already public
+        # in the immutable revision-1 snapshot. Never require credentials in CI.
+        published_payload_mirror=(
+            "https://github.com/henriquefarisco/CapyOS/releases/download/"
+            "modules-capyos-base-v3/org.capyos.ai.assistant-0.2.2.bin"
+        ),
     ),
     ModuleSpec(
         "org.capyos.browser.core",
@@ -147,42 +155,47 @@ MODULE_SPECS: Final[tuple[ModuleSpec, ...]] = (
     ModuleSpec(
         "org.capyos.codecs.image-basic",
         "CapyCodecs",
-        "0.0.13",
-        "org.capyos.codecs.image-basic-0.0.13.bin",
+        "0.1.1",
+        "org.capyos.codecs.image-basic-0.1.1.bin",
         (),
         "/var/capypkg/org.capyos.codecs.image-basic",
         "capy-codec-image", "2", 3, 3, 1,
         published_payload_sha256=(
-            "79c9d871ca086348b95dac2114a0207d"
-            "c8d15272a81142f3992c833f71b298a6"
+            "2b7c3b76fa5d671e508a78c65e60f58e891706caa2110e9b8104e61cc12a99c9"
         ),
-        published_payload_size=174080,
+        published_payload_size=256000,
+    ),
+    ModuleSpec(
+        "org.capyos.codecs.audio-wav", "CapyCodecs", "0.1.1",
+        "org.capyos.codecs.audio-wav-0.1.1.bin", (),
+        "/var/capypkg/org.capyos.codecs.audio-wav",
+        "capy-codec-audio", "1", 3, 3, 1,
+        published_payload_sha256="75bfb68efec92b79da7fd77c3b5e4e10f176701a61964391c140d07fdd9a4183",
+        published_payload_size=358400,
     ),
     ModuleSpec(
         "org.capyos.ui.desktop-session",
         "CapyUI",
-        "2.25.0",
+        "2.27.0",
         "org.capyos.ui.desktop-session.bin",
         ("org.capyos.ui.widget-core",),
         "/var/capypkg/org.capyos.ui.desktop-session",
         "capy-ui-desktop-session", "1", 3, 3, 1,
         published_payload_sha256=(
-            "7505a12199e8d68e73588b9c8cd9860e"
-            "849fc0f6912bcdf22caf08a8eee76a1e"
+            "53cc44ab5acbd8aee1ca6d5542ed55bdba3fe4b417773724bc5a840027586dcb"
         ),
-        published_payload_size=1423360,
+        published_payload_size=1443840,
     ),
     ModuleSpec(
         "org.capyos.ui.widget-core",
         "CapyUI",
-        "2.25.0",
+        "2.27.0",
         "org.capyos.ui.widget-core.bin",
         (),
         "/var/capypkg/org.capyos.ui.widget-core",
         "capy-ui-widget", "2.22", 3, 3, 1,
         published_payload_sha256=(
-            "54815c4277296e2df88156948a0dc4210"
-            "5ed3d8e4c2704faa01ff7efae3ae814"
+            "959afd5287c00f31f5def9f23ccde78cfea2d8a1ddb2c389793055219af1ec3e"
         ),
         published_payload_size=1177600,
     ),
@@ -291,7 +304,7 @@ def release_tag_from_payload_url(spec: ModuleSpec, url: str) -> str:
 
 def _validate_catalog() -> None:
     if len(MODULE_SPECS) != EXPECTED_MODULE_COUNT:
-        raise RuntimeError("official module catalog must contain nine entries")
+        raise RuntimeError("official module catalog count differs from policy")
     if len(MODULE_BY_ID) != len(MODULE_SPECS):
         raise RuntimeError("official module catalog contains duplicate IDs")
     ids = set(MODULE_BY_ID)

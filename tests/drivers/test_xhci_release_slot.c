@@ -76,7 +76,7 @@ static void test_release_slot_frees_addressed_state(void) {
     void *device_ctx;
     prepare_release_controller(&xhci, cmd_ring, evt_ring, dcbaa, doorbells);
     /* Seed Disable Slot command completion at evt[0]. */
-    seed_command_completion(evt_ring, 0, 5u);
+    seed_command_completion(evt_ring, 0, 5u, &cmd_ring[0]);
     /* Allocate real ring + context so kfree_aligned will succeed. */
     ep0_ring = kmalloc_aligned(XHCI_CMD_RING_TRBS * sizeof(struct xhci_trb), 64);
     device_ctx = kmalloc_aligned(32u * 32u, 64);
@@ -110,7 +110,7 @@ static void test_release_slot_frees_configured_state(void) {
     void *intr_ring;
     void *intr_buffer;
     prepare_release_controller(&xhci, cmd_ring, evt_ring, dcbaa, doorbells);
-    seed_command_completion(evt_ring, 0, 4u);
+    seed_command_completion(evt_ring, 0, 4u, &cmd_ring[0]);
     ep0_ring = kmalloc_aligned(XHCI_CMD_RING_TRBS * sizeof(struct xhci_trb), 64);
     device_ctx = kmalloc_aligned(32u * 32u, 64);
     intr_ring = kmalloc_aligned(XHCI_CMD_RING_TRBS * sizeof(struct xhci_trb), 64);
@@ -148,7 +148,7 @@ static void test_release_slot_clears_pending_latches(void) {
     uint64_t dcbaa[33];
     uint32_t doorbells[16];
     prepare_release_controller(&xhci, cmd_ring, evt_ring, dcbaa, doorbells);
-    seed_command_completion(evt_ring, 0, 6u);
+    seed_command_completion(evt_ring, 0, 6u, &cmd_ring[0]);
     /* Simulate stale pending latches from before the device left. */
     xhci.ep0_pending[6].valid = 1u;
     xhci.ep0_pending[6].cc = XHCI_TRB_CC_SUCCESS;
@@ -177,7 +177,7 @@ static void test_release_slot_tolerates_disable_failure(void) {
     /* Seed Disable Slot completion with non-success CC. The hot-unplug
      * path commonly produces this when the controller already saw the
      * disconnect before we issued the command. */
-    evt_ring[0].param = 0;
+    evt_ring[0].param = (uintptr_t)&cmd_ring[0];
     evt_ring[0].status = (uint32_t)5u << 24; /* CC=5 (STALL_ERROR) */
     evt_ring[0].control = (TRB_TYPE_CMD_COMPLETE << 10) |
                           ((uint32_t)2u << 24) | 1u;
@@ -190,15 +190,17 @@ static void test_release_slot_tolerates_disable_failure(void) {
     xhci.ep0_rings[2] = (struct xhci_trb *)ep0_ring;
     xhci.device_contexts[2] = device_ctx;
     xhci.dcbaa[2] = (uint64_t)(uintptr_t)device_ctx;
-    /* Release should return non-zero to surface the failure but still
-     * free everything and zero the DCBAA so a future Enable Slot does
-     * not collide. */
+    /* An error is not an acknowledgement that DMA ownership ended. */
     if (xhci_release_slot(&xhci, 2u) == 0) {
         fail("release must propagate non-success CC");
     }
-    if (xhci.ep0_rings[2] != NULL) fail("release must free EP0 ring even on CC failure");
-    if (xhci.device_contexts[2] != NULL) fail("release must free device context even on CC failure");
-    if (xhci.dcbaa[2] != 0u) fail("release must zero DCBAA even on CC failure");
+    if (xhci.ep0_rings[2] != ep0_ring) fail("failed disable must retain EP0 DMA ring");
+    if (xhci.device_contexts[2] != device_ctx) fail("failed disable must retain device context");
+    if (xhci.dcbaa[2] != (uint64_t)(uintptr_t)device_ctx) fail("failed disable must retain DCBAA ownership");
+    seed_command_completion(evt_ring, 1u, 2u, &cmd_ring[1]);
+    if (xhci_release_slot(&xhci, 2u) != 0) fail("disable retry must succeed");
+    if (xhci.ep0_rings[2] || xhci.device_contexts[2] || xhci.dcbaa[2])
+        fail("successful retry must release retained resources");
 }
 
 static void test_release_slot_idempotent_on_clean_slot(void) {
@@ -208,7 +210,7 @@ static void test_release_slot_idempotent_on_clean_slot(void) {
     uint64_t dcbaa[33];
     uint32_t doorbells[16];
     prepare_release_controller(&xhci, cmd_ring, evt_ring, dcbaa, doorbells);
-    seed_command_completion(evt_ring, 0, 1u);
+    seed_command_completion(evt_ring, 0, 1u, &cmd_ring[0]);
     /* No allocations: simulate a slot that was Enable-Slot'd but never
      * Address-Device'd. Release must not crash on the NULL frees. */
     if (xhci_release_slot(&xhci, 1u) != 0) {

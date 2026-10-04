@@ -19,3 +19,7 @@ void usb_hid_keyboard_smoke_emit_marker(void) {
   com1_puts(USB_HID_KEYBOARD_SMOKE_MARKER "\n");
   klog(KLOG_INFO, "[usb-hid] Slice 3D smoke marker emitted on COM1.");
 }
+
+void usb_hid_keyboard_smoke_emit_configured(void) {
+  com1_puts("[smoke] usb-hid-keyboard configured\n");
+}

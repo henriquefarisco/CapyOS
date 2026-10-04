@@ -8,6 +8,8 @@
  *   - kernel_services.c      (service poll / start / stop handlers)
  *   - kernel_runtime_ops.c   (login wrappers, volume/shell runtime builders)
  *   - kernel_io_helpers.c    (filesystem helpers, recovery reports)
+ *   - kernel_boot_stages.c   (late boot-stage bodies)
+ *   - kernel_boot_audio_smoke.c (Etapa 10 audio playback smoke body)
  *
  * Do NOT include this from files outside src/arch/x86_64/.
  */
@@ -305,5 +307,14 @@ void kernel_boot_stage_keyboard_setup(void);
 void kernel_boot_stage_input(struct boot_warnings *warnings);
 void kernel_boot_stage_network_and_policy(struct boot_warnings *warnings);
 void kernel_boot_build_login_ops(struct login_runtime_ops *out);
+
+/* ── kernel_boot_audio_smoke.c ───────────────────────────────────────── */
+
+/* Etapa 10 lab-only playback smoke extracted verbatim from kernel_main64().
+ * Defined only when CAPYOS_AUDIO_PLAYBACK_SMOKE is set; the sole caller is
+ * the matching #ifdef block in kernel_main64(). Returns 0 once the ready
+ * marker was emitted, -1 after a FAIL marker. */
+int kernel_boot_run_audio_playback_smoke(void);
+int kernel_boot_run_audio_multi_smoke(void);
 
 #endif /* ARCH_X86_64_KERNEL_MAIN_INTERNAL_H */

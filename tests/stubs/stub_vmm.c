@@ -21,6 +21,9 @@
 
 static const struct vmm_address_space *g_stub_vmm_active_as = NULL;
 static uint64_t g_stub_vmm_next_user_cr3 = 0x2000u;
+void *vmm_map_device(uint64_t physical, size_t bytes) {
+    return bytes ? (void *)(uintptr_t)physical : NULL;
+}
 
 void stub_vmm_set_active_address_space(const struct vmm_address_space *as) {
     g_stub_vmm_active_as = as;

@@ -65,7 +65,7 @@
  */
 #ifndef CAPYOS_DEFAULT_MODULES_INDEX_URL
 #define CAPYOS_DEFAULT_MODULES_INDEX_URL \
-    "https://github.com/henriquefarisco/CapyOS/releases/download/modules-capyos-base-v3/modules-index.txt"
+    "https://github.com/henriquefarisco/CapyOS/releases/download/modules-capyos-base-v3-r2/modules-index.txt"
 #endif
 
 #ifndef CAPYOS_DEFAULT_REPO_NAME
@@ -73,7 +73,7 @@
 #endif
 
 #define MODULES_PROFILE_BUF 1024u
-#define MODULES_OFFICIAL_COUNT 9u
+#define MODULES_OFFICIAL_COUNT 10u
 
 /* ---- localized strings (PT default, EN, ES) -------------------------- */
 /* The L(language, pt, en, es) picker is shared with the status-bar
@@ -123,6 +123,10 @@ static const struct modules_official_package g_modules_official[MODULES_OFFICIAL
      "Benchmark oficial",
      "Official benchmark",
      "Benchmark oficial"},
+    {"org.capyos.codecs.audio-wav",
+     "Codecs oficiais de audio (WAV/Vorbis)",
+     "Official audio codecs (WAV/Vorbis)",
+     "Codecs oficiales de audio (WAV/Vorbis)"},
 };
 
 static const char *modules_official_label(const char *language, size_t idx) {
@@ -155,9 +159,9 @@ static void modules_draw_official_checklist(const char *setup_language,
                          "Official modules",
                          "Modulos oficiales"));
     config_print_line(L(setup_language,
-                        "Espaco alterna, numeros alternam, Enter confirma.",
-                        "Space toggles, numbers toggle, Enter confirms.",
-                        "Espacio alterna, numeros alternan, Enter confirma."));
+                        "Espaco alterna, 1-9/0 selecionam 1-10, Enter confirma.",
+                        "Space toggles, 1-9/0 toggle 1-10, Enter confirms.",
+                        "Espacio alterna, 1-9/0 alternan 1-10, Enter confirma."));
     config_print_line(L(setup_language,
                         "[a] marcar todos, [n] desmarcar todos.",
                         "[a] select all, [n] select none.",
@@ -207,8 +211,8 @@ static size_t modules_select_official_packages(const char *setup_language,
             for (size_t i = 0u; i < MODULES_OFFICIAL_COUNT; ++i) selected[i] = 0u;
             continue;
         }
-        if (ch >= '1' && ch <= '9') {
-            size_t idx = (size_t)(ch - '1');
+        if (ch >= '0' && ch <= '9') {
+            size_t idx = ch == '0' ? 9u : (size_t)(ch - '1');
             if (idx < MODULES_OFFICIAL_COUNT) {
                 selected[idx] = selected[idx] ? 0u : 1u;
                 cursor = idx;

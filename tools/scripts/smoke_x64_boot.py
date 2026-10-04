@@ -15,6 +15,12 @@ from smoke_x64_helpers import (
 from smoke_x64_session import SmokeSession
 
 
+def require_builtin_music(session: SmokeSession, timeout: float) -> None:
+    """Check each installed preset through the logged-in filesystem view."""
+    for name in ("Capy Acoustic.ogg", "Capy Opera.ogg", "Capy Sound.ogg"):
+        run_cmd(session, "list /Music", timeout=timeout, expect=" - " + name)
+
+
 def smoke_first_boot(
     session: SmokeSession, timeout: float, user: str, password: str, marker: str
 ) -> None:

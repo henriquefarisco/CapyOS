@@ -67,16 +67,10 @@ x64_exception_common:
     mov rdi, rsp
     mov r12, rsp
     and rsp, -16
-    # entry64 enables OSFXSR before installing the native IDT. Compiler C
-    # handlers and scheduled tasks use XMM registers; preserve the interrupted
-    # x87/SSE state on THIS interrupt stack across deferred task dispatch.
-    # The kernel does not enable/use AVX, so the 512-byte FXSAVE64 image covers
-    # its enabled extended state. Keep the image aligned and outside the
-    # public exception-frame layout addressed by RDI/R12.
-    sub rsp, 512
-    fxsave64 [rsp]
-    call x64_exception_dispatch
-    fxrstor64 [rsp]
+    # Preserve FP on THIS interrupt stack, outside the exception frame in
+    # RDI/R12, and give C handlers neutral controls. A timer-driven context
+    # switch can suspend the boundary and later resume its restore safely.
+    call x64_exception_dispatch_fp
     mov rsp, r12
     POP_REGS
     add rsp, 16
@@ -110,6 +104,28 @@ x64_user_first_dispatch:
     iretq
 
 .size x64_user_first_dispatch, .-x64_user_first_dispatch
+
+.att_syntax prefix
+.global x64_exception_dispatch_fp
+.type x64_exception_dispatch_fp, @function
+x64_exception_dispatch_fp:
+    # Like the syscall boundary, callable by the native clobber oracle.
+    # entry64 enables OSFXSR; AVX is not part of the enabled kernel contract.
+    subq $520, %rsp
+    fxsave64 (%rsp)
+    fninit
+    ldmxcsr .Lexception_kernel_mxcsr(%rip)
+    call x64_exception_dispatch
+    fxrstor64 (%rsp)
+    addq $520, %rsp
+    ret
+.size x64_exception_dispatch_fp, .-x64_exception_dispatch_fp
+.pushsection .rodata
+.balign 4
+.Lexception_kernel_mxcsr:
+    .long 0x1f80
+.popsection
+.intel_syntax noprefix
 
 VECTOR_NOERR 0
 VECTOR_NOERR 1

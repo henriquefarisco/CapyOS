@@ -26,6 +26,14 @@
 #include "kernel/task.h"
 #include "kernel/user_task_init.h"
 #include "kernel/arch_sched_hooks.h"
+#ifdef CAPYOS_FP_TIMER_SMOKE
+#include "arch/x86_64/platform_timer.h"
+#include "arch/x86_64/timebase.h"
+#include "boot/handoff.h"
+#endif
+#if defined(CAPYOS_FP_CONTEXT_SMOKE) && !defined(UNIT_TEST)
+#include "drivers/serial/serial_com1.h"
+#endif
 #if defined(CAPYOS_GFX_SMOKE) || defined(CAPYOS_DESKTOP_GRAPHICAL_BROWSER) || \
     defined(CAPYOS_CAPYGFX_LIFECYCLE_SMOKE)
 #include "kernel/syscall_gfx.h"
@@ -131,12 +139,21 @@ int kernel_spawn_embedded_hello(struct process **out_proc) {
 }
 
 int kernel_boot_run_embedded_hello(void) {
+#if defined(CAPYOS_FP_CONTEXT_SMOKE) && !defined(UNIT_TEST)
+  com1_init();
+#endif
   struct process *p = NULL;
   int rc = kernel_spawn_embedded_hello(&p);
   if (rc != KERNEL_SPAWN_OK || !p) {
     /* Caller logs and falls through to the kernel shell. */
     return rc;
   }
+  /* This direct boot hook can run before the normal scheduler startup.
+   * Keep the parent selectable after a child yields/exits, and permit
+   * cooperative wait/fork progress even before the periodic timer is armed.
+   * process_enter_user_mode establishes current-task/RSP0/CR3 below. */
+  scheduler_add(p->main_thread);
+  scheduler_set_running(1);
   /* `process_enter_user_mode` is __attribute__((noreturn)) on the
    * success path: it iretq's into Ring 3 and execution does not
    * come back to this function. The defensive `return -1` below
@@ -170,6 +187,10 @@ int kernel_boot_run_embedded_hello(void) {
  *
  * Failure cleanup: any partial state is destroyed before return. */
 int kernel_boot_run_two_busy_users(void) {
+#if defined(CAPYOS_FP_CONTEXT_SMOKE) && !defined(UNIT_TEST)
+  com1_init();
+  com1_puts("[fp-context] cooperative legacy-state smoke\n");
+#endif
   struct process *pa = NULL;
   struct process *pb = NULL;
 
@@ -234,6 +255,15 @@ int kernel_boot_run_two_busy_users(void) {
    * success (existing iretq path). When the scheduler later swaps
    * to pb on quantum exhaustion, context_switch will land on
    * x64_user_first_dispatch which iretqs into pb at rank=1. */
+#ifdef CAPYOS_FP_TIMER_SMOKE
+  x64_timebase_init();
+  x64_platform_timer_init(!handoff_boot_services_active());
+  scheduler_set_policy(SCHED_POLICY_ROUND_ROBIN);
+  if (x64_platform_timer_start_scheduler() != 0) {
+    com1_puts("[fp-corrupt] timer activation failed\n");
+    for (;;) __asm__ volatile("cli; hlt");
+  }
+#endif
   process_enter_user_mode(pa);
   return -1;
 }

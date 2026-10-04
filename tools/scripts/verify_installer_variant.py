@@ -15,6 +15,7 @@ BOOT_MARKERS = (
     b"[user_init] CAPYOS_BOOT_RUN_HELLO defined; spawning hello.",
     b"[user_init] CAPYOS_BOOT_RUN_TWO_BUSY defined; spawning two.",
     b"[smoke] audio-playback-roundtrip starting",
+    b"[smoke] audio-multi starting",
     b"[smoke] media-player-playlist starting",
     b"[smoke] capyai-gui-async ready",
     b"[lab] update trust anchor overridden",

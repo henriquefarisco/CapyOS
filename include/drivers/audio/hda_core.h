@@ -6,6 +6,8 @@
 
 #define HDA_BDL_MAX_ENTRIES 32u
 #define HDA_BDL_FRAGMENT_BYTES 4096u
+/* Streaming ring exposed to the audio service (sixteen fragments). */
+#define HDA_DMA_BYTES (64u * 1024u)
 
 struct hda_bdl_entry {
     uint64_t address;
@@ -33,6 +35,11 @@ int hda_stream_format(uint32_t sample_rate,
 int hda_output_stream_offset(uint16_t gcap, uint16_t *offset);
 int hda_node_range_decode(uint32_t response, struct hda_node_range *range);
 uint8_t hda_widget_type(uint32_t widget_caps);
+typedef int (*hda_codec_command_fn)(void *ctx, uint8_t node, uint32_t verb, uint32_t *response);
+/* Bounded analog route: at most eight widgets, sixteen short connections per
+ * widget and 256 discovery commands. Rejects ranges/long lists and cycles. */
+int hda_codec_route_setup(uint8_t afg, uint8_t output, uint8_t pin, uint16_t format,
+                          hda_codec_command_fn command, void *ctx);
 /* Positions include CBL itself immediately before wrap. */
 int hda_ring_advance(uint32_t previous, uint32_t position, uint32_t bytes,
                      uint32_t *advance);

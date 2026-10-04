@@ -5,11 +5,22 @@
 #include "../../../CapyUI/src/apps/media_player.c"
 
 static struct audio_service_status mock_audio;
+static int presets_available;
+int vfs_stat_path(const char *path, struct vfs_stat *st) {
+    if (!presets_available || strncmp(path, "/Music/", 7)) return VFS_ERR_NOT_FOUND;
+    *st = (struct vfs_stat){.mode = VFS_MODE_FILE, .size = 100};
+    return VFS_OK;
+}
 static struct gui_window mock_window;
 static uint32_t pixels[540u * 390u];
 static struct font mock_font;
 static struct gui_theme_palette mock_theme = {.accent = 0x123456, .accent_alt = 0x654321};
 static unsigned plays, stops, invalidations;
+static uint16_t mock_left, mock_right;
+int audio_service_get_app_levels(uint32_t app, uint16_t *left, uint16_t *right) {
+    assert(app == MEDIA_PLAYER_APP_ID);
+    *left = mock_left; *right = mock_right; return 0;
+}
 static const char *fail_path;
 static char played_path[256];
 
@@ -60,6 +71,7 @@ void audio_service_stop(void) { ++stops; mock_audio.playing = mock_audio.complet
 static void reset_player(void) {
     memset(&g_media, 0, sizeof(g_media)); memset(&mock_audio, 0, sizeof(mock_audio));
     mock_audio.global_volume = 1000; plays = stops = invalidations = 0; fail_path = NULL;
+    mock_left = mock_right = 0;
     assert(media_player_open_path("/a.wav") == 0);
     assert(media_player_enqueue("/b.wav") == 0);
 }
@@ -101,6 +113,31 @@ int main(void) {
     reset_player(); mock_audio.last_error = -5; mock_audio.playing = 0;
     media_player_poll(); assert(plays == 1 && !g_media.auto_advance);
     assert(media_player_smoke_roundtrip() == 0);
-    puts("[media-player] playlist/progress/ownership ok");
+    reset_player();
+    mock_left = 16384; mock_right = 32768;
+    before = invalidations;
+    media_player_poll(); assert(invalidations == before + 1);
+    media_player_poll(); assert(invalidations == before + 1);
+    mp_paint(&mock_window);
+    assert(pixels[354u * 540u + 269u] == mock_theme.accent);
+    assert(pixels[354u * 540u + 270u] == mock_theme.accent_alt);
+    assert(pixels[370u * 540u + 511u] == mock_theme.accent);
+    mock_right = 65535; media_player_poll(); mp_paint(&mock_window);
+    assert(pixels[370u * 540u + 512u] == mock_theme.window_bg);
+    mp_stop_owned();
+    assert(!g_media.level_left && !g_media.level_right);
+    media_player_poll(); assert(!g_media.level_left && !g_media.level_right);
+    reset_player(); mock_left = 100; mock_right = 200;
+    media_player_poll(); ++mock_audio.playback_id;
+    media_player_poll(); assert(!g_media.level_left && !g_media.level_right);
+    mp_close(&mock_window);
+    memset(&g_media, 0, sizeof(g_media));
+    presets_available = 1;
+    unsigned preset_plays = plays;
+    media_player_open();
+    assert(g_media.count == 3 && g_media.selected == 0 && plays == preset_plays);
+    assert(!strcmp(g_media.queue[0], "/Music/Capy Acoustic.ogg"));
+    media_player_open(); assert(g_media.count == 3);
+    puts("[media-player] playlist/progress/ownership/presets ok");
     return 0;
 }

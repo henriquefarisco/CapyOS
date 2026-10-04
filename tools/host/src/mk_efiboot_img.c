@@ -25,7 +25,7 @@ static void put_le32(uint8_t *p, uint32_t v) {
 }
 
 static uint32_t ceil_div(uint32_t a, uint32_t b) {
-  return (a + b - 1) / b;
+  return a / b + (a % b != 0);
 }
 
 static void dirent16(uint8_t *entry, const char *name8, const char *ext3,
@@ -50,7 +50,7 @@ static uint8_t *read_file_data(const char *path, size_t *out_size) {
     return NULL;
   }
   size = ftell(fp);
-  if (size <= 0) {
+  if (size <= 0 || (uint64_t)size > UINT32_MAX) {
     fclose(fp);
     return NULL;
   }
@@ -78,32 +78,39 @@ static uint8_t *read_file_data(const char *path, size_t *out_size) {
 static size_t parse_size(const char *raw) {
   size_t value = 0;
   size_t mul = 1;
-  size_t len = strlen(raw);
-  char suffix = 0;
-
-  if (len == 0) return 0;
-
-  suffix = raw[len - 1];
-  if (suffix == 'K' || suffix == 'k') {
-    mul = 1024;
-  } else if (suffix == 'M' || suffix == 'm') {
-    mul = 1024 * 1024;
-  } else if (suffix == 'G' || suffix == 'g') {
-    mul = 1024UL * 1024UL * 1024UL;
+  const char *end = raw;
+  if (*raw < '0' || *raw > '9') return 0;
+  while (*end >= '0' && *end <= '9') {
+    unsigned digit = (unsigned)(*end++ - '0');
+    if (value > (SIZE_MAX - digit) / 10u) return 0;
+    value = value * 10u + digit;
   }
-
-  value = (size_t)atol(raw);
-  return value * mul;
+  if (*end && end[1]) return 0;
+  if (*end == 'K' || *end == 'k') {
+    mul = 1024;
+  } else if (*end == 'M' || *end == 'm') {
+    mul = 1024 * 1024;
+  } else if (*end == 'G' || *end == 'g') {
+    mul = 1024UL * 1024UL * 1024UL;
+  } else if (*end) {
+    return 0;
+  }
+  if (value > SIZE_MAX / mul) return 0;
+  return (size_t)value * mul;
 }
 
 static uint16_t fat_entries[65536];
 static uint16_t next_free_cluster;
+static uint32_t cluster_limit;
+static int write_failed;
 
 static uint16_t fat_alloc(uint32_t bytes_needed, uint32_t cluster_bytes) {
   uint32_t need = ceil_div(bytes_needed, cluster_bytes);
   uint16_t start = next_free_cluster;
 
   if (need == 0) need = 1;
+  if (start < 2 || start >= cluster_limit || need > cluster_limit - start)
+    return 0;
 
   for (uint32_t i = 0; i < need; i++) {
     uint16_t cluster = (uint16_t)(start + i);
@@ -115,8 +122,8 @@ static uint16_t fat_alloc(uint32_t bytes_needed, uint32_t cluster_bytes) {
 }
 
 static void write_at(FILE *fp, size_t offset, const void *data, size_t len) {
-  fseek(fp, (long)offset, SEEK_SET);
-  fwrite(data, 1, len, fp);
+  if (fseek(fp, (long)offset, SEEK_SET) != 0 ||
+      fwrite(data, 1, len, fp) != len) write_failed = 1;
 }
 
 static void write_cluster_data(FILE *fp, uint32_t data_lba, uint32_t spc,
@@ -132,7 +139,10 @@ static void write_cluster_data(FILE *fp, uint32_t data_lba, uint32_t spc,
 
     if (chunk > cluster_bytes) chunk = cluster_bytes;
     buf = (uint8_t *)calloc(1, cluster_bytes);
-    if (!buf) return;
+    if (!buf) {
+      write_failed = 1;
+      return;
+    }
 
     memcpy(buf, data + written, chunk);
     write_at(fp, offset, buf, cluster_bytes);
@@ -219,7 +229,9 @@ int main(int argc, char **argv) {
   }
 
   size_bytes = parse_size(size_str);
-  if (size_bytes < SECTOR || size_bytes % SECTOR != 0) {
+  if (size_bytes < SECTOR || size_bytes % SECTOR != 0 ||
+      size_bytes / SECTOR > UINT32_MAX || spc < 1 || spc > 128 ||
+      (spc & (spc - 1)) != 0) {
     fprintf(stderr, "[err] Invalid size: %s\n", size_str);
     goto cleanup;
   }
@@ -250,13 +262,18 @@ int main(int argc, char **argv) {
   cluster_bytes = (uint32_t)spc * SECTOR;
 
   for (;;) {
-    uint32_t data_sectors = total_sectors - reserved - num_fats * fat_size - root_dir_sectors;
+    uint32_t overhead = reserved + num_fats * fat_size + root_dir_sectors;
+    if (overhead >= total_sectors) {
+      fprintf(stderr, "[err] EFI image too small for FAT metadata\n");
+      goto cleanup;
+    }
+    uint32_t data_sectors = total_sectors - overhead;
     uint32_t need = 0;
 
     cluster_count = data_sectors / (uint32_t)spc;
-    need = (cluster_count + 2) * 2;
-    if (ceil_div(need, SECTOR) == fat_size) break;
-    fat_size = ceil_div(need, SECTOR);
+    need = (uint32_t)((((uint64_t)cluster_count + 2u) * 2u + SECTOR - 1u) / SECTOR);
+    if (need <= fat_size) break;
+    fat_size = need;
   }
 
   if (cluster_count < 4085 || cluster_count >= 65525) {
@@ -272,6 +289,9 @@ int main(int argc, char **argv) {
   fat_entries[0] = 0xFFF8;
   fat_entries[1] = 0xFFFF;
   next_free_cluster = 2;
+  cluster_limit = cluster_count + 2u;
+  /* FAT16 reserves 0xFFF0..0xFFFF; never use those as data clusters. */
+  if (cluster_limit > 0xFFF0u) cluster_limit = 0xFFF0u;
 
   efi_cl = fat_alloc(cluster_bytes, cluster_bytes);
   efi_boot_cl = fat_alloc(cluster_bytes, cluster_bytes);
@@ -281,6 +301,11 @@ int main(int argc, char **argv) {
   if (manifest_data) manifest_cl = fat_alloc((uint32_t)manifest_sz, cluster_bytes);
   if (bootcfg_data) bootcfg_cl = fat_alloc((uint32_t)bootcfg_sz, cluster_bytes);
   marker_cl = fat_alloc((uint32_t)marker_sz, cluster_bytes);
+  if (!efi_cl || !efi_boot_cl || !bootdir_cl || !bootx64_cl || !kernel_cl ||
+      (manifest_data && !manifest_cl) || (bootcfg_data && !bootcfg_cl) || !marker_cl) {
+    fprintf(stderr, "[err] EFI image payload exceeds FAT16 capacity; increase --size\n");
+    goto cleanup;
+  }
 
   root = (uint8_t *)calloc(1, root_dir_sectors * SECTOR);
   efi_dir = (uint8_t *)calloc(1, cluster_bytes);
@@ -311,7 +336,7 @@ int main(int argc, char **argv) {
     dirent16(&boot_dir[96], "MANIFEST", "BIN", 0x20, manifest_cl, (uint32_t)manifest_sz);
   }
   if (bootcfg_data) {
-    dirent16(&boot_dir[128], "CAPYCFG ", "BIN", 0x20, bootcfg_cl, (uint32_t)bootcfg_sz);
+    dirent16(&boot_dir[manifest_data ? 128 : 96], "CAPYCFG ", "BIN", 0x20, bootcfg_cl, (uint32_t)bootcfg_sz);
   }
 
   {
@@ -365,7 +390,10 @@ int main(int argc, char **argv) {
       uint8_t zero[SECTOR];
       memset(zero, 0, sizeof(zero));
       for (uint32_t sector = 0; sector < total_sectors; sector++) {
-        fwrite(zero, 1, sizeof(zero), fp);
+        if (fwrite(zero, 1, sizeof(zero), fp) != sizeof(zero)) {
+          fprintf(stderr, "[err] Cannot initialize EFI image\n");
+          goto cleanup;
+        }
       }
     }
 
@@ -397,8 +425,12 @@ int main(int argc, char **argv) {
   write_cluster_data(fp, data_lba, (uint32_t)spc, cluster_bytes, marker_cl,
                      (const uint8_t *)marker_str, marker_sz);
 
-  fclose(fp);
+  if (fclose(fp) != 0) write_failed = 1;
   fp = NULL;
+  if (write_failed) {
+    fprintf(stderr, "[err] Cannot write complete EFI image\n");
+    goto cleanup;
+  }
 
   printf("[ok] EFI boot image ready: %s (%zu bytes)\n", out_path, size_bytes);
   exit_code = 0;

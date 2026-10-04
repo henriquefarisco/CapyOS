@@ -8,12 +8,9 @@
 #include <stdint.h>
 
 #ifndef KHEAP_SIZE
-#define KHEAP_SIZE KHEAP_DEFAULT_SIZE /* 32 MiB: 16 MiB estoura somente com
-                                         backbuffer + taskbar + terminal +
-                                         CapyAI em GOP 1920x1080. A imagem
-                                         resultante permanece abaixo da janela
-                                         UEFI fixa de 48 MiB. Override de build
-                                         continua possivel via -DKHEAP_SIZE. */
+#define KHEAP_SIZE KHEAP_DEFAULT_SIZE /* 96 MiB includes a bounded 40 MiB decoded
+                                      music source, codec scratch and desktop.
+                                      The UEFI reservation covers this BSS. */
 #endif
 
 /* Block header structure */

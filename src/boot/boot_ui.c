@@ -23,6 +23,7 @@
 static struct boot_ui_io g_io;
 static int g_ui_ready = 0;
 static int g_splash_active = 0;
+static uint32_t g_splash_fill_w;
 
 static struct {
   uint32_t icon_x, icon_y;
@@ -135,6 +136,7 @@ void boot_ui_splash_begin(void) {
     return;
   }
   g_splash_active = 1;
+  g_splash_fill_w = 0;
 
   /* Icon scale — same logic as the original ui_boot_splash(). */
   scale = (g_io.screen_h / 4u) / CAPYOS_ICON_H;
@@ -216,14 +218,18 @@ void boot_ui_splash_advance(uint32_t stage, uint32_t total) {
   }
   fill_w = (g_layout.inner_w * stage) / total;
 
-  /* Redraw inner bar. */
-  g_io.fill_rect(g_layout.inner_x, g_layout.inner_y, g_layout.inner_w,
-                 g_layout.inner_h, g_io.splash_bar_bg);
-  if (fill_w > 0) {
-    g_io.fill_rect(g_layout.inner_x, g_layout.inner_y, fill_w,
+  /* Only changed pixels need MMIO writes. Full text-row/bar clears here
+   * compete with the early, synchronously pumped audio DMA stream. */
+  if (fill_w > g_splash_fill_w) {
+    g_io.fill_rect(g_layout.inner_x + g_splash_fill_w, g_layout.inner_y,
+                   fill_w - g_splash_fill_w,
                    g_layout.inner_h, g_io.splash_bar_fill);
+  } else if (fill_w < g_splash_fill_w) {
+    g_io.fill_rect(g_layout.inner_x + fill_w, g_layout.inner_y,
+                   g_splash_fill_w - fill_w,
+                   g_layout.inner_h, g_io.splash_bar_bg);
   }
-  draw_progress_percent(stage, total);
+  g_splash_fill_w = fill_w;
 }
 
 __attribute__((optimize("O0")))

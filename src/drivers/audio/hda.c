@@ -5,7 +5,6 @@
 #include "kernel/log/klog.h"
 #include "util/kstring.h"
 
-#define HDA_DMA_BYTES (64u * 1024u)
 #define HDA_TIMEOUT_SPINS 2000000u
 
 #define HDA_REG_GCAP 0x00u
@@ -160,19 +159,14 @@ static int hda_discover_codec(void) {
     return g_hda.output_node && g_hda.pin_node ? 0 : -1;
 }
 
+static int hda_route_command(void *ctx, uint8_t node, uint32_t verb, uint32_t *response) {
+    (void)ctx;
+    return hda_command(node, verb, response);
+}
+
 static int hda_configure_codec(uint16_t format) {
-    uint32_t ignored;
-    if (hda_command(g_hda.afg, 0x00070500u, &ignored) != 0 ||
-        hda_command(g_hda.output_node, 0x00070500u, &ignored) != 0 ||
-        hda_command(g_hda.pin_node, 0x00070500u, &ignored) != 0 ||
-        hda_command(g_hda.output_node, 0x00070610u, &ignored) != 0 ||
-        hda_command(g_hda.output_node, 0x00020000u | format, &ignored) != 0 ||
-        hda_command(g_hda.output_node, 0x0003b04au, &ignored) != 0 ||
-        hda_command(g_hda.pin_node, 0x00070740u, &ignored) != 0)
-        return -1;
-    /* EAPD is optional; some virtual codecs report no support. */
-    (void)hda_command(g_hda.pin_node, 0x00070c02u, &ignored);
-    return 0;
+    return hda_codec_route_setup(g_hda.afg, g_hda.output_node, g_hda.pin_node,
+                                 format, hda_route_command, 0);
 }
 
 static int hda_reset_stream(void) {

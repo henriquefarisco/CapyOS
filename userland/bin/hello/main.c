@@ -30,37 +30,63 @@
  */
 #include <capylibc/capylibc.h>
 
+#ifdef CAPYOS_HELLO_FP_STATE
+/* The oracle itself must not use the registers whose contents it inspects. */
+#pragma GCC target("general-regs-only")
+#endif
+
 static const char k_msg[] = "hello, capyland\n";
 #ifdef CAPYOS_HELLO_FAULT
 static const char k_fault_marker[] = "before-fault\n";
 #endif
 #ifdef CAPYOS_HELLO_BUSY
-/* M4 phase 8f.3: marker emitted in a loop so the smoke can prove
- * that an APIC tick fired from ring 3 does NOT crash the kernel
- * (TSS / RSP0 path works) and that iretq correctly returns to user
- * mode after the tick is serviced. The bracketed prefix matches the
- * convention used by the kernel-mode preemption demo (phase 8e).
- *
- * M4 phase 8f.5: when the kernel spawns TWO copies of this binary
- * via kernel_boot_run_two_busy_users, each copy receives a distinct
- * `rank` value as its first main() argument (rank 0 -> [busyU0],
- * rank 1 -> [busyU1]). The smoke harness asserts BOTH markers
- * appear at least N times to prove ring-3 preemption swaps actually
- * resume each task. Single-task builds (phase 8f.3) see rank=0 and
- * emit only [busyU0]. */
+/* Busy markers distinguish the two ring-3 tasks by their main() rank.
+ * They prove progress, not the cause of a context switch. In particular,
+ * the early FP boot hook runs before timer initialization and yields
+ * cooperatively. Timer/preemption evidence must independently prove ticks.
+ * Single-task builds see rank=0 and emit only [busyU0]. */
 static const char k_busy_marker_0[] = "[busyU0]\n";
 static const char k_busy_marker_1[] = "[busyU1]\n";
 #ifdef CAPYOS_HELLO_FP_STATE
 static const char k_fp_corrupt_marker[] = "[fp-corrupt]\n";
+static const char k_fp_full_0[] = "[fp-full0] cycles=64 x87+xmm0-15+mxcsr\n";
+static const char k_fp_full_1[] = "[fp-full1] cycles=64 x87+xmm0-15+mxcsr\n";
+struct fp_smoke_image { _Alignas(16) unsigned char bytes[512]; };
 
-static void fp_state_write(uint32_t value) {
-    __asm__ volatile("movd %0, %%xmm0" : : "r"(value) : "xmm0");
+static void fp_state_seed(struct fp_smoke_image *image, unsigned rank) {
+    for (unsigned i = 0; i < 512; ++i) image->bytes[i] = 0;
+    image->bytes[0] = 0x7f;
+    image->bytes[1] = rank ? 0x0b : 0x07; /* distinct masked x87 rounding */
+    image->bytes[3] = rank ? 0x10 : 0x28; /* distinct TOP; all slots live */
+    image->bytes[4] = 0xff;
+    image->bytes[24] = 0x80;
+    image->bytes[25] = rank ? 0x5f : 0x3f; /* distinct masked SSE rounding */
+    for (unsigned reg = 0; reg < 8; ++reg) {
+        unsigned offset = 32 + reg * 16;
+        for (unsigned i = 0; i < 7; ++i)
+            image->bytes[offset + i] = (unsigned char)(rank * 67 + reg * 13 + i);
+        image->bytes[offset + 7] = 0x80;
+        image->bytes[offset + 8] = 0xff;
+        image->bytes[offset + 9] = 0x3f;
+    }
+    for (unsigned i = 160; i < 416; ++i)
+        image->bytes[i] = (unsigned char)(rank * 97 + i * 31);
+    __asm__ volatile("fxrstor64 %0" : : "m"(*image) : "memory");
+    __asm__ volatile("fxsave64 %0" : "=m"(*image));
 }
 
-static uint32_t fp_state_read(void) {
-    uint32_t value;
-    __asm__ volatile("movd %%xmm0, %0" : "=r"(value));
-    return value;
+static int fp_state_preserved(const struct fp_smoke_image *expected) {
+    struct fp_smoke_image actual;
+    __asm__ volatile("fxsave64 %0" : "=m"(actual));
+    for (unsigned i = 0; i < 416; ++i) {
+        /* Compare FCW/FSW/FTW, MXCSR, 80-bit x87 slots and all XMM bytes.
+         * Reserved bytes, MXCSR_MASK and CPU-dependent x87 pointers are not
+         * software-owned state and intentionally do not enter the oracle. */
+        int architectural = i < 5 || (i >= 24 && i < 28) || i >= 160 ||
+            (i >= 32 && (i - 32) % 16 < 10);
+        if (architectural && actual.bytes[i] != expected->bytes[i]) return 0;
+    }
+    return 1;
 }
 #endif
 #endif
@@ -175,7 +201,30 @@ static const char k_fork_fail_marker[]   = "[fork-fail]\n";
 #endif
 
 int main(int rank) {
-#ifdef CAPYOS_HELLO_FAULT
+#ifdef CAPYOS_HELLO_FP_LIFECYCLE
+    (void)rank;
+    struct fp_smoke_image expected;
+    fp_state_seed(&expected, 0);
+    if (capy_exec("/bin/no-such-fp-test", 0) != -1 || !fp_state_preserved(&expected))
+        goto fp_lifecycle_fail;
+    int child = capy_fork();
+    if (child < 0 || !fp_state_preserved(&expected)) goto fp_lifecycle_fail;
+    if (child == 0) {
+        fp_state_seed(&expected, 1);
+        capy_yield();
+        if (!fp_state_preserved(&expected)) goto fp_lifecycle_fail;
+        capy_write(1, "[fp-child] inherited+isolated\n", sizeof("[fp-child] inherited+isolated\n") - 1);
+        return 0;
+    }
+    int status = -1;
+    if (capy_wait(child, &status) < 0 || status != 0 || !fp_state_preserved(&expected))
+        goto fp_lifecycle_fail;
+    capy_write(1, "[fp-parent] preserved\n", sizeof("[fp-parent] preserved\n") - 1);
+    capy_exec("/bin/exectarget", 0);
+fp_lifecycle_fail:
+    capy_write(1, "[fp-corrupt]\n", sizeof("[fp-corrupt]\n") - 1);
+    return 2;
+#elif defined(CAPYOS_HELLO_FAULT)
     /* Phase 5f smoke: verify the fault-kill path end-to-end.
      *
      * Step 1: emit a marker the QEMU harness can match. Its
@@ -205,34 +254,35 @@ int main(int rank) {
      * not flag a noreturn path. */
     return 1;
 #elif defined(CAPYOS_HELLO_BUSY)
-    /* M4 phase 8f.3 / 8f.5: ring-3 preemption smoke body.
-     *
-     * Loops forever, emitting a marker every N busy iterations.
-     * The smoke harness asserts the marker appears at least
-     * BUSY_MIN times within the wall-clock window. With APIC
-     * armed at 100Hz and a multi-second timeout the user task is
-     * guaranteed to take many ticks; if any of them crashed the
-     * kernel (TSS missing, RSP0 wrong, iretq mis-staged) the
-     * marker would simply stop appearing.
-     *
-     * The `rank` argument is non-zero only when the kernel spawned
-     * two copies of this binary; rank 0 emits [busyU0] and rank 1
-     * emits [busyU1]. */
+    /* Ring-3 progress loop; FP mode additionally checks full legacy FP
+     * state around writes and cooperative yields. This loop alone does
+     * not establish that a periodic timer is armed or has preempted it. */
     const char *marker =
         (rank == 0) ? k_busy_marker_0 : k_busy_marker_1;
     size_t marker_len =
         (rank == 0) ? sizeof(k_busy_marker_0) - 1u
                     : sizeof(k_busy_marker_1) - 1u;
 #ifdef CAPYOS_HELLO_FP_STATE
-    const uint32_t fp_cookie = rank == 0 ? 0x46503030u : 0x46503131u;
-    fp_state_write(fp_cookie);
+    struct fp_smoke_image fp_expected;
+    unsigned fp_cycles = 0;
+    fp_state_seed(&fp_expected, rank != 0);
+#ifdef CAPYOS_HELLO_FP_TIMER
+    const char *timer_marker = rank ? "[fp-timer1] no-yield\n" : "[fp-timer0] no-yield\n";
+    capy_write(1, timer_marker, sizeof("[fp-timer0] no-yield\n") - 1u);
+#endif
 #endif
     for (;;) {
-        for (volatile uint64_t spin = 0; spin < 0x80000ULL; ++spin) {
+        for (volatile uint64_t spin = 0; spin <
+#ifdef CAPYOS_HELLO_FP_STATE
+             0x2000ULL;
+#else
+             0x80000ULL;
+#endif
+             ++spin) {
             __asm__ volatile("pause");
         }
 #ifdef CAPYOS_HELLO_FP_STATE
-        if (fp_state_read() != fp_cookie) {
+        if (!fp_state_preserved(&fp_expected)) {
             capy_write(1, k_fp_corrupt_marker,
                        sizeof(k_fp_corrupt_marker) - 1u);
             return 2;
@@ -240,16 +290,26 @@ int main(int rank) {
 #endif
         capy_write(1, marker, marker_len);
 #ifdef CAPYOS_HELLO_FP_STATE
+        if (!fp_state_preserved(&fp_expected)) {
+            capy_write(1, k_fp_corrupt_marker, sizeof(k_fp_corrupt_marker) - 1u);
+            return 2;
+        }
         /* Deterministically exercise multiple save/restore cycles even on the
          * early UEFI boot path where the periodic timer is not armed yet. */
+#ifndef CAPYOS_HELLO_FP_TIMER
         capy_yield();
 #endif
+        if (!fp_state_preserved(&fp_expected)) {
+            capy_write(1, k_fp_corrupt_marker, sizeof(k_fp_corrupt_marker) - 1u);
+            return 2;
+        }
+        if (fp_cycles < 64u && ++fp_cycles == 64u) {
+            capy_write(1, rank ? k_fp_full_1 : k_fp_full_0,
+                       sizeof(k_fp_full_0) - 1u);
+        }
+#endif
     }
-    /* Unreachable: the loop is intentionally infinite so the smoke
-     * has an unlimited window of opportunity to observe the marker.
-     * The kernel-side scheduler will eventually preempt this task
-     * out via the APIC tick and back via iretq, exactly the path
-     * the smoke is validating. */
+    /* Unreachable: the bounded host harness stops the infinite guest loop. */
     return 0;
 #elif defined(CAPYOS_HELLO_EXEC)
     (void)rank;

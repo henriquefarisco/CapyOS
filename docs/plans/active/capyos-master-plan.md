@@ -2,10 +2,12 @@
 
 **Data de referência:** 2026-09-04 (0.10.0 stable publicada, Latest e imutável)
 **Versão atual:** `0.10.0+20260904`
+**Candidato em preparacao:** `0.11.0+20261003` (audio, boot sonoro e musicas;
+nao publicado; a versao publica acima permanece vigente).
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-9 oficialmente fechadas; 9/16 etapas concluídas; Etapa 10 desbloqueada.
+**Status:** Etapas 1-9 publicadas; Etapa 10 concluída em engenharia local (2026-10-02), ainda não publicada; 10/16 etapas concluídas; Etapa 11 desbloqueada.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -88,8 +90,8 @@ Referências obrigatórias:
 | 7 | Browser usável com web estática moderna | Concluída (alpha.312) | Etapa 6 | HTTPS real, HTML/CSS, imagens, toolbar, histórico, links, cache, limites, sem JavaScript |
 | 8 | Release/update gate oficial + instalador polido | Concluída (0.9.2) | Etapa 7 | publicação Ed25519 imutável, ciclo A/B oficial e instalador wizard amigável |
 | 9 | Package manager + SDK + ABI estável | Concluída (0.10.0) | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
-| 10 | Áudio + multimídia básica | Desbloqueada (próxima) | Etapa 9 | Intel HDA/AC97/USB Audio, mixer de sistema, media player com playlist e codecs por contrato |
-| 11 | WiFi + power management + suspend/resume | Bloqueada | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
+| 10 | Áudio + multimídia básica | Concluída localmente, não publicada | Etapa 9 | [Aceite integrado](../../operations/etapa10-acceptance-20261002.md): HDA/AC97/USB, mixer, playlist WAV/OGG e medidores |
+| 11 | WiFi + power management + suspend/resume | Desbloqueada (próxima) | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
 | 12 | JS engine sandboxed | Bloqueada | Etapa 11 | JavaScript isolado no browser com bridge DOM controlada e engine sem syscalls diretas |
 | 13 | CapyLX L0-L5 unificado | Bloqueada | Etapa 12 | binários Linux estáticos + POSIX amplo + threads/futex/sockets, base futura para ports Linux de browsers grandes |
 | 14 | Wayland bridge + apps Linux GUI | Bloqueada | Etapa 13 | apps Linux GUI via Wayland mínimo integrados ao compositor CapyOS |
@@ -1023,10 +1025,14 @@ persistência; o manifesto VMware usa o contrato
 
 ### Critérios de aceite
 
-- [ ] Reprodução de WAV/OGG sem stutter perceptível em VM oficial.
-- [ ] Mixer permite ajuste de volume global e por app.
-- [ ] Falha de driver de áudio não derruba o sistema.
-- [ ] Codec puro não acessa FS/rede diretamente e respeita limites de memória/tempo.
+- [x] Reprodução de WAV/OGG sem stutter perceptível em VM oficial.
+- [x] Mixer permite ajuste de volume global e por app.
+- [x] Falha de driver de áudio não derruba o sistema.
+- [x] Codec puro não acessa FS/rede diretamente e respeita limites de memória/tempo.
+
+Aceite local: [evidência renovada de 2026-10-02](../../operations/etapa10-acceptance-20261002.md).
+VMware validado por captura PCM real em dois boots, além de QEMU HDA/AC97/USB,
+falha contida, testes completos e sanitizadores. Não equivale a release publicada.
 
 ### Gates externos recomendados
 
@@ -1471,6 +1477,6 @@ como Latest imutável com 12 assets assinados e o índice agregado imutável
 `modules-capyos-base-v3` resolve os sete módulos oficiais pelos releases dos
 respectivos produtores.
 
-**Próxima ação:** iniciar a Etapa 10 (§13) numa branch própria, começando pelo
-contrato de áudio do `CapyCodecs` e pelo inventário de Intel HDA/AC97/USB Audio
-sem incorporar codecs complexos ao kernel base.
+**Próxima ação:** planejar a Etapa 11 (§14) em branch própria, identificando
+hardware WiFi e os gates de energia. A Etapa 10 está concluída localmente;
+publicação exige seu fluxo de release separado, sem promover os pins por inferência.

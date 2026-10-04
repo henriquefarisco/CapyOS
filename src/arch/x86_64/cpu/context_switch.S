@@ -51,9 +51,9 @@ context_switch:
     popq %rax
     movq %rax, 0x40(%rdi)
 
-    # Interrupt entry preserves the interrupted architectural state but does
-    # not reset it. Saving here therefore captures the old task whether this
-    # switch is voluntary or timer-driven. CR0.TS/EM are cleared at entry64.
+    # Save the task's live kernel FP state. Syscall/interrupt dispatch keeps
+    # its caller's original FP image on the owning kernel stack and restores
+    # it when that suspended boundary returns. CR0.TS/EM are cleared at entry64.
     fxsave64 0x50(%rdi)
 
     # Save callee-saved registers into old context

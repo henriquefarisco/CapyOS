@@ -55,5 +55,6 @@ int usb_hid_keyboard_smoke_observe(struct usb_hid_keyboard_smoke_state *state,
  * `usb_hid_keyboard_smoke_observe` so that the marker is emitted
  * exactly once per boot. The function performs no internal latching. */
 void usb_hid_keyboard_smoke_emit_marker(void);
+void usb_hid_keyboard_smoke_emit_configured(void);
 
 #endif /* DRIVERS_USB_USB_HID_SMOKE_H */

@@ -88,6 +88,11 @@ Escopo atual:
     diretório como histórico encadeado
 - `operations/manual-module-deploy-runbook.md`
   - runbook de deploy manual de módulos remotos durante a instalação do core
+- `operations/etapa-10-audio-development.md`
+  - checkpoint de desenvolvimento da Etapa 10 (Intel HDA, mixer, serviço de
+    áudio, fronteira FP, gates QEMU/VMware de laboratório); evidência de
+    desenvolvimento na branch `feature/etapa-10-audio-multimedia`, não aceite
+    de release
 - `architecture/libcapy-net-http-hardening.md`
   - contrato de seguranca do request-target HTTP em `libcapy-net`
 - `architecture/libcapy-tls-userland-contract.md`

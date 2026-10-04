@@ -33,6 +33,10 @@ Pass criteria (matched against the kernel debug-console log):
 
 Usage (CI):
   make smoke-x64-preemptive-user-2task
+
+The --fp-full mode is a separate cooperative FP-state gate. Its binary yields
+explicitly before the early boot path arms a timer; completion proves 64
+write/yield cycles per task, not timer preemption or execution on multiple CPUs.
 """
 
 from __future__ import annotations
@@ -67,6 +71,9 @@ FAILURE_MARKERS = (
     "[fp-corrupt]",
     "[user_init] hello spawn returned without entering Ring 3.",
 )
+FP_FULL_MARKERS = tuple(
+    f"[fp-full{rank}] cycles=64 x87+xmm0-15+mxcsr" for rank in (0, 1)
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +87,12 @@ def parse_args() -> argparse.Namespace:
                         help="Seconds to wait for both busy markers")
     parser.add_argument("--busy-min", type=int, default=BUSY_MIN,
                         help="Min count for EACH of [busyU0]/[busyU1]")
+    parser.add_argument("--fp-lifecycle", action="store_true",
+                        help="Require fork inheritance/isolation and exec reset")
+    parser.add_argument("--fp-preemptive", action="store_true",
+                        help="Require no-yield FP tasks and 128 timer quantum expirations")
+    parser.add_argument("--fp-full", action="store_true",
+                        help="Require both full-state 64-cycle FP completion markers")
     parser.add_argument(
         "--log",
         default="build/ci/smoke_x64_preemptive_user_2task.log",
@@ -112,8 +125,18 @@ def busy_counts(text: str) -> tuple[int, int]:
     return text.count("[busyU0]"), text.count("[busyU1]")
 
 
-def all_markers_present(text: str, busy_min: int) -> bool:
+def all_markers_present(text: str, busy_min: int, fp_full: bool = False,
+                        fp_preemptive: bool = False, fp_lifecycle: bool = False) -> bool:
+    if fp_lifecycle:
+        return all(marker in text for marker in (
+            "[fp-child] inherited+isolated", "[fp-parent] preserved", "[fp-exec] reset"))
     if not all(m in text for m in SUCCESS_MARKERS):
+        return False
+    if (fp_full or fp_preemptive) and not all(marker in text for marker in FP_FULL_MARKERS):
+        return False
+    if fp_preemptive and not all(marker in text for marker in (
+            "[fp-timer0] no-yield", "[fp-timer1] no-yield",
+            "[fp-timer] quantum-expirations=128")):
         return False
     n0, n1 = busy_counts(text)
     return n0 >= busy_min and n1 >= busy_min
@@ -127,7 +150,8 @@ def any_failure_marker_present(text: str) -> str | None:
 
 
 def poll_debugcon(debugcon_log: Path, timeout: float,
-                  busy_min: int) -> tuple[bool, str | None]:
+                  busy_min: int, fp_full: bool = False,
+                  fp_preemptive: bool = False, fp_lifecycle: bool = False) -> tuple[bool, str | None]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -141,7 +165,7 @@ def poll_debugcon(debugcon_log: Path, timeout: float,
         bad = any_failure_marker_present(text)
         if bad is not None:
             return False, bad
-        if all_markers_present(text, busy_min):
+        if all_markers_present(text, busy_min, fp_full, fp_preemptive, fp_lifecycle):
             return True, None
         time.sleep(0.1)
     return False, None
@@ -214,7 +238,7 @@ def main() -> int:
         proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT)
 
         success, failure_reason = poll_debugcon(
-            debugcon_log, args.timeout, args.busy_min)
+            debugcon_log, args.timeout, args.busy_min, args.fp_full, args.fp_preemptive, args.fp_lifecycle)
 
         if proc.poll() is None:
             try:
@@ -224,17 +248,28 @@ def main() -> int:
                 proc.kill()
 
     text = debugcon_log.read_text(encoding="latin-1", errors="replace")
+    # Recheck after stopping the VM: a late failure must beat an earlier pass.
+    failure_reason = any_failure_marker_present(text) or failure_reason
+    success = success and failure_reason is None and all_markers_present(
+        text, args.busy_min, args.fp_full, args.fp_preemptive, args.fp_lifecycle)
     found = [m for m in SUCCESS_MARKERS if m in text]
     missing = [m for m in SUCCESS_MARKERS if m not in text]
     n0, n1 = busy_counts(text)
 
     if success:
-        print(f"[ok] preemptive-user-2task smoke passed "
+        label = ("fork-exec-FP" if args.fp_lifecycle else "timer-full-FP" if args.fp_preemptive else
+                 "cooperative-full-FP" if args.fp_full else "preemptive-user-2task")
+        print(f"[ok] {label} smoke passed "
               f"in <={args.timeout:.0f}s")
         for m in found:
             print(f"     + {m!r} present")
-        print(f"     + [busyU0] count = {n0} (>= {args.busy_min})")
-        print(f"     + [busyU1] count = {n1} (>= {args.busy_min})")
+        if args.fp_lifecycle:
+            print("     + fork inheritance/isolation, parent preservation and exec reset present")
+        else:
+            print(f"     + [busyU0] count = {n0} (>= {args.busy_min})")
+            print(f"     + [busyU1] count = {n1} (>= {args.busy_min})")
+        if args.fp_full:
+            print("     + both full x87/XMM0-15/MXCSR 64-cycle markers present")
         rc = 0
     else:
         print("[err] preemptive-user-2task smoke failed",

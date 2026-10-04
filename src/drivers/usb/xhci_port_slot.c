@@ -6,6 +6,7 @@
  *   - xhci_enable_slot / xhci_address_device / xhci_release_slot.
  */
 #include "drivers/usb/internal/xhci_internal.h"
+#include "drivers/usb/xhci_iso.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -128,9 +129,10 @@ int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id, int port)
   if (!(portsc & XHCI_PORTSC_CCS) || !(portsc & XHCI_PORTSC_PED)) return -2;
   speed = xhci_port_speed_from_status(portsc);
   ctx_size = xhci->context_size ? xhci->context_size : 32u;
+  if (ctx_size != 32u && ctx_size != 64u) return -1;
   input_size = (uint64_t)ctx_size * 33u;
   device_size = (uint64_t)ctx_size * 32u;
-  input_ctx = kmalloc_aligned(input_size, 64);
+  input_ctx = kmalloc_aligned(4096u, 4096u);
   device_ctx = kmalloc_aligned(device_size, 64);
   ep0_ring = (struct xhci_trb *)kmalloc_aligned(
       XHCI_CMD_RING_TRBS * sizeof(struct xhci_trb), 64);
@@ -162,6 +164,7 @@ int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id, int port)
    * Enabled state (slot leak). */
   xhci->dcbaa[slot_id] = (uint64_t)(uintptr_t)device_ctx;
   xhci->device_contexts[slot_id] = device_ctx;
+  xhci->ep0_buffers[slot_id] = input_ctx;
   xhci->ep0_rings[slot_id] = ep0_ring;
   xhci->ep0_ring_idx[slot_id] = 0;
   xhci->ep0_ring_cycle[slot_id] = 1;
@@ -170,18 +173,19 @@ int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id, int port)
   trb.control = (TRB_TYPE_ADDRESS_DEV << 10) | ((uint32_t)slot_id << 24);
   rc = xhci_ring_command(xhci, &trb);
   if (rc == 0) rc = xhci_wait_command_completion(xhci, NULL);
-  kfree_aligned(input_ctx);
   if (rc != 0) {
+    xhci->ep0_failed[slot_id] = 1;
     /* Address Device failed. The slot is still Enabled on the
      * controller; emit Disable Slot and free per-slot allocations
      * via the centralised teardown. Disable Slot may itself fail
      * (controller could be in an unexpected state), but
-     * xhci_release_slot tolerates that and always drops our
-     * pointers, so the next Enable Slot can reuse this slot ID
-     * without colliding. */
+     * xhci_release_slot retains DMA resources until a successful
+     * Disable Slot acknowledges that controller ownership ended. */
     (void)xhci_release_slot(xhci, slot_id);
     return rc;
   }
+  /* Address input becomes the idle EP0 bounce page only after the matching
+   * completion. On timeout release_slot retains it until Disable Slot ACK. */
   return 0;
 }
 
@@ -196,9 +200,7 @@ int xhci_address_device(struct xhci_controller *xhci, uint8_t slot_id, int port)
  * future Enable Slot/Address Device cycle on the same slot starts from
  * a clean state.
  *
- * Frees happen regardless of the Disable Slot completion outcome: a
- * disconnected device often makes the command fail with CC != SUCCESS,
- * but the slot can still be reused once we drop our pointers. */
+ * A failed Disable Slot retains allocations and DCBAA ownership. */
 int xhci_release_slot(struct xhci_controller *xhci, uint8_t slot_id) {
   struct xhci_trb trb;
   int rc;
@@ -206,14 +208,35 @@ int xhci_release_slot(struct xhci_controller *xhci, uint8_t slot_id) {
       slot_id > xhci->max_slots) {
     return -1;
   }
+  uint32_t expected = 0;
+  if (!__atomic_compare_exchange_n(&xhci->ep0_busy[slot_id], &expected, 1u,
+                                   0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    return -4;
+  if (!xhci_event_try_lock(xhci)) {
+    __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
+    return -4;
+  }
+  if (xhci->iso_queue && xhci->iso_slot == slot_id) {
+    xhci->iso_queue->failed = 1;
+    xhci->iso_queue = NULL;
+  }
+  xhci_event_unlock(xhci);
   trb.param = 0;
   trb.status = 0;
   trb.control = (TRB_TYPE_DISABLE_SLOT << 10) | ((uint32_t)slot_id << 24);
   rc = xhci_ring_command(xhci, &trb);
   if (rc == 0) rc = xhci_wait_command_completion(xhci, NULL);
-  /* Free controller-owned allocations even on cmd failure: the slot is
-   * being torn down regardless, and leaking the rings would defeat the
-   * whole point of this routine. */
+  /* A failed/timed-out command does not prove DMA has stopped. Retain the
+   * slot and all controller-owned memory for a successful retry/reset. */
+  if (rc != 0) {
+    __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
+    return rc;
+  }
+  if (xhci->ep0_buffers[slot_id]) {
+    kfree_aligned(xhci->ep0_buffers[slot_id]);
+    xhci->ep0_buffers[slot_id] = NULL;
+  }
+  xhci->ep0_failed[slot_id] = 0;
   if (xhci->ep0_rings[slot_id]) {
     kfree_aligned(xhci->ep0_rings[slot_id]);
     xhci->ep0_rings[slot_id] = NULL;
@@ -242,5 +265,6 @@ int xhci_release_slot(struct xhci_controller *xhci, uint8_t slot_id) {
    * consume an event meant for the previous device. */
   xhci->ep0_pending[slot_id].valid = 0u;
   xhci->intr_pending[slot_id].valid = 0u;
+  __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
   return rc;
 }

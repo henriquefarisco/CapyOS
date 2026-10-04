@@ -4,6 +4,11 @@
 #include "kernel/task.h"
 #include "kernel/arch_sched_hooks.h"
 #include <stddef.h>
+#ifdef CAPYOS_FP_TIMER_SMOKE
+#include "drivers/serial/serial_com1.h"
+#include "drivers/io.h"
+static unsigned fp_timer_preemptions;
+#endif
 
 #ifdef CAPYOS_THREAD_CRASH_SURVIVES_SMOKE
 #include "kernel/thread_crash_smoke.h"
@@ -317,6 +322,13 @@ void scheduler_tick(void) {
         current->quantum_remaining--;
       if (current->quantum_remaining == 0) {
         current->quantum_remaining = SCHED_DEFAULT_QUANTUM;
+#ifdef CAPYOS_FP_TIMER_SMOKE
+        if (runnable == 2 && ++fp_timer_preemptions == 128u) {
+          const char *marker = "[fp-timer] quantum-expirations=128\n";
+          for (const char *p = marker; *p; ++p) outb(0xe9, (uint8_t)*p);
+          com1_puts(marker);
+        }
+#endif
         schedule();
         return;
       }

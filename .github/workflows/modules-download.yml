@@ -5,7 +5,7 @@ name: Modules download gate
 # restrict=on, so it never exercises a real module download -- which let the
 # alpha.286 sin_addr byte-order bug (every module download failed) slip for ~17
 # alphas. This boots a full ISO install with real QEMU user-net (SLIRP NAT) and
-# asserts the 7 official modules actually install. It is networked, slow under
+# asserts the resolved official modules actually install. It is networked, slow under
 # TCG and depends on GitHub availability, so it runs on a schedule + manual
 # dispatch rather than per-push (advisory).
 
@@ -31,15 +31,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout CapyUI sibling
+      - name: Checkout pinned release siblings
         shell: bash
-        run: |
-          CAPYUI_REF=main
-          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
-            CAPYUI_REF=develop
-          fi
-          git clone --depth 1 --branch "$CAPYUI_REF" \
-            https://github.com/henriquefarisco/CapyUI.git ../CapyUI
+        env:
+          CAPYAI_DEPLOY_KEY: ${{ secrets.CAPYAI_DEPLOY_KEY }}
+        run: bash tools/scripts/checkout_release_siblings.sh
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -52,6 +48,7 @@ jobs:
           sudo apt-get install -y \
             binutils-x86-64-linux-gnu \
             build-essential \
+            ffmpeg \
             gcc-x86-64-linux-gnu \
             gnu-efi \
             make \

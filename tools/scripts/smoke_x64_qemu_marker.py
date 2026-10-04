@@ -53,6 +53,15 @@ def wait_for_clean_marker(session, marker, fail_markers, timeout):
         raise RuntimeError(f"failure marker observed: {failure or observed!r}")
 
 
+def stop_and_check_session(session, fail_markers):
+    """Drain the final capture before accepting a successful guest marker."""
+    session.stop()
+    captured = session.text()
+    failure = next((value for value in fail_markers if value in captured), None)
+    if failure is not None:
+        raise RuntimeError(f"failure marker in final capture: {failure!r}")
+
+
 def verify_audio_capture(path):
     """Require sustained non-silent PCM and reject gaps inside the tone."""
     with wave.open(str(path), "rb") as capture:
@@ -73,14 +82,16 @@ def verify_audio_capture(path):
 
 
 def verify_audio_stream_capture(path):
-    """Distinguish the 240/300/400 Hz WAV sections from a repeated DMA ring."""
+    """Distinguish 240/300/400 Hz fixture sections from a repeated DMA ring."""
     if verify_audio_capture(path) < 130000:
         raise RuntimeError("stream capture is shorter than the three-section fixture")
     with wave.open(str(path), "rb") as capture:
         samples = array.array("h", capture.readframes(capture.getnframes()))
     if sys.byteorder != "little":
         samples.byteswap()
-    left = samples[::2]
+    left, right = samples[::2], samples[1::2]
+    if left != right:
+        raise RuntimeError("fixture stereo channels differ")
     start = next(i for i, sample in enumerate(left) if abs(sample) > 100)
     counts = []
     for second, expected in enumerate((240, 300, 400)):
@@ -91,6 +102,39 @@ def verify_audio_stream_capture(path):
             raise RuntimeError(f"stream section {second} has {changes} transitions, expected {expected}")
         counts.append(changes)
     return counts
+
+
+def verify_audio_multi_capture(path, *, ac97=False, usb=False):
+    """Check audible mixing, independent gain, EOF and stop after ring latency."""
+    frames = verify_audio_capture(path)
+    if not 310000 <= frames <= 340000:
+        raise RuntimeError("multi-app fixture duration outside bounds")
+    with wave.open(str(path), "rb") as capture:
+        samples = array.array("h", capture.readframes(capture.getnframes()))
+    if sys.byteorder != "little": samples.byteswap()
+    left, right = samples[::2], samples[1::2]
+    if left != right:
+        raise RuntimeError("multi-app stereo channels differ")
+    start = next(i for i, value in enumerate(left) if abs(value) > 100)
+    # QEMU 10.2 AC97 get_volume() maps PCM register 0x0808 linearly:
+    # 255 - floor(255*8/31) = 190, unlike the real codec's 0 dB setting.
+    # Fixed model expectation, never normalize to arbitrary captured gain.
+    if ac97 and usb:
+        raise ValueError("one audio backend per capture")
+    # QEMU 10.2.1 hw/usb/dev-audio.c initializes UAC1 volume to 240 (0 dB),
+    # passed directly to AUD_set_volume_out. Fixed model gain, not a fit to PCM.
+    gain = 240 / 255 if usb else (190 / 255 if ac97 else 1.0)
+    phases = ((0.5, (4000,)), (1.7, (2000, 6000)),
+              (2.7, (3000, 5000)), (3.7, (1500, 2500)),
+              (4.7, (2000,)), (5.5, (1500, 2500)), (6.5, (2000,)))
+    for second, levels in phases:
+        offset = start + int(second * 48000)
+        window = left[offset:offset + 4800]
+        matches = sum(any(abs(abs(value) - level * gain) <= 2 for level in levels)
+                      for value in window)
+        if len(window) != 4800 or matches < 4752:
+            raise RuntimeError(f"multi-app phase {second}s: incorrect mix/gain/stop")
+    return frames
 
 
 def verify_audio_playlist_capture(path):
@@ -155,12 +199,21 @@ def parse_args() -> argparse.Namespace:
                         "in-kernel boot markers need no network)")
     p.add_argument("--audio-hda", action="store_true",
                    help="Attach Intel HDA with a hermetic null audio backend")
+    p.add_argument("--audio-ac97", action="store_true",
+                   help="Attach an ICH AC'97 controller instead of HDA so the "
+                        "guest service exercises its AC'97 fallback")
     p.add_argument("--audio-capture", type=Path,
-                   help="Capture HDA output to WAV and verify sustained PCM")
+                   help="Capture the audio device output to WAV and verify sustained PCM")
+    p.add_argument("--audio-usb", action="store_true",
+                   help="Attach only xHCI/UAC1 speaker for real USB PCM validation")
     p.add_argument("--audio-stream-fixture", action="store_true",
-                   help="Require the three-section streamed WAV fixture")
+                   help="Require the three-section streamed audio fixture (WAV or Ogg)")
     p.add_argument("--audio-playlist-fixture", action="store_true",
                    help="Require two three-section WAV tracks; loading gap optional")
+    p.add_argument("--audio-multi-fixture", action="store_true",
+                   help="Verify two-source PCM mixing, gains, EOF and stop")
+    p.add_argument("--audio-builtin-music", action="store_true",
+                   help="Compare the complete three-song preset playlist against decoded PCM")
     p.add_argument("--log", default="build/ci/smoke_x64_qemu_marker.log",
                    help="Combined QEMU stdout + COM1 serial log")
     p.add_argument("--debugcon-log",
@@ -177,14 +230,25 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.audio_builtin_music and (not args.audio_capture or not args.audio_hda or
+            args.audio_multi_fixture or args.audio_playlist_fixture or args.audio_stream_fixture):
+        print("[err] builtin music requires HDA capture and excludes synthetic fixtures", file=sys.stderr)
+        return 2
+    if args.audio_multi_fixture and (not args.audio_capture or
+            args.audio_stream_fixture or args.audio_playlist_fixture):
+        print("[err] multi fixture requires capture and excludes other fixtures", file=sys.stderr)
+        return 2
     if args.audio_playlist_fixture and (not args.audio_capture or args.audio_stream_fixture):
         print("[err] playlist fixture requires capture and excludes stream fixture", file=sys.stderr)
         return 2
     if args.audio_stream_fixture and not args.audio_capture:
         print("[err] --audio-stream-fixture requires --audio-capture", file=sys.stderr)
         return 2
-    if args.audio_capture and not args.audio_hda:
-        print("[err] --audio-capture requires --audio-hda", file=sys.stderr)
+    if sum((args.audio_hda, args.audio_ac97, args.audio_usb)) > 1:
+        print("[err] audio backends are mutually exclusive", file=sys.stderr)
+        return 2
+    if args.audio_capture and not (args.audio_hda or args.audio_ac97 or args.audio_usb):
+        print("[err] --audio-capture requires an audio backend", file=sys.stderr)
         return 2
     fail_markers = tuple(DEFAULT_FAIL_MARKERS) + tuple(args.fail_marker)
 
@@ -235,6 +299,8 @@ def main() -> int:
         networking=args.networking,
         audio_hda=args.audio_hda,
         audio_capture=audio_capture,
+        audio_ac97=args.audio_ac97,
+        audio_usb=args.audio_usb,
     )
 
     rc = 1
@@ -242,7 +308,6 @@ def main() -> int:
         print(f"[info] waiting for {args.marker!r} (<= {args.timeout:.0f}s)")
         wait_for_clean_marker(session, args.marker, fail_markers, args.timeout)
         print(f"[ok]   + {args.marker!r}")
-        print("[ok] qemu-marker smoke passed")
         rc = 0
     except (TimeoutError, RuntimeError) as exc:
         print(f"[err] qemu-marker smoke failed: {exc}", file=sys.stderr)
@@ -253,24 +318,35 @@ def main() -> int:
                       file=sys.stderr)
         print_log_tail(log_path)
     finally:
-        session.stop()
+        try:
+            stop_and_check_session(session, fail_markers)
+        except RuntimeError as exc:
+            print(f"[err] final guest capture failed: {exc}", file=sys.stderr)
+            rc = 1
         cleanup_file(ovmf_vars_runtime)
         if not args.keep_disk:
             cleanup_file(disk_path)
 
     if rc == 0 and audio_capture:
         try:
-            if args.audio_playlist_fixture:
+            if args.audio_builtin_music:
+                from verify_builtin_music_capture import verify
+                print(f"[ok] complete preset PCM: {verify(audio_capture, REPO_ROOT / 'build/generated/sounds')}")
+            elif args.audio_multi_fixture:
+                print(f"[ok] multi-app PCM phases: {verify_audio_multi_capture(audio_capture, ac97=args.audio_ac97, usb=args.audio_usb)} frames")
+            elif args.audio_playlist_fixture:
                 print(f"[ok] captured playlist sections: {verify_audio_playlist_capture(audio_capture)}")
             else:
                 frames = verify_audio_capture(audio_capture)
                 print(f"[ok] captured {frames} non-silent stereo frames without long gaps")
             if args.audio_stream_fixture:
-                print(f"[ok] streamed WAV section transitions: {verify_audio_stream_capture(audio_capture)}")
+                print(f"[ok] streamed audio section transitions: {verify_audio_stream_capture(audio_capture)}")
         except (OSError, EOFError, wave.Error, RuntimeError) as exc:
             print(f"[err] audio capture failed: {exc}", file=sys.stderr)
             rc = 1
 
+    if rc == 0:
+        print("[ok] qemu-marker smoke passed (final log and requested PCM checks)")
     return rc
 
 

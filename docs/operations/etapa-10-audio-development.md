@@ -4,6 +4,136 @@ Development branch: `feature/etapa-10-audio-multimedia` in CapyOS,
 CapyCodecs and CapyUI. This is development evidence, not a release acceptance
 record. The published Etapa 9 release is not replaced by these lab artifacts.
 
+Latest checkpoint (2026-10-02): [local stage acceptance](etapa10-acceptance-20261002.md).
+HDA route gain and VMware startup/drain were corrected. The final selector fix
+passed a rebuilt artifact, full tests, sanitizers, QEMU HDA/AC97/USB capture and
+two VMware actual-output captures. The stage is locally complete, not published.
+The dated checkpoints below are historical and retain their original limitations.
+
+Fresh HDA/AC97 playback gates and capture-oracle fixes (2026-09-29):
+[runtime validation record](audio-validation-20260929.md). These supersede the
+static-only playback-gate status below, not the remaining Etapa 10 requirements.
+
+## FP dispatch boundary (2026-09-14, unreleased)
+
+The current x64 task switch already has per-task FXSAVE/FXRSTOR storage and
+the current compiler flags permit SSE. The older September 9/10 restrictions
+below describe historical checkpoints, not the current build configuration.
+The missing boundary was SYSCALL: kernel C could clobber user FP registers.
+Interrupts already saved registers but inherited the interrupted FP controls.
+
+Both dispatch entries now preserve the legacy x87/XMM0-15/MXCSR state on the
+owning kernel stack and initialize neutral x87/MXCSR controls before calling C.
+They restore the saved state on return, including after a cooperative yield.
+The syscall/exception frame layout and syscall return value are unchanged.
+Each callable boundary reserves 520 stack bytes with a 16-byte aligned 512-byte
+FXSAVE image; it uses no allocator or shared global scratch. AVX/XSAVE and a
+complete process-lifecycle FP policy are not introduced by this change.
+
+`make test-fp-boundary` executes the actual assembly dispatch wrappers against
+a native clobber oracle: 64 cases cover all legacy data registers, four rounding
+modes, eight x87 TOP values, sticky status, selected unmasked exceptions,
+neutral handler controls and the preserved return value. A transparent syscall
+trampoline representing the prior unprotected call failed the initial oracle;
+the protected wrappers pass. Reserved FXSAVE bytes, MXCSR_MASK and CPU-dependent
+x87 instruction/data-pointer metadata are not compared. Layout reference:
+[Intel SDM, FXSAVE64 Table 3-46](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2a-manual.pdf).
+
+The ring-3 FP smoke now requires both tasks to complete 64 write/yield cycles
+with distinct x87, XMM0-15 and MXCSR profiles; old busy-only/XMM0 markers cannot
+pass it. It passed QEMU/OVMF and VMware/UEFI with kernel SHA-256
+`5b021ecd53688c4c947f40b647e69a3d21108d25313ada5df74e085f9d2ac7ac`.
+The provisioned QEMU disk and converted VMware VMDK compared byte-identical
+before VMware boot. This is disk-boot evidence, not a claim that VMware booted
+the diagnostic ISO. The diagnostic-only `CAPYOS_FP_CONTEXT_SMOKE` COM1 bridge
+makes the same guest markers observable in VMware; canonical ISO policy rejects
+this flag. The normal ISO/pointer remained byte-identical during these smokes.
+
+This early boot hook precedes timer initialization: the VM proof is cooperative,
+not full timer-preemption/SMP coverage. Native IRQ dispatch testing is not a
+substitute for that missing runtime proof. Public Ogg/player integration remains
+blocked on the remaining architectural gates and a bounded pure whole-stream
+decoder wrapper. Public ABI/features/versions/pins are unchanged. Local commands,
+artifact identity, normal regression results and limitations belong in
+`build/fp-boundary-20260914/resultado.md`.
+
+### Fork regression follow-up (2026-09-20, unreleased)
+
+The additional fork/crash gate exposed three independent prerequisites. QMP
+first found the parent spinning in `task_yield` with `sched_running=0`; the
+direct-hello boot helper now queues its parent and enables cooperative dispatch.
+A four-case native contract checks this ordering and inert spawn-error paths.
+The actual assembly syscall frame also had RIP/RSP reversed relative to C;
+the push/restore order now matches the unchanged C offsets (72/80, size 96),
+with compile-time and source-contract checks.
+
+After that correction, the child resumed along a parent stack continuation:
+CoW had downgraded parent PTEs without invalidating its cached writable
+translations. Clone now reloads the active source CR3 before returning, including
+partial-allocation failure paths. This is local CPU invalidation, not an SMP
+shootdown implementation. The existing fork/crash gate then passed: child fault
+at address 1, child termination, parent observation of the crash, no final panic.
+Exact kernel SHA-256:
+`3804daac9e1fc57fd6696ab04de6db0f1fd8d6f5a165a60ef701daea442a52b7`.
+Diagnostics and the matching ELF are retained in `build/fp-boundary-20260914/`.
+The combined revision subsequently passed full cooperative FP in both QEMU and
+VMware, with kernel `f3edfb1d31ddf83399016e7e52fae59e2b47961427b429ae6b38396d8a53f130`.
+The raw/VMDK pair compared identical before VMware boot, and both tasks completed
+64 cycles. QEMU SYS_EXEC also passed the before-exec/new-program markers with no
+final panic.
+
+The final combined revision passed `make test`, `make audio-selftest`, and a fresh
+normal FULL kernel/ISO build without diagnostic flags. Canonical ISO SHA-256:
+`188cc0ae3b0a015d352d91a5248b40441dc745dc80b767835ed42901f950bf82`.
+Both QEMU/OVMF and VMware/UEFI passed fresh FULL installation, module activation,
+desktop after login and persistence after reboot, preserving the larger guard
+disk. QEMU required `--first-boot-net` for module downloads; the first invocation
+without it failed and is retained, not counted as a pass. The corrected run
+installed all 14 modules without failures. Final ISO/kernel hashes were unchanged
+and neither hypervisor retained a running test VM. Commands, logs and performance
+samples are indexed in the local report above. These are local development
+results, not publication or full timer-preemption/SMP/FP-lifecycle acceptance.
+
+### Timer-driven FP gate (2026-09-20, unreleased)
+
+`make smoke-x64-fp-preemptive` now arms the native PIT after task setup, selects
+round-robin, and runs two FP-checking ring-3 tasks with no yield calls. QEMU and
+VMware passed both full FP profiles plus 128 timer quantum expirations. This
+supersedes the cooperative-only runtime limitation above, not the remaining SMP
+or fork/exec FP-lifecycle requirements. VMware concurrent markers use an explicit
+unordered mode; default ordered gates and failure precedence remain enforced.
+Evidence: `build/fp-boundary-20260914/timer-result2.log`,
+`timer-vmware-result3.log`, and `timer-delivery.md` in the same evidence directory.
+Normal ISO, public ABI, versions and pins are unchanged.
+
+### Fresh FP lifecycle and regression evidence (2026-09-28, unreleased)
+
+The current tree was rebuilt and tested on this execution-enabled workstation;
+the older static-only checkpoints below are not the result of this run.
+`test_fp_lifecycle.c` now calls the real FP-aware dispatcher and covers default,
+replaced, generic, unregistered and invalid syscall routes, as well as fork
+publication ordering and failed/successful exec state handling. Its standalone
+host build disables vectorization to keep unrelated handler pointer pools from
+defeating section garbage collection. No assertions were removed.
+
+The context-switch C/assembly contracts moved unchanged into
+`test_context_switch_contract.c` (19 checks), wired into both full and
+`gfx-lifecycle` runners. Fresh `make test TOOLCHAIN64=elf`, `make audio-selftest
+TOOLCHAIN64=elf`, `make test-fp-boundary TOOLCHAIN64=elf`, the focused graphical
+lifecycle runner and strict `make layout-audit` passed. Layout warnings: none.
+
+QEMU/OVMF and VMware/UEFI both passed timer-driven FP preservation (two full
+profiles and 128 quantum expirations) and fork/exec lifecycle (child inheritance
+and isolation, parent preservation, exec reset). Each raw/VMDK pair compared
+identical before VMware boot; VMware tests booted the provisioned disks, not
+the diagnostic ISOs. No test VM remained running. Commands, hashes, matching
+ELFs and logs are indexed in `build/validation-20260927/resultado.md`.
+
+This closes the fresh FP regression slice, not Etapa 10 or release acceptance.
+SMP shootdown/FP validation, audio playback VM gates for the new backend/mixing
+changes and the remaining codec/UI work are not covered by these FP smokes.
+No public ABI, version, pin or published artifact changed.
+
 ## Review fixes (2026-09-13, unreleased)
 
 - `ISO_REUSE_X64_VARIANT=1` defaults to `build/ci/CapyOS-Smoke-UEFI.iso`
@@ -13,8 +143,8 @@ record. The published Etapa 9 release is not replaced by these lab artifacts.
   diagnostic flags and known boot hooks, including FP/TWO_BUSY.
 - `smoke-x64-fp-context` has dedicated FP ISO/pointer names and no global clean.
   The variant fingerprint rebuilds its affected objects while preserving the
-  canonical ISO. Its XMM0 cookie tests cooperative context switches, not the
-  complete FP control/register state or all preemptive/SMP paths.
+  canonical ISO. That checkpoint's XMM0-only cookie has been superseded by the
+  fuller cooperative gate above; timer-preemption/SMP coverage remains open.
 - Full desktop builds check source completeness even when the kernel/object
   cache exists. CapyUI owns the player and its desktop wiring; the coordinated
   local source commits are CapyUI `1bfcb24321ccc9ff592e8186df703b7a00d7be95`
@@ -582,3 +712,192 @@ FP/SIMD restriction still blocks safe player integration, so no VM playback
 claim is made. Next is complete packet orchestration followed by an explicit
 choice between per-task FP/SIMD state and a fixed-point codec backend.
 Engineering progress is approximately 94%; Etapa 10 remains open.
+
+## Layout gate restoration (2026-09-21, unreleased)
+
+`make layout-audit` (strict 900-line ceiling, `tools/scripts/audit_source_layout.py`)
+had regressed on this branch and none of the checkpoints above executed it:
+`src/arch/x86_64/kernel_main.c` reached 1003 lines once the
+`CAPYOS_AUDIO_PLAYBACK_SMOKE` block was added inline to the O0 entry TU, and
+`src/memory/vmm.c` reached 915 lines with the CoW/fork work. Neither file is in
+`MONOLITH_BASELINE_EXCEPTIONS`.
+
+Two verbatim relocations restore the budget without logic change:
+
+- `src/arch/x86_64/kernel_boot_audio_smoke.c` now owns `audio_smoke_log`,
+  `audio_smoke_fixture` and `kernel_boot_run_audio_playback_smoke` (declared in
+  `include/arch/x86_64/kernel_main_internal.h`; same `#pragma GCC optimize("O0")`
+  as the rest of the kernel_main TU group). The call site and its
+  `[user_init] CAPYOS_AUDIO_PLAYBACK_SMOKE` dbgcon marker stay in
+  `kernel_main64()`; every `[smoke] ...` marker string is unchanged.
+  `kernel_main.c` is 869 lines.
+- `src/memory/vmm_fault.c` now owns `vmm_walk_to_leaf`, `vmm_handle_cow_fault`
+  and `vmm_handle_page_fault`; `src/memory/internal/vmm_internal.h` shares
+  `VMM_PTE_PHYS_MASK`, `invlpg()` and the `vmm_global_stats` counters (external
+  linkage instead of `static`). `vmm.c` is 737 lines. Host tests keep linking
+  `tests/stubs/stub_vmm.c`.
+- `CAPYOS64_OBJS` gained `kernel_boot_audio_smoke.o` and `vmm_fault.o`.
+
+This was reviewed statically on a coding-only workstation; nothing was built
+or executed. Required external gates before the change counts as validated:
+`make layout-audit`, `make test`, `make all64 TOOLCHAIN64=elf`,
+`make audio-selftest`, `make smoke-x64-qemu-audio-playback-roundtrip` (same
+ready/fail markers), `make smoke-x64-qemu-media-player-playlist` and the
+fork/CoW smokes. Public ABI, features, versions, pins and the 94% estimate are
+unchanged; Etapa 10 remains open. Roadmap entry:
+`docs/architecture/monolith-refactor-roadmap.md` §9.
+
+## AC'97 driver foundation (2026-09-21, unreleased)
+
+The §13 deliverable names Intel HDA, AC'97 and USB Audio class. This slice adds
+the AC'97 controller driver (Intel ICH programming model; PCI class 0x04 /
+subclass 0x01, e.g. QEMU `-device AC97` = 8086:2415) with the same API shape as
+`drivers/audio/hda.h`, so a later slice can let the audio service select either
+backend. VMware does not emulate AC'97 (HDA, ES1371, SB16 only), so the only
+planned runtime gate is QEMU; the "at least one backend validated on VMware"
+criterion is already carried by HDA.
+
+- `include/drivers/audio/ac97_core.h` + `src/drivers/audio/ac97_core.c`: pure
+  helpers — register map and bit definitions, 32-entry buffer descriptor list
+  aliasing the 64 KiB ring of sixteen 4096-byte fragments twice (CIV wraps
+  modulo 32, so the entry count must be exactly 32), CIV/PICB to ring byte
+  position (PICB counts samples still to play; positions include the ring size
+  itself before wrap, matching the HDA CBL contract used by the service), LVI
+  trailing CIV by one so the engine never halts while polled, the HDA fragment
+  refill-window rule, mixer volume word, 32-bit DMA window check, and I/O BAR
+  decoding that rejects memory BARs, zero bases and windows that would wrap
+  the 16-bit port space (`ac97_io_base_ok`).
+- `tests/drivers/test_ac97_core.c` (64 checks; `AC97_CORE_STANDALONE_TEST`),
+  wired into `TEST_SRCS`, `tests/test_runner.c` and `make audio-selftest`.
+- `include/drivers/audio/ac97.h` + `src/drivers/audio/ac97.c`: PIO backend —
+  PCI probe, NAM/NABM I/O BARs, `IO_SPACE|BUS_MASTER|INT_DISABLE` (polling
+  only), AC-link cold/warm reset through `GLOB_CNT` and codec-ready wait on
+  `GLOB_STA.PCR`, codec access semaphore before every mixer access, mixer
+  reset/vendor read/0 dB volumes with read-back verification, variable-rate
+  audio disabled (fixed 48 kHz), 64 KiB ring + descriptor list allocated and
+  verified below 4 GiB (released again on pre-start failures), TSC-derived
+  24 MHz-equivalent wallclock (cached rate; no timebase probing in IRQ paths).
+  `refill`, `get_status` and `request_stop` are PIO + memcpy only. Failures set
+  `AC97_STATE_FAILED` with a `klog` warning and are not retried in-session; a
+  missing controller is `UNAVAILABLE` at INFO level.
+- The service integration landed in the same day as the backend-selection
+  slice below; the interim read-only inventory probe was removed with it.
+
+Static review only (coding-only workstation): nothing was built or executed.
+External gates before this counts as validated: `make test`, `make
+audio-selftest`, `make layout-audit`, `make all64 TOOLCHAIN64=elf`. Public
+ABI, features, versions, pins and the 94% estimate are unchanged; Etapa 10
+remains open. Driver matrix: `docs/reference/driver-support-matrix.md` (Áudio).
+
+## Audio output backend selection (2026-09-21, unreleased)
+
+The audio service no longer calls the HDA driver directly. A backend table in
+`include/audio/audio_output.h` / `src/audio/audio_output.c` fixes the shared
+contract — one 64 KiB ring of sixteen 4096-byte fragments, polled completion,
+positions that include the ring size right before wrap, and a 24 MHz wallclock
+(HDA WALLCLK or the AC'97 driver's TSC-derived equivalent) — and normalizes the
+hardware status into `struct audio_output_status` (`state`, `buffer_bytes`,
+`position_bytes`, `wallclock_ticks`, `stream_error`). `audio_output_select()`
+initializes Intel HDA first (the VMware-validated path) and falls back to AC'97;
+with neither, audio is disabled safely and the decision is latched.
+
+- HDA hosts: every former `hda_*` call happens through the table in the same
+  order with the same arguments; `stream_error` is `SDSTS & (DESE|FIFOE)` and the
+  250 ms / 1 s thresholds are the same tick counts as before
+  (`AUDIO_SERVICE_POLL_GAP_TICKS`, `AUDIO_SERVICE_STALL_TICKS`). Log lines now
+  end in `via hda` / `via ac97`.
+- AC'97 hosts: `stream_error` is `PO_SR.FIFOE`, or `PO_SR.DCH` while the service
+  believes the stream is running; `PO_SR.BCIS` (bit 3) is a completion the
+  driver acknowledges, never an error — without this normalization the old
+  `& 0x18` test would have stopped playback at the first fragment. Assumption
+  to confirm on the QEMU gate: DCH clears as soon as RPBM is set, so the first
+  IRQ-phase check (one timer tick after start) never sees a stale halted flag.
+  Sources shorter than the ring (the diagnostic tone) are tiled across the
+  ring by `ac97_play_stereo_s16` instead of padded with silence. Compile-time
+  asserts in `audio_output.c` pin both drivers' fragment/ring sizes and the
+  AC'97 wallclock domain to the contract.
+- `audio_service_get_output_status()` (engine gate, IRQ-safe backend read) gives
+  diagnostics and smokes a backend-agnostic snapshot;
+  `kernel_boot_run_audio_playback_smoke` uses it instead of `hda_get_status`,
+  treats a busy gate as a skipped sample, and keeps the same markers.
+- Host tests: `tests/audio/test_audio_service.c` still selects HDA (its AC'97
+  stubs assert if ever reached); `tests/audio/test_audio_service_backend_probe.c`
+  runs the real service with HDA absent — `ac97` mode plays the tone through
+  the AC'97 table entry, proves BCIS is benign and FIFOE/DCH stop the service
+  with `-4`, and that selection is latched; `none` mode proves the safe
+  disable path. Both run from `make audio-selftest`.
+- Lab gate: `make smoke-x64-qemu-audio-playback-roundtrip-ac97` builds the
+  same smoke kernel as the HDA gate but boots QEMU with `-device AC97` and no
+  HDA (`tools/scripts/smoke_x64_qemu_marker.py --audio-ac97`, exclusive with
+  `--audio-hda`; `test_audio_smoke_contract.py` locks the QEMU arguments and
+  the non-canonical ISO name). It records PCM through the WAV backend and
+  applies the same three-section fixture verification as the HDA gate.
+
+Static review only: nothing was built or executed. Required external gates:
+`make test`, `make audio-selftest`, `make layout-audit`, `make all64
+TOOLCHAIN64=elf`, `make smoke-x64-qemu-audio-playback-roundtrip` (HDA path must
+remain green with the same markers), `make smoke-x64-qemu-audio-playback-
+roundtrip-ac97` (new), and the VMware HDA gate before any release use. Public
+ABI, features, versions and pins are unchanged; the §13 "Driver Intel HDA +
+AC97" deliverable is now code-complete pending those gates, USB Audio class is
+not started, and Etapa 10 remains open.
+
+## Multi-application mixing in the audio service (2026-09-21, unreleased)
+
+`src/audio/audio_service.c` now owns up to `AUDIO_SERVICE_MAX_SOURCES` (4)
+decoded WAV sources and mixes them into the single 64 KiB ring, closing the
+§13 gap "concurrent multi-app playback" behind the existing per-application
+gain API. Design approved by the maintainer:
+
+- **Primary semantics.** The legacy `audio_service_status` fields that name a
+  source (`playing`, `active_app_id`, `source_frames`, `played_frames`,
+  `completed`, `playback_id`) describe the *primary* source — the most recent
+  `play_*`. At the primary's EOF they read exactly as the single-source
+  service did (playing 0, active_app_id 0, completed 1, fully played) even
+  while other applications keep playing, so the CapyUI Media Player's
+  auto-advance and ownership logic keep working unchanged. Stopping the primary
+  with `audio_service_stop_app` promotes the most recent remaining source.
+- **Single-source path byte-identical.** With one source the hardware call
+  sequence, ring counters, refill contents, EOF timing and legacy status
+  transitions are unchanged (`tests/audio/test_audio_service.c` is the
+  regression spec and was not modified).
+- **Joining.** An in-memory source (`audio_service_play_wav_memory`) joins a
+  running ring without a DMA restart; its first frame is queued at the next
+  refilled fragment (`start_bytes = g_queued_bytes`), so it starts at most one
+  ring (~341 ms) later. Per-source progress is
+  `(g_played_bytes - start_bytes) / 4` capped at its length; the IRQ phase only
+  marks `completed`, the task pump (`audio_engine_poll`) frees the PCM. A
+  second start by the same application releases its previous source first
+  (peak memory unchanged for the single case); worst case is 4 × 8 MiB
+  decoded plus one transient encoded buffer.
+- **Exclusive paths kept.** `audio_service_play_wav_file` still stops every
+  source before its synchronous VFS reads (they run under the engine gate and
+  would starve the ring); the diagnostic tone stays exclusive, looping and
+  re-rendered on gain changes. A start while a stop/EOF is still pending, or
+  while the backend no longer reports a healthy running stream, also takes the
+  historical full-stop path instead of joining a ring about to be torn down.
+  Empty decodes (zero frames) are rejected with `-2`.
+- **Isolation.** Rejections (`-2` format, `-7` no free source, codec errors)
+  set `last_error` and leave other applications playing; hardware/stream
+  failures (`-3`, `-4`, `-5`) still stop everything.
+- **Additive API.** `audio_service_stop_app(app)` (stops one source or the
+  tone; `-1` when that application has nothing) and
+  `audio_service_get_app_status(app, &status)` (per-application view; zeros
+  when it has no source), both through the engine gate; engine entry points
+  `audio_engine_stop_app` / `audio_engine_get_app_status`.
+- **Tests.** `tests/audio/test_audio_service_multi.c` (in `make
+  audio-selftest`) runs the real service, runtime, mixer, codec and backend
+  table with HDA stubs: a second source joins without restart, fragments carry
+  the mixed sum (4000 + 2000; app gain 500 → 1000 on new fragments only), the
+  primary's EOF reads like the legacy EOF while the other source continues and
+  is reaped in task context, `stop_app` on the last source is the full stop,
+  the fifth source is refused with `-7` without touching the others, same-app
+  replacement, promotion after stopping the primary, file exclusivity (two
+  historical stops) and tone exclusivity both ways.
+
+Static review only: nothing was built or executed. Gates: `make
+audio-selftest` (all three service binaries), `make test`, `make
+layout-audit`, `make all64 TOOLCHAIN64=elf`, then the HDA QEMU/VMware
+playback smokes (single-source path) before any release use. No public ABI,
+version or pin changes; Etapa 10 remains open (Ogg/Vorbis in CapyCodecs,
+incremental source I/O for long files, UI validation, USB Audio class).

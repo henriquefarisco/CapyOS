@@ -40,7 +40,7 @@ void capypkg_emit_install_phase(const char *name,
 const char *const CAPYPKG_DEFAULT_REPO_NAME = "stable";
 const char *const CAPYPKG_DEFAULT_REPO_URL =
     "https://github.com/henriquefarisco/CapyOS/releases/download/"
-    "modules-capyos-base-v3/modules-index.txt";
+    "modules-capyos-base-v3-r2/modules-index.txt";
 
 void capypkg_local_zero(void *ptr, size_t len) {
     uint8_t *dst = (uint8_t *)ptr;

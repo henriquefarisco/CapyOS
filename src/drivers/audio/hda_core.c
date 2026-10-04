@@ -2,6 +2,96 @@
 
 #define HDA_BDL_FLAG_IOC 0x1u
 
+struct codec_route {
+    hda_codec_command_fn command;
+    void *ctx;
+    unsigned budget, length;
+    uint8_t nodes[8], selected[8], count[8];
+    uint32_t caps[8];
+};
+
+static int route_query(struct codec_route *r, uint8_t node, uint32_t verb, uint32_t *value) {
+    if (!r->budget) return -1;
+    --r->budget;
+    return r->command(r->ctx, node, verb, value);
+}
+
+static int route_find(struct codec_route *r, uint8_t node, uint8_t target, unsigned depth) {
+    uint32_t caps, length, packed = 0;
+    if (!node || node > 127 || depth >= 8) return -1;
+    for (unsigned i = 0; i < depth; ++i) if (r->nodes[i] == node) return -1;
+    if (route_query(r, node, 0xf0009u, &caps) != 0 || (caps & (1u << 9))) return -1;
+    r->nodes[depth] = node; r->caps[depth] = caps;
+    if (node == target) {
+        if (hda_widget_type(caps) != HDA_WIDGET_AUDIO_OUTPUT) return -1;
+        r->length = depth + 1u;
+        return 0;
+    }
+    unsigned type = hda_widget_type(caps);
+    if ((type != HDA_WIDGET_PIN_COMPLEX && type != HDA_WIDGET_MIXER &&
+         type != HDA_WIDGET_SELECTOR) || !(caps & (1u << 8)) ||
+        route_query(r, node, 0xf000eu, &length) != 0 ||
+        !length || length > 16u) return -1;
+    r->count[depth] = (uint8_t)length;
+    uint8_t connections[16];
+    for (unsigned i = 0; i < length; ++i) {
+        if (!(i % 4u) && route_query(r, node, 0xf0200u | i, &packed) != 0) return -1;
+        connections[i] = (uint8_t)(packed >> ((i % 4u) * 8u));
+        if (!connections[i] || (connections[i] & 0x80u)) return -1;
+    }
+    for (unsigned i = 0; i < length; ++i) {
+        if (route_find(r, connections[i], target, depth + 1u) == 0) {
+            r->selected[depth] = (uint8_t)i;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int hda_codec_route_setup(uint8_t afg, uint8_t output, uint8_t pin, uint16_t format,
+                          hda_codec_command_fn command, void *ctx) {
+    if (!command || !afg || afg > 127 || !output || output == pin) return -1;
+    struct codec_route r = {.command = command, .ctx = ctx, .budget = 256};
+    uint32_t value;
+    if (route_find(&r, pin, output, 0) != 0 ||
+        command(ctx, afg, 0x70500u, &value) != 0) return -1;
+    for (unsigned n = r.length; n-- > 0;) {
+        uint8_t node = r.nodes[n];
+        uint32_t caps = r.caps[n];
+        if ((caps & (1u << 10)) && command(ctx, node, 0x70500u, &value) != 0) return -1;
+        if (n + 1u < r.length && hda_widget_type(caps) != HDA_WIDGET_MIXER &&
+            command(ctx, node, 0x70100u | r.selected[n], &value) != 0) return -1;
+        for (unsigned input = 0; input < 2; ++input) {
+            if (input && hda_widget_type(caps) == HDA_WIDGET_PIN_COMPLEX) continue;
+            if (!(caps & (input ? 2u : 4u))) continue;
+            uint32_t amp;
+            if (command(ctx, (caps & 8u) ? node : afg,
+                        input ? 0xf000du : 0xf0012u, &amp) != 0) return -1;
+            uint32_t gain = amp & 127u, steps = (amp >> 8) & 127u;
+            if (gain > steps) return -1;
+            int per_input = input && hda_widget_type(caps) == HDA_WIDGET_MIXER;
+            unsigned count = per_input ? r.count[n] : 1u;
+            for (unsigned i = 0; i < count; ++i) {
+                uint32_t setting = gain;
+                if (per_input && i != r.selected[n]) {
+                    if (!(amp & (1u << 31))) return -1;
+                    setting = 0x80u; /* Never enable unrelated microphone/loopback inputs. */
+                }
+                uint32_t verb = 0x30000u | (input ? 0x7000u : 0xb000u) |
+                                (i << 8) | setting;
+                if (command(ctx, node, verb, &value) != 0) return -1;
+            }
+        }
+    }
+    if (command(ctx, output, 0x70610u, &value) != 0 ||
+        command(ctx, output, 0x20000u | format, &value) != 0 ||
+        command(ctx, pin, 0x70740u, &value) != 0) return -1;
+    /* EAPD exists only on pins advertising the corresponding capability. */
+    if (command(ctx, pin, 0xf000cu, &value) != 0) return -1;
+    if ((value & (1u << 16)) && command(ctx, pin, 0x70c02u, &value) != 0) return -1;
+    return 0;
+}
+
 int hda_stream_format(uint32_t sample_rate,
                       uint8_t bits_per_sample,
                       uint8_t channels,

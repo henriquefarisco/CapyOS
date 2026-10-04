@@ -10,6 +10,7 @@
  *   - test_event_pump_stops_on_cycle_mismatch
  */
 #include "drivers/usb/xhci.h"
+#include "drivers/usb/xhci_iso.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -110,7 +111,7 @@ static void test_event_pump_drains_multiple_events_until_stop(void) {
     memset(evt_ring, 0, sizeof(evt_ring));
     /* Three back-to-back events; pump must drain all three in one call. */
     seed_port_status_event(evt_ring, 0);
-    seed_command_completion(evt_ring, 1, 3u);
+    seed_command_completion(evt_ring, 1, 3u, NULL);
     seed_transfer_event(evt_ring, 2, 4u, 1u);
     xhci.max_slots = 8u;
     xhci.evt_ring = evt_ring;
@@ -149,6 +150,55 @@ static void test_event_pump_stops_on_cycle_mismatch(void) {
     }
 }
 
+static void test_event_pump_lock_contention(void) {
+    struct xhci_controller xhci = {0};
+    struct xhci_trb events[XHCI_EVT_RING_TRBS] = {0};
+    xhci.evt_ring = events;
+    xhci.evt_ring_cycle = 1;
+    seed_command_completion(events, 0, 3u, NULL);
+    if (!xhci_event_try_lock(&xhci)) fail("initial lock must succeed");
+    if (xhci_event_try_lock(&xhci)) fail("recursive lock must not succeed");
+    xhci_event_pump(&xhci);
+    if (xhci.evt_ring_idx || xhci.cmd_pending.valid)
+        fail("contended pump must leave event owned by lock holder");
+    xhci_event_unlock(&xhci);
+    xhci_event_pump(&xhci);
+    if (xhci.evt_ring_idx != 1 || !xhci.cmd_pending.valid || xhci.event_lock)
+        fail("retry must consume event and release lock");
+}
+
+static void test_event_pump_iso_batch(void) {
+    struct xhci_controller xhci = {0};
+    struct xhci_trb events[XHCI_EVT_RING_TRBS] = {0};
+    struct xhci_trb ring[XHCI_ISO_RING_TRBS] __attribute__((aligned(64)));
+    struct xhci_iso_queue queue;
+    if (xhci_iso_queue_init(&queue, ring, 0x10000)) {
+        fail("iso fixture initialization");
+        return;
+    }
+    xhci.evt_ring = events;
+    xhci.evt_ring_cycle = 1;
+    xhci.max_slots = 8;
+    xhci.iso_slot = 4;
+    xhci.iso_dci = 2;
+    xhci.iso_queue = &queue;
+    for (unsigned i = 0; i < 3; ++i) {
+        if (xhci_iso_enqueue(&queue, 0x20000 + 192 * i, 192))
+            fail("iso fixture enqueue");
+        seed_transfer_event(events, i, 4, 2);
+        events[i].param = 0x10000 + sizeof(*ring) * i;
+    }
+    xhci_event_pump(&xhci);
+    if (queue.pending || queue.failed || queue.completed_bytes != 576 ||
+        xhci.evt_ring_idx != 3 || xhci.event_stray_count)
+        fail("iso batch must account every completion, not just latest");
+    seed_transfer_event(events, 3, 4, 2);
+    events[3].param = 0x10000;
+    xhci_event_pump(&xhci);
+    if (!queue.failed || queue.completed_bytes != 576 || xhci.evt_ring_idx != 4)
+        fail("duplicate completion must fail queue without wedging event ring");
+}
+
 int run_xhci_event_pump_tests(void) {
     g_failures = 0;
     test_event_pump_routes_owned_ep0_event();
@@ -156,6 +206,13 @@ int run_xhci_event_pump_tests(void) {
     test_event_pump_counts_stray_for_unknown_owner();
     test_event_pump_drains_multiple_events_until_stop();
     test_event_pump_stops_on_cycle_mismatch();
+    test_event_pump_lock_contention();
+    test_event_pump_iso_batch();
     if (g_failures == 0) printf("[tests] xhci_event_pump OK\n");
     return g_failures;
 }
+
+#ifdef XHCI_EVENT_TEST_STANDALONE
+void xhci_memzero(void *ptr, uint64_t size) { memset(ptr, 0, (size_t)size); }
+int main(void) { return run_xhci_event_pump_tests() != 0; }
+#endif

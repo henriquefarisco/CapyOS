@@ -333,6 +333,8 @@ def boot_with_session(
     audio_hda: bool = False,
     extra_disks: tuple[Path, ...] = (),
     audio_capture: Path | None = None,
+    audio_ac97: bool = False,
+    audio_usb: bool = False,
 ) -> SmokeSession:
     port = choose_free_port()
     cmd = make_qemu_cmd(
@@ -350,6 +352,8 @@ def boot_with_session(
         audio_hda=audio_hda,
         audio_capture=audio_capture,
         extra_disks=extra_disks,
+        audio_ac97=audio_ac97,
+        audio_usb=audio_usb,
     )
     session = SmokeSession(
         cmd=cmd,

@@ -8,6 +8,7 @@
  * producer never observes Event Ring Buffer Overflow.
  */
 #include "drivers/usb/internal/xhci_internal.h"
+#include "drivers/usb/xhci_iso.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -50,10 +51,11 @@ static void xhci_dispatch_event(struct xhci_controller *xhci,
   if (type == TRB_TYPE_CMD_COMPLETE) {
     /* Latest command completion wins; a previous unread completion
      * would have been a software bug (commands are serialised). */
-    xhci->cmd_pending.valid = 1u;
     xhci->cmd_pending.slot = slot;
     xhci->cmd_pending.cc = cc;
     xhci->cmd_pending.residual = 0u;
+    xhci->cmd_pending.command_pointer = evt->param;
+    __atomic_store_n(&xhci->cmd_pending.valid, 1u, __ATOMIC_RELEASE);
     return;
   }
   if (type != TRB_TYPE_TRANSFER) {
@@ -66,17 +68,23 @@ static void xhci_dispatch_event(struct xhci_controller *xhci,
     return;
   }
   if (ep_dci == 1u && xhci->ep0_rings[slot]) {
-    xhci->ep0_pending[slot].valid = 1u;
     xhci->ep0_pending[slot].slot = slot;
     xhci->ep0_pending[slot].cc = cc;
     xhci->ep0_pending[slot].residual = residual;
+    __atomic_store_n(&xhci->ep0_pending[slot].valid, 1u, __ATOMIC_RELEASE);
+    return;
+  }
+  if (xhci->iso_queue && slot == xhci->iso_slot && ep_dci == xhci->iso_dci) {
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    uint64_t address = *(volatile uint64_t *)((uint8_t *)evt);
+    (void)xhci_iso_complete(xhci->iso_queue, address, cc, residual);
     return;
   }
   if (xhci->intr_rings[slot] && ep_dci == xhci->intr_ep_dci[slot]) {
-    xhci->intr_pending[slot].valid = 1u;
     xhci->intr_pending[slot].slot = slot;
     xhci->intr_pending[slot].cc = cc;
     xhci->intr_pending[slot].residual = residual;
+    __atomic_store_n(&xhci->intr_pending[slot].valid, 1u, __ATOMIC_RELEASE);
     return;
   }
   /* Transfer event for a slot/endpoint we do not currently own. The
@@ -86,7 +94,7 @@ static void xhci_dispatch_event(struct xhci_controller *xhci,
   xhci->event_stray_count++;
 }
 
-void xhci_event_pump(struct xhci_controller *xhci) {
+void xhci_event_pump_locked(struct xhci_controller *xhci) {
   if (!xhci || !xhci->evt_ring) return;
   /* Bounded by ring size: at most one full segment can be valid
    * between consumer and producer at any instant. */
@@ -95,10 +103,28 @@ void xhci_event_pump(struct xhci_controller *xhci) {
     uint32_t ctrl = mmio_read32((volatile uint32_t *)&evt->control);
     uint32_t type = (ctrl >> 10) & 0x3Fu;
     if ((ctrl & 1u) != (uint32_t)(xhci->evt_ring_cycle & 1)) return;
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
     /* Type 0 is Reserved per spec; in the test harness this also marks
      * fresh zero memory just past the producer head after wrap. */
     if (type == 0u) return;
     xhci_dispatch_event(xhci, evt);
     xhci_advance_event_ring(xhci);
   }
+}
+
+int xhci_event_try_lock(struct xhci_controller *xhci) {
+  if (!xhci) return 0;
+  uint32_t expected = 0;
+  return __atomic_compare_exchange_n(&xhci->event_lock, &expected, 1u, 0,
+                                     __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+void xhci_event_unlock(struct xhci_controller *xhci) {
+  if (xhci) __atomic_store_n(&xhci->event_lock, 0u, __ATOMIC_RELEASE);
+}
+
+void xhci_event_pump(struct xhci_controller *xhci) {
+  if (!xhci_event_try_lock(xhci)) return;
+  xhci_event_pump_locked(xhci);
+  xhci_event_unlock(xhci);
 }

@@ -14,6 +14,9 @@
 #include "drivers/rtc/rtc.h"
 #include "auth/session.h"
 #include <stddef.h>
+#if defined(CAPYOS_FP_CONTEXT_SMOKE) && !defined(UNIT_TEST)
+#include "drivers/serial/serial_com1.h"
+#endif
 
 /* 2026-05-02: FD type discriminators (FD_TYPE_FREE/VFS/PIPE) and
  * pipe direction flags (FD_PIPE_FLAG_READ/WRITE) now centralised
@@ -177,6 +180,12 @@ int64_t sys_write(struct syscall_frame *f) {
     for (size_t i = 0; i < len; i++) {
       __asm__ volatile("outb %0, %1"
                        : : "a"((uint8_t)s[i]), "Nd"((uint16_t)0xE9));
+#ifdef CAPYOS_FP_CONTEXT_SMOKE
+      /* Diagnostic-only bridge: VMware has COM1 but no QEMU debugcon sink.
+       * The normal stdout contract stays unchanged. The smoke boot hook
+       * initializes this bounded, polling UART before entering ring 3. */
+      com1_putc(s[i]);
+#endif
     }
 #else
     /* Host unit tests cannot emit IO ports; behave like a sink so
@@ -427,7 +436,7 @@ static int64_t sys_get_session_lang(struct syscall_frame *f) {
  *   - parent NULL                          -> -1.
  *   - process_fork failed                  -> -1.
  *   - child has no main_thread or stack    -> destroy + -1. */
-static int64_t sys_fork(struct syscall_frame *f) {
+static int64_t sys_fork_fp(struct syscall_frame *f, const uint8_t *user_fp) {
   struct process *parent = process_current();
   if (!parent) return -1;
   struct process *child = process_fork(parent);
@@ -437,9 +446,15 @@ static int64_t sys_fork(struct syscall_frame *f) {
     return -1;
   }
   user_task_arm_for_fork(child->main_thread, f);
+  if (user_fp) {
+    for (size_t i = 0; i < sizeof(child->main_thread->context.fx_state); ++i)
+      child->main_thread->context.fx_state[i] = user_fp[i];
+  }
   scheduler_add(child->main_thread);
   return (int64_t)child->pid;
 }
+
+static int64_t sys_fork(struct syscall_frame *f) { return sys_fork_fp(f, NULL); }
 
 /* M5 phase D: SYS_PIPE.
  *
@@ -561,7 +576,7 @@ static int64_t sys_wait(struct syscall_frame *f) {
  *   - no current process       -> -1
  *   - lookup miss              -> -1
  *   - process_exec_replace fail-> -1 (rolled back; AS untouched) */
-static int64_t sys_exec(struct syscall_frame *f) {
+static int64_t sys_exec_fp(struct syscall_frame *f, uint8_t *user_fp) {
   const char *path = (const char *)f->rdi;
   /* (const char **)f->rsi is argv; intentionally unused this phase. */
   if (!path) return -1;
@@ -582,8 +597,19 @@ static int64_t sys_exec(struct syscall_frame *f) {
   f->rcx = proc->main_thread->context.rip;
   f->rsp = proc->main_thread->context.rsp;
   f->r11 = (uint64_t)USER_TASK_USER_RFLAGS;  /* IF=1, IOPL=0 */
+  if (user_fp) {
+    /* Replace the caller image restored by the assembly boundary, not the
+     * live kernel FP registers. Failed exec leaves that image untouched. */
+    for (size_t i = 0; i < 512u; ++i) user_fp[i] = 0;
+    user_fp[0] = 0x7f;
+    user_fp[1] = 0x03;
+    user_fp[24] = 0x80;
+    user_fp[25] = 0x1f;
+  }
   return 0;
 }
+
+static int64_t sys_exec(struct syscall_frame *f) { return sys_exec_fp(f, NULL); }
 
 void syscall_init(void) {
   for (int i = 0; i < SYSCALL_COUNT; i++) syscall_table[i] = NULL;
@@ -637,4 +663,15 @@ int64_t syscall_dispatch(struct syscall_frame *frame) {
   uint32_t num = (uint32_t)frame->rax;
   if (num >= SYSCALL_COUNT || !syscall_table[num]) return -1;
   return syscall_table[num](frame);
+}
+
+int64_t syscall_dispatch_with_fp(struct syscall_frame *frame, uint8_t *user_fp) {
+  /* Native entry supplies its stack-owned FXSAVE image. No task/global scratch
+   * pointer survives blocking, nested IRQs or a context switch. */
+  uint32_t num = (uint32_t)frame->rax;
+  if (num == SYS_FORK && syscall_table[num] == sys_fork)
+    return sys_fork_fp(frame, user_fp);
+  if (num == SYS_EXEC && syscall_table[num] == sys_exec)
+    return sys_exec_fp(frame, user_fp);
+  return syscall_dispatch(frame);
 }

@@ -4,6 +4,7 @@ int run_block_wrapper_tests(void);
 int run_partition_tests(void);
 int run_keyboard_layout_tests(void);
 int run_hda_core_tests(void);
+int run_ac97_core_tests(void);
 int run_grub_cfg_builder_tests(void);
 int run_boot_manifest_tests(void);
 int run_boot_writer_tests(void);
@@ -118,6 +119,7 @@ int test_process_destroy_run(void);
 int test_vmm_anon_regions_run(void);
 int test_service_runner_run(void);
 int test_context_switch_run(void);
+int test_context_switch_contract_run(void);
 int test_task_sleep_run(void);
 int test_syscall_msr_run(void);
 int test_fault_classify_run(void);
@@ -313,6 +315,7 @@ int main(int argc, char **argv) {
         failures += test_syscall_gfx_backend_run();
         failures += test_process_destroy_run();
         failures += test_context_switch_run();
+        failures += test_context_switch_contract_run();
         failures += test_task_sleep_run();
         printf("\n[gfx-lifecycle-selftest] %s (%d falha%s)\n",
                failures == 0 ? "OK" : "FALHOU", failures,
@@ -324,6 +327,7 @@ int main(int argc, char **argv) {
     failures += run_partition_tests();
     failures += run_keyboard_layout_tests();
     failures += run_hda_core_tests();
+    failures += run_ac97_core_tests();
     failures += run_grub_cfg_builder_tests();
     failures += run_boot_manifest_tests();
     failures += run_boot_writer_tests();
@@ -438,6 +442,7 @@ int main(int argc, char **argv) {
     failures += test_vmm_anon_regions_run();
     failures += test_service_runner_run();
     failures += test_context_switch_run();
+    failures += test_context_switch_contract_run();
     failures += test_task_sleep_run();
     failures += test_syscall_msr_run();
     failures += test_fault_classify_run();
