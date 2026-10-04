@@ -20,7 +20,7 @@
 ## Progresso global
 
 - **Release de audio em preparacao (2026-10-03):** candidato
-  `0.11.0+20261003`, CapyUI `2.27.0`, CapyCodecs `0.1.1`; som de boot, splash
+  `0.11.1+20261004`, CapyUI `2.27.0`, CapyCodecs `0.1.1`; som de boot, splash
   com atualizacao parcial e tres musicas OGG. Corrigida imagem EFI pequena que
   produzia `Volume Corrupt`; instalacao Full, desktop e persistencia passaram
   em QEMU e VMware. Publicacao assinada e validacao do artefato final pendentes.

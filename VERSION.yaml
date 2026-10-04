@@ -1,5 +1,5 @@
 meta:
-  generated: 2026-10-03
+  generated: 2026-10-04
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
@@ -1026,10 +1026,10 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.11.0
-    extended: 0.11.0+20261003
+    current: 0.11.1
+    extended: 0.11.1+20261004
     stability: production
-    current_summary: "Candidato 0.11.0: audio HDA/AC97/USB, Media Player WAV/OGG, som de boot com splash e tres musicas predefinidas; imagem EFI de 16 MiB com capacidade validada. Publicacao assinada e aceite dos bytes finais pendentes."
+    current_summary: "Candidato 0.11.1: audio HDA/AC97/USB, som de boot e musicas OGG com orcamento compativel com o atualizador de 8 MiB; WAVs originais preservados. Publicacao assinada e aceite dos bytes finais pendentes."
     history:
       - version: 0.10.0+20260904
         date: 2026-09-04

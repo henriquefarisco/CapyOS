@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Fail-closed asset preparation, without modifying the supplied recordings."""
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 import wave
 
-from prepare_builtin_sounds import prepare
+from prepare_builtin_sounds import MUSIC_VORBIS_QUALITY, SOUNDS, prepare
 
 
 class PrepareSoundsTests(unittest.TestCase):
@@ -43,6 +44,34 @@ class PrepareSoundsTests(unittest.TestCase):
                     run.assert_not_called()
                 self.assertEqual(path.read_bytes(), original)
                 self.assertFalse((self.output / 'manifest.json').exists())
+
+    def test_music_quality_budget_preserves_originals_and_boot_pcm(self):
+        boot = self.source_wav()
+        original = boot.read_bytes()
+        for name in SOUNDS:
+            if name != boot.name:
+                shutil.copyfile(boot, self.source / name)
+
+        def encoder(command, **kwargs):
+            source = Path(command[command.index('-i') + 1])
+            target = Path(command[-1])
+            if '-ac' in command:
+                self.assertEqual(command[command.index('-ac') + 1], '2')
+            if target.suffix == '.ogg':
+                self.assertEqual(command[command.index('-q:a') + 1], '0')
+                target.write_bytes(b'Ogg fixture')
+            else:
+                shutil.copyfile(source, target)
+
+        with patch('prepare_builtin_sounds.subprocess.run', side_effect=encoder) as run:
+            records = prepare(self.source, self.output)
+        self.assertEqual(MUSIC_VORBIS_QUALITY, '0')
+        self.assertEqual(run.call_count, 7)
+        self.assertEqual(len(records), 4)
+        self.assertTrue(all(record['frames'] == 48 for record in records))
+        for name in SOUNDS:
+            self.assertEqual((self.source / name).read_bytes(), original)
+        self.assertEqual((self.output / 'boot.wav').read_bytes(), original)
 
 
 if __name__ == '__main__':
