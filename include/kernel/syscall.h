@@ -30,6 +30,7 @@ typedef int64_t (*syscall_handler_fn)(struct syscall_frame *frame);
 void syscall_init(void);
 void syscall_register(uint32_t num, syscall_handler_fn handler);
 int64_t syscall_dispatch(struct syscall_frame *frame);
+int64_t syscall_dispatch_with_fp(struct syscall_frame *frame, uint8_t *user_fp);
 
 /* 2026-05-02: sys_read / sys_write are exposed (non-static) so that
  * host tests can drive them directly with a synthetic frame and a

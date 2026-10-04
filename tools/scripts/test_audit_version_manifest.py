@@ -30,6 +30,7 @@ def version_yaml(*, token: str = TOKEN, url: str = CANONICAL_URL) -> str:
         "modules_index:\n"
         f'  token: "{token}"\n'
         "  epoch: 1\n"
+        "  revision: 1\n"
         f'  url: "{url}"\n'
     )
 
@@ -52,6 +53,21 @@ def makefile(url: str = CANONICAL_URL) -> str:
 
 
 class ModulesIndexAuditTests(unittest.TestCase):
+    def test_revision_preserves_legacy_and_creates_new_snapshot(self):
+        self.assertEqual(audit.canonical_modules_index_url(TOKEN, 1), CANONICAL_URL)
+        revised = audit.canonical_modules_index_url(TOKEN, 2)
+        self.assertIn("modules-capyos-base-v3-r2/", revised)
+        self.assertEqual([], audit.audit_modules_index_contract(
+            version_yaml(url=revised).replace("revision: 1", "revision: 2"),
+            modules_c(revised), makefile(revised)))
+        self.assertTrue(audit.audit_modules_index_contract(
+            version_yaml().replace("revision: 1", "revision: 2"), modules_c(), makefile()))
+
+    def test_invalid_revision_rejected(self):
+        for revision in (0, -1, 0x100000000, True, "2"):
+            with self.subTest(revision=revision), self.assertRaises(RuntimeError):
+                audit.canonical_modules_index_url(TOKEN, revision)
+
     def assert_contract_error(
         self, expected: str, yaml_text: str, c_text: str, make_text: str
     ) -> None:

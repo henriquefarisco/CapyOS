@@ -719,6 +719,27 @@ static void test_create_resets_capture_mouse_on_slot_reuse(void) {
   shutdown_fixture();
 }
 
+static unsigned service_calls;
+static void service_probe(void) { ++service_calls; }
+static void test_service_hook(void) {
+  reset_fixture();
+  service_calls = 0;
+  compositor_set_service_hook(service_probe);
+  compositor_render();
+  TEST("render services bounded work between scanline batches");
+  if (service_calls >= 12u) PASS(); else FAIL("no scanline servicing");
+  unsigned before = service_calls;
+  compositor_render();
+  TEST("clean frame does not perform service work");
+  if (service_calls == before) PASS(); else FAIL("serviced idle frame");
+  shutdown_fixture();
+  reset_fixture();
+  compositor_render();
+  TEST("shutdown clears service hook before next session");
+  if (service_calls == before) PASS(); else FAIL("stale hook after shutdown");
+  shutdown_fixture();
+}
+
 int test_compositor_events_run(void) {
   printf("[test_compositor_events]\n");
   tests_run = 0;
@@ -739,6 +760,7 @@ int test_compositor_events_run(void) {
   test_visibility_blur_events();
   test_destroy_events();
   test_create_resets_capture_mouse_on_slot_reuse();
+  test_service_hook();
   printf("  -> %d/%d passed\n", tests_passed, tests_run);
   return tests_run - tests_passed;
 }

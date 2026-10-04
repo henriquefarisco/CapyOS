@@ -28,9 +28,8 @@ _start:
     # as its first arg per the System V x86_64 ABI. Tasks that did
     # NOT come through the synth-frame path see RAX=0 (a fresh
     # task created via task_create has all GP regs zeroed; an
-    # iretq-from-boot path leaves RAX as whatever it was at the
-    # iretq site, but the existing kernel_boot_run_embedded_hello
-    # zeroes argc/argv setup), so main() sees rank=0 by default
+    # direct iretq-from-boot path explicitly clears RAX in
+    # enter_user_mode), so main() sees rank=0 by default
     # which keeps the existing single-task hello path unchanged.
     movq %rax, %rdi
 

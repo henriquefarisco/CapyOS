@@ -1,15 +1,9 @@
 /*
  * Tests for the context_switch seam (M4 phase 2).
  *
- * Two layers are exercised:
- *
- *   1. The C/asm contract: sizeof(struct task_context) and the offset of
- *      every field must match the constants hard-coded in
- *      src/arch/x86_64/cpu/context_switch.S. A drift in either side
- *      would silently corrupt every preempted task; locking the
- *      contract here makes it impossible to merge such a regression.
- *
- *   2. The scheduler-side seam: schedule() is private to scheduler.c
+ * The C/asm layout and instruction-order contract is tested separately in
+ * test_context_switch_contract.c. This file exercises the scheduler seam:
+ *      schedule() is private to scheduler.c
  *      but is invoked indirectly through scheduler_block_current() and
  *      scheduler_sleep_current(), both of which always call schedule()
  *      regardless of sched_running. Tests use these entry points to
@@ -63,141 +57,6 @@ static void reset_world(void) {
     stub_context_switch_log_clear();
 }
 
-/* -------------------- 1. Layout invariants ----------------------------- */
-
-static void test_layout_locks_asm_contract(void) {
-    TEST("sizeof(struct task_context) == 0x50 (10 x 8 bytes)");
-    if (sizeof(struct task_context) == 0x50u) PASS();
-    else FAIL("size drift between C and asm");
-
-    TEST("offsetof(rsp) == 0x00");
-    if (offsetof(struct task_context, rsp) == 0x00u) PASS();
-    else FAIL("rsp offset drift");
-
-    TEST("offsetof(rbp) == 0x08");
-    if (offsetof(struct task_context, rbp) == 0x08u) PASS();
-    else FAIL("rbp offset drift");
-
-    TEST("offsetof(rbx) == 0x10");
-    if (offsetof(struct task_context, rbx) == 0x10u) PASS();
-    else FAIL("rbx offset drift");
-
-    TEST("offsetof(r12) == 0x18");
-    if (offsetof(struct task_context, r12) == 0x18u) PASS();
-    else FAIL("r12 offset drift");
-
-    TEST("offsetof(r13) == 0x20");
-    if (offsetof(struct task_context, r13) == 0x20u) PASS();
-    else FAIL("r13 offset drift");
-
-    TEST("offsetof(r14) == 0x28");
-    if (offsetof(struct task_context, r14) == 0x28u) PASS();
-    else FAIL("r14 offset drift");
-
-    TEST("offsetof(r15) == 0x30");
-    if (offsetof(struct task_context, r15) == 0x30u) PASS();
-    else FAIL("r15 offset drift");
-
-    TEST("offsetof(rip) == 0x38");
-    if (offsetof(struct task_context, rip) == 0x38u) PASS();
-    else FAIL("rip offset drift");
-
-    TEST("offsetof(rflags) == 0x40");
-    if (offsetof(struct task_context, rflags) == 0x40u) PASS();
-    else FAIL("rflags offset drift");
-
-    TEST("offsetof(cr3) == 0x48");
-    if (offsetof(struct task_context, cr3) == 0x48u) PASS();
-    else FAIL("cr3 offset drift");
-}
-
-/* The host scheduler uses stub_context_switch.c, so runtime C tests alone
- * cannot catch an instruction-order regression in the real assembly.  Lock
- * the source contract that matters here: original RFLAGS must be pushed
- * before cli, then popped and committed to old->rflags before any swap. */
-static void test_asm_captures_rflags_before_cli(void) {
-    char source[16384];
-    FILE *f = fopen("src/arch/x86_64/cpu/context_switch.S", "rb");
-    if (!f) f = fopen("../../src/arch/x86_64/cpu/context_switch.S", "rb");
-
-    TEST("context_switch asm source is available for contract check");
-    if (!f) {
-        FAIL("cannot open context_switch.S");
-        return;
-    }
-    size_t n = fread(source, 1, sizeof(source) - 1u, f);
-    fclose(f);
-    source[n] = '\0';
-    PASS();
-
-    const char *entry = strstr(source, "\ncontext_switch:\n");
-    const char *push = entry ? strstr(entry, "\n    pushfq\n") : NULL;
-    const char *cli = entry ? strstr(entry, "\n    cli\n") : NULL;
-    const char *pop = entry ? strstr(entry, "\n    popq %rax\n") : NULL;
-    const char *save = entry ? strstr(entry,
-        "\n    movq %rax, 0x40(%rdi)\n") : NULL;
-    const char *first_register_save = entry ? strstr(entry,
-        "\n    movq %rsp, 0x00(%rdi)\n") : NULL;
-
-    TEST("context_switch captures RFLAGS before cli and before context swap");
-    if (entry && push && cli && pop && save && first_register_save &&
-        push < cli && cli < pop && pop < save && save < first_register_save) {
-        PASS();
-    } else {
-        FAIL("expected pushfq -> cli -> popq -> old.rflags ordering");
-    }
-
-    const char *frame_rsp_load = entry ?
-        strstr(entry, "\n    movq 0x00(%rsi), %rdx\n") : NULL;
-    const char *frame_ss = entry ? strstr(entry, "\n    pushq $0x10\n") : NULL;
-    const char *frame_rsp = entry ? strstr(entry, "\n    pushq %rdx\n") : NULL;
-    const char *frame_flags = entry ? strstr(entry,
-        "\n    pushq 0x40(%rsi)\n") : NULL;
-    const char *frame_cs = entry ? strstr(entry,
-        "\n    pushq $0x08\n") : NULL;
-    const char *frame_rip = entry ? strstr(entry,
-        "\n    pushq 0x38(%rsi)\n") : NULL;
-    const char *iret = entry ? strstr(entry, "\n    iretq\n") : NULL;
-    const char *resume = entry ? strstr(entry, "\n1:\n") : NULL;
-    const char *early_popfq = entry ? strstr(entry, "\n    popfq\n") : NULL;
-
-    TEST("context_switch restores full AMD64 frame and IF atomically");
-    if (frame_rsp_load && frame_ss && frame_rsp && frame_flags && frame_cs &&
-        frame_rip && iret && resume && frame_rsp_load < frame_ss &&
-        frame_ss < frame_rsp && frame_rsp < frame_flags &&
-        frame_flags < frame_cs && frame_cs < frame_rip &&
-        frame_rip < iret && iret < resume &&
-        (!early_popfq || early_popfq > resume)) {
-        PASS();
-    } else {
-        FAIL("IRETQ needs SS/RSP/RFLAGS/CS/RIP in reverse push order");
-    }
-
-    const char *first = strstr(source, "\ncontext_switch_into_first:\n");
-    const char *first_rsp_load = first ?
-        strstr(first, "\n    movq 0x00(%rdi), %rdx\n") : NULL;
-    const char *first_ss = first ? strstr(first, "\n    pushq $0x10\n") : NULL;
-    const char *first_rsp = first ? strstr(first, "\n    pushq %rdx\n") : NULL;
-    const char *first_flags = first ? strstr(first,
-        "\n    pushq 0x40(%rdi)\n") : NULL;
-    const char *first_cs = first ? strstr(first,
-        "\n    pushq $0x08\n") : NULL;
-    const char *first_rip = first ? strstr(first,
-        "\n    pushq 0x38(%rdi)\n") : NULL;
-    const char *first_iret = first ? strstr(first, "\n    iretq\n") : NULL;
-    const char *first_popfq = first ? strstr(first, "\n    popfq\n") : NULL;
-
-    TEST("first task dispatch also restores the full AMD64 frame");
-    if (first_rsp_load && first_ss && first_rsp && first_flags && first_cs &&
-        first_rip && first_iret && first_rsp_load < first_ss &&
-        first_ss < first_rsp && first_rsp < first_flags &&
-        first_flags < first_cs && first_cs < first_rip &&
-        first_rip < first_iret && first_popfq == NULL) {
-        PASS();
-    } else {
-        FAIL("first dispatch must build all five IRETQ fields");
-    }
-}
 
 /* -------------------- 2. scheduler_init / pick_next -------------------- */
 
@@ -867,8 +726,6 @@ int test_context_switch_run(void) {
     printf("[test_context_switch]\n");
     tests_run = 0;
     tests_passed = 0;
-    test_layout_locks_asm_contract();
-    test_asm_captures_rflags_before_cli();
     test_init_resets_stats();
     test_pick_next_priority();
     test_pick_next_cooperative();

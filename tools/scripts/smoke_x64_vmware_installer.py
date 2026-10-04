@@ -25,8 +25,9 @@ from smoke_x64_auth import (
     login,
     maybe_run_first_boot_setup,
     module_install_completed,
+    require_desktop_after_login,
 )
-from smoke_x64_boot import smoke_first_boot, smoke_second_boot
+from smoke_x64_boot import require_builtin_music, smoke_first_boot, smoke_second_boot
 from smoke_x64_helpers import ensure_shell_after_login
 from smoke_x64_vmware_installer_contract import (
     RECOVERY_KEY_RE,
@@ -369,9 +370,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default="vmware-installer-pass")
     parser.add_argument("--module-profile", choices=("basic", "full", "custom"), default="basic")
     parser.add_argument("--require-module-install", action="store_true")
+    parser.add_argument("--require-desktop-after-login", action="store_true")
+    parser.add_argument("--require-builtin-music", action="store_true")
     parser.add_argument("--keep-vm", action="store_true")
     parser.add_argument("--verbose", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.module_profile == "basic" and (args.require_desktop_after_login or args.require_module_install):
+        parser.error("desktop/module acceptance requires --module-profile full or custom")
+    return args
 
 
 def run_checked(command: list[str]) -> None:
@@ -554,7 +560,10 @@ def main() -> int:
             )
             if setup_result != "rebooted":
                 mode = login(boot1, args.step_timeout, args.user, args.password, allow_desktop=True)
+                require_desktop_after_login(mode, args.require_desktop_after_login)
                 ensure_shell_after_login(boot1, args.step_timeout, mode)
+                if args.require_builtin_music:
+                    require_builtin_music(boot1, args.step_timeout)
                 smoke_first_boot(boot1, args.step_timeout, args.user, args.password, "persist-ok")
                 marker_written = True
         finally:
@@ -575,7 +584,10 @@ def main() -> int:
                 if setup_result == "rebooted":
                     raise RuntimeError("VMware first boot rebooted twice before persistence marker")
                 mode = login(marker_session, args.step_timeout, args.user, args.password, allow_desktop=True)
+                require_desktop_after_login(mode, args.require_desktop_after_login)
                 ensure_shell_after_login(marker_session, args.step_timeout, mode)
+                if args.require_builtin_music:
+                    require_builtin_music(marker_session, args.step_timeout)
                 smoke_first_boot(marker_session, args.step_timeout, args.user, args.password, "persist-ok")
             finally:
                 marker_session.stop()
@@ -584,7 +596,10 @@ def main() -> int:
         boot2 = start_console(vmrun, vmx, pipe_name, boot2_log, secrets=(recovery_key,), verbose=args.verbose)
         try:
             mode = login(boot2, args.step_timeout, args.user, args.password, allow_desktop=True)
+            require_desktop_after_login(mode, args.require_desktop_after_login)
             ensure_shell_after_login(boot2, args.step_timeout, mode)
+            if args.require_builtin_music:
+                require_builtin_music(boot2, args.step_timeout)
             smoke_second_boot(
                 boot2,
                 args.step_timeout,

@@ -13,6 +13,7 @@
 #   0x38: rip
 #   0x40: rflags
 #   0x48: cr3
+#   0x50: 512-byte, 16-byte-aligned FXSAVE area
 #
 # IRQ-safety contract (M4 phase 2):
 #   - The function snapshots RFLAGS before disabling interrupts.  A
@@ -50,6 +51,11 @@ context_switch:
     popq %rax
     movq %rax, 0x40(%rdi)
 
+    # Save the task's live kernel FP state. Syscall/interrupt dispatch keeps
+    # its caller's original FP image on the owning kernel stack and restores
+    # it when that suspended boundary returns. CR0.TS/EM are cleared at entry64.
+    fxsave64 0x50(%rdi)
+
     # Save callee-saved registers into old context
     movq %rsp, 0x00(%rdi)
     movq %rbp, 0x08(%rdi)
@@ -72,6 +78,10 @@ context_switch:
     je .Lno_cr3_switch
     movq %rax, %cr3
 .Lno_cr3_switch:
+
+    # Publish the selected task's x87/MMX/SSE state before its registers and
+    # stack become live. The area is aligned by struct task_context.
+    fxrstor64 0x50(%rsi)
 
     # Restore callee-saved registers from new context
     movq 0x10(%rsi), %rbx
@@ -135,6 +145,10 @@ context_switch_into_first:
     je .Lcsif_no_cr3
     movq %rax, %cr3
 .Lcsif_no_cr3:
+
+    # Fresh contexts contain the architectural reset image; resumed contexts
+    # contain their most recently saved task-local state.
+    fxrstor64 0x50(%rdi)
 
     # Restore callee-saved regs from new context.
     movq 0x10(%rdi), %rbx

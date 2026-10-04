@@ -6,7 +6,7 @@
  * src/memory/vmm_regions.c and is just kmalloc-backed linked-list
  * manipulation, so the test pulls in the real production code rather
  * than a stub. The actual page-fault servicing in
- * src/memory/vmm.c::vmm_handle_page_fault uses x86_64 inline asm and
+ * src/memory/vmm_fault.c::vmm_handle_page_fault uses x86_64 inline asm and
  * is not exercised here; that path is validated by the QEMU smoke
  * tests once a userland program triggers a real demand fault.
  *

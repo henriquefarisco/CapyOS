@@ -31,6 +31,9 @@
 #define PCI_CLASS_STORAGE    0x01
 #define PCI_SUBCLASS_SATA    0x06  /* SATA controller */
 #define PCI_SUBCLASS_NVME    0x08  /* NVMe controller */
+#define PCI_CLASS_MULTIMEDIA 0x04
+#define PCI_SUBCLASS_AUDIO   0x01  /* legacy AC'97-compatible audio */
+#define PCI_SUBCLASS_HDA     0x03  /* High Definition Audio */
 
 /* Maximum scan limits */
 #define PCI_MAX_BUS  256

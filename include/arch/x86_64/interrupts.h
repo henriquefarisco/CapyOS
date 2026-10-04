@@ -7,6 +7,9 @@ void gdt_init(void);
 void idt_install(void);
 void irq_install_handler(int irq, void (*handler)(void));
 void irq_uninstall_handler(int irq);
+/* Install only with local IRQs disabled. Cleared on handler replacement.
+ * Timer scheduling belongs here, after the device handler and PIC EOI. */
+void x64_irq_set_after_eoi(int irq, void (*handler)(void));
 void pic_remap(uint8_t master_offset, uint8_t slave_offset);
 void pic_set_mask(uint8_t master_mask, uint8_t slave_mask);
 void x64_irq_unmask(int irq);

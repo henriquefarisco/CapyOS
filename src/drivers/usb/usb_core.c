@@ -2,6 +2,8 @@
 #include "drivers/usb/usb_hid.h"
 #include "drivers/usb/xhci.h"
 #include "kernel/log/klog.h"
+#include "kernel/scheduler.h"
+#include "drivers/serial/serial_com1.h"
 #include <stddef.h>
 
 static struct usb_device_info g_devices[USB_MAX_DEVICES];
@@ -66,7 +68,7 @@ static int usb_hid_set_boot_protocol(uint8_t slot_id, uint8_t interface_number) 
 static int usb_read_and_parse_descriptors(struct usb_device_info *dev) {
   uint8_t device_desc[18];
   uint8_t config_head[9];
-  uint8_t config_desc[256];
+  uint8_t config_desc[USB_AUDIO_CONFIG_MAX];
   uint16_t total;
   struct usb_device_descriptor parsed_descriptor;
   struct usb_device_info parsed_dev;
@@ -76,6 +78,10 @@ static int usb_read_and_parse_descriptors(struct usb_device_info *dev) {
   usb_memset(config_desc, 0, sizeof(config_desc));
   usb_memset(&parsed_descriptor, 0, sizeof(parsed_descriptor));
   parsed_dev = *dev;
+  if (usb_get_descriptor(dev->slot_id, USB_DESC_TYPE_DEVICE, 0, device_desc, 8) != 0 ||
+      device_desc[0] != sizeof(device_desc) || device_desc[1] != USB_DESC_TYPE_DEVICE ||
+      xhci_update_ep0_packet_size(&g_xhci, dev->slot_id, device_desc[7]) != 0)
+    return -1;
   if (usb_get_descriptor(dev->slot_id, USB_DESC_TYPE_DEVICE, 0, device_desc,
                          sizeof(device_desc)) != 0) {
     return -1;
@@ -108,6 +114,13 @@ static int usb_read_and_parse_descriptors(struct usb_device_info *dev) {
     parsed_dev.class_code = parsed_descriptor.bDeviceClass;
     parsed_dev.subclass = parsed_descriptor.bDeviceSubClass;
     parsed_dev.protocol = parsed_descriptor.bDeviceProtocol;
+  }
+  if (parsed_dev.audio_output.alternate) {
+    int port_status = xhci_port_get_status(&g_xhci, dev->port);
+    if (port_status < 0 || xhci_port_speed_from_status((uint32_t)port_status) != 1u)
+      parsed_dev.audio_output = (struct usb_audio_format){0};
+    else
+      com1_puts("[usb-audio] UAC1 48k stereo S16 discovered\n");
   }
   *dev = parsed_dev;
   return 0;
@@ -161,7 +174,8 @@ static int usb_configure_hid_interrupt_endpoint(struct usb_device_info *dev) {
   return 0;
 }
 
-void usb_core_init(void) {
+static void usb_core_init_impl(void) {
+  if (g_usb_initialized) return;
   usb_memset(g_devices, 0, sizeof(g_devices));
   usb_memset(&g_xhci, 0, sizeof(g_xhci));
   g_device_count = 0;
@@ -220,7 +234,7 @@ static void usb_release_stale_slots(const struct usb_device_info *previous,
   }
 }
 
-int usb_enumerate_devices(void) {
+static int usb_enumerate_devices_impl(void) {
   if (!g_usb_initialized) return 0;
 
   int found = 0;
@@ -236,7 +250,11 @@ int usb_enumerate_devices(void) {
     int status = xhci_port_get_status(&g_xhci, port);
     uint8_t slot_id = 0;
     struct usb_device_info *dev = NULL;
-    if (!(status & 0x01)) continue; /* no device connected */
+    if (status < 0) continue;
+    if (!(status & XHCI_PORTSC_CCS)) {
+      if (status & XHCI_PORTSC_CSC) (void)xhci_port_ack_csc(&g_xhci, port);
+      continue;
+    }
     dev = &g_devices[found];
     if (!(status & XHCI_PORTSC_CSC) &&
         usb_find_existing_addressed_device(previous, previous_count, port, dev) == 0) {
@@ -272,6 +290,7 @@ int usb_enumerate_devices(void) {
     }
     found++;
     klog_dec(KLOG_INFO, "[usb] XHCI addressed slot ", slot_id);
+    (void)xhci_port_ack_csc(&g_xhci, port);
   }
 
   g_device_count = found;
@@ -300,7 +319,7 @@ int usb_device_is_hid_mouse(const struct usb_device_info *dev) {
           dev->protocol == USB_PROTOCOL_MOUSE) ? 1 : dev->is_mouse;
 }
 
-void usb_poll_all(void) {
+static void usb_poll_all_impl(void) {
   if (!g_usb_initialized) return;
   /* P1-F fix (2026-05-25): defense-in-depth bound. `g_device_count`
    * is normally capped at `USB_MAX_DEVICES` by `usb_enumerate_devices`,
@@ -355,9 +374,9 @@ int usb_hid_send_led_report(uint8_t slot_id, uint8_t interface_number,
 
 /* Etapa 3 — Slice 3D §15.1 fix: detect Port Status Change on each
  * root-hub port and trigger re-enumeration. CSC is RW1C; we clear it
- * via `xhci_port_ack_csc` BEFORE calling `usb_enumerate_devices` so
- * subsequent polls don't re-fire on the same event. */
-void usb_hotplug_check(void) {
+ * after stale-slot detection/enumeration so a replacement is not mistaken
+ * for the previous device on the same port. */
+static void usb_hotplug_check_impl(void) {
   int any_change = 0;
   if (!g_usb_initialized) return;
   for (uint8_t port = 0; port < g_xhci.max_ports; port++) {
@@ -365,7 +384,6 @@ void usb_hotplug_check(void) {
     if (status < 0) continue;
     if ((uint32_t)status & XHCI_PORTSC_CSC) {
       klog_dec(KLOG_INFO, "[usb] Hotplug event on port ", port);
-      (void)xhci_port_ack_csc(&g_xhci, port);
       any_change = 1;
     }
   }
@@ -373,6 +391,34 @@ void usb_hotplug_check(void) {
     /* Single re-enumeration handles all changed ports in one pass; the
      * inner loop in usb_enumerate_devices iterates all ports and
      * `usb_release_stale_slots` releases departed devices. */
-    (void)usb_enumerate_devices();
+    (void)usb_enumerate_devices_impl();
   }
+}
+
+/* The current scheduler dispatches USB/audio tasks on the BSP. Keep task-side
+ * commands/lifetime transitions together; IRQ event pumping has its own gate.
+ * These paths never yield or sleep while the task-dispatch guard is held. */
+void usb_core_init(void) {
+  scheduler_preempt_disable();
+  usb_core_init_impl();
+  scheduler_preempt_enable();
+}
+int usb_enumerate_devices(void) {
+  scheduler_preempt_disable();
+  int result = usb_enumerate_devices_impl();
+  scheduler_preempt_enable();
+  return result;
+}
+void usb_poll_all(void) {
+  scheduler_preempt_disable();
+  usb_poll_all_impl();
+  scheduler_preempt_enable();
+}
+void usb_hotplug_check(void) {
+  scheduler_preempt_disable();
+  usb_hotplug_check_impl();
+  scheduler_preempt_enable();
+}
+struct xhci_controller *usb_core_controller(void) {
+  return g_usb_initialized ? &g_xhci : NULL;
 }

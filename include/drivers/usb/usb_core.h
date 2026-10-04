@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "drivers/usb/usb_audio.h"
 
 #define USB_MAX_DEVICES 16
 #define USB_MAX_ENDPOINTS 8
@@ -98,9 +99,14 @@ struct usb_device_info {
   uint8_t protocol;
   int is_keyboard;
   int is_mouse;
+  struct usb_audio_format audio_output;
 };
 
 void usb_core_init(void);
+/* Internal driver access: task caller must guard BSP dispatch throughout its
+ * controller commands. IRQ callers use the xHCI event gate, never commands. */
+struct xhci_controller;
+struct xhci_controller *usb_core_controller(void);
 int usb_enumerate_devices(void);
 int usb_get_device_count(void);
 int usb_get_device(int index, struct usb_device_info *out);

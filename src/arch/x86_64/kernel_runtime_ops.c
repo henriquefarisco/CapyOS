@@ -20,6 +20,7 @@
 #include "arch/x86_64/storage_runtime.h"
 #include "auth/session.h"
 #include "auth/user.h"
+#include "audio/builtin_music.h"
 #include "boot/boot_metrics.h"
 #include "boot/handoff.h"
 #include "core/system_init.h"
@@ -426,6 +427,11 @@ int prepare_shell_runtime(void) {
   kernel_shell_runtime_ops_init(&ops);
   dbg_runtime_puts("[pr] begin\n");
   rc = x64_kernel_prepare_shell_runtime(&state, &io, &ops);
+  if (rc == 0 && g_shell_persistent_storage) {
+    int music_rc = builtin_music_install();
+    if (music_rc == 0) music_rc = kernel_sync_root_volume();
+    dbg_runtime_puts(music_rc == 0 ? "[music] preset ready\n" : "[music] preset failed; retry next boot\n");
+  }
   dbg_runtime_puts(rc == 0 ? "[pr] ok\n" : "[pr] fail\n");
   return rc;
 }

@@ -17,18 +17,13 @@ for repo in CapyAgent CapyAI CapyBrowser CapyCodecs CapyUI CapyLang CapyBenchmar
   [[ -f "$workspace/$repo/Makefile" ]] || fail "$repo checkout is missing"
 done
 
-capyai_version="$(tr -d '\r\n' < "$workspace/CapyAI/VERSION")"
-[[ -n "$capyai_version" ]] || fail "CapyAI VERSION is empty"
-
-make -C "$workspace/CapyAgent" package-clean package
-make -C "$workspace/CapyAI" package-clean package
-make -C "$workspace/CapyBrowser" package-clean
-make -C "$workspace/CapyBrowser" package STAGE=text
-make -C "$workspace/CapyBrowser" package STAGE=core
-make -C "$workspace/CapyCodecs" package-clean package
-make -C "$workspace/CapyUI" package-clean package
-make -C "$workspace/CapyLang" package-clean package
-make -C "$workspace/CapyBenchmark" package-clean package
+mkdir -p "$repo_root/build"
+staging_parent="$(mktemp -d "$repo_root/build/release-module-inputs.XXXXXX")"
+python3 "$script_dir/stage_published_modules.py" \
+  --output "$staging_parent/workspace" --release-tag "$release_tag"
+workspace="$staging_parent/workspace"
+capyai_version="$(sed -n 's/^version=//p' "$workspace/CapyAI/build/capypkg/org.capyos.ai.assistant.manifest")"
+[[ -n "$capyai_version" ]] || fail "CapyAI version is empty"
 
 mkdir -p "$repo_root/build/capypkg"
 

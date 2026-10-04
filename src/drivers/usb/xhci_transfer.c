@@ -25,15 +25,15 @@ static int xhci_wait_transfer_completion(struct xhci_controller *xhci,
     return -1;
   }
   for (int i = 0; i < 500000; i++) {
-    if (xhci->ep0_pending[slot_id].valid) {
+    if (__atomic_load_n(&xhci->ep0_pending[slot_id].valid, __ATOMIC_ACQUIRE)) {
       uint32_t cc = xhci->ep0_pending[slot_id].cc;
-      xhci->ep0_pending[slot_id].valid = 0u;
+      __atomic_store_n(&xhci->ep0_pending[slot_id].valid, 0u, __ATOMIC_RELEASE);
       return (cc == XHCI_TRB_CC_SUCCESS) ? 0 : -2;
     }
     xhci_event_pump(xhci);
-    if (xhci->ep0_pending[slot_id].valid) {
+    if (__atomic_load_n(&xhci->ep0_pending[slot_id].valid, __ATOMIC_ACQUIRE)) {
       uint32_t cc = xhci->ep0_pending[slot_id].cc;
-      xhci->ep0_pending[slot_id].valid = 0u;
+      __atomic_store_n(&xhci->ep0_pending[slot_id].valid, 0u, __ATOMIC_RELEASE);
       return (cc == XHCI_TRB_CC_SUCCESS) ? 0 : -2;
     }
     cpu_relax();
@@ -77,8 +77,30 @@ int xhci_control_transfer(struct xhci_controller *xhci, uint8_t slot_id,
   volatile uint32_t *db;
   if (!xhci || !xhci->initialized || slot_id == 0 || slot_id > xhci->max_slots ||
       !setup || !xhci->ep0_rings[slot_id] || !xhci->db_base ||
-      (!buf && len != 0)) {
+      (!buf && len != 0) || len > 4096u || setup->wLength != len ||
+      (len && ((setup->bmRequestType >> 7) != !!dir_in))) {
     return -1;
+  }
+  uint32_t expected = 0;
+  if (!__atomic_compare_exchange_n(&xhci->ep0_busy[slot_id], &expected, 1u,
+                                   0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    return -4;
+  if (xhci->ep0_failed[slot_id] || !xhci->ep0_rings[slot_id]) {
+    __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
+    return -4;
+  }
+  /* Never hand caller/stack memory to DMA. A timed-out endpoint retains this
+   * page and cannot reuse it until successful slot disable ends ownership. */
+  if (len && !xhci->ep0_buffers[slot_id]) {
+    xhci->ep0_buffers[slot_id] = kmalloc_aligned(4096u, 4096u);
+    if (!xhci->ep0_buffers[slot_id]) {
+      __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
+      return -5;
+    }
+  }
+  if (len) {
+    if (dir_in) xhci_memzero(xhci->ep0_buffers[slot_id], len);
+    else xhci_memcpy(xhci->ep0_buffers[slot_id], buf, len);
   }
   trb.param = xhci_setup_packet_param(setup);
   trb.status = 8u;
@@ -86,7 +108,7 @@ int xhci_control_transfer(struct xhci_controller *xhci, uint8_t slot_id,
   if (len != 0) trb.control |= (uint32_t)((dir_in ? 3u : 2u) << 16);
   xhci_queue_ep0_trb(xhci, slot_id, &trb);
   if (len != 0) {
-    trb.param = (uint64_t)(uintptr_t)buf;
+    trb.param = (uint64_t)(uintptr_t)xhci->ep0_buffers[slot_id];
     trb.status = len;
     trb.control = (TRB_TYPE_DATA << 10);
     if (dir_in) trb.control |= 1u << 16;
@@ -98,8 +120,69 @@ int xhci_control_transfer(struct xhci_controller *xhci, uint8_t slot_id,
   if (!dir_in) trb.control |= 1u << 16;
   xhci_queue_ep0_trb(xhci, slot_id, &trb);
   db = (volatile uint32_t *)(xhci->db_base + ((uint32_t)slot_id * 4u));
+  __atomic_thread_fence(__ATOMIC_RELEASE);
   mmio_write32(db, 1u);
-  return xhci_wait_transfer_completion(xhci, slot_id, 1u);
+  int rc = xhci_wait_transfer_completion(xhci, slot_id, 1u);
+  if (rc != 0) xhci->ep0_failed[slot_id] = 1u;
+  else if (dir_in && len) {
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    xhci_memcpy(buf, xhci->ep0_buffers[slot_id], len);
+  }
+  __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
+  return rc;
+}
+
+int xhci_update_ep0_packet_size(struct xhci_controller *xhci, uint8_t slot_id,
+                                uint8_t descriptor_size) {
+  if (!xhci || !xhci->initialized || !slot_id || slot_id > xhci->max_slots ||
+      !xhci->device_contexts[slot_id] || !xhci->ep0_rings[slot_id] ||
+      !xhci->cmd_ring || !xhci->db_base ||
+      (xhci->context_size != 32u && xhci->context_size != 64u)) return -1;
+  uint32_t expected = 0;
+  if (!__atomic_compare_exchange_n(&xhci->ep0_busy[slot_id], &expected, 1u,
+                                   0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    return -4;
+  int rc = -1;
+  if (xhci->ep0_failed[slot_id] || !xhci->device_contexts[slot_id] ||
+      !xhci->ep0_rings[slot_id]) { rc = -4; goto done; }
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  const uint32_t *device = xhci->device_contexts[slot_id];
+  unsigned speed = (device[0] >> 20) & 15u;
+  uint16_t packet = descriptor_size;
+  if (speed == 1) {
+    if (packet != 8 && packet != 16 && packet != 32 && packet != 64) goto done;
+  } else if (speed == 2) {
+    if (packet != 8) goto done;
+  } else if (speed == 3) {
+    if (packet != 64) goto done;
+  } else if (speed == 4 || speed == 5) {
+    if (packet != 9) goto done;
+    packet = 512;
+  } else goto done;
+  if ((device[xhci->context_size / 4u + 1u] >> 16) == packet) {
+    rc = 0;
+    goto done;
+  }
+  if (!xhci->ep0_buffers[slot_id])
+    xhci->ep0_buffers[slot_id] = kmalloc_aligned(4096u, 4096u);
+  if (!xhci->ep0_buffers[slot_id]) { rc = -5; goto done; }
+  /* Reuse the persistent page only while EP0 is idle. If the command times
+   * out, quarantine also protects this Input Context from late DMA reads. */
+  uint32_t *input = (uint32_t *)xhci->ep0_buffers[slot_id];
+  xhci_memzero(input, 4096u);
+  input[1] = 2u; /* Add EP0 only; Evaluate Context copies its MPS field. */
+  input[xhci->context_size / 2u + 1u] = (uint32_t)packet << 16;
+  struct xhci_trb command = {
+    .param = (uint64_t)(uintptr_t)input,
+    .control = (TRB_TYPE_EVALUATE_CONTEXT << 10) | (uint32_t)slot_id << 24
+  };
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  rc = xhci_ring_command(xhci, &command);
+  if (rc == 0) rc = xhci_wait_command_completion(xhci, NULL);
+  if (rc != 0) xhci->ep0_failed[slot_id] = 1;
+done:
+  __atomic_store_n(&xhci->ep0_busy[slot_id], 0u, __ATOMIC_RELEASE);
+  return rc;
 }
 
 static int xhci_queue_interrupt_trb(struct xhci_controller *xhci,
@@ -146,20 +229,22 @@ int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
   if (!xhci || !xhci->initialized || slot_id == 0 || slot_id > xhci->max_slots ||
       !ep || ep->type != 3u || !(ep->address & 0x80u) ||
       ep->max_packet_size == 0 || report_len == 0 || !xhci->cmd_ring ||
-      !xhci->db_base || !xhci->device_contexts[slot_id]) {
+      !xhci->db_base || !xhci->device_contexts[slot_id] || xhci->ep0_failed[slot_id]) {
     return -1;
   }
   dci = xhci_endpoint_dci(ep->address);
   if (dci == 0) return -1;
   if (xhci->intr_rings[slot_id] || xhci->intr_buffers[slot_id]) return -1;
   ctx_size = xhci->context_size ? xhci->context_size : 32u;
+  if (ctx_size != 32u && ctx_size != 64u) return -1;
   input_size = (uint64_t)ctx_size * 33u;
-  input_ctx = kmalloc_aligned(input_size, 64);
+  if (!xhci->ep0_buffers[slot_id])
+    xhci->ep0_buffers[slot_id] = kmalloc_aligned(4096u, 4096u);
+  input_ctx = xhci->ep0_buffers[slot_id];
   ring = (struct xhci_trb *)kmalloc_aligned(
       XHCI_CMD_RING_TRBS * sizeof(struct xhci_trb), 64);
   buffer = (uint8_t *)kmalloc_aligned(report_len, 16);
   if (!input_ctx || !ring || !buffer) {
-    if (input_ctx) kfree_aligned(input_ctx);
     if (ring) kfree_aligned(ring);
     if (buffer) kfree_aligned(buffer);
     return -2;
@@ -173,7 +258,6 @@ int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
   if (xhci_build_configure_endpoint_input_context(
           input_ctx, ctx_size, ep->address, ep->max_packet_size, ep->interval,
           ring) != 0) {
-    kfree_aligned(input_ctx);
     kfree_aligned(ring);
     kfree_aligned(buffer);
     return -3;
@@ -193,7 +277,6 @@ int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
     xhci->intr_ep_dci[slot_id] = 0;
     xhci->intr_ring_idx[slot_id] = 0;
     xhci->intr_ring_cycle[slot_id] = 0;
-    kfree_aligned(input_ctx);
     kfree_aligned(ring);
     kfree_aligned(buffer);
     return -4;
@@ -203,17 +286,10 @@ int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
   trb.control = (TRB_TYPE_CONFIG_EP << 10) | ((uint32_t)slot_id << 24);
   rc = xhci_ring_command(xhci, &trb);
   if (rc == 0) rc = xhci_wait_command_completion(xhci, NULL);
-  kfree_aligned(input_ctx);
   if (rc != 0) {
-    xhci->intr_rings[slot_id] = NULL;
-    xhci->intr_buffers[slot_id] = NULL;
-    xhci->intr_buffer_len[slot_id] = 0;
-    xhci->intr_ep_addr[slot_id] = 0;
-    xhci->intr_ep_dci[slot_id] = 0;
-    xhci->intr_ring_idx[slot_id] = 0;
-    xhci->intr_ring_cycle[slot_id] = 0;
-    kfree_aligned(ring);
-    kfree_aligned(buffer);
+    /* A late Configure Endpoint can still read the Input Context and ring.
+     * Quarantine the slot until a matching Disable Slot returns ownership. */
+    xhci->ep0_failed[slot_id] = 1;
     return rc;
   }
   if (xhci->db_base) {
@@ -241,10 +317,10 @@ int xhci_poll_interrupt(struct xhci_controller *xhci, uint8_t slot_id,
    * own event into intr_pending[slot_id] and other endpoints' events
    * into their own slots, so cooperative polling stays cooperative. */
   xhci_event_pump(xhci);
-  if (!xhci->intr_pending[slot_id].valid) return 0;
+  if (!__atomic_load_n(&xhci->intr_pending[slot_id].valid, __ATOMIC_ACQUIRE)) return 0;
   cc = xhci->intr_pending[slot_id].cc;
   residual = xhci->intr_pending[slot_id].residual;
-  xhci->intr_pending[slot_id].valid = 0u;
+  __atomic_store_n(&xhci->intr_pending[slot_id].valid, 0u, __ATOMIC_RELEASE);
   if (cc != XHCI_TRB_CC_SUCCESS) return -2;
   produced = xhci->intr_buffer_len[slot_id];
   if (residual >= produced) {

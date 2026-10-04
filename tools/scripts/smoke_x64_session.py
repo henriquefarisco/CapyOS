@@ -421,7 +421,11 @@ def make_qemu_cmd(
     iso_path: Path | None = None,
     boot_from: str = "disk",
     networking: bool = False,
+    audio_hda: bool = False,
     extra_disks: tuple[Path, ...] = (),
+    audio_capture: Path | None = None,
+    audio_ac97: bool = False,
+    audio_usb: bool = False,
 ) -> list[str]:
     cmd = [
         qemu_bin,
@@ -466,6 +470,33 @@ def make_qemu_cmd(
         # QEMU implicit default user-net NIC with full internet access.
         cmd.extend(["-netdev", "user,id=net0,restrict=on",
                     "-device", "e1000,netdev=net0"])
+
+    if sum((audio_hda, audio_ac97, audio_usb)) > 1:
+        # The guest service prefers HDA, so exposing both would silently turn
+        # an AC'97 gate into an HDA run.
+        raise ValueError("audio_hda and audio_ac97 are mutually exclusive")
+    if audio_hda or audio_ac97 or audio_usb:
+        # A null backend keeps the gate hermetic while retaining the complete
+        # controller/codec/DMA path in the guest (Intel HDA, or the ICH AC'97
+        # fallback the service selects when no HDA controller exists).
+        backend = "driver=none,id=audio0"
+        if audio_capture is not None:
+            escaped_path = str(audio_capture).replace(",", ",,")
+            backend = (f"driver=wav,id=audio0,path={escaped_path},"
+                       "out.frequency=48000,out.channels=2,out.format=s16")
+        cmd.extend(["-audiodev", backend])
+        if audio_hda:
+            cmd.extend([
+                "-device", "intel-hda",
+                "-device", "hda-duplex,audiodev=audio0",
+            ])
+        elif audio_usb:
+            cmd.extend(["-device", "qemu-xhci,id=audio-usb",
+                        "-device", "usb-audio,bus=audio-usb.0,audiodev=audio0"])
+        else:
+            cmd.extend(["-device", "AC97,audiodev=audio0"])
+    elif audio_capture is not None:
+        raise ValueError("audio_capture requires audio_hda or audio_ac97")
 
     if debugcon_log is not None:
         cmd.extend(

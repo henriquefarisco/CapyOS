@@ -24,6 +24,10 @@
  */
 
 #include "internal/compositor_internal.h"
+
+static void (*render_service_hook)(void);
+void compositor_set_service_hook(void (*hook)(void)) { render_service_hook = hook; }
+static void render_service(void) { if (render_service_hook) render_service_hook(); }
 #include "gui/font.h"
 #include "gui/compositor_smoke.h"
 
@@ -84,6 +88,7 @@ static void render_fill_wallpaper_rect(uint32_t *buf, uint32_t buf_stride,
   if (y1 > (int32_t)comp_height) y1 = (int32_t)comp_height;
   if (x0 >= x1 || y0 >= y1) return;
   for (int32_t y = (int32_t)y0; y < (int32_t)y1; ++y) {
+    if ((y & 31u) == 0u) render_service();
     comp_memset32(buf + (uint32_t)y * buf_stride + (uint32_t)x0,
                   comp_wallpaper, (size_t)(x1 - x0));
   }
@@ -177,6 +182,7 @@ static void render_window_outline(struct gui_window *win,
   if (win->focused) color = g_theme.title_active;
 
   for (uint32_t row = 0; row < total_h; row++) {
+    if ((row & 31u) == 0u) render_service();
     int32_t py = origin_y + (int32_t)row;
     if (py < 0 || (uint32_t)py >= comp_height) continue;
     for (uint32_t col = 0; col < total_w; col++) {
@@ -244,6 +250,7 @@ static void render_fill_rect_clip(uint32_t *buf, uint32_t buf_stride,
                                   int32_t x, int32_t y, uint32_t w,
                                   uint32_t h, uint32_t color) {
   for (uint32_t row = 0; row < h; row++) {
+    if ((row & 31u) == 0u) render_service();
     int32_t py = y + (int32_t)row;
     if (py < 0 || (uint32_t)py >= comp_height) continue;
     for (uint32_t col = 0; col < w; col++) {
@@ -373,6 +380,7 @@ static void render_window_decoration(struct gui_window *win, uint32_t *buf,
   }
 
   for (uint32_t row = 0; row < title_h; row++) {
+    if ((row & 31u) == 0u) render_service();
     uint8_t amount = (title_h > 1u)
         ? (uint8_t)((row * 255u) / (title_h - 1u))
         : 0u;
@@ -479,6 +487,7 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
 
   if (!render_clip_enabled) {
     for (uint32_t y = 0; y < comp_height; y++) {
+      if ((y & 31u) == 0u) render_service();
       comp_memset32(buf + y * buf_stride, comp_wallpaper, comp_width);
     }
   } else {
@@ -487,7 +496,9 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
 
   if (comp_desktop_paint_cb) {
     struct gui_surface desktop = { buf, comp_width, comp_height, buf_stride * 4 };
+    render_service();
     comp_desktop_paint_cb(&desktop);
+    render_service();
   }
 
   for (int i = 0; i < COMPOSITOR_MAX_WINDOWS; i++) {
@@ -509,7 +520,9 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
         continue;
       }
 
+      render_service();
       if (!render_skip_window_paint && win->on_paint) win->on_paint(win);
+      render_service();
       render_window_decoration(win, buf, buf_stride);
 
       {
@@ -530,6 +543,7 @@ static void compose_scene(uint32_t *buf, uint32_t buf_stride) {
          * comeca em row=0 do mask total. Para decorated, body comeca
          * abaixo do title bar. */
         for (uint32_t row = 0; row < win->frame.height; row++) {
+          if ((row & 31u) == 0u) render_service();
           int32_t py = wy + (int32_t)row;
           int32_t px_start = 0;
           int32_t px_end = 0;
@@ -605,6 +619,7 @@ static void present_full_frame_from_backbuffer(void) {
   uint32_t front_stride = comp_pitch / 4;
   if (!comp_fb || !comp_backbuffer || front_stride == 0) return;
   for (uint32_t y = 0; y < comp_height; y++) {
+    if ((y & 31u) == 0u) render_service();
     comp_memcpy(&comp_fb[y * front_stride],
                 &comp_backbuffer[y * comp_backbuffer_stride],
                 comp_width * sizeof(uint32_t));
@@ -631,6 +646,7 @@ static void copy_backbuffer_rect_to_front(int32_t x, int32_t y,
   if (x0 >= x1 || y0 >= y1) return;
 
   for (int32_t py = y0; py < y1; py++) {
+    if ((py & 31u) == 0u) render_service();
     comp_memcpy(&comp_fb[(uint32_t)py * front_stride + (uint32_t)x0],
                 &comp_backbuffer[(uint32_t)py * comp_backbuffer_stride + (uint32_t)x0],
                 (size_t)(x1 - x0) * sizeof(uint32_t));
@@ -764,7 +780,9 @@ void compositor_render(void) {
         struct gui_window *win = &comp_windows[i];
         if (win->id && win->visible && win->surface.pixels && win->on_paint &&
             render_window_intersects_damage(win)) {
+          render_service();
           win->on_paint(win);
+          render_service();
         }
       }
       render_skip_window_paint = 1;

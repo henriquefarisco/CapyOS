@@ -18,6 +18,7 @@ FALLBACK_TOOLCHAIN = [
 ]
 
 REQUIRED_RUNTIME_TOOLS = [
+    "ffmpeg",
     "xorriso",
     "python3",
 ]

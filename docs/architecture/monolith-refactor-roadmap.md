@@ -36,7 +36,7 @@ diretório `src/` + `tests/`. Linha-base de exceção do audit antes do refactor
 | `src/apps/file_manager.c` | 1132 | runtime | **Refatorado 2026-05-15** (onda 1) |
 | `src/apps/settings.c` | 1081 | runtime | **Refatorado 2026-05-15** (onda 1) |
 | `src/gui/desktop/taskbar.c` | 1436 | runtime | **Refatorado 2026-05-15** (onda 1) |
-| `src/arch/x86_64/kernel_main.c` | 989 | runtime | Deferred — já passou por múltiplos splits anteriores |
+| `src/arch/x86_64/kernel_main.c` | 989 → 655 → 1003 → **869** | runtime | Saiu da baseline em 2026-05-29 (`kernel_boot_stages.c`); regrediu a 1003 LOC com o smoke de áudio da Etapa 10; **Refatorado 2026-09-21** (onda 9, ver §9) |
 | `src/services/update_agent.c` | 1990 | runtime | **Refatorado 2026-05-15** (onda 2) |
 | `src/security/ed25519.c` | 1465 → **286** | runtime | **Refatorado 2026-05-15** (estágio A do plano dedicado: PR A.1 + A.2 + A.3) — group/scalar mult em `ed25519_group.c` (306 LOC) + codec em `ed25519_encode.c` (208 LOC) + scalar arithmetic mod L em `ed25519_scalar.c` (836 LOC) + internal header (139 LOC). Saiu da baseline. |
 | `src/auth/login_runtime.c` | 22776 → **282** | runtime | **Refatorado 2026-05-15** (estágio C do plano dedicado: PRs C.0-C.65) — facade fino + 65 TUs sob 900 LOC em `src/auth/login_runtime/` + 1 internal header em `src/auth/internal/`. Saiu da baseline. |
@@ -509,6 +509,12 @@ para `kernel_main_helpers.c` (~120 LOC) baixando o arquivo para
 ~870 LOC. Ganho marginal; recomenda-se priorizar os outros monolitos
 primeiro.
 
+**Atualização 2026-09-21:** o arquivo saiu da baseline em 2026-05-29
+(655 LOC, `kernel_boot_stages.c`), mas regrediu a 1003 LOC quando o bloco
+`CAPYOS_AUDIO_PLAYBACK_SMOKE` da Etapa 10 foi adicionado inline. A onda 9
+(§9) extraiu esse bloco para `kernel_boot_audio_smoke.c`; o arquivo está em
+869 LOC. A extração de helpers acima continua opcional.
+
 ## 5. Sequência de execução recomendada
 
 1. **Apps independentes (baixo risco):** `file_manager.c`, `settings.c`.
@@ -622,6 +628,39 @@ isoladamente com:
 3. Diff do Makefile.
 4. Diff do `audit_source_layout.py`.
 5. Diff dos call-sites (zero, idealmente — só renames internos).
+
+## 9. Onda 9 — regressões de teto pós-Etapa 10 (2026-09-21)
+
+O trabalho in-tree da Etapa 10 (branch `feature/etapa-10-audio-multimedia`)
+fez dois arquivos de runtime ultrapassarem o teto de 900 linhas **sem**
+entrada em `MONOLITH_BASELINE_EXCEPTIONS`, o que faz `make layout-audit`
+falhar em modo estrito. Nenhum dos checkpoints da Etapa 10 executou esse
+gate. A onda 9 restaura o teto por relocação verbatim de código, sem
+alteração de lógica:
+
+| Arquivo | LOC antes | LOC depois | Novo(s) arquivo(s) | Funções movidas |
+|---|---:|---:|---|---|
+| `src/arch/x86_64/kernel_main.c` | 1003 | 869 | `src/arch/x86_64/kernel_boot_audio_smoke.c` (163 LOC) | `audio_smoke_log`, `audio_smoke_fixture`, `kernel_boot_run_audio_playback_smoke` (bloco `CAPYOS_AUDIO_PLAYBACK_SMOKE`; protótipo em `include/arch/x86_64/kernel_main_internal.h`; mesmo `#pragma GCC optimize("O0")` do grupo) |
+| `src/memory/vmm.c` | 915 | 737 | `src/memory/vmm_fault.c` (180 LOC) + `src/memory/internal/vmm_internal.h` (40 LOC) | `vmm_walk_to_leaf`, `vmm_handle_cow_fault`, `vmm_handle_page_fault`; o header interno passa a ser dono de `VMM_PTE_PHYS_MASK`, `invlpg()` e do `extern` de `vmm_global_stats` (antes `static`) |
+
+Wiring: `CAPYOS64_OBJS` ganha `kernel_boot_audio_smoke.o` (após
+`kernel_boot_stages.o`) e `vmm_fault.o` (após `vmm_cow.o`); a regra
+genérica `$(BUILD)/x86_64/%.o` compila ambos. `vmm.c` não participa de
+`TEST_SRCS` (os testes de host usam `tests/stubs/stub_vmm.c`), portanto
+não há mudança em `make test` além do contrato textual de
+`tests/kernel/test_process_destroy.c`, que continua lendo
+`vmm_destroy_address_space` em `vmm.c`.
+
+Validação: apenas inspeção estática em estação de coding (sem build).
+Gates externos obrigatórios antes de considerar a onda fechada:
+`make layout-audit`, `make test`, `make all64 TOOLCHAIN64=elf`,
+`make audio-selftest`, `make smoke-x64-qemu-audio-playback-roundtrip`
+(marker `[smoke] audio-playback-roundtrip ready` inalterado),
+`make smoke-x64-qemu-media-player-playlist` e os smokes de fork/CoW.
+
+`kernel_main.c` fica a 31 linhas do teto: qualquer novo hook de smoke deve
+nascer em TU próprio do grupo `kernel_main` (padrão de
+`kernel_boot_stages.c` / `kernel_boot_audio_smoke.c`), nunca inline.
 
 Validação externa fica responsabilidade do operador humano que
 executa `make test`/`make all64`/`make layout-audit` numa máquina

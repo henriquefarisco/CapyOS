@@ -56,8 +56,10 @@ o índice do handoff autenticado pela forma assinada offline com a chave dedicad
 do publisher CapyPKG e recalcule os dois arquivos de checksum:
 
 ```sh
+python3 tools/scripts/stage_published_modules.py \
+  --output "$MODULE_INPUTS" --release-tag "$TAG"
 python3 tools/scripts/sign_modules_index.py \
-  --workspace "$(dirname "$PWD")" \
+  --workspace "$MODULE_INPUTS" \
   --private-key "$OFFLINE_CAPYPKG_PUBLISHER_KEY" \
   --release-tag "$TAG" \
   --output "$BUNDLE/modules-index.txt"
@@ -78,8 +80,10 @@ python3 tools/scripts/sign_modules_index.py \
 )
 ```
 
-A saída deve ser reconstruída dos tags imutáveis exatos pinados pelo tag do
-CapyOS. O signer confirma que a chave privada corresponde à âncora pública
+A saída usa os bytes publicados dos tags imutáveis pinados pelo catálogo do tag
+CapyOS, conferidos por tamanho e SHA-256. `MODULE_INPUTS` deve ser um diretório
+novo e isolado. Não reempacote fontes locais: finais de linha/metadados do tar
+podem produzir bytes diferentes. O signer confirma que a chave privada corresponde à âncora pública
 compilada no kernel taggeado. Não execute `make sign-release-checksums` nesse
 diretório: esse alvo regenera o checksum
 local de cinco artefatos e não representa o conjunto público de seis payloads.
@@ -187,7 +191,8 @@ python3 tools/scripts/verify_modules_index_assets.py \
   --local-payload-dir "$BUNDLE"
 ```
 
-Anexe ao draft somente os cinco materiais novos:
+Substitua no draft o índice agora assinado e seus dois arquivos de checksum,
+e anexe os cinco materiais novos:
 
 - `release-artifacts.sha256.sig`;
 - `release-ed25519.pub.pem`;
@@ -197,6 +202,9 @@ Anexe ao draft somente os cinco materiais novos:
 
 ```sh
 gh release upload "$TAG" \
+  "$BUNDLE/modules-index.txt" \
+  "$BUNDLE/modules.sha256" \
+  "$BUNDLE/release-artifacts.sha256" \
   "$BUNDLE/release-artifacts.sha256.sig" \
   "$BUNDLE/release-ed25519.pub.pem" \
   "$BUNDLE/release-public-key.manifest" \

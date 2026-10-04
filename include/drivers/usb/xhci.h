@@ -8,6 +8,7 @@
 
 struct usb_setup_packet;
 struct usb_endpoint_info;
+struct xhci_iso_queue;
 
 /* PCI class/subclass for USB XHCI controller */
 #define PCI_CLASS_SERIAL_BUS 0x0C
@@ -77,6 +78,7 @@ struct usb_endpoint_info;
 #define TRB_TYPE_DISABLE_SLOT 10
 #define TRB_TYPE_ADDRESS_DEV 11
 #define TRB_TYPE_CONFIG_EP 12
+#define TRB_TYPE_EVALUATE_CONTEXT 13
 #define TRB_TYPE_TRANSFER 32
 #define TRB_TYPE_CMD_COMPLETE 33
 #define TRB_TYPE_PORT_STATUS 34
@@ -116,6 +118,7 @@ struct xhci_pending_event {
   uint8_t slot;       /* Slot ID from the event TRB (CMD_COMPLETE).   */
   uint32_t cc;        /* Completion code (CC) from TRB.status[31:24]. */
   uint32_t residual;  /* TRB.status[23:0] for transfer events.        */
+  uint64_t command_pointer;
 };
 
 /* XHCI Controller State */
@@ -149,6 +152,9 @@ struct xhci_controller {
   uint32_t context_size;
   void *device_contexts[XHCI_MAX_DEVICE_SLOTS];
   struct xhci_trb *ep0_rings[XHCI_MAX_DEVICE_SLOTS];
+  uint8_t *ep0_buffers[XHCI_MAX_DEVICE_SLOTS];
+  uint32_t ep0_busy[XHCI_MAX_DEVICE_SLOTS];
+  uint8_t ep0_failed[XHCI_MAX_DEVICE_SLOTS];
   uint32_t ep0_ring_idx[XHCI_MAX_DEVICE_SLOTS];
   int ep0_ring_cycle[XHCI_MAX_DEVICE_SLOTS];
   struct xhci_trb *intr_rings[XHCI_MAX_DEVICE_SLOTS];
@@ -169,6 +175,9 @@ struct xhci_controller {
   struct xhci_pending_event ep0_pending[XHCI_MAX_DEVICE_SLOTS];
   struct xhci_pending_event intr_pending[XHCI_MAX_DEVICE_SLOTS];
   uint32_t event_stray_count;
+  uint32_t event_lock;
+  struct xhci_iso_queue *iso_queue;
+  uint8_t iso_slot, iso_dci;
 
   /* State */
   int initialized;
@@ -215,6 +224,10 @@ int xhci_release_slot(struct xhci_controller *xhci, uint8_t slot_id);
 int xhci_control_transfer(struct xhci_controller *xhci, uint8_t slot_id,
                           const struct usb_setup_packet *setup, void *buf,
                           uint16_t len, int dir_in);
+/* Task context, serialized with other controller commands by the USB owner.
+ * descriptor_size is USB bMaxPacketSize0 (exponent 9 for SuperSpeed). */
+int xhci_update_ep0_packet_size(struct xhci_controller *xhci, uint8_t slot_id,
+                                uint8_t descriptor_size);
 int xhci_configure_interrupt_endpoint(struct xhci_controller *xhci,
                                       uint8_t slot_id,
                                       const struct usb_endpoint_info *ep,
@@ -228,6 +241,11 @@ int xhci_poll_interrupt(struct xhci_controller *xhci, uint8_t slot_id,
  * pending slot. Safe to call repeatedly; idempotent on an empty ring.
  * Exposed for direct unit testing of the dispatcher contract. */
 void xhci_event_pump(struct xhci_controller *xhci);
+/* Nonblocking shared DMA/event gate; IRQ callers skip a busy controller.
+ * A caller holding the gate may drain and update its isoch queue atomically. */
+int xhci_event_try_lock(struct xhci_controller *xhci);
+void xhci_event_unlock(struct xhci_controller *xhci);
+void xhci_event_pump_locked(struct xhci_controller *xhci);
 uint8_t xhci_endpoint_dci(uint8_t ep_addr);
 uint8_t xhci_port_speed_from_status(uint32_t portsc);
 uint16_t xhci_ep0_max_packet_size_for_speed(uint8_t port_speed);

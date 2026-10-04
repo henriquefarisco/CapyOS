@@ -14,6 +14,7 @@
  *   kernel_boot_stages.c   — late boot-stage bodies (Linux-ABI shims, Stage 4
  *                            keyboard/setup, Stage 7 input, Stage 8 network/
  *                            policy, login_runtime_ops builder)
+ *   kernel_boot_audio_smoke.c — Etapa 10 CAPYOS_AUDIO_PLAYBACK_SMOKE body
  */
 #pragma GCC optimize("O0")
 #include <stddef.h>
@@ -36,6 +37,7 @@
 #include "boot/boot_config.h"
 #include "boot/boot_menu.h"
 #include "boot/boot_ui.h"
+#include "boot/boot_audio.h"
 #include "boot/handoff.h"
 #include "boot/boot_slot.h"
 #include "boot/boot_metrics.h"
@@ -440,6 +442,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
 #if defined(CAPYOS_BOOT_RUN_CAPYSH)
     int hello_rc = kernel_boot_run_capysh();
 #elif defined(CAPYOS_BOOT_RUN_TWO_BUSY)
+    dbgcon_write("[user_init] CAPYOS_BOOT_RUN_TWO_BUSY defined; spawning two.\n");
     int hello_rc = kernel_boot_run_two_busy_users();
 #else
     int hello_rc = kernel_boot_run_embedded_hello();
@@ -678,6 +681,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('8');
 
   /* --- End splash -------------------------------------------------------- */
+#ifndef CAPYOS_AUDIO_PLAYBACK_SMOKE
+  /* Restore the logo after storage/setup diagnostics and retain it until EOF.
+   * Dedicated audio fixture smokes exclude the production intro from capture. */
+  if (boot_splash_enabled) boot_ui_splash_begin();
+  kernel_boot_play_startup_sound();
+#endif
   boot_ui_splash_end();
   fbcon_set_visual_muted(0);
   dbgcon_putc('X');
@@ -836,6 +845,12 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
     int apps_roundtrip_rc = kernel_boot_run_apps_roundtrip();
     (void)apps_roundtrip_rc;
   }
+#endif
+#ifdef CAPYOS_AUDIO_PLAYBACK_SMOKE
+  /* Etapa 10: require codec configuration, a live output stream and observed
+   * DMA-position progress before publishing the playback marker. */
+  dbgcon_write("[user_init] CAPYOS_AUDIO_PLAYBACK_SMOKE; probing HDA DMA.\n");
+  (void)kernel_boot_run_audio_playback_smoke();
 #endif
 #ifdef CAPYOS_CAPYAI_GUI_ASYNC_SMOKE
   /* Build-only end-to-end regression for the CapyAI VM freeze. It enters the

@@ -171,7 +171,7 @@ static void test_enable_slot_advances_past_index_63(void) {
     memset(&xhci, 0, sizeof(xhci));
     memset(cmd_ring, 0, sizeof(cmd_ring));
     memset(evt_ring, 0, sizeof(evt_ring));
-    seed_command_completion(evt_ring, 0, 7u);
+    seed_command_completion(evt_ring, 0, 7u, &cmd_ring[63]);
     xhci.initialized = 1;
     xhci.cmd_ring = cmd_ring;
     xhci.evt_ring = evt_ring;
@@ -199,7 +199,7 @@ static void test_enable_slot_wraps_on_link_trb_boundary(void) {
     memset(&xhci, 0, sizeof(xhci));
     memset(cmd_ring, 0, sizeof(cmd_ring));
     memset(evt_ring, 0, sizeof(evt_ring));
-    seed_command_completion(evt_ring, 0, 9u);
+    seed_command_completion(evt_ring, 0, 9u, &cmd_ring[XHCI_CMD_RING_TRBS - 2u]);
     xhci.initialized = 1;
     xhci.cmd_ring = cmd_ring;
     xhci.evt_ring = evt_ring;
@@ -226,7 +226,7 @@ static void test_enable_slot_toggles_event_cycle_on_wrap(void) {
     memset(&xhci, 0, sizeof(xhci));
     memset(cmd_ring, 0, sizeof(cmd_ring));
     memset(evt_ring, 0, sizeof(evt_ring));
-    seed_command_completion(evt_ring, XHCI_EVT_RING_TRBS - 1u, 11u);
+    seed_command_completion(evt_ring, XHCI_EVT_RING_TRBS - 1u, 11u, &cmd_ring[0]);
     xhci.initialized = 1;
     xhci.cmd_ring = cmd_ring;
     xhci.evt_ring = evt_ring;
@@ -255,7 +255,7 @@ static void test_enable_slot_skips_non_command_events(void) {
     memset(cmd_ring, 0, sizeof(cmd_ring));
     memset(evt_ring, 0, sizeof(evt_ring));
     seed_port_status_event(evt_ring, 0);
-    seed_command_completion(evt_ring, 1, 12u);
+    seed_command_completion(evt_ring, 1, 12u, &cmd_ring[0]);
     xhci.initialized = 1;
     xhci.cmd_ring = cmd_ring;
     xhci.evt_ring = evt_ring;

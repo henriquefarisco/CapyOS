@@ -16,6 +16,7 @@
 #include "drivers/pcie.h"
 #include "drivers/usb/usb_core.h"
 #include "kernel/log/klog.h"
+#include "memory/vmm.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -62,29 +63,34 @@ int xhci_ring_command(struct xhci_controller *xhci, struct xhci_trb *trb) {
   }
   xhci->cmd_ring_idx = idx;
   db = (volatile uint32_t *)(xhci->db_base);
+  __atomic_thread_fence(__ATOMIC_RELEASE);
   mmio_write32(db, 0);
   return 0;
 }
 
 int xhci_wait_command_completion(struct xhci_controller *xhci,
                                  uint8_t *slot_id) {
-  if (!xhci || !xhci->evt_ring) return -1;
+  if (!xhci || !xhci->evt_ring || !xhci->cmd_ring) return -1;
+  uint32_t command_index = xhci->cmd_ring_idx ? xhci->cmd_ring_idx - 1u :
+                                               XHCI_CMD_RING_TRBS - 2u;
+  uint64_t expected = (uintptr_t)&xhci->cmd_ring[command_index];
   for (int i = 0; i < 500000; i++) {
-    if (xhci->cmd_pending.valid) {
+    if (!xhci_event_try_lock(xhci)) { cpu_relax(); continue; }
+    xhci_event_pump_locked(xhci);
+    if (__atomic_load_n(&xhci->cmd_pending.valid, __ATOMIC_ACQUIRE)) {
       uint8_t completed_slot = xhci->cmd_pending.slot;
       uint32_t cc = xhci->cmd_pending.cc;
-      xhci->cmd_pending.valid = 0u;
+      uint64_t pointer = xhci->cmd_pending.command_pointer;
+      __atomic_store_n(&xhci->cmd_pending.valid, 0u, __ATOMIC_RELEASE);
+      xhci_event_unlock(xhci);
+      if (pointer != expected) {
+        ++xhci->event_stray_count;
+        continue; /* A late completion must not authorize DMA reclamation. */
+      }
       if (slot_id) *slot_id = completed_slot;
       return (cc == XHCI_TRB_CC_SUCCESS) ? 0 : -2;
     }
-    xhci_event_pump(xhci);
-    if (xhci->cmd_pending.valid) {
-      uint8_t completed_slot = xhci->cmd_pending.slot;
-      uint32_t cc = xhci->cmd_pending.cc;
-      xhci->cmd_pending.valid = 0u;
-      if (slot_id) *slot_id = completed_slot;
-      return (cc == XHCI_TRB_CC_SUCCESS) ? 0 : -2;
-    }
+    xhci_event_unlock(xhci);
     cpu_relax();
   }
   return -3;
@@ -118,15 +124,34 @@ int xhci_find(struct xhci_controller *xhci) {
     return -3; /* Invalid BAR or I/O space (unexpected) */
   }
 
-  xhci->mmio_base = (volatile uint8_t *)(uintptr_t)(bar0 & ~0xFULL);
+  uint64_t physical = bar0 & ~0xFULL;
+  uint16_t cmd = pci_config_read16(xhci->bus, xhci->dev, xhci->func, 0x04);
+  pci_config_write16(xhci->bus, xhci->dev, xhci->func, 0x04, cmd | (1u << 1));
+  volatile uint8_t *capabilities = vmm_map_device(physical, 0x20u);
+  if (!capabilities) goto invalid_mapping;
+  uint32_t params = mmio_read32(capabilities + XHCI_HCSPARAMS1);
+  uint8_t caplength = *capabilities;
+  uint32_t slots = params & 255u, ports = params >> 24;
+  if (caplength < 0x20u || !slots || !ports) goto invalid_mapping;
+  uint64_t extent = caplength + 0x400u + ports * 16u;
+  uint64_t end = (uint64_t)(mmio_read32(capabilities + XHCI_DBOFF) & ~3u) +
+                 (slots + 1u) * 4u;
+  if (end > extent) extent = end;
+  end = (uint64_t)(mmio_read32(capabilities + XHCI_RTSOFF) & ~31u) + 0x40u;
+  if (end > extent) extent = end;
+  xhci->mmio_base = vmm_map_device(physical, (size_t)extent);
+  if (!xhci->mmio_base) goto invalid_mapping;
 
   /* Enable bus mastering and memory space access */
-  uint16_t cmd = pci_config_read16(xhci->bus, xhci->dev, xhci->func, 0x04);
   cmd |= (1 << 1) | (1 << 2); /* Memory Space Enable + Bus Master Enable */
   pci_config_write16(xhci->bus, xhci->dev, xhci->func, 0x04, cmd);
 
   g_xhci_found = 1;
   return 0;
+invalid_mapping:
+  pci_config_write16(xhci->bus, xhci->dev, xhci->func, 0x04, cmd);
+  xhci->mmio_base = NULL;
+  return -4;
 }
 
 /* Reset XHCI controller */
@@ -274,6 +299,9 @@ int xhci_init(struct xhci_controller *xhci) {
   xhci->evt_ring_cycle = 1;
   xhci_memzero(xhci->device_contexts, sizeof(xhci->device_contexts));
   xhci_memzero(xhci->ep0_rings, sizeof(xhci->ep0_rings));
+  xhci_memzero(xhci->ep0_buffers, sizeof(xhci->ep0_buffers));
+  xhci_memzero(xhci->ep0_busy, sizeof(xhci->ep0_busy));
+  xhci_memzero(xhci->ep0_failed, sizeof(xhci->ep0_failed));
   xhci_memzero(xhci->ep0_ring_idx, sizeof(xhci->ep0_ring_idx));
   xhci_memzero(xhci->ep0_ring_cycle, sizeof(xhci->ep0_ring_cycle));
   xhci_memzero(xhci->intr_rings, sizeof(xhci->intr_rings));

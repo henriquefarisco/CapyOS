@@ -12,11 +12,12 @@ from smoke_x64_auth import (
     installer_has_single_eligible_target,
     installer_select_target_by_size,
     module_install_completed,
+    require_desktop_after_login,
     require_first_boot_wizard,
     require_installer_target_count,
 )
 from smoke_x64_common import cleanup_file, create_runtime_ovmf_vars
-from smoke_x64_helpers import ensure_shell_after_login
+from smoke_x64_helpers import _text_after_command_echo, ensure_shell_after_login
 from smoke_x64_iso_install import (
     extract_volume_key,
     file_sha256,
@@ -86,6 +87,31 @@ class FakeDesktopSession:
 
 
 def main() -> int:
+    framed = _text_after_command_echo(
+        "admin@host>~> update-import-manifest /tmp/update-manifest.in\ni\r\n"
+        "[security] imported manifest missing or invalid ed25519 signature\r\n"
+        "admin@host>~> ",
+        "update-import-manifest /tmp/update-manifest.ini",
+    )
+    if framed is None or not framed.startswith("\r\n[security]"):
+        print("[FAIL] wrapped command echo did not frame its response")
+        return 1
+    framed = _text_after_command_echo(
+        "admin@host>~> \r\nupdate-status\r\nchannel=stable\r\nadmin@host>~> ",
+        "update-status",
+    )
+    if framed != "\r\nchannel=stable\r\nadmin@host>~> ":
+        print("[FAIL] stale prompt was not excluded from command response")
+        return 1
+    require_desktop_after_login("desktop", True)
+    require_desktop_after_login("shell", False)
+    try:
+        require_desktop_after_login("shell", True)
+    except RuntimeError:
+        pass
+    else:
+        print("[FAIL] FULL install accepted a shell-only post-login session")
+        return 1
     with TemporaryDirectory() as temp:
         stale_capture = Path(temp) / "stale.debugcon.log"
         stale_capture.write_text("old-login-evidence", encoding="utf-8")
@@ -209,6 +235,25 @@ def main() -> int:
     else:
         print("[FAIL] ambiguous installer target capacity was accepted")
         return 1
+    for mirrored in (candidate_text + serial_candidate_text,
+                     serial_candidate_text + candidate_text):
+        if installer_select_target_by_size(mirrored, 2048) != (1, "0123456789abcdef"):
+            print("[FAIL] exact display/serial mirror was not coalesced")
+            return 1
+    for ambiguous in (
+        candidate_text + serial_candidate_text + candidate_text,
+        serial_candidate_text + candidate_text + serial_candidate_text,
+        candidate_text + serial_candidate_text.replace("size-mib=2048", "size-mib=4096"),
+        candidate_text + serial_candidate_text.replace("0123456789abcdef", "1111111111111111"),
+        candidate_text.replace("3072 MiB", "2048 MiB"),
+    ):
+        try:
+            installer_select_target_by_size(ambiguous, 2048)
+        except RuntimeError:
+            pass
+        else:
+            print("[FAIL] contradictory/repeated/ambiguous target evidence accepted")
+            return 1
     try:
         require_installer_target_count("[installer] eligible-targets=1\n", 2)
     except RuntimeError:

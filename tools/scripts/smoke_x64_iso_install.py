@@ -30,7 +30,8 @@ from smoke_x64_common import (
     run_build_if_requested,
     validate_iso_artifact,
 )
-from smoke_x64_auth import module_install_completed
+from smoke_x64_auth import module_install_completed, require_desktop_after_login
+from smoke_x64_boot import require_builtin_music
 from smoke_x64_flow import (
     complete_iso_install,
     ensure_shell_after_login,
@@ -126,8 +127,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail unless first boot completed at least one module and rebooted",
     )
+    parser.add_argument(
+        "--require-desktop-after-login",
+        action="store_true",
+        help="Fail unless the installed system starts the desktop after login",
+    )
+    parser.add_argument("--require-builtin-music", action="store_true")
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.module_profile == "basic" and (args.require_desktop_after_login or args.require_module_install):
+        parser.error("desktop/module acceptance requires --module-profile full or custom")
+    return args
 
 
 def file_sha256(path: Path) -> str:
@@ -342,7 +352,10 @@ def run_boot1(
             password=parsed.password,
             allow_desktop=True,
         )
+        require_desktop_after_login(mode, parsed.require_desktop_after_login)
         ensure_shell_after_login(session, parsed.step_timeout, mode)
+        if parsed.require_builtin_music:
+            require_builtin_music(session, parsed.step_timeout)
         smoke_first_boot(
             session=session,
             timeout=parsed.step_timeout,
@@ -402,7 +415,10 @@ def run_marker_write_boot(
             password=parsed.password,
             allow_desktop=True,
         )
+        require_desktop_after_login(mode, parsed.require_desktop_after_login)
         ensure_shell_after_login(session, parsed.step_timeout, mode)
+        if parsed.require_builtin_music:
+            require_builtin_music(session, parsed.step_timeout)
         smoke_first_boot(
             session=session,
             timeout=parsed.step_timeout,
@@ -453,7 +469,10 @@ def run_boot2(
             password=parsed.password,
             allow_desktop=True,
         )
+        require_desktop_after_login(mode, parsed.require_desktop_after_login)
         ensure_shell_after_login(session, parsed.step_timeout, mode)
+        if parsed.require_builtin_music:
+            require_builtin_music(session, parsed.step_timeout)
         smoke_second_boot(
             session=session,
             timeout=parsed.step_timeout,

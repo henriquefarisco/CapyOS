@@ -6,6 +6,7 @@
  * `tests/drivers/test_usb_hid_smoke_gate.c` directly against
  * `src/drivers/usb/usb_hid_smoke.c`. */
 #include "drivers/usb/usb_hid_smoke.h"
+void usb_hid_keyboard_smoke_emit_configured(void) {}
 
 void usb_hid_keyboard_smoke_emit_marker(void) {
   /* intentionally empty in host tests */
