@@ -1,14 +1,17 @@
 # Cross-repo compatibility matrix
 
-**Candidato coordenado 2026-10-04:** CapyOS `0.11.1+20261004` consome os tags
+**Release coordenada 2026-10-04:** CapyOS `0.11.1+20261004` consome os tags
 `CapyUI v2.27.0` e `CapyCodecs v0.1.1`. Os demais pins ficam inalterados.
 `capy-codec-audio` v1, desktop-session v1, widget v2.22 e `capyos-base` v3
 permanecem compativeis. O limite de PCM decodificado passa a 40 MiB, heap do
 kernel a 96 MiB e reserva UEFI a 128 MiB; entradas de audio continuam limitadas
 a 8 MiB. As musicas OGG instaladas ficam abaixo do limite por arquivo do CapyFS.
 Instalacao Full/desktop/persistencia passou em QEMU e VMware para o artefato de
-desenvolvimento. A tabela publicada abaixo permanece historicamente valida;
-promocao da nova release e aceite dos bytes finais ainda pendentes.
+desenvolvimento. A ISO final tambem passou Full/desktop/persistencia no VMware
+(`9e7ac7f6ce08`), e a promocao assinada dos 12 assets passou (`37225241587`).
+O A/B publico com predecessor 0.10.0 falhou ao persistir o kernel verificado:
+7.400.072 bytes excedem 4.243.456 bytes por arquivo do CapyFS legado. Nenhum
+update foi aplicado. Instalacao nova validada; migracao antiga ainda nao aceita.
 
 O snapshot publicado `modules-capyos-base-v3-r2` tem revisao de publicacao 2,
 sem mudar token `capyos-base-v3`, envelope v2 ou epoca de assinatura 1. O catalogo
@@ -18,13 +21,13 @@ Os payloads sao os bytes publicados pinados por SHA-256/tamanho; nao sao
 reempacotados. O snapshot imutavel anterior permanece intacto.
 
 A tag 0.11.0 foi retida sem release: seu kernel excedeu o limite de 8 MiB do
-atualizador. O candidato 0.11.1 reduz somente as copias musicais para Vorbis q0;
+atualizador. A 0.11.1 reduz somente as copias musicais para Vorbis q0;
 taxa/duracao/estereo, WAVs originais e PCM do boot sao preservados. Nenhuma
 politica de tamanho, assinatura ou confianca foi relaxada.
 
-**Status:** autoritativo; **revisao atual:** 2026-09-04, CapyOS
-`0.10.0+20260904` (release stable da Etapa 9, Latest e imutavel), com
-CapyAgent `0.1.0`, CapyUI `2.25.0` e `capyos-base-v3`.
+**Status:** autoritativo; **revisao atual:** 2026-10-04, CapyOS
+`0.11.1+20261004` (stable, Latest e imutavel, gate de update legado aberto), com
+CapyAgent `0.1.0`, CapyUI `2.27.0`, CapyCodecs `0.1.1` e `capyos-base-v3-r2`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
 
 **Checkpoint local 2026-10-01 (não publicado):** CapyUI `2.26.0` acrescenta
@@ -157,11 +160,11 @@ política de instalação modular.
 
 | Repositório | Versão atual local | ABI declarada | Versão mínima compatível com CapyOS core | Versão máxima testada |
 |---|---|---|---|---|
-| `CapyOS` | `0.10.0+20260904` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
+| `CapyOS` | `0.11.1+20261004` | `capyos-base` v3 + `capyos-package-apply` v1 | — (autoritativo) | — |
 | `CapyAgent` | `0.1.0` | `capy-agent-component-index` v2; resolver publish-time SemVer/ABI/known-good e signer KAT externo | `0.1.0` | `0.1.0` |
 | `CapyBrowser` | `0.6.8` | `capy-browser-core` v1 textual/grafico + `capy_page_render`; HTML/CSS/layout/display-list estaticos, limites e release gate reproduzivel | `0.6.8` | `0.6.8` |
-| `CapyCodecs` | `0.0.13` | `capy-codec-image` v2 (`CAPY_IMAGE_ABI_VERSION=2`, aditiva sobre v1; +`capy_image_format_name`) | `0.0.13` (consumo build-time integrado; pacote remoto ainda gated) | `0.0.13` |
-| `CapyUI` | `2.25.0` | `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1; Software Center com backend capypkg injetado | `2.25.0` | `2.25.0` |
+| `CapyCodecs` | `0.1.1` | `capy-codec-image` v2 + `capy-codec-audio` v1 (WAV/Vorbis limitado) | `0.1.1` (imagem e audio publicados no indice signed) | `0.1.1` |
+| `CapyUI` | `2.27.0` | `capy-ui-widget` v2.22 + `capy-ui-desktop-session` v1; Software Center, audio e presets | `2.27.0` | `2.27.0` |
 | `CapyAI` | `0.2.2` | `capy-ai-core` artifact v0; orquestrador governado, modelo fixed-point reproduzivel, split sem leakage, gate massivo de risco e pacote `org.capyos.ai.assistant` | `0.2.2` | `0.2.2` |
 | `CapyLang` | `0.1.13` | `capy-lang-host` v0 (parcial: S1-S7 + S6.3 structs/enums; +opcodes de array 0x60-0x6A incl. push/pop/insert/remove, traps V0017-V0019, 43 opcodes congelados; metodos de array no frontend S10 (a.push/pop/insert/remove/get/set/len, E0022); host-only no sister) | n/a (roadmap-blocked) | n/a |
 | `CapyBenchmark` | `0.0.12` | `capy-benchmark-report` v1 (planejada; serialização report/eval/replay + thresholds derivadas de baseline) | n/a (roadmap-blocked) | n/a |
@@ -186,6 +189,7 @@ instaláveis devem declarar `required_abis` por nome.
 | `capyos-package-apply` | CapyOS | v1 | implícito; aplicação de pacote |
 | `capy-agent-component-index` | CapyAgent | v2 | extensão aditiva com ABI/range/known-good; resolver publica plano determinístico; índice oficial é verificado fail-closed pelo CapyOS |
 | `capy-codec-image` | CapyCodecs | v2 | decodificação de imagem (aditiva sobre v1: per-call limits, detect/generic decode, metadata query, QOI) |
+| `capy-codec-audio` | CapyCodecs | v1 | WAV/Vorbis com limites de entrada e PCM, integrado ao player e publicado em `org.capyos.codecs.audio-wav` 0.1.1 |
 | `capy-browser-core` | CapyBrowser | v1 text subset publicado em CapyBrowser `0.6.0`; core grafico (display-list) consumido na Etapa 7 -- `0.6.6` faz o no IMAGE carregar o `src` resolvido (aditivo em v1, `CAPY_DL_VERSION` inalterado) | adapter CapyOS-side: app ring-3 `capybrowse` (texto) + pipeline/rasterizador/decode graficos (`browser_pipeline`/`browser_render_pixel`/`browser_image`) consumindo o display-list; build-validado (`make test`, `test-browser-pipeline` 19/19, `make all64` clean); runtime grafico via `smoke-x64-qemu-capygfx` (QEMU), gate VMware `smoke-x64-vmware-browser-graphical` mapeado |
 | `capy-ui-widget` | CapyUI | v2.22 (display-list schema v7; v1.x LTS preservado no sister) | Etapa 4 consome `CapyUI/src/widget/capy_display_list.h` via adapter CapyOS-side; ops básicos 2D renderizam no core, ops sem provider (`IMAGE_REF`, transforms, plugins) ficam fail-safe/skip até providers dedicados |
 | `capy-ui-desktop-session` | CapyUI | v1 (publicado em `alpha.241`) | aceita via capypkg `org.capyos.ui.desktop-session`; consultado pelo `kernel/module_gate.c` no boot |
@@ -200,7 +204,7 @@ breaking explícita.
 
 | Repositório | Política de versionamento | Política de tag | Política de assinatura |
 |---|---|---|---|
-| `CapyOS` | `0.9.2+20260826` (stable extended) | `v<major>.<minor>.<patch>+<YYYYMMDD>` | release assinada, imutavel e aceita pelo gate completo |
+| `CapyOS` | `0.11.1+20261004` (stable extended) | `v<major>.<minor>.<patch>+<YYYYMMDD>` | assinada e imutavel; instalacao nova aceita, A/B legado bloqueado no cache |
 | `CapyAgent` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | assinatura Ed25519 obrigatória no payload do adapter; **signer publicado host-side em `0.0.7` (`src/signer/`); verifier CapyOS-side registrado via `capypkg_set_signature_verifier` (alpha.276), KAT host-validado e trust anchor de producao publicado na CapyOS `0.9.1`; KAT externo do signer pendente** |
 | `CapyBrowser` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>`; `v0.6.0` publica `org.capyos.browser.text` para Etapa 6 | assinatura obrigatoria quando o fluxo signed for promovido; laboratorio segue `--unsigned` |
 | `CapyCodecs` | semver `MAJOR.MINOR.PATCH` | `v<x>.<y>.<z>` | será obrigatória quando entrar como pacote |
@@ -231,7 +235,7 @@ incidente; documente no `STATUS.md`.
 | Etapas 5-7 (concluídas) | CapyUI widget/desktop, CapyCodecs image v2, CapyBrowser estático textual/gráfico e CapyAI `capy-ai-core` v0 / `org.capyos.ai.assistant` integrados por seams/adapters versionados | CapyLang, CapyBenchmark |
 | Etapa 8 (concluída) | installer/update/release gate; `0.9.2` promovida como Latest imutável e ciclo A/B VMware público aprovado | CapyLang, CapyBenchmark |
 | Etapa 9 (concluída) | package manager + SDK + ABI estável; `0.10.0+20260904` promovida como Latest imutável e ciclo A/B VMware público aprovado | CapyLang, CapyBenchmark |
-| Etapa 10 | CapyCodecs audio | CapyLang, CapyBenchmark |
+| Etapa 10 (publicada, A/B legado aberto) | CapyCodecs audio 0.1.1 + CapyUI 2.27.0 | CapyLang, CapyBenchmark |
 | Etapa 15 | CapyLang VM e benchmarks | — |
 | Etapa 16 | baseline CapyBenchmark | — |
 

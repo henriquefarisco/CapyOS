@@ -486,9 +486,15 @@ def make_qemu_cmd(
                        "out.frequency=48000,out.channels=2,out.format=s16")
         cmd.extend(["-audiodev", backend])
         if audio_hda:
+            # WAV rate control and the codec's virtual timer can diverge under
+            # TCG, dropping an entire 8192-byte codec FIFO on overrun. Capture
+            # uses backend-driven DMA; non-capture gates retain the timer.
+            codec = "hda-duplex,audiodev=audio0"
+            if audio_capture is not None:
+                codec += ",use-timer=off"
             cmd.extend([
                 "-device", "intel-hda",
-                "-device", "hda-duplex,audiodev=audio0",
+                "-device", codec,
             ])
         elif audio_usb:
             cmd.extend(["-device", "qemu-xhci,id=audio-usb",
