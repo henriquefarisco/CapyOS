@@ -76,15 +76,8 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_commit=$TAG_COMMIT" >> "$GITHUB_OUTPUT"
           echo "published_at=$PUBLISHED_AT" >> "$GITHUB_OUTPUT"
-          BRIDGE_VERSION=""
-          if git cat-file -e "${TAG_COMMIT}:include/core/runtime_version.h" 2>/dev/null; then
-            BRIDGE_VERSION="$(git show "${TAG_COMMIT}:include/core/runtime_version.h" \
-              | sed -n 's/^#define CAPYOS_RUNTIME_VERSION_FULL[[:space:]]*"\([^"]*\)"/\1/p')"
-            if [[ ! "$BRIDGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]{8}$ ]]; then
-              echo "Invalid tagged migration bridge runtime identity"
-              exit 1
-            fi
-          fi
+          BRIDGE_VERSION="$(python3 tools/scripts/migration_bridge_policy.py \
+            --tag-commit "$TAG_COMMIT" --release-version "$VERSION")"
           echo "bridge_version=$BRIDGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Require the approved release signer fingerprint

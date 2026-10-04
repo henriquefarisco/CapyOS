@@ -3266,6 +3266,7 @@ verify-update-payload-budget:
 MIGRATION_BRIDGE_BUILD ?= $(BUILD)/migration-bridge
 .PHONY: migration-bridge
 migration-bridge:
+	python3 tools/scripts/migration_bridge_policy.py --require-bridge
 	@if [ -n "$(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)" ] || [ -n "$(CAPYOS_UPDATE_LAB_MANIFEST_URL)" ]; then echo "[err] production migration bridge forbids lab trust overrides"; exit 2; fi
 	$(MAKE) all64 BUILD="$(MIGRATION_BRIDGE_BUILD)" TOOLCHAIN64=$(TOOLCHAIN64) \
 		EXTRA_CFLAGS64='-DCAPYOS_MIGRATION_BRIDGE'
@@ -3280,6 +3281,7 @@ test-update-payload-budget:
 	python3 tools/scripts/test_installed_artifact_bundle.py
 	python3 tools/scripts/test_migration_bridge_contract.py
 	python3 tools/scripts/test_migration_evidence.py
+	python3 tools/scripts/test_migration_bridge_policy.py
 
 test: test-update-payload-budget
 

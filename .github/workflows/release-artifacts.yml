@@ -79,6 +79,11 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "published_at=$PUBLISHED_AT" >> "$GITHUB_OUTPUT"
+          BRIDGE_VERSION=""
+          if [ -f .github/release-policy/migration-bridge.json ]; then
+            BRIDGE_VERSION="$(python3 tools/scripts/migration_bridge_policy.py --release-version "$VERSION")"
+          fi
+          echo "bridge_version=$BRIDGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Checkout pinned release siblings
         shell: bash
@@ -126,6 +131,7 @@ jobs:
 
       - name: Build separate OTA migration bridge
         id: bridge
+        if: steps.release.outputs.bridge_version != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -181,14 +187,16 @@ jobs:
             --payload-url "$PAYLOAD_URL" \
             --output build/update/latest.unsigned.ini \
             --force
-          python3 tools/scripts/build_update_manifest.py \
-            --unsigned \
-            --version "${{ steps.bridge.outputs.version }}" \
-            --channel stable --branch main --source "github:${GITHUB_REPOSITORY}" \
-            --published-at "$PUBLISHED_AT" \
-            --payload build/migration-bridge/capyos-bridge64.bin \
-            --payload-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/capyos-bridge64.bin" \
-            --output build/update/bridge.unsigned.ini --force
+          if [ -n "${{ steps.release.outputs.bridge_version }}" ]; then
+            python3 tools/scripts/build_update_manifest.py \
+              --unsigned \
+              --version "${{ steps.release.outputs.bridge_version }}" \
+              --channel stable --branch main --source "github:${GITHUB_REPOSITORY}" \
+              --published-at "$PUBLISHED_AT" \
+              --payload build/migration-bridge/capyos-bridge64.bin \
+              --payload-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/capyos-bridge64.bin" \
+              --output build/update/bridge.unsigned.ini --force
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "payload_url=$PAYLOAD_URL" >> "$GITHUB_OUTPUT"
           {
@@ -222,12 +230,16 @@ jobs:
           SOURCES=(
             "$ISO_PATH"
             build/capyos64.bin
-            build/migration-bridge/capyos-bridge64.bin
             build/manifest.bin
             build/capypkg/modules-index.txt
             "${AI_ASSETS[0]}"
             build/capypkg/modules.sha256
           )
+          EXPECTED_PAYLOADS=6
+          if [ -n "${{ steps.release.outputs.bridge_version }}" ]; then
+            SOURCES+=(build/migration-bridge/capyos-bridge64.bin)
+            EXPECTED_PAYLOADS=7
+          fi
           for source in "${SOURCES[@]}"; do
             if [ ! -f "$source" ] || [ -L "$source" ]; then
               echo "Invalid release asset source: $source"
@@ -242,8 +254,8 @@ jobs:
               find . -maxdepth 1 -type f ! -name release-artifacts.sha256 \
                 -printf '%f\n' | LC_ALL=C sort
             )
-            if [ "${#PAYLOADS[@]}" -ne 7 ]; then
-              echo "Expected exactly seven payload assets, got ${#PAYLOADS[@]}"
+            if [ "${#PAYLOADS[@]}" -ne "$EXPECTED_PAYLOADS" ]; then
+              echo "Expected exactly $EXPECTED_PAYLOADS payload assets, got ${#PAYLOADS[@]}"
               exit 1
             fi
             sha256sum -c modules.sha256

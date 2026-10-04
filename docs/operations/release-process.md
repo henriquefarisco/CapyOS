@@ -358,7 +358,10 @@ ISO e em `capyos64.bin`. Assine separadamente `bridge.ini` com o mesmo signer
 offline do update-agent, apontando ao asset da tag FINAL, nao a uma tag ficticia
 0.11.2. Inclua o kernel da ponte no checksum assinado (sete payloads).
 
-O promoter le o contrato de ponte da tag, exige ambos os assets e verifica as
+O contrato `.github/release-policy/migration-bridge.json` da tag vincula a
+ponte somente a versao final 0.11.3+20261004. Releases futuras, inclusive alpha,
+nao herdam essa exigencia; identidade divergente e policy malformada falham.
+O promoter le esse contrato da tag, exige ambos os assets e verifica as
 duas assinaturas de update, hashes, limites e versoes antes da promocao e nas
 rotas publicas imutavel/Latest. Tags antigas sem esse contrato continuam com
 12 assets e recusam a injecao de uma ponte retroativa.
