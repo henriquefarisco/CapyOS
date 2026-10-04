@@ -1,13 +1,13 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-09-04 (0.10.0 stable publicada, Latest e imutável)
-**Versão atual:** `0.10.0+20260904`
-**Candidato em preparacao:** `0.11.1+20261004` (audio, boot sonoro e musicas;
-nao publicado; a versao publica acima permanece vigente).
+**Data de referência:** 2026-10-04 (0.11.1 stable publicada, Latest e imutável)
+**Versão atual:** `0.11.1+20261004`
+**Aceite pendente:** update A/B a partir de 0.10.0 bloqueado pelo limite por
+arquivo do CapyFS antigo; instalacao nova da ISO final aprovada no VMware.
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-9 publicadas; Etapa 10 concluída em engenharia local (2026-10-02), ainda não publicada; 10/16 etapas concluídas; Etapa 11 desbloqueada.
+**Status:** Etapas 1-10 publicadas; Etapa 10 concluída em engenharia local (2026-10-02), aceite de update da release ainda aberto; Etapa 11 desbloqueada em engenharia, nao substitui a correcao da migracao.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -1472,11 +1472,13 @@ de release. Integração gated pelas **Etapas 15-16**.
 
 ## 21. Próximo comando esperado
 
-Etapas 1-9 estão fechadas. A release `0.10.0+20260904` está publicada
+Etapas 1-9 estão fechadas. A release `0.11.1+20261004` está publicada
 como Latest imutável com 12 assets assinados e o índice agregado imutável
-`modules-capyos-base-v3` resolve os sete módulos oficiais pelos releases dos
+`modules-capyos-base-v3-r2` resolve oito módulos oficiais pelos releases dos
 respectivos produtores.
 
-**Próxima ação:** planejar a Etapa 11 (§14) em branch própria, identificando
-hardware WiFi e os gates de energia. A Etapa 10 está concluída localmente;
-publicação exige seu fluxo de release separado, sem promover os pins por inferência.
+**Próxima ação:** resolver a migracao dos clientes 0.10.0: o payload de
+7.400.072 bytes verifica corretamente, mas excede o limite de 4.243.456 bytes
+por arquivo do cache CapyFS legado. Nao houve update aplicado. Preservar a
+release imutavel e validar uma nova estrategia antes de fechar o A/B publico.
+A Etapa 11 (§14) permanece liberada em engenharia, nao como substituto do gate.

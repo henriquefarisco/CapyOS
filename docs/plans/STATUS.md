@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-09-04 | **Versao:** `0.10.0+20260904` (stable, Latest e imutavel) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-10-04 | **Versao:** `0.11.1+20261004` (stable, Latest e imutavel; instalacao nova validada, update 0.10.0 bloqueado) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -19,13 +19,18 @@
 
 ## Progresso global
 
-- **Release de audio em preparacao (2026-10-03):** candidato
+- **Release de audio publicada (2026-10-04):**
   `0.11.1+20261004`, CapyUI `2.27.0`, CapyCodecs `0.1.1`; som de boot, splash
   com atualizacao parcial e tres musicas OGG. Corrigida imagem EFI pequena que
   produzia `Volume Corrupt`; instalacao Full, desktop e persistencia passaram
-  em QEMU e VMware. Publicacao assinada e validacao do artefato final pendentes.
+  em QEMU e VMware. A ISO final passou Full/desktop/persistencia no VMware
+  (`9e7ac7f6ce08`); publicacao assinada imutavel com 12 assets passou
+  (`37225241587`). O A/B de producao a partir de 0.10.0 falhou na persistencia
+  do cache: kernel 7.400.072 bytes versus limite CapyFS 4.243.456 por arquivo.
+  Nenhum update foi aplicado. Instalacao nova aceita; migracao antiga e aceite
+  final de update pendentes. [Detalhes](../releases/capyos-0.11.1+20261004.md).
 
-- **Etapa 10 concluída localmente em 2026-10-02, não publicada:** rota/ganho HDA
+- **Aceite local da Etapa 10 em 2026-10-02 (checkpoint anterior a publicacao):** rota/ganho HDA
   corrigidos; playlist WAV/OGG capturada no VMware em dois boots. HDA/AC97/USB
   passaram com PCM no QEMU, unplug USB preservou shell/teclado, e testes completos,
   sanitizadores e validações de CapyUI 2.26.0/CapyCodecs 0.1.1 passaram.
@@ -503,7 +508,7 @@ Resumo executivo vigente:
 | 7 | Browser usável com web estática moderna | Concluída | fechada em alpha.312; integra CapyBrowser, CapyCodecs e CapyAI |
 | 8 | Release/update gate oficial + instalador polido | **Concluída** | fechada na `0.9.2` com promoção imutável e ciclo A/B oficial VMware |
 | 9 | Package manager + SDK + ABI estável | **Concluída** | fechada na `0.10.0+20260904` com release assinada, imutável e Latest |
-| 10 | Áudio + multimídia básica | **Concluída localmente, não publicada** | CapyUI 2.26.0 + CapyCodecs 0.1.1, gates QEMU/VMware aprovados |
+| 10 | Áudio + multimídia básica | **Publicada; aceite de update pendente** | CapyUI 2.27.0 + CapyCodecs 0.1.1; instalacao nova passou, cache legado bloqueia A/B |
 | 11 | WiFi + power management + suspend/resume | **Desbloqueada (próxima)** | sem repo apartado |
 | 12 | JS engine sandboxed | Bloqueada | engine pode ser apartada por contrato |
 | 13 | CapyLX L0-L5 unificado | Bloqueada | sem repo apartado |
@@ -1095,7 +1100,7 @@ do display-list ou no pin do sister deve passar pelo workflow
 ## Histórico do bloqueio sequencial observado na Etapa 4
 
 Naquele snapshot, as Etapas 5-16 dependiam do fechamento integral da anterior.
-Hoje as Etapas 1-9 estão publicadas e a Etapa 10 fechou o aceite local, sem publicação.
+Hoje as Etapas 1-10 estão publicadas; o aceite de update da 0.11.1 permanece aberto pela capacidade do cache legado.
 A Etapa 11 é a próxima; somente as Etapas 12-16 permanecem bloqueadas. Repositórios apartados podem evoluir em paralelo (CapyUI já entregou v2.22.0 com
 desktop session e widget/display-list schema v7; CapyLang já entregou S1-S7 host-only (lexer/parser/diagnostics/bytecode v0/VM/host bridge); demais permanecem em
 ABI host-only ou planejada) — mas só contam como progresso oficial
