@@ -20,6 +20,8 @@ FAILURES = ("KERNEL PANIC", "#PF", "#GP", "[boot-audio] unavailable", "[music] p
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "build/boot-sound-validation")
+    parser.add_argument("--artifact-dir", type=Path,
+                        help="Explicit loader/kernel/manifest bundle; default is build/")
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--boots", type=int, choices=range(1, 11), default=2)
     parser.add_argument("--no-screenshot", action="store_true",
@@ -27,7 +29,7 @@ def main():
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    boot, kernel, manifest = validate_installed_disk_artifacts(ROOT)
+    boot, kernel, manifest = validate_installed_disk_artifacts(ROOT, artifact_dir=args.artifact_dir)
     code, template = resolve_ovmf_or_raise(None)
     qemu = resolve_qemu_binary("qemu-system-x86_64")
     with tempfile.TemporaryDirectory(prefix="capy-boot-sound-") as temp:

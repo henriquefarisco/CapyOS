@@ -30,6 +30,13 @@ politica de tamanho, assinatura ou confianca foi relaxada.
 CapyAgent `0.1.0`, CapyUI `2.27.0`, CapyCodecs `0.1.1` e `capyos-base-v3-r2`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
 
+**Candidata local:** `0.11.3+20261004`, com ponte OTA `0.11.2` e cache
+segmentado privado do update-agent. Nao altera CapyFS v2, ABI, pins, epoca ou
+ancoras de confianca. A imagem completa preserva as tres musicas; somente a
+ponte adia novos presets. Host e A/B QEMU passaram; a ISO local completa passou
+QEMU e VMware Full/desktop/musicas/persistencia (`c9e5f1abbff9`, guard intacto).
+Bytes do CI, migracao VMware de producao e publicacao ainda pendentes.
+
 **Checkpoint local 2026-10-01 (não publicado):** CapyUI `2.26.0` acrescenta
 medidores PCM estéreo usando a API aditiva `audio_service_get_app_levels` do
 kernel desta branch. CapyCodecs permanece `0.1.1`; estruturas de status e ABIs

@@ -109,10 +109,11 @@ def print_log_tail(log_path: Path) -> None:
         pass
 
 
-def validate_installed_disk_artifacts(repo_root: Path) -> tuple[Path, Path, Path]:
-    bootx64 = (repo_root / "build/boot/uefi_loader.efi").resolve()
-    kernel = (repo_root / "build/capyos64.bin").resolve()
-    manifest = (repo_root / "build/manifest.bin").resolve()
+def validate_installed_disk_artifacts(repo_root: Path, *, artifact_dir: Path | None = None) -> tuple[Path, Path, Path]:
+    root = (repo_root / (artifact_dir or Path("build"))).resolve()
+    bootx64 = (root / "boot/uefi_loader.efi").resolve()
+    kernel = (root / "capyos64.bin").resolve()
+    manifest = (root / "manifest.bin").resolve()
     for path in (bootx64, kernel, manifest):
         if not path.exists():
             raise FileNotFoundError(f"required artifact missing: {path}")

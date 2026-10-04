@@ -1,6 +1,6 @@
 #include "internal/network_internal.h"
 
-#include "core/version.h"
+#include "core/runtime_version.h"
 
 static void shell_print_signed_number(int32_t value) {
   uint32_t magnitude = 0u;
@@ -55,7 +55,7 @@ static void print_hyperv_runtime_dump(const struct net_stack_status *st) {
   shell_print(net_cli_hyperv_block_label(st, &platform));
   shell_newline();
   shell_print("hyperv.build version=");
-  shell_print(CAPYOS_VERSION_FULL);
+  shell_print(CAPYOS_RUNTIME_VERSION_FULL);
   shell_print(" feature=");
   shell_print(CAPYOS_FEATURE_HYPERV_RUNTIME);
   shell_print(" diag=");
@@ -258,7 +258,7 @@ int net_cmd_status(struct shell_context *ctx, int argc, char **argv) {
       shell_print(platform.synthetic_storage_ready ? "yes" : "no");
       shell_newline();
       shell_print("build=");
-      shell_print(CAPYOS_VERSION_FULL);
+      shell_print(CAPYOS_RUNTIME_VERSION_FULL);
       shell_print(" feature=");
       shell_print(CAPYOS_FEATURE_HYPERV_RUNTIME);
       shell_print(" diag=");
@@ -462,7 +462,7 @@ int net_cmd_refresh(struct shell_context *ctx, int argc, char **argv) {
           shell_print_ok(net_cli_text(language, NET_REFRESH_WAIT_PLATFORM));
           shell_newline();
           shell_print("hyperv.wait build=");
-          shell_print(CAPYOS_VERSION_FULL);
+          shell_print(CAPYOS_RUNTIME_VERSION_FULL);
           shell_print(" feature=");
           shell_print(CAPYOS_FEATURE_HYPERV_RUNTIME);
           shell_print(" ebs=");

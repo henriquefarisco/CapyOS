@@ -1,4 +1,5 @@
 #include "internal/system_control_internal.h"
+#include "core/runtime_version.h"
 #include "auth/privilege.h"
 #ifdef CAPYOS_HAVE_CAPYAI
 #include "services/capyai.h"
@@ -297,7 +298,7 @@ static void print_runtime_native_status(const char *language) {
   struct system_runtime_platform platform;
   system_runtime_platform_get(&platform);
   shell_print("build=");
-  shell_print(CAPYOS_VERSION_FULL);
+  shell_print(CAPYOS_RUNTIME_VERSION_FULL);
   shell_print(" feature=");
   shell_print(CAPYOS_FEATURE_HYPERV_RUNTIME);
   shell_newline();

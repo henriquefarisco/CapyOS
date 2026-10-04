@@ -82,6 +82,7 @@ static int update_runtime_remover(const char *path) {
 
   session_set_active(NULL);
   rc = vfs_unlink(path);
+  if (rc != 0 && vfs_last_error() == VFS_ERR_NOT_FOUND) rc = 0;
   session_set_active(previous_session);
   return rc;
 }

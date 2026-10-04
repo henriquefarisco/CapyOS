@@ -3,7 +3,7 @@
 #include "net/hyperv_runtime_policy.h"
 
 #include "kernel/log/klog.h"
-#include "core/version.h"
+#include "core/runtime_version.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/net/netvsc_vmbus.h"
 
@@ -91,7 +91,7 @@ static void log_runtime_checkpoint(const struct net_hyperv_runtime_state *state)
   }
 
   hyperv_runtime_log("[netvsc] build=");
-  hyperv_runtime_log(CAPYOS_VERSION_FULL);
+  hyperv_runtime_log(CAPYOS_RUNTIME_VERSION_FULL);
   hyperv_runtime_log(" feature=");
   hyperv_runtime_log(CAPYOS_FEATURE_HYPERV_RUNTIME);
   hyperv_runtime_log(" stage=");

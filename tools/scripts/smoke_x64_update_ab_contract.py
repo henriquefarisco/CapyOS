@@ -47,6 +47,7 @@ EVIDENCE_FORMAT = "capyos-signed-ab-update-evidence-manifest-v1"
 PRODUCTION_EVIDENCE_FORMAT = (
     "capyos-production-signed-ab-update-evidence-manifest-v2"
 )
+PRODUCTION_MIGRATION_EVIDENCE_FORMAT = "capyos-production-bridge-migration-evidence-manifest-v1"
 TRACK = "UEFI/GPT/x86_64"
 PROVIDERS = ("qemu-ovmf", "vmware-workstation")
 TRUST_ANCHOR = "lab-ed25519"
@@ -173,6 +174,10 @@ _PRODUCTION_REQUIRED_FIELDS = (
 )
 
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_MIGRATION_REQUIRED_FIELDS = (*_PRODUCTION_REQUIRED_FIELDS,
+    "bridge_version", "bridge_manifest_url", "bridge_payload_url",
+    "bridge_payload_size", "bridge_payload_sha256", "bridge_attempt_slot",
+    "bridge_health_confirmed", "bridge_route_retired")
 _DECIMAL_RE = re.compile(r"^[1-9][0-9]*$")
 
 
@@ -446,20 +451,24 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
 
 
 def render_production_evidence(fields: Mapping[str, str]) -> str:
-    if tuple(fields) != _PRODUCTION_REQUIRED_FIELDS:
+    order = (_MIGRATION_REQUIRED_FIELDS if fields.get("format") ==
+             PRODUCTION_MIGRATION_EVIDENCE_FORMAT else _PRODUCTION_REQUIRED_FIELDS)
+    if tuple(fields) != order:
         raise ValueError(
             "production evidence fields must use the canonical contract order"
         )
-    return "".join(f"{key}={fields[key]}\n" for key in _PRODUCTION_REQUIRED_FIELDS)
+    return "".join(f"{key}={fields[key]}\n" for key in order)
 
 
 def validate_production_evidence(fields: Mapping[str, str]) -> None:
-    missing = [key for key in _PRODUCTION_REQUIRED_FIELDS if key not in fields]
+    migration = fields.get("format") == PRODUCTION_MIGRATION_EVIDENCE_FORMAT
+    order = _MIGRATION_REQUIRED_FIELDS if migration else _PRODUCTION_REQUIRED_FIELDS
+    missing = [key for key in order if key not in fields]
     if missing:
         raise ValueError(
             f"production evidence is missing fields: {', '.join(missing)}"
         )
-    if fields["format"] != PRODUCTION_EVIDENCE_FORMAT:
+    if not migration and fields["format"] != PRODUCTION_EVIDENCE_FORMAT:
         raise ValueError("production evidence format mismatch")
     if fields["track"] != TRACK:
         raise ValueError(f"production evidence track must be {TRACK}")
@@ -530,13 +539,14 @@ def validate_production_evidence(fields: Mapping[str, str]) -> None:
     for key in ("first_attempt_slot", "second_attempt_slot"):
         if fields[key] not in ("0", "1"):
             raise ValueError(f"{key} must be slot 0 or 1")
-    if (fields["first_attempt_slot"], fields["second_attempt_slot"]) != ("1", "1"):
+    expected_slot = "0" if migration else "1"
+    if (fields["first_attempt_slot"], fields["second_attempt_slot"]) != (expected_slot, expected_slot):
         raise ValueError(
-            "production rollback-then-confirm must reapply twice to inactive slot 1"
+            "production rollback-then-confirm must reapply twice to the expected inactive slot"
         )
     if not _DECIMAL_RE.fullmatch(fields["boots_observed"]) or int(
         fields["boots_observed"]
-    ) < 4:
+    ) < (5 if migration else 4):
         raise ValueError("a production two-cycle proof needs at least 4 boots")
     if compare_update_versions(
         fields["manifest_version"], fields["predecessor_version"]
@@ -557,6 +567,21 @@ def validate_production_evidence(fields: Mapping[str, str]) -> None:
         raise ValueError("production payload_url must identify the release exactly")
     if contains_recovery_key(render_production_evidence(fields)):
         raise ValueError("production evidence text still contains a recovery key")
+    if migration:
+        if not (compare_update_versions(fields["bridge_version"], fields["predecessor_version"]) > 0
+                and compare_update_versions(fields["manifest_version"], fields["bridge_version"]) > 0):
+            raise ValueError("migration requires predecessor < bridge < full release")
+        if (fields["bridge_attempt_slot"] != "1" or fields["bridge_health_confirmed"] != "yes"
+                or fields["bridge_route_retired"] != "yes"):
+            raise ValueError("migration bridge slot, health and route retirement must be proven")
+        if fields["bridge_manifest_url"] != "https://github.com/henriquefarisco/CapyOS/releases/latest/download/bridge.ini":
+            raise ValueError("bridge must use the official public Latest route")
+        if fields["bridge_payload_url"] != fields["payload_url"].removesuffix("capyos64.bin") + "capyos-bridge64.bin":
+            raise ValueError("bridge must belong to the full immutable release")
+        if not _DECIMAL_RE.fullmatch(fields["bridge_payload_size"]) or int(fields["bridge_payload_size"]) > (12 + 4096 // 4) * 4096:
+            raise ValueError("bridge exceeds the released predecessor cache bound")
+        if not _HEX64_RE.fullmatch(fields["bridge_payload_sha256"]):
+            raise ValueError("bridge payload digest must be hex64")
 
 
 __all__ = [

@@ -7,7 +7,7 @@
 #include "arch/x86_64/storage_runtime.h"
 #include "arch/x86_64/timebase.h"
 #include "core/system_init.h"
-#include "core/version.h"
+#include "core/runtime_version.h"
 #include "drivers/storage/storvsc_runtime.h"
 
 static int diag_io_ready(const struct x64_platform_diag_io *io) {
@@ -101,7 +101,7 @@ void x64_kernel_print_platform_runtime_mode(
   io->print_hex64((uint64_t)flags);
   io->putc('\n');
   io->print("[boot] Build: ");
-  io->print(CAPYOS_VERSION_FULL);
+  io->print(CAPYOS_RUNTIME_VERSION_FULL);
   io->print(" feature=");
   io->print(CAPYOS_FEATURE_HYPERV_RUNTIME);
   io->print(" diag=");

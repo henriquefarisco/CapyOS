@@ -19,6 +19,16 @@
 
 ## Progresso global
 
+- **Migracao legada em desenvolvimento (2026-10-04):** candidata
+  `0.11.3+20261004` com ponte OTA `0.11.2` menor que 4.243.456 bytes e cache
+  segmentado em partes de ate 2 MiB; tamanho/SHA-256 completo e Ed25519 continuam
+  obrigatorios. `make test` e ciclo A/B QEMU com payload de 7.416.616 bytes
+  passaram (`build/ci/migration-cache-lab-v2.manifest`, laboratorio, nao aceite
+  de producao). A ponte iniciou pelo loader publico 0.10.0 e exibiu 0.11.2.
+  A candidata completa passou boot QEMU e instalacao Full/desktop/tres musicas/
+  persistencia no VMware (`c9e5f1abbff9`, ISO local, guard intacto). Nenhuma nova
+  release publicada; CI, bytes publicos e migracao de producao ainda pendentes.
+
 - **Release de audio publicada (2026-10-04):**
   `0.11.1+20261004`, CapyUI `2.27.0`, CapyCodecs `0.1.1`; som de boot, splash
   com atualizacao parcial e tres musicas OGG. Corrigida imagem EFI pequena que

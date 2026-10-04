@@ -124,6 +124,25 @@ jobs:
         shell: bash
         run: bash tools/scripts/verify_release_siblings.sh linked
 
+      - name: Build separate OTA migration bridge
+        id: bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRIDGE_VERSION="$(sed -n 's/^#define CAPYOS_RUNTIME_VERSION_FULL[[:space:]]*"\([^"]*\)"/\1/p' include/core/runtime_version.h)"
+          FINAL_VERSION="${{ steps.release.outputs.version }}"
+          python3 - "$BRIDGE_VERSION" "$FINAL_VERSION" <<'PY'
+          import sys
+          sys.path.insert(0, 'tools/scripts')
+          from verify_migration_bridge import stable_key
+          if stable_key(sys.argv[1]) >= stable_key(sys.argv[2]):
+              raise SystemExit('Bridge must be strictly older than the full release')
+          PY
+          sha256sum build/capyos64.bin > build/full-kernel-before-bridge.sha256
+          make migration-bridge TOOLCHAIN64=host
+          sha256sum -c build/full-kernel-before-bridge.sha256
+          echo "version=$BRIDGE_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build aggregate module index
         shell: bash
         run: bash tools/scripts/build_release_modules.sh "${{ steps.release.outputs.tag }}"
@@ -162,6 +181,14 @@ jobs:
             --payload-url "$PAYLOAD_URL" \
             --output build/update/latest.unsigned.ini \
             --force
+          python3 tools/scripts/build_update_manifest.py \
+            --unsigned \
+            --version "${{ steps.bridge.outputs.version }}" \
+            --channel stable --branch main --source "github:${GITHUB_REPOSITORY}" \
+            --published-at "$PUBLISHED_AT" \
+            --payload build/migration-bridge/capyos-bridge64.bin \
+            --payload-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/capyos-bridge64.bin" \
+            --output build/update/bridge.unsigned.ini --force
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "payload_url=$PAYLOAD_URL" >> "$GITHUB_OUTPUT"
           {
@@ -195,6 +222,7 @@ jobs:
           SOURCES=(
             "$ISO_PATH"
             build/capyos64.bin
+            build/migration-bridge/capyos-bridge64.bin
             build/manifest.bin
             build/capypkg/modules-index.txt
             "${AI_ASSETS[0]}"
@@ -214,8 +242,8 @@ jobs:
               find . -maxdepth 1 -type f ! -name release-artifacts.sha256 \
                 -printf '%f\n' | LC_ALL=C sort
             )
-            if [ "${#PAYLOADS[@]}" -ne 6 ]; then
-              echo "Expected exactly six payload assets, got ${#PAYLOADS[@]}"
+            if [ "${#PAYLOADS[@]}" -ne 7 ]; then
+              echo "Expected exactly seven payload assets, got ${#PAYLOADS[@]}"
               exit 1
             fi
             sha256sum -c modules.sha256
@@ -233,6 +261,7 @@ jobs:
             build/release-stage/*
             build/CapyOS-Installer-UEFI.last-built.txt
             build/update/latest.unsigned.ini
+            build/update/bridge.unsigned.ini
           if-no-files-found: error
           retention-days: 14
 
@@ -255,7 +284,7 @@ jobs:
               echo "Refusing to replace already-published release $TAG"
               exit 1
             fi
-            if jq -e 'any(.assets[]; .name == "latest.ini" or .name == "release-artifacts.sha256.sig" or .name == "release-ed25519.pub.pem" or .name == "release-public-key.manifest" or .name == "release-publication.manifest")' \
+            if jq -e 'any(.assets[]; .name == "latest.ini" or .name == "bridge.ini" or .name == "release-artifacts.sha256.sig" or .name == "release-ed25519.pub.pem" or .name == "release-public-key.manifest" or .name == "release-publication.manifest")' \
               build/release-existing.json >/dev/null; then
               echo "Refusing to replace payloads after offline signed materials were attached"
               exit 1
@@ -359,6 +388,7 @@ jobs:
             echo "Replace modules-index.txt with its offline-signed form and recompute"
             echo "modules.sha256 plus release-artifacts.sha256. Then upload the signed"
             echo "checksum, approved release public key, public manifests and latest.ini"
+            echo "plus the separately signed bridge.ini (same production update anchor)"
             echo "before running the Promote Signed Release workflow."
             echo "No tag workflow is allowed to mark an unsigned draft as Latest."
           } >> "$GITHUB_STEP_SUMMARY"

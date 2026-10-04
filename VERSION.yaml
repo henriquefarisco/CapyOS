@@ -1026,11 +1026,14 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.11.1
-    extended: 0.11.1+20261004
+    current: 0.11.3
+    extended: 0.11.3+20261004
     stability: production
-    current_summary: "Candidato 0.11.1: audio HDA/AC97/USB, som de boot e musicas OGG com orcamento compativel com o atualizador de 8 MiB; WAVs originais preservados. Publicacao assinada e aceite dos bytes finais pendentes."
+    current_summary: "Candidato 0.11.3: cache OTA segmentado e ponte 0.11.2 compativel com o limite do CapyFS legado; audio, boot e tres OGG preservados na imagem completa. Gates host e A/B QEMU locais passaram; bytes finais, VMware de producao e publicacao pendentes. Latest publica permanece 0.11.1."
     history:
+      - version: 0.11.1+20261004
+        date: 2026-10-04
+        summary: "Audio publicado como Latest imutavel com 12 assets; instalacao nova Full/desktop/persistencia aprovada no VMware. Update de 0.10.0 bloqueado pelo limite de 4.243.456 bytes por arquivo do CapyFS antigo; nenhum update aplicado."
       - version: 0.10.0+20260904
         date: 2026-09-04
         summary: "Etapa 9 publicada como stable Latest imutavel: indice resolve-at-publish assinado, package manager, SDK e ABI capyos-base-v3."

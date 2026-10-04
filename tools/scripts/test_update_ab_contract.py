@@ -1014,10 +1014,10 @@ fixed-address 192.168.87.3;
                 return fail("VMware production gate lost its DNS warm-up proof")
             if 'default="8.26.56.26"' not in driver:
                 return fail("VMware production gate lost its compatible public DNS")
-            if driver.count("verify_production_public_route(") != 3:
+            if driver.count("verify_production_public_route(") != 4:
                 return fail(
                     "VMware production gate must prove the public route "
-                    "before both remote update phases"
+                    "before both remote update phases and the bridge transition"
                 )
             if driver.count("reapply_cached_update_after_rollback(") != 1:
                 return fail("VMware production gate lost the verified-cache reapply")
@@ -1036,8 +1036,8 @@ fixed-address 192.168.87.3;
                     and isinstance(node.func, ast.Name)
                     and node.func.id == "assert_production_runtime"
                 ]
-            if len(runtime_calls) != 4:
-                return fail("VMware production gate must bind all four boots to runtime")
+            if len(runtime_calls) != 5:
+                return fail("VMware production gate must bind all four boots plus the optional bridge to runtime")
             if '"print-version"' not in driver:
                 return fail("VMware production gate no longer queries runtime identity")
             if '[boot] Build:' in driver:

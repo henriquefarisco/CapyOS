@@ -28,6 +28,7 @@ SIGNED_MATERIALS = {
     "release-public-key.manifest",
     "release-publication.manifest",
 }
+BRIDGE_ASSETS = {"bridge.ini", "capyos-bridge64.bin"}
 
 
 class PromotionBundleError(ValueError):
@@ -82,7 +83,8 @@ def parse_checksums(path: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def verify_bundle(bundle_dir: Path) -> list[str]:
+def verify_bundle(bundle_dir: Path, *, require_bridge: bool = False,
+                  forbid_bridge: bool = False) -> list[str]:
     if not bundle_dir.exists() or not bundle_dir.is_dir() or bundle_dir.is_symlink():
         raise PromotionBundleError(f"invalid promotion bundle directory: {bundle_dir}")
 
@@ -96,6 +98,10 @@ def verify_bundle(bundle_dir: Path) -> list[str]:
             raise PromotionBundleError(f"promotion bundle asset is empty: {entry.name}")
 
     names = {entry.name for entry in entries}
+    if require_bridge and forbid_bridge:
+        raise PromotionBundleError("contradictory bridge policy")
+    if forbid_bridge and names & BRIDGE_ASSETS:
+        raise PromotionBundleError("bridge assets forbidden by tagged release policy")
     ai_payloads = sorted(name for name in names if AI_PAYLOAD_RE.fullmatch(name))
     if len(ai_payloads) != 1:
         raise PromotionBundleError(
@@ -104,6 +110,9 @@ def verify_bundle(bundle_dir: Path) -> list[str]:
 
     payloads = FIXED_PAYLOADS | {ai_payloads[0]}
     expected = payloads | SIGNED_MATERIALS | {CHECKSUMS_FILE}
+    if require_bridge or names & BRIDGE_ASSETS:
+        expected |= BRIDGE_ASSETS
+        payloads |= {"capyos-bridge64.bin"}
     missing = sorted(expected - names)
     unexpected = sorted(names - expected)
     if missing:
@@ -120,7 +129,7 @@ def verify_bundle(bundle_dir: Path) -> list[str]:
     expected_checksum_names = sorted(payloads)
     if checksum_names != expected_checksum_names:
         raise PromotionBundleError(
-            "release checksum inventory differs from the six payload assets"
+            "release checksum inventory differs from the exact payload assets"
         )
     for name, expected_digest in checksum_entries:
         actual_digest = sha256_file(bundle_dir / name)
@@ -145,13 +154,19 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--bundle-dir", type=Path, required=True)
+    policy = parser.add_mutually_exclusive_group()
+    policy.add_argument("--require-bridge", action="store_true",
+                        help="Require both bridge assets; signatures need the migration validator")
+    policy.add_argument("--forbid-bridge", action="store_true",
+                        help="Historical tags without a bridge contract cannot gain bridge assets")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        assets = verify_bundle(args.bundle_dir.expanduser())
+        assets = verify_bundle(args.bundle_dir.expanduser(), require_bridge=args.require_bridge,
+                               forbid_bridge=args.forbid_bridge)
     except (OSError, PromotionBundleError) as exc:
         print(f"[err] {exc}", file=sys.stderr)
         return 1

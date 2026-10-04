@@ -430,7 +430,12 @@ int prepare_shell_runtime(void) {
   if (rc == 0 && g_shell_persistent_storage) {
     int music_rc = builtin_music_install();
     if (music_rc == 0) music_rc = kernel_sync_root_volume();
-    dbg_runtime_puts(music_rc == 0 ? "[music] preset ready\n" : "[music] preset failed; retry next boot\n");
+#if defined(CAPYOS_MIGRATION_BRIDGE)
+    dbg_runtime_puts("[music] deferred by migration bridge\n");
+#else
+    dbg_runtime_puts(music_rc == 0 ? "[music] preset ready\n" :
+                                     "[music] preset failed; retry next boot\n");
+#endif
   }
   dbg_runtime_puts(rc == 0 ? "[pr] ok\n" : "[pr] fail\n");
   return rc;

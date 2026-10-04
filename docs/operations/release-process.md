@@ -334,7 +334,8 @@ públicas. Essa retomada somente leitura continua possível após novos commits 
 
 ## 5. Encerramento
 
-Confirme workflows verdes, título/notas da release, 12 assets públicos e o tag
+Confirme workflows verdes, título/notas da release, inventario exato (12 assets
+historicos ou 14 com a ponte obrigatoria declarada pela tag) e o tag
 retornado por `/releases/latest`. Depois da promoção, execute o ciclo A/B de
 produção no VMware oficial com
 `smoke-x64-vmware-update-ab-production-existing-iso`; esse é um gate de aceite
@@ -347,3 +348,32 @@ versão ou o gate com chave de laboratório como substituto. Preserve a evidênc
 e remova apenas temporários e VMs descartáveis cuja identidade tenha sido
 confirmada. A existência do artifact ou da tag, isoladamente, não conclui a
 publicação nem fecha a Etapa 8.
+
+### Migracao de clientes com CapyFS legado
+
+A candidata 0.11.3 acrescenta `capyos-bridge64.bin` e `bridge.ini`. A ponte tem
+runtime 0.11.2, cabe no limite por arquivo de 4.243.456 bytes e nao e uma ISO;
+seu build separado e `make migration-bridge`. O kernel completo permanece na
+ISO e em `capyos64.bin`. Assine separadamente `bridge.ini` com o mesmo signer
+offline do update-agent, apontando ao asset da tag FINAL, nao a uma tag ficticia
+0.11.2. Inclua o kernel da ponte no checksum assinado (sete payloads).
+
+O promoter le o contrato de ponte da tag, exige ambos os assets e verifica as
+duas assinaturas de update, hashes, limites e versoes antes da promocao e nas
+rotas publicas imutavel/Latest. Tags antigas sem esse contrato continuam com
+12 assets e recusam a injecao de uma ponte retroativa.
+
+Para o aceite VMware, forneca adicionalmente `--production-bridge-manifest`,
+`--production-bridge-payload` e `--production-bridge-version 0.11.2+20261004` ao
+harness, junto dos argumentos normais de producao. Os quatro arquivos publicos
+devem estar no mesmo diretorio, com seus nomes canonicos. O guest predecessor
+recebe a rota oficial `.../releases/latest/download/bridge.ini` pelo editor ja
+existente. A ponte deve iniciar no slot B, confirmar saude, persistir o retorno
+a `latest.ini` e aplicar o full no slot A; depois, rollback para B e reaplicacao
+do cache precisam terminar com A confirmado. O manifesto de evidencia distingue
+essa migracao do ciclo direto antigo e exige pelo menos cinco boots de runtime.
+
+Somente execute esse fluxo publico quando a release com os 14 assets existir.
+As musicas existentes e WAVs originais sao preservados; a ponte adia novos
+presets, e o full os instala. Nao usar chaves de laboratorio nem relaxar trust,
+quotas ou protecoes para fechar o aceite.

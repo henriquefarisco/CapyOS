@@ -24,6 +24,7 @@
 #include "services/update_agent.h"
 #include "kernel/log/klog.h"
 #include "security/sha256.h"
+#include "services/update_payload_cache.h"
 
 #if !defined(UNIT_TEST)
 #include "memory/kmem.h"
@@ -35,6 +36,13 @@
 #include <stdint.h>
 
 #define UPDATE_AGENT_PAYLOAD_FETCH_ATTEMPTS 2u
+
+static struct update_cache_io cache_io(void) {
+  struct update_cache_io io = {update_agent_active_bytes_reader(),
+                              update_agent_active_bytes_writer(),
+                              update_agent_active_remover()};
+  return io;
+}
 
 #if defined(UNIT_TEST)
 static uint8_t g_update_payload_storage[UPDATE_AGENT_PAYLOAD_MAX_BYTES];
@@ -66,6 +74,7 @@ static int write_state_file(int pending_activation,
 
 static int invalidate_payload_cache_state(void) {
   update_agent_remove_file_fn remover = update_agent_active_remover();
+  struct update_cache_io io = cache_io();
   const char *staged_path = update_agent_g_status.staged_manifest_path[0]
                                 ? update_agent_g_status.staged_manifest_path
                                 : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH;
@@ -73,7 +82,7 @@ static int invalidate_payload_cache_state(void) {
 
   update_agent_g_status.payload_cache_sha256[0] = '\0';
   if (!remover ||
-      remover(update_agent_g_status.payload_cache_path[0]
+      update_cache_remove(&io, update_agent_g_status.payload_cache_path[0]
                   ? update_agent_g_status.payload_cache_path
                   : UPDATE_AGENT_PAYLOAD_CACHE_PATH) != 0) {
     rc = -1;
@@ -104,6 +113,7 @@ int update_agent_payload_load_verified(
     const struct update_manifest_view *manifest, uint8_t **out_buffer,
     size_t *out_len) {
   update_agent_read_bytes_fn reader = update_agent_active_bytes_reader();
+  struct update_cache_io io = cache_io();
   uint8_t digest[SHA256_DIGEST_SIZE];
   char digest_hex[UPDATE_AGENT_SHA256_HEX_MAX];
   size_t payload_len = 0u;
@@ -129,7 +139,7 @@ int update_agent_payload_load_verified(
   if (!payload_buffer) {
     return -1;
   }
-  if (reader(update_agent_g_status.payload_cache_path, payload_buffer,
+  if (update_cache_read(&io, update_agent_g_status.payload_cache_path, payload_buffer,
              payload_limit, &payload_len) == 0 &&
       payload_len > 0u && payload_len <= payload_limit &&
       (!manifest->payload_size_present ||
@@ -254,6 +264,7 @@ int update_agent_fetch_remote_manifest(void) {
 }
 
 int update_agent_download_payload(void) {
+  struct update_cache_io io = cache_io();
   struct update_manifest_view manifest;
   uint8_t digest[SHA256_DIGEST_SIZE];
   char digest_hex[UPDATE_AGENT_SHA256_HEX_MAX];
@@ -356,7 +367,7 @@ int update_agent_download_payload(void) {
     return -44;
   }
 
-  if (writer(update_agent_g_status.payload_cache_path, payload_buffer,
+  if (update_cache_write(&io, update_agent_g_status.payload_cache_path, payload_buffer,
              payload_len) != 0) {
     invalidate_payload_cache_state();
     update_agent_g_status.last_result = -45;
@@ -370,7 +381,7 @@ int update_agent_download_payload(void) {
 
   update_agent_local_zero(payload_buffer, payload_limit);
   if (!reader ||
-      reader(update_agent_g_status.payload_cache_path, payload_buffer,
+      update_cache_read(&io, update_agent_g_status.payload_cache_path, payload_buffer,
              payload_limit, &readback_len) != 0 ||
       readback_len != payload_len) {
     invalidate_payload_cache_state();
@@ -707,6 +718,7 @@ int update_agent_stage_latest(void) {
 
 int update_agent_clear_stage(void) {
   update_agent_remove_file_fn remover = update_agent_active_remover();
+  struct update_cache_io io = cache_io();
 
   update_agent_init(NULL);
   if (remover) {
@@ -715,7 +727,7 @@ int update_agent_clear_stage(void) {
                     ? update_agent_g_status.staged_manifest_path
                     : UPDATE_AGENT_DEFAULT_STAGED_MANIFEST_PATH) != 0)
       remove_rc = -1;
-    if (remover(update_agent_g_status.payload_cache_path[0]
+    if (update_cache_remove(&io, update_agent_g_status.payload_cache_path[0]
                     ? update_agent_g_status.payload_cache_path
                     : UPDATE_AGENT_PAYLOAD_CACHE_PATH) != 0)
       remove_rc = -1;

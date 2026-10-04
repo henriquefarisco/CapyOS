@@ -219,6 +219,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--debugcon-log",
                    default="build/ci/smoke_x64_qemu_marker.debugcon.log")
     p.add_argument("--disk", default="build/ci/smoke_x64_qemu_marker.img")
+    p.add_argument("--artifact-dir", type=Path,
+                   help="Explicit loader/kernel/manifest bundle; default is build/")
     p.add_argument("--disk-size", default="2G")
     p.add_argument("--keep-disk", action="store_true")
     p.add_argument("--volume-key", default="CAPYOS-SMOKE-KEY-2026-0001")
@@ -265,7 +267,8 @@ def main() -> int:
     try:
         qemu_bin = resolve_qemu_binary(args.qemu)
         ovmf_code, ovmf_vars_template = resolve_ovmf_or_raise(args.ovmf)
-        bootx64, kernel, manifest = validate_installed_disk_artifacts(REPO_ROOT)
+        bootx64, kernel, manifest = validate_installed_disk_artifacts(
+            REPO_ROOT, artifact_dir=args.artifact_dir)
     except FileNotFoundError as exc:
         print(f"[err] {exc}", file=sys.stderr)
         return 2

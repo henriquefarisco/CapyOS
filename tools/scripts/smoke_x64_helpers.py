@@ -167,12 +167,17 @@ def run_cmd_expect_prompt(
     timeout: float,
     prompt: str,
     expect: str | None = None,
+    require_command_echo: bool = False,
 ) -> None:
     mk = session.marker()
     session.send_line(cmd)
     if expect:
         session.wait_for(expect, timeout=timeout, start_at=mk)
-    session.wait_for(prompt, timeout=timeout, start_at=mk)
+    if require_command_echo:
+        _wait_for_primary_any(session, [prompt], timeout=timeout, start_at=mk,
+                              command_echo=cmd)
+    else:
+        session.wait_for(prompt, timeout=timeout, start_at=mk)
 
 
 def ensure_shell_after_login(session: SmokeSession, timeout: float, mode: str) -> str:

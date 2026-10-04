@@ -52,11 +52,13 @@ from smoke_x64_helpers import (  # noqa: E402
     trigger_reboot,
 )
 from smoke_x64_qemu_update_ab import build_signed_material  # noqa: E402
+from smoke_x64_migration import prepare_bridge_material, configure_bridge_route  # noqa: E402
 from smoke_x64_update_ab_contract import (  # noqa: E402
     EVIDENCE_FORMAT,
     LAB_BANNER,
     PRODUCTION_CYCLE_ORDER,
     PRODUCTION_EVIDENCE_FORMAT,
+    PRODUCTION_MIGRATION_EVIDENCE_FORMAT,
     PRODUCTION_TRUST_ANCHOR,
     TRACK,
     TRUST_ANCHOR,
@@ -163,6 +165,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--www-root", default="build/ci/update-ab/www", type=Path)
     parser.add_argument("--production-manifest", type=Path)
     parser.add_argument("--production-payload", type=Path)
+    parser.add_argument("--production-bridge-manifest", type=Path)
+    parser.add_argument("--production-bridge-payload", type=Path)
+    parser.add_argument("--production-bridge-version")
     parser.add_argument("--expected-iso-sha256")
     parser.add_argument("--vmnet", default="VMnet8")
     parser.add_argument(
@@ -755,12 +760,15 @@ def main() -> int:
         return 2
 
     production_network = None
+    bridge_material = None
     try:
         if args.production:
             material = prepare_production_material(args)
+            bridge_material = prepare_bridge_material(args, material)
             production_network = discover_production_vmware_network(args)
         else:
             require_lab_arguments(args)
+            prepare_bridge_material(args, None)
         boot_media_sha256 = sha256_file(args.iso)
         if (
             args.production
@@ -783,7 +791,7 @@ def main() -> int:
     pipe_name = f"capyos-update-ab-{run_id}"
     logs = {
         phase: safe_root / f"smoke_x64_vmware_update_ab_{run_id}.{phase}.log"
-        for phase in ("installer", "boot1", "boot1b", "boot2", "boot3", "boot4")
+        for phase in ("installer", "boot1", "boot1b", "bridge", "boot2", "boot3", "boot4")
     }
     vmx_path = run_root / "capyos-update-ab.vmx"
     http_server = None
@@ -867,6 +875,13 @@ def main() -> int:
 
         boots = 1
         armed = False
+        baseline_slot = 1 if bridge_material else 0
+        candidate_slot = 1 - baseline_slot
+        baseline_version = bridge_material["version"] if bridge_material else args.current_version
+        first_version = bridge_material["version"] if bridge_material else version
+        first_manifest = bridge_material["manifest_url"] if bridge_material else manifest_endpoint
+        first_payload = bridge_material["payload_url"] if bridge_material else payload_endpoint
+        first_digest = bridge_material["payload_sha256"] if bridge_material else digest
         for phase, interactive in (("boot1", True), ("boot1b", False)):
             console = start_console(
                 args.vmrun, vmx_path, pipe_name, logs[phase],
@@ -902,16 +917,18 @@ def main() -> int:
                         console, args.step_timeout, production_network
                     )
                 assert_provider_ready(console, args.step_timeout)
+                if bridge_material:
+                    configure_bridge_route(console, args.step_timeout)
                 run_cmd(
                     console,
                     "update-channel show",
                     args.step_timeout,
-                    expect=manifest_endpoint,
+                    expect=first_manifest,
                     expect_ignore_line_breaks=True,
                 )
                 if args.production:
                     verify_production_public_route(
-                        console, args.step_timeout, manifest_endpoint
+                        console, args.step_timeout, first_manifest
                     )
                 else:
                     assert_http_endpoint_reachable(
@@ -920,9 +937,9 @@ def main() -> int:
                 stage_and_arm_update(
                     console,
                     args.step_timeout,
-                    expect_version=version,
-                    expect_payload_url=payload_endpoint,
-                    expect_payload_sha256=digest,
+                    expect_version=first_version,
+                    expect_payload_url=first_payload,
+                    expect_payload_sha256=first_digest,
                 )
                 assert_armed_attempt_state(console, args.step_timeout)
                 sync_and_reboot(args, console)
@@ -935,6 +952,30 @@ def main() -> int:
             raise RuntimeError("VMware first boot never armed the first attempt")
 
         if args.production:
+            if bridge_material:
+                console = start_console(
+                    args.vmrun, vmx_path, pipe_name, logs["bridge"],
+                    secrets=(recovery_key,), verbose=args.verbose,
+                )
+                try:
+                    login_shell(args, console)
+                    assert_production_runtime(console, args.step_timeout, baseline_version)
+                    assert_production_vmware_network_persisted(console, args.step_timeout, production_network)
+                    require_boot_attempt(console.text(), baseline_slot, "pending")
+                    assert_attempt_pending(console, args.step_timeout)
+                    confirm_boot_health(console, args.step_timeout)
+                    assert_slot_state(console, args.step_timeout, "health=confirmed [ACTIVE]")
+                    run_cmd(console, "update-channel show", args.step_timeout,
+                            expect=manifest_endpoint, expect_ignore_line_breaks=True)
+                    run_cmd(console, "print-file /system/update/repository.ini", args.step_timeout,
+                            expect=f"remote_manifest={manifest_endpoint}", expect_ignore_line_breaks=True)
+                    verify_production_public_route(console, args.step_timeout, manifest_endpoint)
+                    stage_and_arm_update(console, args.step_timeout, expect_version=version,
+                                         expect_payload_url=payload_endpoint, expect_payload_sha256=digest)
+                    assert_armed_attempt_state(console, args.step_timeout)
+                    sync_and_reboot(args, console)
+                finally:
+                    console.stop()
             # A confirmed candidate reports the same version as Latest and must
             # not be reapplied. Exercise rollback first, then restage from the
             # restored predecessor and confirm the second attempt.
@@ -948,7 +989,7 @@ def main() -> int:
                     console, args.step_timeout, production_network
                 )
                 assert_production_runtime(console, args.step_timeout, version)
-                require_boot_attempt(console.text(), 1, "pending")
+                require_boot_attempt(console.text(), candidate_slot, "pending")
                 assert_attempt_pending(console, args.step_timeout)
                 sync_and_reboot(args, console)
             finally:
@@ -964,9 +1005,9 @@ def main() -> int:
                     console, args.step_timeout, production_network
                 )
                 assert_production_runtime(
-                    console, args.step_timeout, args.current_version
+                    console, args.step_timeout, baseline_version
                 )
-                require_boot_attempt(console.text(), 0, "rollback")
+                require_boot_attempt(console.text(), baseline_slot, "rollback")
                 assert_rollback_reported(console, args.step_timeout)
                 assert_slot_state(console, args.step_timeout, "state=failed")
                 reapply_cached_update_after_rollback(
@@ -988,7 +1029,7 @@ def main() -> int:
             try:
                 login_shell(args, console)
                 assert_production_runtime(console, args.step_timeout, version)
-                require_boot_attempt(console.text(), 1, "pending")
+                require_boot_attempt(console.text(), candidate_slot, "pending")
                 assert_attempt_pending(console, args.step_timeout)
                 confirm_boot_health(console, args.step_timeout)
                 assert_slot_state(
@@ -1059,7 +1100,7 @@ def main() -> int:
 
         if args.production:
             evidence = {
-                "format": PRODUCTION_EVIDENCE_FORMAT,
+                "format": PRODUCTION_MIGRATION_EVIDENCE_FORMAT if bridge_material else PRODUCTION_EVIDENCE_FORMAT,
                 "release_tag": release_tag,
                 "track": TRACK,
                 "provider": "vmware-workstation",
@@ -1072,9 +1113,9 @@ def main() -> int:
                 "payload_size": str(size),
                 "payload_sha256": digest,
                 "boot_media_sha256": boot_media_sha256,
-                "first_attempt_slot": "1",
-                "second_attempt_slot": "1",
-                "boots_observed": str(boots + 3),
+                "first_attempt_slot": str(candidate_slot),
+                "second_attempt_slot": str(candidate_slot),
+                "boots_observed": str(boots + 3 + (1 if bridge_material else 0)),
                 "cycle_order": PRODUCTION_CYCLE_ORDER,
                 "second_cycle_source": "verified-cache",
                 "bootstrap_vmnet": args.vmnet,
@@ -1102,6 +1143,17 @@ def main() -> int:
                 "equal_release_refused": "yes",
                 "recovery_key_included": "no",
             }
+            if bridge_material:
+                evidence.update({
+                    "bridge_version": baseline_version,
+                    "bridge_manifest_url": first_manifest,
+                    "bridge_payload_url": first_payload,
+                    "bridge_payload_size": bridge_material["payload_size"],
+                    "bridge_payload_sha256": first_digest,
+                    "bridge_attempt_slot": str(baseline_slot),
+                    "bridge_health_confirmed": "yes",
+                    "bridge_route_retired": "yes",
+                })
             validate_production_evidence(evidence)
             rendered_evidence = render_production_evidence(evidence)
         else:
