@@ -42,6 +42,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("| grep -Eq", self.builder)
         for signed_asset in (
             "latest.ini",
+            "bridge.ini",
             "release-artifacts.sha256.sig",
             "release-ed25519.pub.pem",
             "release-public-key.manifest",
@@ -186,6 +187,24 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("release-assets-before.json", self.promoter)
         self.assertIn("release-assets-public.json", self.promoter)
         self.assertIn("release-assets-latest.json", self.promoter)
+
+    def test_bridge_is_required_by_tagged_identity_and_verified_at_all_routes(self) -> None:
+        self.assertIn('--tag-commit "$TAG_COMMIT" --release-version "$VERSION"', self.promoter)
+        self.assertIn('migration_bridge_policy.py', self.promoter)
+        self.assertIn('.github/release-policy/migration-bridge.json', self.builder)
+        self.assertIn("if: steps.release.outputs.bridge_version != ''", self.builder)
+        self.assertIn('BRIDGE_POLICY=--forbid-bridge', self.promoter)
+        self.assertIn('BRIDGE_POLICY=--require-bridge', self.promoter)
+        self.assertEqual(self.promoter.count('verify_migration_bridge.py'), 3)
+        self.assertLess(self.promoter.index('verify_migration_bridge.py'),
+                        self.promoter.index('gh api --method PATCH'))
+        self.assertIn('LATEST_ASSETS+=(bridge.ini capyos-bridge64.bin)', self.promoter)
+        self.assertIn('make migration-bridge TOOLCHAIN64=host', self.builder)
+        self.assertIn('sha256sum -c build/full-kernel-before-bridge.sha256', self.builder)
+        self.assertIn('build/update/bridge.unsigned.ini', self.builder)
+        self.assertIn('EXPECTED_PAYLOADS=6', self.builder)
+        self.assertIn('EXPECTED_PAYLOADS=7', self.builder)
+        self.assertIn('"${#PAYLOADS[@]}" -ne "$EXPECTED_PAYLOADS"', self.builder)
 
     def test_release_id_keeps_the_existing_extended_version_semantics(self) -> None:
         self.assertIn('--expected-release-id "$RELEASE_VERSION"', self.promoter)

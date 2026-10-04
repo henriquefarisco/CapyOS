@@ -55,6 +55,48 @@ class VerifyReleasePromotionBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(PromotionBundleError, "missing assets"):
                 verify_bundle(bundle)
 
+    def add_bridge(self, bundle: Path) -> None:
+        payload = b"bridge-kernel"
+        (bundle / "capyos-bridge64.bin").write_bytes(payload)
+        (bundle / "bridge.ini").write_bytes(b"signed-bridge\n")
+        checksums = bundle / "release-artifacts.sha256"
+        lines = checksums.read_text(encoding="utf-8").splitlines()
+        lines.append(f"{hashlib.sha256(payload).hexdigest()}  capyos-bridge64.bin")
+        checksums.write_text("\n".join(sorted(lines, key=lambda line: line[66:])) + "\n")
+
+    def test_accepts_exact_bridge_pair_with_checksummed_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = self.make_bundle(Path(tmp))
+            self.add_bridge(bundle)
+            self.assertEqual(len(verify_bundle(bundle, require_bridge=True)), 14)
+
+    def test_bridge_cannot_be_omitted_when_policy_requires_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(PromotionBundleError, "missing assets"):
+                verify_bundle(self.make_bundle(Path(tmp)), require_bridge=True)
+
+    def test_historical_release_policy_refuses_bridge_injection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = self.make_bundle(Path(tmp))
+            self.add_bridge(bundle)
+            with self.assertRaisesRegex(PromotionBundleError, "forbidden"):
+                verify_bundle(bundle, forbid_bridge=True)
+
+    def test_rejects_partial_bridge_pair_and_payload_tampering(self) -> None:
+        for missing in ("bridge.ini", "capyos-bridge64.bin"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                bundle = self.make_bundle(Path(tmp))
+                self.add_bridge(bundle)
+                (bundle / missing).unlink()
+                with self.assertRaisesRegex(PromotionBundleError, "missing assets"):
+                    verify_bundle(bundle)
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = self.make_bundle(Path(tmp))
+            self.add_bridge(bundle)
+            (bundle / "capyos-bridge64.bin").write_bytes(b"corrupt")
+            with self.assertRaisesRegex(PromotionBundleError, "checksum mismatch"):
+                verify_bundle(bundle)
+
     def test_rejects_extra_private_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bundle = self.make_bundle(Path(tmp))

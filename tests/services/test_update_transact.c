@@ -108,6 +108,10 @@ static struct fake_file g_files[] = {
     {UA_STAGE_PATH, "", 0, 0u},
     {UA_STATE_PATH, "", 0, 0u},
     {UA_PAYLOAD_PATH, "", 0, 0u},
+    {UA_PAYLOAD_PATH ".part0", "", 0, 0u},
+    {UA_PAYLOAD_PATH ".part1", "", 0, 0u},
+    {UA_PAYLOAD_PATH ".part2", "", 0, 0u},
+    {UA_PAYLOAD_PATH ".part3", "", 0, 0u},
 };
 
 static uint8_t g_boot_records[BOOT_SLOT_PERSIST_COPY_COUNT]

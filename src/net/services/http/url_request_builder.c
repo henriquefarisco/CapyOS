@@ -1,5 +1,5 @@
 #include "internal/http_internal.h"
-#include "core/version.h"
+#include "core/runtime_version.h"
 
 int http_init(void) {
   http_set_ok();
@@ -151,7 +151,7 @@ int http_build_request(const struct http_request *req, char *buf, size_t buf_siz
   }
   if (!http_request_has_header(req, "User-Agent") &&
       http_buf_append_str(buf, buf_size, &pos,
-                          "\r\nUser-Agent: CapyOS/" CAPYOS_VERSION_EXTENDED) != 0) {
+                          "\r\nUser-Agent: CapyOS/" CAPYOS_RUNTIME_VERSION_EXTENDED) != 0) {
     return -1;
   }
   if (!http_request_has_header(req, "Accept") &&

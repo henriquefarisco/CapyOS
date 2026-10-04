@@ -76,6 +76,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_commit=$TAG_COMMIT" >> "$GITHUB_OUTPUT"
           echo "published_at=$PUBLISHED_AT" >> "$GITHUB_OUTPUT"
+          BRIDGE_VERSION="$(python3 tools/scripts/migration_bridge_policy.py \
+            --tag-commit "$TAG_COMMIT" --release-version "$VERSION")"
+          echo "bridge_version=$BRIDGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Require the approved release signer fingerprint
         id: signer
@@ -226,14 +229,22 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          RELEASE_BRIDGE_VERSION: ${{ steps.release.outputs.bridge_version }}
           RELEASE_DIR: ${{ steps.release_object.outputs.release_dir }}
           RELEASE_KEY_FINGERPRINT: ${{ steps.signer.outputs.fingerprint }}
         run: |
           set -euo pipefail
           PAYLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/capyos64.bin"
 
+          BRIDGE_POLICY=--forbid-bridge
+          if [ -n "$RELEASE_BRIDGE_VERSION" ]; then BRIDGE_POLICY=--require-bridge; fi
           python3 tools/scripts/verify_release_promotion_bundle.py \
-            --bundle-dir "$RELEASE_DIR"
+            --bundle-dir "$RELEASE_DIR" "$BRIDGE_POLICY"
+          if [ -n "$RELEASE_BRIDGE_VERSION" ]; then
+            python3 tools/scripts/verify_migration_bridge.py \
+              --bundle-dir "$RELEASE_DIR" --final-version "$RELEASE_VERSION" \
+              --bridge-version "$RELEASE_BRIDGE_VERSION" --published-at "$RELEASE_PUBLISHED_AT"
+          fi
           (
             cd "$RELEASE_DIR"
             sha256sum -c modules.sha256
@@ -412,6 +423,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          RELEASE_BRIDGE_VERSION: ${{ steps.release.outputs.bridge_version }}
           RELEASE_ID: ${{ steps.release_object.outputs.release_id }}
           RELEASE_KEY_FINGERPRINT: ${{ steps.signer.outputs.fingerprint }}
         run: |
@@ -444,8 +456,15 @@ jobs:
             fi
           done < build/release-asset-names.txt
 
+          BRIDGE_POLICY=--forbid-bridge
+          if [ -n "$RELEASE_BRIDGE_VERSION" ]; then BRIDGE_POLICY=--require-bridge; fi
           python3 tools/scripts/verify_release_promotion_bundle.py \
-            --bundle-dir "$PUBLIC_DIR"
+            --bundle-dir "$PUBLIC_DIR" "$BRIDGE_POLICY"
+          if [ -n "$RELEASE_BRIDGE_VERSION" ]; then
+            python3 tools/scripts/verify_migration_bridge.py \
+              --bundle-dir "$PUBLIC_DIR" --final-version "$RELEASE_VERSION" \
+              --bridge-version "$RELEASE_BRIDGE_VERSION" --published-at "$RELEASE_PUBLISHED_AT"
+          fi
           (
             cd "$PUBLIC_DIR"
             sha256sum -c modules.sha256
@@ -508,6 +527,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          RELEASE_BRIDGE_VERSION: ${{ steps.release.outputs.bridge_version }}
           RELEASE_ID: ${{ steps.release_object.outputs.release_id }}
         run: |
           set -euo pipefail
@@ -524,7 +544,11 @@ jobs:
 
           rm -rf "$LATEST_DIR"
           mkdir -p "$LATEST_DIR"
-          for asset in latest.ini capyos64.bin; do
+          LATEST_ASSETS=(latest.ini capyos64.bin)
+          if [ -n "$RELEASE_BRIDGE_VERSION" ]; then
+            LATEST_ASSETS+=(bridge.ini capyos-bridge64.bin)
+          fi
+          for asset in "${LATEST_ASSETS[@]}"; do
             downloaded=false
             for attempt in 1 2 3 4 5; do
               rm -f "$LATEST_DIR/$asset.partial"
@@ -556,6 +580,11 @@ jobs:
             --expected-published-at "$RELEASE_PUBLISHED_AT" \
             --expected-payload-url "$PAYLOAD_URL"
 
+          if [ -n "$RELEASE_BRIDGE_VERSION" ]; then
+            python3 tools/scripts/verify_migration_bridge.py \
+              --bundle-dir "$LATEST_DIR" --final-version "$RELEASE_VERSION" \
+              --bridge-version "$RELEASE_BRIDGE_VERSION" --published-at "$RELEASE_PUBLISHED_AT"
+          fi
           gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --json databaseId,tagName,isDraft,isPrerelease,isImmutable,assets \
@@ -583,6 +612,6 @@ jobs:
             echo ""
             echo "Tag: $RELEASE_TAG"
             echo "Release id: $RELEASE_ID"
-            echo "All 12 assets were verified through immutable tag URLs."
+            echo "All required assets were verified through immutable tag URLs."
             echo "latest.ini and capyos64.bin were also verified through the runtime Latest route."
           } >> "$GITHUB_STEP_SUMMARY"

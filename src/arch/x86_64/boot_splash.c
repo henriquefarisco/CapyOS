@@ -9,7 +9,7 @@
 #include "arch/x86_64/kernel_main_internal.h"
 #include "arch/x86_64/kernel_platform_runtime.h"
 #include "branding/capyos_icon_mask.h"
-#include "core/version.h"
+#include "core/runtime_version.h"
 
 /* ── theme splash colour globals (owned here) ────────────────────────── */
 
@@ -228,14 +228,14 @@ void ui_banner(void) {
 
   if (inner_cols < 38u) {
     fbcon_print("CAPYOS\n");
-    fbcon_print(CAPYOS_VERSION_EXTENDED);
+    fbcon_print(CAPYOS_RUNTIME_VERSION_EXTENDED);
     fbcon_print("  x86_64\n");
     return;
   }
 
   version_line[0] = '\0';
   ui_banner_append(version_line, sizeof(version_line), " Version: ");
-  ui_banner_append(version_line, sizeof(version_line), CAPYOS_VERSION_EXTENDED);
+  ui_banner_append(version_line, sizeof(version_line), CAPYOS_RUNTIME_VERSION_EXTENDED);
   ui_banner_append(version_line, sizeof(version_line), "   Arch: x86_64");
 
   ui_banner_rule(inner_cols);

@@ -2,7 +2,7 @@
 #include "internal/storage_runtime_hyperv.h"
 
 #include "arch/x86_64/storage_runtime_hyperv_plan.h"
-#include "core/version.h"
+#include "core/runtime_version.h"
 #include "drivers/hyperv/hyperv.h"
 #include "drivers/storage/storvsc_vmbus.h"
 
@@ -257,7 +257,7 @@ static int finish_runtime_action(
         status.offer.child_relid != last_relid ||
         status.offer.connection_id != last_conn) {
       storage_hyperv_log("[storvsc] build=");
-      storage_hyperv_log(CAPYOS_VERSION_FULL);
+      storage_hyperv_log(CAPYOS_RUNTIME_VERSION_FULL);
       storage_hyperv_log(" feature=");
       storage_hyperv_log(CAPYOS_FEATURE_HYPERV_RUNTIME);
       storage_hyperv_log(" stage=");

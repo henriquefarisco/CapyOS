@@ -2,6 +2,9 @@
 
 **Data de referência:** 2026-10-04 (0.11.1 stable publicada, Latest e imutável)
 **Versão atual:** `0.11.1+20261004`
+**Candidata em desenvolvimento:** `0.11.3+20261004`, ponte OTA `0.11.2` e
+cache segmentado sem alterar CapyFS v2. Host e A/B QEMU de laboratorio passaram;
+VMware com bytes finais assinados e publicacao ainda pendentes.
 **Aceite pendente:** update A/B a partir de 0.10.0 bloqueado pelo limite por
 arquivo do CapyFS antigo; instalacao nova da ISO final aprovada no VMware.
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`

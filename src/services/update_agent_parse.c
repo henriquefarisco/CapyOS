@@ -364,6 +364,12 @@ static int legacy_official_stable_url(const char *url) {
   const char *p = NULL;
   size_t dots = 0u;
 
+  /* Only this exact official one-time migration route is retired. Custom
+   * sources, develop channels and lookalike URLs retain their configured URL. */
+  if (update_agent_local_equal(
+          url, "https://github.com/henriquefarisco/CapyOS/releases/latest/download/bridge.ini")) {
+    return 1;
+  }
   if (!url || !update_agent_local_starts_with(url, prefix)) {
     return 0;
   }

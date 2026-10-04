@@ -407,6 +407,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/services/update_agent_apply.o \
 	$(BUILD)/x86_64/services/update_agent_prepare.o \
 	$(BUILD)/x86_64/services/update_agent_transact.o \
+	$(BUILD)/x86_64/services/update_payload_cache.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_state.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_manifest.o \
 	$(BUILD)/x86_64/services/capypkg/capypkg_repo.o \
@@ -1895,6 +1896,9 @@ iso-uefi: prepare-x64-toolchain
 endif
 
 iso-uefi-build: $(UEFI_LOADER) $(CAPYOS_ELF64) $(MANIFEST64) $(BOOT_CONFIG_BIN) $(MK_EFIBOOT_HOST)
+	@if strings "$(CAPYOS_ELF64)" | grep -Fq '[music] deferred by migration bridge'; then \
+		echo "[err] migration bridge is OTA-only; refusing installer ISO"; exit 2; \
+	fi
 	python3 tools/scripts/verify_official_boot_config.py $(BOOT_CONFIG_BIN)
 	python3 tools/scripts/verify_installer_variant.py --kernel "$(CAPYOS_ELF64)" \
 		--variant "$(X64_BUILD_VARIANT_FILE)" --iso "$(ISO_IMG_EFI)" \
@@ -2700,8 +2704,9 @@ TEST_SRCS   := \
                tests/services/test_service_boot_policy.c src/services/service_boot_policy.c \
                tests/services/test_service_runner.c src/services/service_runner.c \
                tests/services/test_work_queue.c src/core/work_queue.c \
-               tests/services/test_update_agent.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
+               tests/services/test_update_agent.c tests/services/test_update_agent_migration.c src/services/update_agent.c src/services/update_agent_parse.c src/services/update_agent_apply.c src/services/update_agent_prepare.c \
                tests/services/test_update_transact.c src/services/update_agent_transact.c \
+               src/services/update_payload_cache.c \
                tests/services/test_capypkg.c src/services/capypkg/capypkg_state.c src/services/capypkg/capypkg_manifest.c src/services/capypkg/capypkg_repo.c src/services/capypkg/capypkg_install.c src/services/capypkg/capypkg_persist.c src/services/capypkg/capypkg_signature.c src/services/capypkg_network.c \
                tests/services/test_capypkg_local_bundle.c src/services/capypkg_local_bundle.c \
                tests/services/test_install_profile.c src/services/install_profile.c \
@@ -3226,11 +3231,57 @@ check-toolchain:
 
 .PHONY: release-check
 .PHONY: verify-update-payload-budget test-update-payload-budget
+.PHONY: test-update-payload-cache
+test-update-payload-cache:
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -Werror tests/services/test_update_payload_cache.c src/services/update_payload_cache.c -o $(BUILD)/tests/update_payload_cache
+	$(BUILD)/tests/update_payload_cache
+
+test: test-update-payload-cache
+
+.PHONY: test-update-agent
+$(TEST_BIN): tests/services/update_agent_fixture.h include/services/update_payload_cache.h include/core/runtime_version.h
+test-update-agent:
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) $(HOST_CFLAGS) -Werror \
+	  tests/services/update_agent_main.c tests/services/test_update_agent.c \
+	  tests/services/test_update_agent_migration.c \
+	  tests/auth/test_audit_events.c \
+	  tests/services/test_update_transact.c src/services/update_agent.c \
+	  src/services/update_agent_parse.c src/services/update_agent_apply.c \
+	  src/services/update_agent_prepare.c src/services/update_agent_transact.c \
+	  src/services/update_payload_cache.c src/boot/boot_slot.c \
+	  src/boot/boot_slot_authorization.c src/boot/boot_slot_lifecycle.c \
+	  src/boot/boot_slot_operations.c src/boot/boot_slot_status.c \
+	  src/boot/boot_slot_store.c src/security/sha256.c src/kernel/log/klog.c \
+	  src/security/ed25519.c src/security/ed25519_group.c \
+	  src/security/ed25519_encode.c src/security/ed25519_scalar.c \
+	  src/security/fe25519.c src/security/sha512.c \
+	  -o $(BUILD)/tests/update_agent
+	$(BUILD)/tests/update_agent
 verify-update-payload-budget:
 	python3 tools/scripts/verify_update_payload_budget.py --payload $(CAPYOS_ELF64)
 
+# Separate output tree: never replace the full installer kernel with the bridge.
+MIGRATION_BRIDGE_BUILD ?= $(BUILD)/migration-bridge
+.PHONY: migration-bridge
+migration-bridge:
+	python3 tools/scripts/migration_bridge_policy.py --require-bridge
+	@if [ -n "$(CAPYOS_UPDATE_LAB_TRUST_KEY_HEX)" ] || [ -n "$(CAPYOS_UPDATE_LAB_MANIFEST_URL)" ]; then echo "[err] production migration bridge forbids lab trust overrides"; exit 2; fi
+	$(MAKE) all64 BUILD="$(MIGRATION_BRIDGE_BUILD)" TOOLCHAIN64=$(TOOLCHAIN64) \
+		EXTRA_CFLAGS64='-DCAPYOS_MIGRATION_BRIDGE'
+	$(OBJCOPY64) --strip-all "$(MIGRATION_BRIDGE_BUILD)/capyos64.bin" \
+		"$(MIGRATION_BRIDGE_BUILD)/capyos-bridge64.bin"
+	python3 tools/scripts/verify_update_payload_budget.py \
+		--payload "$(MIGRATION_BRIDGE_BUILD)/capyos-bridge64.bin" --legacy-cache
+	@if strings "$(MIGRATION_BRIDGE_BUILD)/capyos-bridge64.bin" | grep -Fq '[lab] update trust anchor overridden'; then echo "[err] migration bridge contains a lab trust override"; exit 2; fi
+
 test-update-payload-budget:
 	python3 tools/scripts/test_update_payload_budget.py
+	python3 tools/scripts/test_installed_artifact_bundle.py
+	python3 tools/scripts/test_migration_bridge_contract.py
+	python3 tools/scripts/test_migration_evidence.py
+	python3 tools/scripts/test_migration_bridge_policy.py
 
 test: test-update-payload-budget
 

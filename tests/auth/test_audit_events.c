@@ -67,6 +67,10 @@ static struct fake_file g_files[] = {
     {UPDATE_AGENT_STATE_PATH, "", 0},
     {UPDATE_AGENT_IMPORT_PATH, "", 0},
     {UPDATE_AGENT_PAYLOAD_CACHE_PATH, "", 0},
+    {UPDATE_AGENT_PAYLOAD_CACHE_PATH ".part0", "", 0},
+    {UPDATE_AGENT_PAYLOAD_CACHE_PATH ".part1", "", 0},
+    {UPDATE_AGENT_PAYLOAD_CACHE_PATH ".part2", "", 0},
+    {UPDATE_AGENT_PAYLOAD_CACHE_PATH ".part3", "", 0},
 };
 
 static struct fake_file *find_file(const char *path) {
