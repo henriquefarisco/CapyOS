@@ -77,12 +77,15 @@ static void describe(const struct capyos_gpt_identity *identity,
   uint32_t confirmed = snapshot->manager.confirmed_slot;
   uint32_t inactive = confirmed ^ 1u;
   char guid[33];
+  char candidate_sha[65];
+  sha256_hex(snapshot->manager.slots[inactive].payload_sha256, candidate_sha);
   for (size_t i = 0; i < 16; ++i)
     snprintf(guid + 2 * i, 3, "%02x", identity->disk_guid[i]);
   printf("{\"disk_guid\":\"%s\",\"boot_lba\":%u,\"boot_sectors\":%u,"
          "\"data_lba\":%u,\"data_sectors\":%u,\"confirmed_slot\":%u,"
          "\"inactive_start\":%u,\"inactive_end\":%u,\"control_start\":%u,"
-         "\"generation\":%llu,\"pending_slot\":%u,\"tries_remaining\":%u}\n",
+         "\"generation\":%llu,\"pending_slot\":%u,\"tries_remaining\":%u,"
+         "\"candidate_size\":%u,\"candidate_sha256\":\"%s\"}\n",
          guid, identity->boot.lba, identity->boot.sectors,
          identity->data.lba, identity->data.sectors, confirmed,
          identity->boot.lba + layout->slots[inactive].header_lba,
@@ -90,7 +93,8 @@ static void describe(const struct capyos_gpt_identity *identity,
              layout->slots[inactive].payload_capacity_sectors,
          identity->boot.lba + layout->control_lba[0],
          (unsigned long long)snapshot->generation,
-         snapshot->manager.pending_slot, snapshot->manager.tries_remaining);
+         snapshot->manager.pending_slot, snapshot->manager.tries_remaining,
+         snapshot->manager.slots[inactive].payload_size, candidate_sha);
 }
 
 int main(int argc, char **argv) {

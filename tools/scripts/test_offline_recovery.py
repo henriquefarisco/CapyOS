@@ -105,6 +105,21 @@ class OfflineRecoveryTests(unittest.TestCase):
         self.assertFalse(list(self.root.glob(".capyos-recovery-*")))
         self.assertEqual(digest(self.image), self.before)
 
+    @patch("offline_recovery.vm_is_off")
+    @patch("verify_migration_bridge.verify_signature")
+    def test_payload_change_after_signature_verification_is_refused(self, signature, power):
+        real_backend = backend
+        def change_payload(helper, mode, image, current, payload=None, bridge=None):
+            if mode == "stage":
+                with payload.open("ab") as stream:
+                    stream.write(b"post-verification-change")
+            return real_backend(helper, mode, image, current, payload, bridge)
+        with patch("offline_recovery.backend", side_effect=change_payload):
+            with self.assertRaisesRegex(ManifestError, "authenticated manifest"):
+                self.recovery()
+        self.assertFalse(self.output.exists())
+        self.assertEqual(digest(self.image), self.before)
+
     def test_wrong_confirmed_version_and_gpt_crc_refused(self):
         with self.assertRaises(subprocess.CalledProcessError):
             backend(self.helper, "inspect", self.image, BRIDGE)

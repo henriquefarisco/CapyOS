@@ -164,6 +164,12 @@ def recover(*, source: Path, output: Path, vmx: Path, vmrun: str,
                 raise ManifestError("source boot state changed before cloning")
             staged = backend(helper, "stage", copy, current,
                              scratch / "capyos-bridge64.bin", bridge["available_version"])
+            payload_start = (identity["inactive_start"] + 1) * 512
+            signed_size = int(bridge["payload_size"])
+            if (staged["candidate_size"] != signed_size or
+                    staged["candidate_sha256"] != bridge["payload_sha256"] or
+                    digest(copy, payload_start, payload_start + signed_size) != bridge["payload_sha256"]):
+                raise ManifestError("staged candidate differs from the authenticated manifest")
             if (staged["disk_guid"] != identity["disk_guid"] or
                     staged["confirmed_slot"] != identity["confirmed_slot"] or
                     staged["pending_slot"] != (identity["confirmed_slot"] ^ 1) or

@@ -25,7 +25,10 @@ receipts and source show confirmation succeeded. The corrected gate requires
 the fresh durable commit receipt, active-slot health and absence of an armed
 rollback in that command's complete response; 12 evidence regression tests pass.
 Full host make test passed twice, including the final oracle. Eleven offline
-image safety tests, seven bridge contract tests, strict layout/version audits
+image safety tests initially, expanded to twelve with a post-signature payload
+mutation regression. The extra signed-candidate size/SHA/readback guard was
+also verified read-only against the completed production VM's disk, including
+its confirmed full kernel and absence of a pending trial. Seven bridge contract tests, strict layout/version audits
 and installer disk selftests passed. The new host backend builds with warnings
 as errors, without UNIT_TEST.
 
