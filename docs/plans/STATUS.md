@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-10-04 | **Versao:** `0.11.1+20261004` (stable, Latest e imutavel; instalacao nova validada, update 0.10.0 bloqueado) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-10-04 | **Versao:** `0.11.3+20261004` (stable, Latest e imutavel; instalacao nova validada, aceite OTA legado aberto) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -19,15 +19,21 @@
 
 ## Progresso global
 
-- **Migracao legada em desenvolvimento (2026-10-04):** candidata
+- **Migracao legada publicada, aceite aberto (2026-10-04):**
   `0.11.3+20261004` com ponte OTA `0.11.2` menor que 4.243.456 bytes e cache
   segmentado em partes de ate 2 MiB; tamanho/SHA-256 completo e Ed25519 continuam
   obrigatorios. `make test` e ciclo A/B QEMU com payload de 7.416.616 bytes
   passaram (`build/ci/migration-cache-lab-v2.manifest`, laboratorio, nao aceite
   de producao). A ponte iniciou pelo loader publico 0.10.0 e exibiu 0.11.2.
   A candidata completa passou boot QEMU e instalacao Full/desktop/tres musicas/
-  persistencia no VMware (`c9e5f1abbff9`, ISO local, guard intacto). Nenhuma nova
-  release publicada; CI, bytes publicos e migracao de producao ainda pendentes.
+  persistencia no VMware (`c9e5f1abbff9`, ISO local, guard intacto). Release
+  Latest imutavel com 14 assets: CI `37234552890`, producao dos artefatos
+  `37235177730`, promocao `37235892015`, assinaturas de producao verificadas.
+  ISO publicada aprovada Full/desktop/presets/persistencia (`e6f2c525aeea`).
+  A/B de producao ainda pendente: primeiro run parou antes do fetch porque o
+  editor normal do predecessor nao pode recriar repository.ini root-owned;
+  manutencao nao persiste e a importacao manual trunca a assinatura no TTY antigo.
+  [Evidencia e hashes](../releases/capyos-0.11.3+20261004.md).
 
 - **Release de audio publicada (2026-10-04):**
   `0.11.1+20261004`, CapyUI `2.27.0`, CapyCodecs `0.1.1`; som de boot, splash

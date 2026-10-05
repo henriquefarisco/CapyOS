@@ -85,6 +85,18 @@ class MigrationEvidenceTests(unittest.TestCase):
             run_cmd_expect_prompt(Console(), "channel=stable", 0, "open> ",
                                   require_command_echo=True)
 
+    def test_editor_failure_returns_immediately_without_accepting_shell_prompt(self):
+        class Console:
+            proc = None
+            def marker(self): return 0
+            def send_line(self, line): self.line = line
+            def serial_text_since(self, marker):
+                return (self.line + "\n[erro] could not create file\n"
+                        "admin@capyos64>~> ")
+        with self.assertRaisesRegex(RuntimeError, "returned to the shell before editor"):
+            run_cmd_expect_prompt(Console(), "open /system/update/repository.ini", 0,
+                                  "open> ", require_command_echo=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -174,8 +174,10 @@ def run_cmd_expect_prompt(
     if expect:
         session.wait_for(expect, timeout=timeout, start_at=mk)
     if require_command_echo:
-        _wait_for_primary_any(session, [prompt], timeout=timeout, start_at=mk,
-                              command_echo=cmd)
+        found = _wait_for_primary_any(session, [prompt, SHELL_PROMPT_TOKEN],
+                                      timeout=timeout, start_at=mk, command_echo=cmd)
+        if found == SHELL_PROMPT_TOKEN:
+            raise RuntimeError(f"command {cmd!r} returned to the shell before editor prompt {prompt!r}")
     else:
         session.wait_for(prompt, timeout=timeout, start_at=mk)
 
