@@ -1,12 +1,16 @@
 # CapyOS — Master Plan sequencial
 
-**Data de referência:** 2026-10-04 (0.11.1 stable publicada, Latest e imutável)
-**Versão atual:** `0.11.1+20261004`
-**Candidata em desenvolvimento:** `0.11.3+20261004`, ponte OTA `0.11.2` e
-cache segmentado sem alterar CapyFS v2. Host e A/B QEMU de laboratorio passaram;
-VMware com bytes finais assinados e publicacao ainda pendentes.
-**Aceite pendente:** update A/B a partir de 0.10.0 bloqueado pelo limite por
-arquivo do CapyFS antigo; instalacao nova da ISO final aprovada no VMware.
+**Data de referência:** 2026-10-04 (0.11.3 stable publicada, Latest e imutável)
+**Versão atual:** `0.11.3+20261004`
+**Entrega publicada:** ponte OTA `0.11.2` e cache segmentado sem alterar CapyFS
+v2. CI, assinaturas de producao, promocao dos 14 assets e instalacao Full da ISO
+publicada no VMware passaram (run `e6f2c525aeea`).
+**Aceite pendente:** migracao A/B publica 0.10.0 -> ponte -> full, incluindo
+rollback/reaplicacao/confirmacao. O editor do predecessor exige manutencao para
+alterar repository.ini root-owned; o primeiro teste parou antes do fetch.
+A selecao persistente de manutencao tambem e defeituosa no predecessor, e seu
+editor trunca a assinatura na importacao manual. Uma rota de recuperacao externa
+segura ainda precisa ser definida. [Diagnostico](../../releases/capyos-0.11.3+20261004.md).
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).

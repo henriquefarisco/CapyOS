@@ -1,12 +1,12 @@
 # Cross-repo compatibility matrix
 
-**Release coordenada 2026-10-04:** CapyOS `0.11.1+20261004` consome os tags
+**Release coordenada 2026-10-04:** CapyOS `0.11.3+20261004` consome os tags
 `CapyUI v2.27.0` e `CapyCodecs v0.1.1`. Os demais pins ficam inalterados.
 `capy-codec-audio` v1, desktop-session v1, widget v2.22 e `capyos-base` v3
 permanecem compativeis. O limite de PCM decodificado passa a 40 MiB, heap do
 kernel a 96 MiB e reserva UEFI a 128 MiB; entradas de audio continuam limitadas
 a 8 MiB. As musicas OGG instaladas ficam abaixo do limite por arquivo do CapyFS.
-Instalacao Full/desktop/persistencia passou em QEMU e VMware para o artefato de
+Historico 0.11.1: instalacao Full/desktop/persistencia passou em QEMU e VMware para o artefato de
 desenvolvimento. A ISO final tambem passou Full/desktop/persistencia no VMware
 (`9e7ac7f6ce08`), e a promocao assinada dos 12 assets passou (`37225241587`).
 O A/B publico com predecessor 0.10.0 falhou ao persistir o kernel verificado:
@@ -26,16 +26,22 @@ taxa/duracao/estereo, WAVs originais e PCM do boot sao preservados. Nenhuma
 politica de tamanho, assinatura ou confianca foi relaxada.
 
 **Status:** autoritativo; **revisao atual:** 2026-10-04, CapyOS
-`0.11.1+20261004` (stable, Latest e imutavel, gate de update legado aberto), com
+`0.11.3+20261004` (stable, Latest e imutavel, gate de update legado aberto), com
 CapyAgent `0.1.0`, CapyUI `2.27.0`, CapyCodecs `0.1.1` e `capyos-base-v3-r2`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
 
-**Candidata local:** `0.11.3+20261004`, com ponte OTA `0.11.2` e cache
+**Release atual:** `0.11.3+20261004`, com ponte OTA `0.11.2` e cache
 segmentado privado do update-agent. Nao altera CapyFS v2, ABI, pins, epoca ou
 ancoras de confianca. A imagem completa preserva as tres musicas; somente a
 ponte adia novos presets. Host e A/B QEMU passaram; a ISO local completa passou
 QEMU e VMware Full/desktop/musicas/persistencia (`c9e5f1abbff9`, guard intacto).
-Bytes do CI, migracao VMware de producao e publicacao ainda pendentes.
+CI `37234552890`, artefatos `37235177730` e promocao `37235892015` passaram;
+14 assets publicos e assinaturas verificados. ISO publicada aprovada no VMware
+(`e6f2c525aeea`, Full/desktop/presets/persistencia, guard intacto). Migracao A/B
+de producao ainda aberta: o predecessor requer manutencao para editar sua rota
+root-owned; o primeiro run parou antes do fetch. O predecessor tambem nao
+persiste manutencao e seu editor nao comporta a linha completa da assinatura.
+[Hashes e evidencias da release](../../releases/capyos-0.11.3+20261004.md).
 
 **Checkpoint local 2026-10-01 (não publicado):** CapyUI `2.26.0` acrescenta
 medidores PCM estéreo usando a API aditiva `audio_service_get_app_levels` do

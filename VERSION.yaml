@@ -1029,7 +1029,7 @@ channels:
     current: 0.11.3
     extended: 0.11.3+20261004
     stability: production
-    current_summary: "Candidato 0.11.3: cache OTA segmentado e ponte 0.11.2 compativel com o limite do CapyFS legado; audio, boot e tres OGG preservados na imagem completa. Gates host e A/B QEMU locais passaram; bytes finais, VMware de producao e publicacao pendentes. Latest publica permanece 0.11.1."
+    current_summary: "0.11.3 publicada como Latest imutavel com 14 assets assinados: cache OTA segmentado e ponte 0.11.2 compativel com o limite do CapyFS legado. Audio, boot e tres OGG preservados na imagem completa; CI e instalacao Full da ISO publica no VMware passaram. Aceite A/B de producao ainda aberto; testes de laboratorio nao o substituem."
     history:
       - version: 0.11.1+20261004
         date: 2026-10-04
