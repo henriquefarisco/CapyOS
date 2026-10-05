@@ -5,16 +5,15 @@
 **Entrega publicada:** ponte OTA `0.11.2` e cache segmentado sem alterar CapyFS
 v2. CI, assinaturas de producao, promocao dos 14 assets e instalacao Full da ISO
 publicada no VMware passaram (run `e6f2c525aeea`).
-**Aceite pendente:** migracao A/B publica 0.10.0 -> ponte -> full, incluindo
-rollback/reaplicacao/confirmacao. O editor do predecessor exige manutencao para
-alterar repository.ini root-owned; o primeiro teste parou antes do fetch.
-A selecao persistente de manutencao tambem e defeituosa no predecessor, e seu
-editor trunca a assinatura na importacao manual. Uma rota de recuperacao externa
-segura ainda precisa ser definida. [Diagnostico](../../releases/capyos-0.11.3+20261004.md).
+**Aceite de migracao:** recuperacao offline assinada de 0.10.0 -> ponte -> full
+por HTTPS passou no VMware, incluindo cinco boots, rollback/reaplicacao/cache,
+confirmacao final e recusa da mesma versao (run `8e6cdbede301`). Original e DATA
+preservados no bootstrap. O editor/manutencao do predecessor continuam limitados;
+nao se afirma bootstrap inteiramente online. [Procedimento/evidencia](../../operations/signed-offline-recovery.md).
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-10 publicadas; Etapa 10 concluída em engenharia local (2026-10-02), aceite de update da release ainda aberto; Etapa 11 desbloqueada em engenharia, nao substitui a correcao da migracao.
+**Status:** Etapas 1-10 publicadas; Etapa 10 concluida em engenharia local (2026-10-02), migracao offline+OTA da release aceita (2026-10-04); Etapa 11 desbloqueada em engenharia.
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em

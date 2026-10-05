@@ -26,9 +26,16 @@ taxa/duracao/estereo, WAVs originais e PCM do boot sao preservados. Nenhuma
 politica de tamanho, assinatura ou confianca foi relaxada.
 
 **Status:** autoritativo; **revisao atual:** 2026-10-04, CapyOS
-`0.11.3+20261004` (stable, Latest e imutavel, gate de update legado aberto), com
+`0.11.3+20261004` (stable, Latest e imutavel, migracao offline+OTA aceita), com
 CapyAgent `0.1.0`, CapyUI `2.27.0`, CapyCodecs `0.1.1` e `capyos-base-v3-r2`.
 **Sincronização:** acompanha a versão do CapyOS core em `VERSION.yaml`.
+
+**Aceite de migracao 2026-10-04:** run VMware `8e6cdbede301`, predecessor publico
+0.10.0 -> copia offline com ponte assinada 0.11.2 -> full 0.11.3 por HTTPS;
+cinco boots, rollback/reaplicacao/cache/confirmacao/recusa da mesma versao.
+Original/DATA/ESP/GPT/kernel confirmado preservados no bootstrap. Nenhuma ABI,
+pin, ancora ou release imutavel mudou.
+[Limites e evidencia](../../operations/signed-offline-recovery.md).
 
 **Release atual:** `0.11.3+20261004`, com ponte OTA `0.11.2` e cache
 segmentado privado do update-agent. Nao altera CapyFS v2, ABI, pins, epoca ou

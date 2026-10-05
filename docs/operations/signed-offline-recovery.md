@@ -1,5 +1,37 @@
 # Signed offline recovery
 
+## Verified production run
+
+2026-10-04, VMware run `8e6cdbede301`: public predecessor
+`0.10.0+20260904` -> production-signed offline bridge `0.11.2+20261004` ->
+public HTTPS Latest `0.11.3+20261004`. Five boots passed, including an
+unconfirmed full-kernel rollback, verified-cache reapply, final durable health
+confirmation and equal-version rejection. No lab trust override was present.
+
+Evidence: `build/ci/release-0.11.3-offline-migration.manifest`,
+`build/ci/smoke_x64_vmware_update_ab_8e6cdbede301.<phase>.log` and
+`build/release-0.11.3-offline-migration-v3.log`.
+Original image SHA-256:
+`11b785a9c7ac3c53c58b242488a236b0be26b2c09967b1b64b054ce0b82c5994`.
+DATA SHA-256 at offline cloning/staging:
+`63848777bc0038dd354e153d11d2f93035b542593682f6d2e5fcf297a34dc918`.
+The original was rehashed after the entire gate; all protected regions were
+compared before booting the copy. Network/user settings persisted across boots.
+
+Runs `f87fba65e646` and `a8c5f35fe335` are failed test-oracle runs, not acceptance:
+the first expected a transient confirmation summary in update-status; the
+second expected a nonexistent "Rollback pending: no" status line. Actual
+receipts and source show confirmation succeeded. The corrected gate requires
+the fresh durable commit receipt, active-slot health and absence of an armed
+rollback in that command's complete response; 12 evidence regression tests pass.
+Full host make test passed twice, including the final oracle. Eleven offline
+image safety tests, seven bridge contract tests, strict layout/version audits
+and installer disk selftests passed. The new host backend builds with warnings
+as errors, without UNIT_TEST.
+
+This accepts the offline bootstrap followed by production OTA, not a claim
+that the old client's editor can perform an entirely online bridge bootstrap.
+
 The 0.10.0 guest cannot reliably edit its root-owned update route. Its terminal
 also truncates an Ed25519 signature line. Neither limitation authorizes weakening
 the signature verifier or silently confirming a new kernel.
