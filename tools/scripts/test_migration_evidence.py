@@ -8,6 +8,7 @@ import smoke_x64_update_ab_contract as contract
 from test_update_ab_contract import _production_evidence
 from smoke_x64_helpers import run_cmd_expect_prompt
 from smoke_x64_migration import BRIDGE_ROUTE, configure_bridge_route, prepare_bridge_material
+from smoke_x64_update_ab_flow import confirm_boot_health
 
 
 def migration_evidence():
@@ -25,6 +26,73 @@ def migration_evidence():
 
 
 class MigrationEvidenceTests(unittest.TestCase):
+    @patch("smoke_x64_update_ab_flow.assert_slot_state")
+    @patch("smoke_x64_update_ab_flow.run_cmd")
+    def test_health_gate_requires_commit_receipt_and_durable_slot_state(self, command, state):
+        class Console:
+            def marker(self): return 17
+            def text_since(self, marker): return "health=confirmed [ACTIVE]\n"
+            def wait_for(self, expected, **kwargs):
+                self.expected, self.kwargs = expected, kwargs
+        console = Console()
+        confirm_boot_health(console, 10)
+        self.assertEqual(console.expected, contract.CONFIRM_SUMMARY)
+        self.assertEqual(console.kwargs["start_at"], 17)
+        self.assertEqual(command.call_args.args[1], "update-confirm-health")
+        self.assertEqual([call.args[2] for call in state.call_args_list],
+                         ["health=confirmed [ACTIVE]"])
+
+    @patch("smoke_x64_update_ab_flow.assert_slot_state")
+    @patch("smoke_x64_update_ab_flow.run_cmd")
+    def test_health_gate_rejects_rollback_still_armed(self, command, state):
+        class Console:
+            def marker(self): return 17
+            def wait_for(self, *args, **kwargs): pass
+            def text_since(self, marker): return "health=confirmed [ACTIVE]\nRollback pending: yes"
+        with self.assertRaisesRegex(RuntimeError, "did not disarm"):
+            confirm_boot_health(Console(), 10)
+
+    @patch("smoke_x64_update_ab_flow.assert_slot_state")
+    @patch("smoke_x64_update_ab_flow.run_cmd")
+    def test_health_gate_rejects_missing_durable_commit_receipt(self, command, state):
+        class Console:
+            def marker(self): return 17
+            def wait_for(self, *args, **kwargs): raise TimeoutError("missing commit receipt")
+        with self.assertRaises(TimeoutError):
+            confirm_boot_health(Console(), 10)
+        state.assert_not_called()
+
+    def offline(self):
+        fields = migration_evidence()
+        fields["format"] = contract.PRODUCTION_OFFLINE_EVIDENCE_FORMAT
+        fields["bridge_manifest_url"] = fields["payload_url"].removesuffix("capyos64.bin") + "bridge.ini"
+        del fields["bridge_route_retired"]
+        fields.update(offline_source_sha256="aa" * 32, offline_data_sha256="bb" * 32,
+                      offline_signature_verified="yes", offline_original_unchanged="yes",
+                      offline_protected_regions_unchanged="yes")
+        return fields
+
+    def test_offline_proof_does_not_claim_bridge_route_was_used(self):
+        fields = self.offline()
+        contract.validate_production_evidence(fields)
+        self.assertEqual(contract.parse_evidence(contract.render_production_evidence(fields)), fields)
+        self.assertNotIn("bridge_route_retired", fields)
+
+    def test_offline_proof_refuses_missing_rollback_signature_and_preservation(self):
+        for key in self.offline():
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                fields = self.offline()
+                del fields[key]
+                contract.validate_production_evidence(fields)
+        for key, bad in (("offline_original_unchanged", "no"), ("offline_signature_verified", "no"),
+                         ("offline_protected_regions_unchanged", "no"), ("offline_data_sha256", "bad"),
+                         ("bridge_manifest_url", BRIDGE_ROUTE), ("rollback_reported", "no"),
+                         ("boots_observed", "4"), ("lab_override_absent", "no")):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                fields = self.offline()
+                fields[key] = bad
+                contract.validate_production_evidence(fields)
+
     def test_complete_proof_roundtrip(self):
         fields = migration_evidence()
         contract.validate_production_evidence(fields)

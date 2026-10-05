@@ -53,12 +53,14 @@ from smoke_x64_helpers import (  # noqa: E402
 )
 from smoke_x64_qemu_update_ab import build_signed_material  # noqa: E402
 from smoke_x64_migration import prepare_bridge_material, configure_bridge_route  # noqa: E402
+from smoke_x64_offline_recovery import recover_vmware_copy  # noqa: E402
 from smoke_x64_update_ab_contract import (  # noqa: E402
     EVIDENCE_FORMAT,
     LAB_BANNER,
     PRODUCTION_CYCLE_ORDER,
     PRODUCTION_EVIDENCE_FORMAT,
     PRODUCTION_MIGRATION_EVIDENCE_FORMAT,
+    PRODUCTION_OFFLINE_EVIDENCE_FORMAT,
     PRODUCTION_TRUST_ANCHOR,
     TRACK,
     TRUST_ANCHOR,
@@ -168,6 +170,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--production-bridge-manifest", type=Path)
     parser.add_argument("--production-bridge-payload", type=Path)
     parser.add_argument("--production-bridge-version")
+    parser.add_argument("--offline-recovery-wsl", help="WSL distribution for signed offline bootstrap")
     parser.add_argument("--expected-iso-sha256")
     parser.add_argument("--vmnet", default="VMnet8")
     parser.add_argument(
@@ -761,12 +764,18 @@ def main() -> int:
 
     production_network = None
     bridge_material = None
+    offline_evidence = None
+    offline_original = None
     try:
         if args.production:
             material = prepare_production_material(args)
             bridge_material = prepare_bridge_material(args, material)
+            if args.offline_recovery_wsl and not bridge_material:
+                raise ValueError("offline recovery requires the production signed bridge bundle")
             production_network = discover_production_vmware_network(args)
         else:
+            if args.offline_recovery_wsl:
+                raise ValueError("offline recovery is production only")
             require_lab_arguments(args)
             prepare_bridge_material(args, None)
         boot_media_sha256 = sha256_file(args.iso)
@@ -917,32 +926,39 @@ def main() -> int:
                         console, args.step_timeout, production_network
                     )
                 assert_provider_ready(console, args.step_timeout)
-                if bridge_material:
+                if bridge_material and args.offline_recovery_wsl:
+                    run_cmd(console, "do-sync", args.step_timeout, expect_optional=True)
+                    if not trigger_poweroff(console, args.step_timeout * 2):
+                        raise RuntimeError("predecessor did not power off for offline recovery")
+                    armed = True
+                elif bridge_material:
                     configure_bridge_route(console, args.step_timeout)
-                run_cmd(
-                    console,
-                    "update-channel show",
-                    args.step_timeout,
-                    expect=first_manifest,
-                    expect_ignore_line_breaks=True,
-                )
-                if args.production:
+                if not args.offline_recovery_wsl:
+                    run_cmd(
+                        console,
+                        "update-channel show",
+                        args.step_timeout,
+                        expect=first_manifest,
+                        expect_ignore_line_breaks=True,
+                    )
+                if args.production and not args.offline_recovery_wsl:
                     verify_production_public_route(
                         console, args.step_timeout, first_manifest
                     )
-                else:
+                elif not args.offline_recovery_wsl:
                     assert_http_endpoint_reachable(
                         console, args.step_timeout, manifest_endpoint
                     )
-                stage_and_arm_update(
-                    console,
-                    args.step_timeout,
-                    expect_version=first_version,
-                    expect_payload_url=first_payload,
-                    expect_payload_sha256=first_digest,
-                )
-                assert_armed_attempt_state(console, args.step_timeout)
-                sync_and_reboot(args, console)
+                if not args.offline_recovery_wsl:
+                    stage_and_arm_update(
+                        console,
+                        args.step_timeout,
+                        expect_version=first_version,
+                        expect_payload_url=first_payload,
+                        expect_payload_sha256=first_digest,
+                    )
+                    assert_armed_attempt_state(console, args.step_timeout)
+                    sync_and_reboot(args, console)
                 armed = True
             finally:
                 console.stop()
@@ -950,6 +966,14 @@ def main() -> int:
                 break
         if not armed:
             raise RuntimeError("VMware first boot never armed the first attempt")
+
+        if args.offline_recovery_wsl:
+            target_descriptor, offline_original, offline_evidence = recover_vmware_copy(
+                args, vmx_path, target_descriptor, REPO_ROOT)
+            write_vmx(vmx_path, render_update_ab_vmx(
+                display_name=f"CapyOS signed offline A/B {run_id}", iso_path=args.iso,
+                target_descriptor=target_descriptor, pipe_name=pipe_name, boot_from="hdd"))
+            print("[ok] offline production-signed copy staged; original and protected regions unchanged")
 
         if args.production:
             if bridge_material:
@@ -1100,7 +1124,8 @@ def main() -> int:
 
         if args.production:
             evidence = {
-                "format": PRODUCTION_MIGRATION_EVIDENCE_FORMAT if bridge_material else PRODUCTION_EVIDENCE_FORMAT,
+                "format": (PRODUCTION_OFFLINE_EVIDENCE_FORMAT if offline_evidence else
+                           PRODUCTION_MIGRATION_EVIDENCE_FORMAT if bridge_material else PRODUCTION_EVIDENCE_FORMAT),
                 "release_tag": release_tag,
                 "track": TRACK,
                 "provider": "vmware-workstation",
@@ -1153,6 +1178,18 @@ def main() -> int:
                     "bridge_attempt_slot": str(baseline_slot),
                     "bridge_health_confirmed": "yes",
                     "bridge_route_retired": "yes",
+                })
+            if offline_evidence:
+                del evidence["bridge_route_retired"]
+                evidence["bridge_manifest_url"] = first_payload.removesuffix("capyos-bridge64.bin") + "bridge.ini"
+                if sha256_file(offline_original) != offline_evidence["source_sha256"]:
+                    raise RuntimeError("original image changed after offline recovery")
+                evidence.update({
+                    "offline_source_sha256": offline_evidence["source_sha256"],
+                    "offline_data_sha256": offline_evidence["data_sha256"],
+                    "offline_signature_verified": "yes" if offline_evidence["production_bundle_verified"] else "no",
+                    "offline_original_unchanged": "yes" if offline_evidence["original_image_unchanged"] else "no",
+                    "offline_protected_regions_unchanged": "yes" if offline_evidence["all_bytes_outside_inactive_boot_and_control_unchanged"] else "no",
                 })
             validate_production_evidence(evidence)
             rendered_evidence = render_production_evidence(evidence)

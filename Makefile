@@ -3259,6 +3259,22 @@ test-update-agent:
 	  src/security/fe25519.c src/security/sha512.c \
 	  -o $(BUILD)/tests/update_agent
 	$(BUILD)/tests/update_agent
+.PHONY: offline-recovery-host test-offline-recovery
+OFFLINE_RECOVERY_SOURCES = src/boot/boot_slot.c src/boot/boot_slot_authorization.c \
+  src/boot/boot_slot_lifecycle.c src/boot/boot_slot_operations.c \
+  src/boot/boot_slot_status.c src/boot/boot_slot_store.c src/boot/gpt_identity.c \
+  src/security/sha256.c
+offline-recovery-host:
+	@mkdir -p $(BUILD)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -DCAPYOS_UEFI_LOADER -Iinclude \
+	  tools/host/src/offline_recovery_slot.c $(OFFLINE_RECOVERY_SOURCES) \
+	  -o $(BUILD)/offline-recovery-slot
+test-offline-recovery: offline-recovery-host
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -DCAPYOS_UEFI_LOADER -Iinclude \
+	  tools/host/tests/offline_recovery_fixture.c $(OFFLINE_RECOVERY_SOURCES) \
+	  -o $(BUILD)/offline-recovery-fixture
+	python3 tools/scripts/test_offline_recovery.py
+test: test-offline-recovery
 verify-update-payload-budget:
 	python3 tools/scripts/verify_update_payload_budget.py --payload $(CAPYOS_ELF64)
 
