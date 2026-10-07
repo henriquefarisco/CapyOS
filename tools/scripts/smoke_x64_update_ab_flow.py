@@ -245,8 +245,17 @@ def assert_attempt_pending(session, timeout: float) -> None:
 
 
 def confirm_boot_health(session, timeout: float) -> None:
+    marker = session.marker()
     run_cmd(session, "update-confirm-health", timeout * 4, expect=CONFIRM_OK)
-    run_cmd(session, "update-status", timeout, expect=CONFIRM_SUMMARY)
+    # The confirmation command emits this receipt after its verified durable
+    # commit. update-status refreshes the catalog and may replace the transient
+    # summary when the running version already equals the cached catalog.
+    session.wait_for(CONFIRM_SUMMARY, timeout=timeout, start_at=marker,
+                     ignore_line_breaks=True)
+    slot_marker = session.marker()
+    assert_slot_state(session, timeout, "health=confirmed [ACTIVE]")
+    if text_contains_pattern(session.text_since(slot_marker), "Rollback pending: yes"):
+        raise RuntimeError("health receipt did not disarm the persistent rollback")
 
 
 def assert_equal_release_refused(

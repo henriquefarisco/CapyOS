@@ -48,6 +48,7 @@ PRODUCTION_EVIDENCE_FORMAT = (
     "capyos-production-signed-ab-update-evidence-manifest-v2"
 )
 PRODUCTION_MIGRATION_EVIDENCE_FORMAT = "capyos-production-bridge-migration-evidence-manifest-v1"
+PRODUCTION_OFFLINE_EVIDENCE_FORMAT = "capyos-production-offline-recovery-evidence-manifest-v1"
 TRACK = "UEFI/GPT/x86_64"
 PROVIDERS = ("qemu-ovmf", "vmware-workstation")
 TRUST_ANCHOR = "lab-ed25519"
@@ -178,6 +179,9 @@ _MIGRATION_REQUIRED_FIELDS = (*_PRODUCTION_REQUIRED_FIELDS,
     "bridge_version", "bridge_manifest_url", "bridge_payload_url",
     "bridge_payload_size", "bridge_payload_sha256", "bridge_attempt_slot",
     "bridge_health_confirmed", "bridge_route_retired")
+_OFFLINE_REQUIRED_FIELDS = (*_MIGRATION_REQUIRED_FIELDS[:-1],
+    "offline_source_sha256", "offline_data_sha256", "offline_signature_verified",
+    "offline_original_unchanged", "offline_protected_regions_unchanged")
 _DECIMAL_RE = re.compile(r"^[1-9][0-9]*$")
 
 
@@ -451,7 +455,8 @@ def validate_evidence(fields: Mapping[str, str]) -> None:
 
 
 def render_production_evidence(fields: Mapping[str, str]) -> str:
-    order = (_MIGRATION_REQUIRED_FIELDS if fields.get("format") ==
+    order = (_OFFLINE_REQUIRED_FIELDS if fields.get("format") == PRODUCTION_OFFLINE_EVIDENCE_FORMAT
+             else _MIGRATION_REQUIRED_FIELDS if fields.get("format") ==
              PRODUCTION_MIGRATION_EVIDENCE_FORMAT else _PRODUCTION_REQUIRED_FIELDS)
     if tuple(fields) != order:
         raise ValueError(
@@ -461,8 +466,10 @@ def render_production_evidence(fields: Mapping[str, str]) -> str:
 
 
 def validate_production_evidence(fields: Mapping[str, str]) -> None:
-    migration = fields.get("format") == PRODUCTION_MIGRATION_EVIDENCE_FORMAT
-    order = _MIGRATION_REQUIRED_FIELDS if migration else _PRODUCTION_REQUIRED_FIELDS
+    offline = fields.get("format") == PRODUCTION_OFFLINE_EVIDENCE_FORMAT
+    migration = offline or fields.get("format") == PRODUCTION_MIGRATION_EVIDENCE_FORMAT
+    order = (_OFFLINE_REQUIRED_FIELDS if offline else _MIGRATION_REQUIRED_FIELDS
+             if migration else _PRODUCTION_REQUIRED_FIELDS)
     missing = [key for key in order if key not in fields]
     if missing:
         raise ValueError(
@@ -572,10 +579,20 @@ def validate_production_evidence(fields: Mapping[str, str]) -> None:
                 and compare_update_versions(fields["manifest_version"], fields["bridge_version"]) > 0):
             raise ValueError("migration requires predecessor < bridge < full release")
         if (fields["bridge_attempt_slot"] != "1" or fields["bridge_health_confirmed"] != "yes"
-                or fields["bridge_route_retired"] != "yes"):
+                or (not offline and fields["bridge_route_retired"] != "yes")):
             raise ValueError("migration bridge slot, health and route retirement must be proven")
-        if fields["bridge_manifest_url"] != "https://github.com/henriquefarisco/CapyOS/releases/latest/download/bridge.ini":
+        expected_bridge_manifest = (fields["payload_url"].removesuffix("capyos64.bin") + "bridge.ini"
+                                    if offline else "https://github.com/henriquefarisco/CapyOS/releases/latest/download/bridge.ini")
+        if fields["bridge_manifest_url"] != expected_bridge_manifest:
             raise ValueError("bridge must use the official public Latest route")
+        if offline:
+            for key in ("offline_source_sha256", "offline_data_sha256"):
+                if not _HEX64_RE.fullmatch(fields[key]):
+                    raise ValueError(f"invalid {key}")
+            for key in ("offline_signature_verified", "offline_original_unchanged",
+                        "offline_protected_regions_unchanged"):
+                if fields[key] != "yes":
+                    raise ValueError(f"offline evidence requires {key}")
         if fields["bridge_payload_url"] != fields["payload_url"].removesuffix("capyos64.bin") + "capyos-bridge64.bin":
             raise ValueError("bridge must belong to the full immutable release")
         if not _DECIMAL_RE.fullmatch(fields["bridge_payload_size"]) or int(fields["bridge_payload_size"]) > (12 + 4096 // 4) * 4096:

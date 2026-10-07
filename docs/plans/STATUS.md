@@ -1,6 +1,6 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-10-04 | **Versao:** `0.11.3+20261004` (stable, Latest e imutavel; instalacao nova validada, aceite OTA legado aberto) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Data:** 2026-10-04 | **Versao:** `0.11.3+20261004` (stable, Latest e imutavel; instalacao nova e migracao offline+OTA validadas) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -19,7 +19,7 @@
 
 ## Progresso global
 
-- **Migracao legada publicada, aceite aberto (2026-10-04):**
+- **Migracao legada offline+OTA aceita (2026-10-04):**
   `0.11.3+20261004` com ponte OTA `0.11.2` menor que 4.243.456 bytes e cache
   segmentado em partes de ate 2 MiB; tamanho/SHA-256 completo e Ed25519 continuam
   obrigatorios. `make test` e ciclo A/B QEMU com payload de 7.416.616 bytes
@@ -30,9 +30,11 @@
   Latest imutavel com 14 assets: CI `37234552890`, producao dos artefatos
   `37235177730`, promocao `37235892015`, assinaturas de producao verificadas.
   ISO publicada aprovada Full/desktop/presets/persistencia (`e6f2c525aeea`).
-  A/B de producao ainda pendente: primeiro run parou antes do fetch porque o
-  editor normal do predecessor nao pode recriar repository.ini root-owned;
-  manutencao nao persiste e a importacao manual trunca a assinatura no TTY antigo.
+  Recuperacao offline assinada -> ponte -> HTTPS full passou no run
+  `8e6cdbede301`: cinco boots, rollback, cache revalidado, confirmacao e recusa
+  da mesma versao; original e regioes protegidas intactos no bootstrap.
+  O editor/manutencao antigos continuam limitados; esse aceite nao afirma
+  bootstrap inteiramente online. [Procedimento](../operations/signed-offline-recovery.md).
   [Evidencia e hashes](../releases/capyos-0.11.3+20261004.md).
 
 - **Release de audio publicada (2026-10-04):**

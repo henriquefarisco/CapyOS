@@ -62,7 +62,19 @@ temporaria bridge.ini para latest.ini e nao pode gerar uma ISO instaladora.
 - Releases/tags imutaveis anteriores preservados; nenhuma chave, ABI ou pin
   alterado. WAVs originais preservados.
 
-## Aceite de migracao ainda aberto
+## Migracao legada: bootstrap offline aceito
+
+Run `8e6cdbede301` passou com ISO publica 0.10.0 e os bytes publicados acima:
+ponte assinada instalada numa copia offline, cinco boots, fetch HTTPS da full,
+rollback para ponte, reaplicacao do cache verificado, confirmacao persistente
+e recusa da mesma versao. Original/DATA/ESP/GPT/kernel confirmado preservados
+no bootstrap, original revalidado ao final, sem chave privada ou override lab.
+Evidencia `build/ci/release-0.11.3-offline-migration.manifest` e
+[procedimento/limites](../operations/signed-offline-recovery.md).
+Release, tags, assinaturas, ABIs e pins permanecem intactos. Este aceite exige
+recuperacao offline inicial; nao valida o editor/roteamento online do cliente antigo.
+
+### Tentativas antigas e diagnostico preservado
 
 predecessor publico 0.10.0 -> ponte -> full por HTTPS com chave de producao,
 rollback para ponte, reaplicacao do cache e confirmacao final. Nao tratar os
@@ -83,6 +95,6 @@ preservados em `build/ci/smoke_x64_vmware_update_ab_{run}.<fase>.log` e
 `build/migration-maintenance-debug.log`; ajustes experimentais retirados.
 O helper de editor agora recusa imediatamente o retorno prematuro ao shell,
 com teste de regressao, em vez de esperar um prompt que nao sera emitido.
-Uma rota de recuperacao/migracao externa ao editor antigo deve ser definida e
-validada antes de fechar o aceite OTA. Nao alterar permissoes, assinaturas,
+Uma rota externa ao editor antigo foi implementada e validada acima.
+Nao alterar permissoes, assinaturas,
 ancoras, release ou tags imutaveis para esconder essas falhas.
