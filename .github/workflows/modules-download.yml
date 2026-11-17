@@ -24,7 +24,8 @@ permissions:
 jobs:
   modules-download:
     name: Networked full-install module download
-    runs-on: ubuntu-latest
+    # Match the release host: GNU-EFI must not inherit an amd64v3 ISA.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:

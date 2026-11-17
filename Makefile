@@ -50,7 +50,7 @@ else
   $(info [build] Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
   $(info [build] Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
-CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -Isrc -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
+CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -march=x86-64 -mtune=generic -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -Isrc -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
 # Bug fix critico (2026-05-05 sessao 4b): habilita preemptive
 # scheduler por default. Sem essa flag, `scheduler_set_running(1)`
 # nunca e chamado, `task_yield()` vira no-op, e tasks adicionadas
@@ -231,7 +231,7 @@ EFI_OBJCOPY ?= x86_64-linux-gnu-objcopy
 # UEFI runs with firmware interrupts enabled. SysV's 128-byte red zone is not
 # preserved by hardware interrupt frames, so leaf helpers (SHA/copy included)
 # must own real stack storage or their locals are corrupted nondeterministically.
-EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
+EFI_CFLAGS := -march=x86-64 -mtune=generic -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
 EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L$(EFI_LIB_DIR) -T $(EFI_LIB_DIR)/elf_x86_64_efi.lds
 EFI_LIBS := $(EFI_LIB_DIR)/crt0-efi-x86_64.o -lefi -lgnuefi
 
@@ -972,7 +972,7 @@ BEARSSL_USERLAND_CFLAGS := -DBR_AES_X86NI=0 -DBR_SSE2=0
 # AMD64 user code may use scalar SSE2 floating point. The scheduler owns a
 # 16-byte-aligned FXSAVE area per task and restores it on every switch; x87 and
 # MMX stay disabled so the supported compiler contract remains narrow.
-USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
+USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -march=x86-64 -mtune=generic -mcmodel=small \
                   -fno-asynchronous-unwind-tables -fno-unwind-tables \
                   -fcf-protection=none -fno-pic -fno-pie -fno-plt \
                   -fno-omit-frame-pointer -fno-strict-aliasing \

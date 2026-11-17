@@ -52,6 +52,32 @@ production A/B cycle from the public 0.11.3 predecessor.
 
 ## Compatibility limits
 
+### Release-host CPU baseline correction
+
+The first PR CI artifact exposed an existing release-environment regression:
+the floating `ubuntu-latest` runner fetched GNU-EFI 4.0.0-1 from Ubuntu's
+`amd64v3` archive. Its `_IPrint` contains SSE4.1 `pinsrq`, so QEMU's baseline
+x86-64 CPU raised #UD before the installer started. The same fault was present
+in the scheduled module-install run `43890142036` before this PR.
+The exact failed PR ISO SHA-256 is
+`9b8d0cd4ff450cdc43138d99254d2d94c06c077556db7d406525ab9efe349152`.
+Local reproduction normalized RIP to PE offset `0x23c7d`; disassembly of that
+exact loader identifies `_IPrint+0x4d`, `pinsrq`, not an ACPI parser fault.
+Evidence is retained under `build/release-0.11.4/ci-premerge/`.
+
+Image-producing CI/release jobs now pin Ubuntu 24.04, whose baseline GNU-EFI
+does not impose the host's optional v3 ISA on the guest. Kernel, userland and
+loader compilation explicitly select `-march=x86-64 -mtune=generic`.
+Changing compiler flags alone cannot repair a precompiled v3 static library.
+The QEMU CPU and acceptance conditions remain unchanged. Final verification
+must use the rebuilt CI artifact, not the earlier local ISO above.
+The complete local `release-check` passed again after the explicit ISA flags
+(472 seconds; `release-0.11.4-baseline-check.json`).
+
+For local builds, use baseline amd64 GNU-EFI libraries (not amd64v3 or
+`-march=native` libraries). The kernel's minimum ISA is independent of the
+development host. See [Ubuntu architecture variants](https://ubuntu.com/project/docs/how-ubuntu-is-made/concepts/supported-architectures/).
+
 Hyper-V Gen2 and physical hardware require their own device/runtime evidence.
 This release does not certify them. Wi-Fi, battery/thermal providers, tray
 integration and S3 resume remain open in Etapa 11. The follow-up branch will
