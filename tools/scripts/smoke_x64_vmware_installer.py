@@ -32,6 +32,7 @@ from smoke_x64_helpers import ensure_shell_after_login
 from smoke_x64_vmware_installer_contract import (
     RECOVERY_KEY_RE,
     exact_extent_size_mib,
+    evidence_module_profile,
     parse_flat_extent,
     render_evidence,
     render_scratch_vmx,
@@ -653,7 +654,7 @@ def main() -> int:
             "login_completed": "yes",
             "persistence_marker_written": "yes",
             "persistence_marker_read_after_reboot": "yes",
-            "module_profile": args.module_profile,
+            "module_profile": evidence_module_profile(args.module_profile),
             "module_install_completed": "yes" if args.require_module_install else "not-required",
             "recovery_key_redacted": "yes",
             "recovery_key_included": "no",

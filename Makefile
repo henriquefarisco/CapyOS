@@ -441,6 +441,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/builtin_music_assets.o \
 	$(BUILD)/x86_64/services/capyai/capyai_system_actions.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
+	$(BUILD)/x86_64/drivers/acpi/acpi_tables.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/audio/hda_core.o \
 	$(BUILD)/x86_64/drivers/audio/hda.o \
@@ -4722,3 +4723,23 @@ clean:
 .PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-capyai smoke-x64-qemu-capyai-gui-async smoke-x64-qemu-installer-no-uart smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)
+
+.PHONY: test-acpi-power smoke-x64-qemu-acpi-power smoke-x64-vmware-acpi-power
+test-acpi-power:
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) -std=c99 -Wall -Wextra -Werror -Iinclude $(ACPI_TEST_FLAGS) -DACPI_TABLES_TEST_MAIN tests/drivers/test_acpi_tables.c src/drivers/acpi/acpi_tables.c src/drivers/acpi/acpi.c -o $(BUILD)/tests/acpi_power_tests
+	$(BUILD)/tests/acpi_power_tests
+	$(HOST_CC) $(EFI_CFLAGS) -ffunction-sections -fdata-sections $(ACPI_TEST_FLAGS) tests/boot/test_uefi_acpi.c src/boot/uefi_loader/acpi_log_gop.c -Wl,--gc-sections -L$(EFI_LIB_DIR) -lefi -lgnuefi -o $(BUILD)/tests/uefi_acpi_tests
+	$(BUILD)/tests/uefi_acpi_tests
+
+test: test-acpi-power
+
+smoke-x64-qemu-acpi-power:
+	$(MAKE) all64
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_cli.py --check-acpi-power --require-shell --log build/ci/smoke_x64_qemu_acpi_power.log --disk build/ci/smoke_x64_qemu_acpi_power.img $(SMOKE_X64_ACPI_POWER_ARGS)
+
+smoke-x64-vmware-acpi-power:
+	@SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_acpi_power.py)"; \
+	py.exe -3 "$$SCRIPT_WIN" $(SMOKE_X64_VMWARE_ACPI_ARGS)

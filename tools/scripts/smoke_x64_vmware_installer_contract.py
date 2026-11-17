@@ -184,6 +184,15 @@ def exact_extent_size_mib(extent: Path) -> int:
     return size // mib
 
 
+def evidence_module_profile(cli_profile: str) -> str:
+    """Translate the wizard's UI label to the existing evidence-v4 vocabulary."""
+    if cli_profile == "basic":
+        return "core"
+    if cli_profile == "full":
+        return "full"
+    raise ValueError("installer evidence requires a basic or full profile")
+
+
 def render_evidence(fields: Mapping[str, str]) -> str:
     keys = tuple(fields)
     if keys != _REQUIRED_FIELDS:

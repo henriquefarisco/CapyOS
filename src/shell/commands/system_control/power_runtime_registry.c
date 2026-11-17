@@ -1,3 +1,4 @@
+#include "drivers/acpi/acpi_tables.h"
 #include "internal/system_control_internal.h"
 #include "core/runtime_version.h"
 #include "auth/privilege.h"
@@ -5,6 +6,27 @@
 #include "services/capyai.h"
 #endif
 #include "services/capyai_system_actions.h"
+
+static int cmd_power_status(struct shell_context *ctx, int argc, char **argv) {
+  (void)ctx; (void)argv;
+  if (argc != 1) { shell_print("Usage: power-status\n"); return -1; }
+  struct acpi_power_info info;
+  if (acpi_power_snapshot(&info) != 0) {
+    shell_print("ACPI: unavailable or invalid firmware tables\n");
+    return -1;
+  }
+  shell_print(info.uses_xsdt ? "ACPI: XSDT validated\n" : "ACPI: RSDT validated\n");
+  shell_print(info.pm1a_control ? "PM1 control: SystemIO available\n" :
+                                "PM1 control: unsupported or absent\n");
+  shell_print(info.timer_bits == 32 ? "PM timer: 32-bit, 3579545 Hz\n" :
+              info.timer_bits == 24 ? "PM timer: 24-bit, 3579545 Hz\n" :
+                                      "PM timer: unsupported or absent\n");
+  shell_print(info.reset_port ? "ACPI reset: SystemIO available\n" :
+                               "ACPI reset: unsupported or absent\n");
+  shell_print("Battery/thermal: unavailable (AML provider pending)\n"
+              "Suspend S3: unavailable (resume path pending)\n");
+  return 0;
+}
 
 static int require_power_admin(struct shell_context *ctx,
                                const char *operation) {
@@ -514,7 +536,7 @@ static int cmd_runtime_native(struct shell_context *ctx, int argc, char **argv) 
 #endif
 }
 
-static struct shell_command g_system_control_commands[44];
+static struct shell_command g_system_control_commands[45];
 static int g_system_control_commands_initialized = 0;
 
 static void init_system_control_commands(void) {
@@ -609,6 +631,8 @@ static void init_system_control_commands(void) {
   g_system_control_commands[42].handler = cmd_power_schedule_status;
   g_system_control_commands[43].name = "power-schedule-cancel";
   g_system_control_commands[43].handler = cmd_power_schedule_cancel;
+  g_system_control_commands[44].name = "power-status";
+  g_system_control_commands[44].handler = cmd_power_status;
   g_system_control_commands_initialized = 1;
 }
 
@@ -616,7 +640,7 @@ const struct shell_command *shell_commands_system_control(size_t *count) {
   /* keep the count in sync with the array size declared above. */
   init_system_control_commands();
   if (count) {
-    *count = 44;
+    *count = 45;
   }
   return g_system_control_commands;
 }

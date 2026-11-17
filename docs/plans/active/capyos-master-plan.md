@@ -1,5 +1,10 @@
 # CapyOS — Master Plan sequencial
 
+**Candidata 2026-11-17:** `0.11.4+20261117` prepara a publicacao da fatia 11A.
+A Latest publicada permanece `0.11.3+20261004` ate a promocao assinada.
+ABIs, pins e ancoras permanecem iguais; Hyper-V e hardware real nao estao certificados.
+[Notas e gates da candidata](../../releases/capyos-0.11.4+20261117.md).
+
 **Data de referência:** 2026-10-04 (0.11.3 stable publicada, Latest e imutável)
 **Versão atual:** `0.11.3+20261004`
 **Entrega publicada:** ponte OTA `0.11.2` e cache segmentado sem alterar CapyFS
@@ -13,7 +18,10 @@ nao se afirma bootstrap inteiramente online. [Procedimento/evidencia](../../oper
 **Plataforma oficial atual de validação:** `VMware + UEFI + E1000`
 **Compatibilidade oficial planejada:** `Hyper-V + UEFI + VMBus/synthetic devices`, promovida somente após gates dedicados de boot, input, storage e rede.
 **Público alvo prioritário:** usuário desktop comum (não-técnico, experiência tipo Ubuntu/Win7 polida).
-**Status:** Etapas 1-10 publicadas; Etapa 10 concluida em engenharia local (2026-10-02), migracao offline+OTA da release aceita (2026-10-04); Etapa 11 desbloqueada em engenharia.
+**Status:** Etapas 1-10 publicadas; migracao offline+OTA aceita (2026-10-04).
+Etapa 11 em andamento: fatia 11A entregue localmente em 2026-11-17
+(descoberta ACPI validada, PM timer real e `power-status`, QEMU + VMware).
+[Evidencia e limites](../../operations/etapa11-acpi-power-20261117.md).
 
 Este é o único plano ativo. Entregas concluídas foram removidas daqui e
 consolidadas em
@@ -96,8 +104,8 @@ Referências obrigatórias:
 | 7 | Browser usável com web estática moderna | Concluída (alpha.312) | Etapa 6 | HTTPS real, HTML/CSS, imagens, toolbar, histórico, links, cache, limites, sem JavaScript |
 | 8 | Release/update gate oficial + instalador polido | Concluída (0.9.2) | Etapa 7 | publicação Ed25519 imutável, ciclo A/B oficial e instalador wizard amigável |
 | 9 | Package manager + SDK + ABI estável | Concluída (0.10.0) | Etapa 8 | ecossistema instalável, ABI documentada e integração de package format desacoplado |
-| 10 | Áudio + multimídia básica | Concluída localmente, não publicada | Etapa 9 | [Aceite integrado](../../operations/etapa10-acceptance-20261002.md): HDA/AC97/USB, mixer, playlist WAV/OGG e medidores |
-| 11 | WiFi + power management + suspend/resume | Desbloqueada (próxima) | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
+| 10 | Áudio + multimídia básica | Concluída e publicada (0.11.3) | Etapa 9 | [Aceite integrado](../../operations/etapa10-acceptance-20261002.md): HDA/AC97/USB, mixer, playlist WAV/OGG e medidores |
+| 11 | WiFi + power management + suspend/resume | Em andamento; 11A entregue localmente | Etapa 10 | driver WiFi popular, WPA2/WPA3, ACPI battery, suspend S3 inicial |
 | 12 | JS engine sandboxed | Bloqueada | Etapa 11 | JavaScript isolado no browser com bridge DOM controlada e engine sem syscalls diretas |
 | 13 | CapyLX L0-L5 unificado | Bloqueada | Etapa 12 | binários Linux estáticos + POSIX amplo + threads/futex/sockets, base futura para ports Linux de browsers grandes |
 | 14 | Wayland bridge + apps Linux GUI | Bloqueada | Etapa 13 | apps Linux GUI via Wayland mínimo integrados ao compositor CapyOS |
@@ -1047,6 +1055,18 @@ falha contida, testes completos e sanitizadores. Não equivale a release publica
 ## 14. Etapa 11 — WiFi + power management + suspend/resume
 
 **Objetivo:** habilitar uso real fora da VM oficial: WiFi, ACPI battery, suspend/resume. Sem isso o sistema não roda em laptops/desktops modernos.
+
+**Entrega local 11A (2026-11-17):** descoberta RSDP/XSDT/RSDT/FADT/DSDT
+validada, acesso limitado a recursos SystemIO, leitura do PM timer e comando
+`power-status`. 277 verificacoes focadas com sanitizadores, suite host, build
+e dois boots em cada ambiente (QEMU e VMware) aprovados.
+Gates do loader sem UART (QEMU/VMware) e instalacao limpa basic/core com
+reboot/persistencia no VMware tambem passaram na mesma ISO.
+[Artefatos, hashes, reproducao e limites](../../operations/etapa11-acpi-power-20261117.md).
+Esta fundacao nao fecha os criterios de bateria, WiFi ou suspend abaixo.
+Proxima fatia: provider limitado de avaliacao AML/ACPI para leitura real de
+bateria/thermal, antes da integracao com o tray do CapyUI. A Etapa 12 continua
+bloqueada ate o aceite completo da Etapa 11.
 
 **ROI:** muito alto — exigência para uso fora do laboratório.
 

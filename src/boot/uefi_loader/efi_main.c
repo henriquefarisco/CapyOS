@@ -165,8 +165,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
   UINT64 rsdp = 0;
   const CHAR16 *rsdp_src16 = L"none";
   const char *rsdp_src8 = "none";
-  find_rsdp(systab, &rsdp);
-  if (rsdp && rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp)) {
+  EFI_STATUS rsdp_status = find_rsdp(systab, &rsdp);
+  if (rsdp_status == EFI_COMPROMISED_DATA) {
+    /* An advertised invalid ACPI root must not silently select an older one. */
+    rsdp = 0;
+    rsdp_src16 = L"invalid-cfg";
+    rsdp_src8 = "invalid-cfg";
+  } else if (rsdp && rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp)) {
     rsdp_src16 = L"cfg";
     rsdp_src8 = "cfg";
   } else {

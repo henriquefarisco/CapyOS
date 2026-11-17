@@ -98,9 +98,29 @@ def parse_args() -> argparse.Namespace:
         help="Lab-only volume key persisted in CAPYCFG.BIN for smoke coverage",
     )
     parser.add_argument("--verbose", action="store_true", help="Print live serial output")
+    parser.add_argument("--check-acpi-power", action="store_true",
+                        help="Require ACPI discovery/timer and power-status on both boots")
     return parser.parse_args()
 
 
+
+
+def check_acpi_power(session, timeout: float) -> None:
+    captured = session.text()
+    if "[smoke] acpi-power ready" not in captured:
+        raise RuntimeError("ACPI tables/real PM timer did not pass the boot probe")
+    if any(marker in captured for marker in ("KERNEL PANIC", "#PF", "#GP")):
+        raise RuntimeError("fault during ACPI boot")
+    mark = session.marker()
+    run_cmd(session, "power-status", timeout, expect="Suspend S3: unavailable")
+    output = session.text_since(mark)
+    for expected in ("ACPI: XSDT validated", "PM1 control: SystemIO available",
+                     "3579545 Hz", "Battery/thermal: unavailable",
+                     "resume path pending"):
+        if expected not in output:
+            raise RuntimeError(f"power-status missing {expected!r}")
+    run_cmd(session, "power-status invalid", timeout, expect="Usage: power-status")
+    print("[ok] ACPI power-status and unsupported capabilities verified")
 
 
 def run_boot1(
@@ -140,7 +160,7 @@ def run_boot1(
             password=parsed.password,
             allow_desktop=True,
         )
-        if parsed.require_shell or parsed.boot_perf_only:
+        if parsed.require_shell or parsed.boot_perf_only or parsed.check_acpi_power:
             mode = ensure_shell_after_login(
                 session=session,
                 timeout=parsed.step_timeout,
@@ -155,6 +175,8 @@ def run_boot1(
             )
             return
         if mode == "shell":
+            if parsed.check_acpi_power:
+                check_acpi_power(session, parsed.step_timeout)
             smoke_first_boot(
                 session=session,
                 timeout=parsed.step_timeout,
@@ -204,13 +226,15 @@ def run_boot2(
             password=parsed.password,
             allow_desktop=True,
         )
-        if parsed.require_shell:
+        if parsed.require_shell or parsed.check_acpi_power:
             mode = ensure_shell_after_login(
                 session=session,
                 timeout=parsed.step_timeout,
                 mode=mode,
             )
         if mode == "shell":
+            if parsed.check_acpi_power:
+                check_acpi_power(session, parsed.step_timeout)
             smoke_second_boot(
                 session=session,
                 timeout=parsed.step_timeout,
