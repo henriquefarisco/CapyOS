@@ -43,7 +43,9 @@ jobs:
 
   release-gates:
     name: Release gates
-    runs-on: ubuntu-latest
+    # Guest images need baseline amd64 GNU-EFI, not a host amd64v3 archive.
+    # Keep this host aligned with release-artifacts and both QEMU jobs.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -119,7 +121,7 @@ jobs:
 
   qemu-smoke:
     name: QEMU ISO smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: release-gates
     permissions:
       contents: read
@@ -178,7 +180,7 @@ jobs:
 
   qemu-apps-roundtrip:
     name: QEMU apps-basic-roundtrip
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: release-gates
     # Etapa 6 apps-basic-roundtrip RUNTIME gate: boots the gated kernel under
     # QEMU+OVMF and asserts the COM1 marker (the in-kernel orchestrator runs all

@@ -32,7 +32,8 @@ env:
 jobs:
   build-iso:
     name: Build ISO artifact
-    runs-on: ubuntu-latest
+    # Match CI's baseline amd64 GNU-EFI; v3 libraries fault on older CPUs.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

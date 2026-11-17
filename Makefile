@@ -50,7 +50,7 @@ else
   $(info [build] Using x86_64-linux-gnu host toolchain by default; set TOOLCHAIN64=elf to force x86_64-elf-*)
   $(info [build] Host toolchain disables kernel stack protector; x86_64-linux-gnu emits TLS canary reads via %fs:0x28 in freestanding code)
 endif
-CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -Isrc -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
+CFLAGS64  := -ffreestanding -O2 -Wall -Wextra -m64 -march=x86-64 -mtune=generic -mcmodel=small -mno-red-zone -fno-asynchronous-unwind-tables -fno-unwind-tables -fcf-protection=none -fno-pic -fno-pie -fno-plt -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-strict-aliasing -fno-tree-vectorize $(STACKPROTECT64) -Iinclude -Isrc -I$(BUILD_GEN) -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -Ithird_party/tinf
 # Bug fix critico (2026-05-05 sessao 4b): habilita preemptive
 # scheduler por default. Sem essa flag, `scheduler_set_running(1)`
 # nunca e chamado, `task_yield()` vira no-op, e tasks adicionadas
@@ -231,7 +231,7 @@ EFI_OBJCOPY ?= x86_64-linux-gnu-objcopy
 # UEFI runs with firmware interrupts enabled. SysV's 128-byte red zone is not
 # preserved by hardware interrupt frames, so leaf helpers (SHA/copy included)
 # must own real stack storage or their locals are corrupted nondeterministically.
-EFI_CFLAGS := -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
+EFI_CFLAGS := -march=x86-64 -mtune=generic -I$(EFI_INCLUDE_DIR) -I$(EFI_INCLUDE_DIR)/x86_64 -Iinclude -Isrc -fno-stack-protector -fcf-protection=none -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -DCAPYOS_UEFI_LOADER
 EFI_LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -L$(EFI_LIB_DIR) -T $(EFI_LIB_DIR)/elf_x86_64_efi.lds
 EFI_LIBS := $(EFI_LIB_DIR)/crt0-efi-x86_64.o -lefi -lgnuefi
 
@@ -441,6 +441,7 @@ CAPYOS64_OBJS = \
 	$(BUILD)/x86_64/arch/x86_64/builtin_music_assets.o \
 	$(BUILD)/x86_64/services/capyai/capyai_system_actions.o \
 	$(BUILD)/x86_64/drivers/acpi/acpi.o \
+	$(BUILD)/x86_64/drivers/acpi/acpi_tables.o \
 	$(BUILD)/x86_64/drivers/pcie/pcie.o \
 	$(BUILD)/x86_64/drivers/audio/hda_core.o \
 	$(BUILD)/x86_64/drivers/audio/hda.o \
@@ -971,7 +972,7 @@ BEARSSL_USERLAND_CFLAGS := -DBR_AES_X86NI=0 -DBR_SSE2=0
 # AMD64 user code may use scalar SSE2 floating point. The scheduler owns a
 # 16-byte-aligned FXSAVE area per task and restores it on every switch; x87 and
 # MMX stay disabled so the supported compiler contract remains narrow.
-USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -mcmodel=small \
+USERLAND_CFLAGS = -ffreestanding -O2 -Wall -Wextra -m64 -march=x86-64 -mtune=generic -mcmodel=small \
                   -fno-asynchronous-unwind-tables -fno-unwind-tables \
                   -fcf-protection=none -fno-pic -fno-pie -fno-plt \
                   -fno-omit-frame-pointer -fno-strict-aliasing \
@@ -4722,3 +4723,23 @@ clean:
 .PHONY: all all64 iso-uefi manifest64 release-checksums verify-release-checksums disk-gpt provision-vhd legacy-disabled clean test layout-audit layout-audit-report version-audit boot-perf-baseline boot-perf-baseline-selftest check-toolchain release-check smoke-x64-cli smoke-x64-boot-perf smoke-x64-vmware-dhcp smoke-x64-vmware-gui-session smoke-x64-vmware-mouse-events smoke-x64-vmware-usb-hid-keyboard smoke-x64-vmware-storage-resilience smoke-x64-vmware-scheduler-fairness smoke-x64-vmware-compositor-damage-track smoke-x64-vmware-thread-crash-survives smoke-x64-vmware-etapa-4 smoke-x64-cli-nvme smoke-x64-hello-user smoke-x64-hello-segfault smoke-x64-preemptive smoke-x64-preemptive-demo smoke-x64-preemptive-user smoke-x64-preemptive-user-2task smoke-x64-preemptive-all smoke-x64-fork-cow smoke-x64-exec smoke-x64-fork-wait smoke-x64-pipe smoke-x64-fork-crash smoke-x64-capysh smoke-x64-capyai smoke-x64-qemu-capyai-gui-async smoke-x64-qemu-installer-no-uart smoke-x64-iso inspect-disk capylibc hello-elf hello-blob exectarget-elf exectarget-blob capysh-elf capysh-blob
 
 -include $(CAPYOS64_DEPS) $(UEFI_LOADER_DEPS)
+
+.PHONY: test-acpi-power smoke-x64-qemu-acpi-power smoke-x64-vmware-acpi-power
+test-acpi-power:
+	@mkdir -p $(BUILD)/tests
+	$(HOST_CC) -std=c99 -Wall -Wextra -Werror -Iinclude $(ACPI_TEST_FLAGS) -DACPI_TABLES_TEST_MAIN tests/drivers/test_acpi_tables.c src/drivers/acpi/acpi_tables.c src/drivers/acpi/acpi.c -o $(BUILD)/tests/acpi_power_tests
+	$(BUILD)/tests/acpi_power_tests
+	$(HOST_CC) $(EFI_CFLAGS) -ffunction-sections -fdata-sections $(ACPI_TEST_FLAGS) tests/boot/test_uefi_acpi.c src/boot/uefi_loader/acpi_log_gop.c -Wl,--gc-sections -L$(EFI_LIB_DIR) -lefi -lgnuefi -o $(BUILD)/tests/uefi_acpi_tests
+	$(BUILD)/tests/uefi_acpi_tests
+
+test: test-acpi-power
+
+smoke-x64-qemu-acpi-power:
+	$(MAKE) all64
+	$(MAKE) iso-uefi ISO_REUSE_X64_VARIANT=1
+	$(MAKE) manifest64
+	python3 tools/scripts/smoke_x64_cli.py --check-acpi-power --require-shell --log build/ci/smoke_x64_qemu_acpi_power.log --disk build/ci/smoke_x64_qemu_acpi_power.img $(SMOKE_X64_ACPI_POWER_ARGS)
+
+smoke-x64-vmware-acpi-power:
+	@SCRIPT_WIN="$$(wslpath -w tools/scripts/smoke_x64_vmware_acpi_power.py)"; \
+	py.exe -3 "$$SCRIPT_WIN" $(SMOKE_X64_VMWARE_ACPI_ARGS)

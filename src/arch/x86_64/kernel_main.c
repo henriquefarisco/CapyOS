@@ -50,6 +50,7 @@
 #include "drivers/input/keyboard_layout.h"
 #include "drivers/nvme.h"
 #include "drivers/acpi/acpi.h"
+#include "drivers/acpi/acpi_tables.h"
 #include "drivers/serial/serial_com1.h"
 #include "drivers/timer/pit.h"
 #include "kernel/log/klog.h"
@@ -341,8 +342,7 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   dbgcon_putc('P');
 
   dbgcon_putc('r');
-  g_rsdp_override = h->rsdp;
-  g_acpi_initialized = 0;
+  acpi_set_boot_context(h);
   dbgcon_putc('R');
   dbgcon_putc('e');
   g_efi_system_table = h->efi_system_table;
@@ -663,6 +663,29 @@ __attribute__((noreturn)) void kernel_main64(const struct boot_handoff *h) {
   pmm_report_firmware_readonly();
   boot_metrics_stage_end();
   dbgcon_putc('6');
+
+  /* Read-only Etapa 11 platform probe; no sleep or ownership transition. */
+  struct acpi_power_info power_info;
+  if (acpi_power_snapshot(&power_info) == 0) {
+    klog(KLOG_INFO, power_info.uses_xsdt ? "[acpi] power tables: XSDT validated" :
+                                         "[acpi] power tables: RSDT validated");
+    com1_puts(power_info.uses_xsdt ? "[acpi] power tables: XSDT validated\r\n" :
+                                   "[acpi] power tables: RSDT validated\r\n");
+    uint32_t before, after;
+    if (acpi_power_timer_read(&before) == 0) {
+      for (unsigned i = 0; i < 10000; ++i) {
+        if (acpi_power_timer_read(&after) != 0) break;
+        if (acpi_pm_timer_delta(before, after, power_info.timer_bits)) {
+          klog(KLOG_INFO, "[smoke] acpi-power ready");
+          com1_puts("[smoke] acpi-power ready\r\n");
+          break;
+        }
+      }
+    }
+  } else {
+    klog(KLOG_INFO, "[acpi] power tables unavailable or invalid");
+    com1_puts("[acpi] power tables unavailable or invalid\r\n");
+  }
 
   /* Stage 7/8: Input devices */
   boot_ui_splash_set_status("Detecting input devices...");

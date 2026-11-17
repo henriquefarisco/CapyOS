@@ -37,6 +37,9 @@ Escopo atual:
     visual do CapyUI
 - `reference/cli-reference.md`
   - referencia dos comandos do CapyCLI
+- `operations/etapa11-acpi-power-20261117.md`
+  - primeira entrega local da Etapa 11: descoberta ACPI, `power-status`,
+    artefatos e evidencias QEMU/VMware; bateria/WiFi/S3 ainda pendentes
 - `operations/update-from-github.md`
   - procedimento operacional do fetch remoto de manifestos assinados pelo
     `update-agent`

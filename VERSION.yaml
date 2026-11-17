@@ -1,5 +1,5 @@
 meta:
-  generated: 2026-10-04
+  generated: 2026-11-17
   maintainer: Henrique
   product: CapyOS
   execution_track: UEFI/GPT/x86_64
@@ -1026,11 +1026,14 @@ channels:
         date: 2024-02-18
         summary: "Primeira build beta com suporte a multiplos usuarios"
   stable:
-    current: 0.11.3
-    extended: 0.11.3+20261004
+    current: 0.11.4
+    extended: 0.11.4+20261117
     stability: production
-    current_summary: "0.11.3 publicada como Latest imutavel com 14 assets assinados: cache OTA segmentado e ponte 0.11.2 compativel com o limite do CapyFS legado. Audio, boot e tres OGG preservados na imagem completa; CI e instalacao Full da ISO publica no VMware passaram. Aceite A/B de producao ainda aberto; testes de laboratorio nao o substituem."
+    current_summary: "0.11.4 candidata: descoberta ACPI validada, PM timer real e power-status; selecao/copia segura de RSDP. Preserva ABIs, pins e ancoras. Publicacao e aceite dos bytes finais pendentes."
     history:
+      - version: 0.11.3+20261004
+        date: 2026-10-04
+        summary: "0.11.3 publicada como Latest imutavel com 14 assets assinados: cache OTA segmentado e ponte 0.11.2 compativel com o limite do CapyFS legado. Audio, boot e tres OGG preservados na imagem completa; CI e instalacao Full da ISO publica no VMware passaram. Aceite A/B de producao ainda aberto; testes de laboratorio nao o substituem."
       - version: 0.11.1+20261004
         date: 2026-10-04
         summary: "Audio publicado como Latest imutavel com 12 assets; instalacao nova Full/desktop/persistencia aprovada no VMware. Update de 0.10.0 bloqueado pelo limite de 4.243.456 bytes por arquivo do CapyFS antigo; nenhum update aplicado."

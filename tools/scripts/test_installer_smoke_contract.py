@@ -48,6 +48,7 @@ from smoke_x64_vmware_installer import reset_evidence_output
 from smoke_x64_vmware_installer_contract import (
     contains_recovery_key,
     exact_extent_size_mib,
+    evidence_module_profile,
     parse_evidence,
     parse_flat_extent,
     render_evidence,
@@ -669,6 +670,32 @@ def main() -> int:
         rendered = render_evidence(evidence)
         if parse_evidence(rendered) != evidence:
             print("[FAIL] VMware installer evidence did not round-trip")
+            return 1
+        if evidence_module_profile("full") != "full":
+            print("[FAIL] full installer profile changed during export")
+            return 1
+        basic_evidence = dict(evidence)
+        basic_evidence["module_profile"] = evidence_module_profile("basic")
+        basic_evidence["module_install_completed"] = "not-required"
+        if parse_evidence(render_evidence(basic_evidence))["module_profile"] != "core":
+            print("[FAIL] basic installer profile did not export as canonical core")
+            return 1
+        for profile in ("custom", "", "invalid"):
+            try:
+                evidence_module_profile(profile)
+            except ValueError:
+                pass
+            else:
+                print("[FAIL] unsupported installer evidence profile accepted")
+                return 1
+        invalid_profile = dict(evidence)
+        invalid_profile["module_profile"] = "basic"
+        try:
+            render_evidence(invalid_profile)
+        except ValueError:
+            pass
+        else:
+            print("[FAIL] evidence schema was weakened to accept a UI-only label")
             return 1
         invalid = dict(evidence)
         invalid["guard_sha256_after"] = digest_b

@@ -7,12 +7,13 @@ CapyOS e um sistema operacional experimental, open source, focado na trilha
 grafico, login, shell, filesystem CAPYFS, rede, criptografia e um pipeline de
 release validado por testes automatizados.
 
-Versao de referencia: `0.11.3` (build `0.11.3+20261004`; canal `stable`; Latest imutavel publicada, instalacao nova validada; aceite OTA legado ainda aberto; ver `VERSION.yaml`)
+Versao de referencia: `0.11.4` (build `0.11.4+20261117`; canal `stable`; candidata em validacao para publicacao; ver `VERSION.yaml`)
 
-Instalacao nova da ISO final validada no VMware. Atualizacao a partir da 0.10.0
-nao aceita: o kernel excede o limite por arquivo do cache CapyFS legado.
-Nenhum update foi aplicado no gate que falhou. Ver
-[evidencias e limitacao](docs/releases/capyos-0.11.1+20261004.md).
+A candidata acrescenta descoberta ACPI validada e o diagnostico `power-status`.
+Hyper-V e hardware fisico ainda exigem gates dedicados. Clientes 0.10.0 precisam
+da recuperacao offline assinada pela ponte 0.11.2 antes de receber kernels maiores;
+ver [procedimento e limites](docs/operations/signed-offline-recovery.md).
+[Notas da candidata](docs/releases/capyos-0.11.4+20261117.md).
 
 ## Destaques
 

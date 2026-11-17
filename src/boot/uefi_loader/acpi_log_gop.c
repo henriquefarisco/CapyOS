@@ -31,9 +31,7 @@ BOOLEAN rsdp_is_valid_ptr(const VOID *ptr) {
   if (r->revision >= 2) {
     UINT32 len = r->length;
     if (len < 36 || len > 4096) {
-      // Alguns firmwares reportam length inesperado; aceite ACPI 1.0 checksum
-      // como mÃƒÂ­nimo.
-      return TRUE;
+      return FALSE;
     }
     return sum8_bytes(p, len) == 0;
   }
@@ -156,14 +154,25 @@ EFI_STATUS find_rsdp(EFI_SYSTEM_TABLE *st, UINT64 *out_rsdp) {
   if (!out_rsdp)
     return EFI_INVALID_PARAMETER;
   *out_rsdp = 0;
+  if (!st || !st->ConfigurationTable)
+    return EFI_INVALID_PARAMETER;
   static EFI_GUID acpi20 = ACPI_20_TABLE_GUID;
   static EFI_GUID acpi10 = ACPI_TABLE_GUID;
-  for (UINTN i = 0; i < st->NumberOfTableEntries; i++) {
-    EFI_CONFIGURATION_TABLE *ct = &st->ConfigurationTable[i];
-    if (CompareGuid(&ct->VendorGuid, &acpi20) ||
-        CompareGuid(&ct->VendorGuid, &acpi10)) {
-      *out_rsdp = (UINT64)(UINTN)ct->VendorTable;
-      return EFI_SUCCESS;
+  /* GNU-EFI versions expose different CompareGuid return conventions.
+   * Compare the 16-byte identity explicitly and prefer ACPI 2.0 regardless
+   * of configuration-table order. Never mistake an unrelated GUID for ACPI. */
+  for (unsigned pass = 0; pass < 2; ++pass) {
+    const UINT8 *wanted = (const UINT8 *)(pass == 0 ? &acpi20 : &acpi10);
+    for (UINTN i = 0; i < st->NumberOfTableEntries; i++) {
+      EFI_CONFIGURATION_TABLE *ct = &st->ConfigurationTable[i];
+      const UINT8 *guid = (const UINT8 *)&ct->VendorGuid;
+      UINTN j = 0;
+      while (j < sizeof(EFI_GUID) && guid[j] == wanted[j]) ++j;
+      if (j == sizeof(EFI_GUID)) {
+        if (!rsdp_is_valid_ptr(ct->VendorTable)) return EFI_COMPROMISED_DATA;
+        *out_rsdp = (UINT64)(UINTN)ct->VendorTable;
+        return EFI_SUCCESS;
+      }
     }
   }
   return EFI_NOT_FOUND;
@@ -176,6 +185,10 @@ EFI_STATUS copy_rsdp_low(EFI_SYSTEM_TABLE *st, UINT64 rsdp,
   *out_copy = 0;
   if (!rsdp)
     return EFI_NOT_FOUND;
+  if (!rsdp_is_valid_ptr((const VOID *)(UINTN)rsdp))
+    return EFI_COMPROMISED_DATA;
+  const acpi_rsdp_t *source = (const acpi_rsdp_t *)(UINTN)rsdp;
+  UINTN bytes = source->revision >= 2 ? source->length : 20;
 
   EFI_PHYSICAL_ADDRESS dst_pa = 0x3FFFFFFF;
   EFI_STATUS stt =
@@ -186,7 +199,8 @@ EFI_STATUS copy_rsdp_low(EFI_SYSTEM_TABLE *st, UINT64 rsdp,
 
   UINT8 *dst = (UINT8 *)(UINTN)dst_pa;
   UINT8 *src = (UINT8 *)(UINTN)rsdp;
-  for (UINTN i = 0; i < 64; i++)
+  for (UINTN i = 0; i < 4096; i++) dst[i] = 0;
+  for (UINTN i = 0; i < bytes; i++)
     dst[i] = src[i];
   *out_copy = (UINT64)dst_pa;
   return EFI_SUCCESS;

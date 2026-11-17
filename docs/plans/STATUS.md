@@ -1,6 +1,11 @@
 # CapyOS — Status executivo
 
-**Data:** 2026-10-04 | **Versao:** `0.11.3+20261004` (stable, Latest e imutavel; instalacao nova e migracao offline+OTA validadas) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
+**Candidata 2026-11-17:** `0.11.4+20261117` prepara a publicacao da fatia 11A.
+A Latest publicada permanece `0.11.3+20261004` ate a promocao assinada.
+ABIs, pins e ancoras permanecem iguais; Hyper-V e hardware real nao estao certificados.
+[Notas e gates da candidata](../releases/capyos-0.11.4+20261117.md).
+
+**Data:** 2026-11-17 | **Versao publicada:** `0.11.3+20261004` (inalterada; entrega 11A somente local) | **Plataforma oficial:** VMware + UEFI + E1000 | **Publico alvo:** usuario desktop comum
 
 > **Fonte de verdade:** [`active/capyos-master-plan.md`](active/capyos-master-plan.md).
 > **Implementação finalizada (alpha.93):**
@@ -18,6 +23,18 @@
 ---
 
 ## Progresso global
+
+- **Etapa 11 iniciada; fatia 11A entregue localmente (2026-11-17):**
+  ACPI validada desde a selecao/copia do RSDP no loader ate FADT/DSDT no kernel;
+  `power-status` e leitura do PM timer real. Passaram 277 verificacoes focadas
+  com ASan/UBSan, suite host completa, layout audit, build kernel/UEFI/ISO,
+  dois boots QEMU com CLI/persistencia/desligamento e dois boots VMware com
+  diagnostico autenticado. Os tres gates adicionais do loader passaram sobre
+  a mesma ISO: QEMU/VMware sem UART e instalacao limpa basic/core no VMware,
+  com reboot/persistencia e guard intacto. ISO de desenvolvimento e hashes registrados em
+  [evidencia 11A](../operations/etapa11-acpi-power-20261117.md).
+  Sem nova release, ABI ou pins. WiFi, bateria/thermal no tray e S3 ainda
+  pendentes; Etapa 11 nao concluida e Etapa 12 permanece bloqueada.
 
 - **Migracao legada offline+OTA aceita (2026-10-04):**
   `0.11.3+20261004` com ponte OTA `0.11.2` menor que 4.243.456 bytes e cache

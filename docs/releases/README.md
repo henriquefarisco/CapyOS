@@ -2,7 +2,15 @@
 
 Indice das release notes mantidas no repositorio.
 
-## Release atual
+## Candidata atual
+
+- [CapyOS 0.11.4+20261117](capyos-0.11.4+20261117.md): ACPI validada e `power-status`; publicacao pendente.
+
+## Ultima release publicada
+
+- [CapyOS 0.11.3+20261004](capyos-0.11.3+20261004.md).
+
+## Releases anteriores
 
 - `capyos-0.9.2+20260826.md`
   - Corrige o aceite A/B pos-promocao com assets publicos e ordem

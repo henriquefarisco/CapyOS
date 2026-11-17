@@ -1,5 +1,16 @@
 # Cross-repo compatibility matrix
 
+**Candidata 2026-11-17:** `0.11.4+20261117` prepara a publicacao da fatia 11A.
+A Latest publicada permanece `0.11.3+20261004` ate a promocao assinada.
+ABIs, pins e ancoras permanecem iguais; Hyper-V e hardware real nao estao certificados.
+[Notas e gates da candidata](../../releases/capyos-0.11.4+20261117.md).
+
+**Checkpoint local 2026-11-17 — Etapa 11A:** somente CapyOS alterado:
+descoberta ACPI validada, PM timer e `power-status`, aceitos em QEMU e VMware.
+Nenhuma ABI, layout de handoff, pacote, versao publicada, pin ou ancora mudou.
+CapyUI nao recebe provider de bateria nesta fatia; os criterios completos da
+Etapa 11 permanecem abertos. [Evidencia](../../operations/etapa11-acpi-power-20261117.md).
+
 **Release coordenada 2026-10-04:** CapyOS `0.11.3+20261004` consome os tags
 `CapyUI v2.27.0` e `CapyCodecs v0.1.1`. Os demais pins ficam inalterados.
 `capy-codec-audio` v1, desktop-session v1, widget v2.22 e `capyos-base` v3

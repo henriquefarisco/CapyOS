@@ -98,6 +98,7 @@ Contexto operacional atual:
 | `config-language` | `config-language [list|show|pt-BR|en|es]` | Alterna o idioma do usuario atual e grava no perfil do `home`. |
 | `shutdown-reboot` | `shutdown-reboot` | Reinicia o sistema com sincronizacao de buffers. |
 | `shutdown-off` | `shutdown-off` | Desliga (`halt`) apos sincronizar buffers. |
+| `power-status` | `power-status` | Diagnostico somente de leitura: raiz ACPI validada, PM1, temporizador e reset SystemIO. Bateria/thermal e suspend S3 sao informados como indisponiveis ate existirem providers reais. |
 | `pkg-list` | `pkg-list [--installed\|--available]` | Lista pacotes Capy instalados e/ou disponiveis no catalogo do adaptador `capypkg`. |
 | `pkg-info` | `pkg-info <nome>` | Mostra metadados do pacote (versao, repo, SHA-256, assinatura, dependencias). |
 | `pkg-fetch` | `pkg-fetch` | Sincroniza o indice de pacotes em todos os repositorios configurados via HTTPS. |

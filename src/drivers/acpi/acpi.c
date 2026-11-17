@@ -7,6 +7,9 @@
 #include "drivers/efi/efi_console.h"
 
 #include <stddef.h>
+#include "drivers/acpi/acpi_tables.h"
+#include "boot/handoff.h"
+#include "memory/vmm.h"
 
 /* ACPI PM1 Control Register bits */
 #define ACPI_SLP_EN (1 << 13)
@@ -47,47 +50,49 @@ static uint8_t g_reset_value = 0;
 uint64_t g_rsdp_override = 0;
 uint64_t g_efi_system_table = 0;
 
-/* String comparison helper */
-static int mem_compare(const void *a, const void *b, size_t len) {
-  const uint8_t *pa = (const uint8_t *)a;
-  const uint8_t *pb = (const uint8_t *)b;
-  for (size_t i = 0; i < len; ++i) {
-    if (pa[i] != pb[i])
-      return pa[i] - pb[i];
-  }
-  return 0;
-}
+static const struct boot_handoff *g_acpi_handoff;
+static struct acpi_power_info g_power;
 
-/* Validate ACPI table checksum */
-static int acpi_checksum_valid(const void *table, size_t len) {
-  const uint8_t *bytes = (const uint8_t *)table;
-  uint8_t sum = 0;
-  for (size_t i = 0; i < len; ++i) {
-    sum += bytes[i];
-  }
-  return sum == 0;
-}
-
-static int rsdp_valid(const struct acpi_rsdp *rsdp) {
-  if (!rsdp) {
-    return 0;
-  }
-  if (mem_compare(rsdp->signature, "RSD PTR ", 8) != 0) {
-    return 0;
-  }
-  if (!acpi_checksum_valid(rsdp, 20)) {
-    return 0;
-  }
-  if (rsdp->revision >= 2) {
-    uint32_t len = rsdp->length;
-    if (len < sizeof(struct acpi_rsdp) || len > 4096u) {
-      return 0;
-    }
-    if (!acpi_checksum_valid(rsdp, len)) {
-      return 0;
+/* Firmware tables are read only from reserved EFI RAM, never from arbitrary
+ * physical addresses/MMIO. The active kernel tables must identity-map every
+ * page of the validated span. The existing huge-page-aware mapping query
+ * conservatively also requires writable leaves; no writes are performed.
+ * Called on kernel-owned identity tables after vmm_init. */
+static const uint8_t *map_firmware(void *unused, uint64_t addr, size_t length) {
+  (void)unused;
+  const struct boot_handoff *h = g_acpi_handoff;
+  if (!h || !h->memmap || h->memmap_desc_size < 40 || !length ||
+      addr < 4096 || addr >= (1ull << 47) || length > (1ull << 47) - addr ||
+      h->memmap_entries > h->memmap_size / h->memmap_desc_size) return NULL;
+  const uint8_t *map = (const uint8_t *)(uintptr_t)h->memmap;
+  int found = 0;
+  for (uint32_t i = 0; i < h->memmap_entries; ++i) {
+    const uint8_t *d = map + (size_t)i * h->memmap_desc_size;
+    uint32_t type = *(const uint32_t *)(const void *)d;
+    uint64_t start = *(const uint64_t *)(const void *)(d + 8);
+    uint64_t pages = *(const uint64_t *)(const void *)(d + 24);
+    /* LoaderData holds copy_rsdp_low's retained RSDP page. Runtime code/data,
+     * ACPI reclaim/NVS. No reclaimable boot
+     * services or conventional RAM: those may belong to the allocator. */
+    if (type != 2 && type != 5 && type != 6 && type != 9 && type != 10) continue;
+    if (pages > UINT64_MAX / 4096 || addr < start) continue;
+    uint64_t bytes = pages * 4096;
+    if (addr - start <= bytes && length <= bytes - (addr - start)) {
+      found = 1;
+      break;
     }
   }
-  return 1;
+  if (!found) return NULL;
+  for (uint64_t page = addr & ~4095ull; page <= (addr + length - 1) / 4096 * 4096;
+       page += 4096) {
+    if (!vmm_identity_is_writable(page)) return NULL;
+  }
+  return (const uint8_t *)(uintptr_t)addr;
+}
+
+void acpi_set_boot_context(const struct boot_handoff *handoff) {
+  g_acpi_handoff = handoff;
+  acpi_set_rsdp(handoff ? handoff->rsdp : 0);
 }
 
 static void efi_reset_system(uint32_t reset_type) {
@@ -109,95 +114,17 @@ static void efi_reset_system(uint32_t reset_type) {
   rt->ResetSystem(reset_type, EFI_SUCCESS_K, 0, NULL);
 }
 
-/* Search for RSDP in a memory range */
-static struct acpi_rsdp *find_rsdp_in_range(uint32_t start, uint32_t end) {
-  /* RSDP is 16-byte aligned */
-  for (uint32_t addr = start; addr < end; addr += 16) {
-    struct acpi_rsdp *rsdp = (struct acpi_rsdp *)(uintptr_t)addr;
-    if (mem_compare(rsdp->signature, "RSD PTR ", 8) == 0) {
-      /* Validate checksum (first 20 bytes for ACPI 1.0) */
-      if (acpi_checksum_valid(rsdp, 20)) {
-        return rsdp;
-      }
-    }
-  }
-  return NULL;
-}
-
-#if defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Warray-bounds"
-#endif
-static uint16_t bios_read16(uintptr_t addr) {
-  volatile const uint16_t *ptr = (volatile const uint16_t *)addr;
-  return *ptr;
-}
-#if defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
-
-/* Find RSDP */
-static struct acpi_rsdp *find_rsdp(void) {
-  struct acpi_rsdp *rsdp;
-
-  if (g_rsdp_override) {
-    rsdp = (struct acpi_rsdp *)(uintptr_t)g_rsdp_override;
-    if (rsdp_valid(rsdp)) {
-      return rsdp;
-    }
-  }
-
-  /* Search EBDA (Extended BIOS Data Area) - first 1KB */
-  uint16_t ebda_seg = bios_read16((uintptr_t)0x40E);
-  uint32_t ebda_addr = (uint32_t)ebda_seg << 4;
-  if (ebda_addr) {
-    rsdp = find_rsdp_in_range(ebda_addr, ebda_addr + 1024);
-    if (rsdp)
-      return rsdp;
-  }
-
-  /* Search BIOS ROM area: 0xE0000 - 0xFFFFF */
-  rsdp = find_rsdp_in_range(0xE0000, 0x100000);
-  return rsdp;
-}
-
 void acpi_set_rsdp(uint64_t rsdp_addr) {
   g_rsdp_override = rsdp_addr;
   g_acpi_initialized = 0;
+  g_power = (struct acpi_power_info){0};
+  g_pm1a_cnt = g_pm1b_cnt = 0;
+  g_reset_reg = (struct acpi_gas){0};
+  g_reset_value = 0;
 }
 
 void acpi_set_uefi_system_table(uint64_t system_table_addr) {
   g_efi_system_table = system_table_addr;
-}
-
-/* Find a table in RSDT by signature */
-static struct acpi_header *find_table(struct acpi_rsdp *rsdp, const char *sig) {
-  if (!rsdp)
-    return NULL;
-
-  struct acpi_header *rsdt =
-      (struct acpi_header *)(uintptr_t)rsdp->rsdt_address;
-  if (!rsdt)
-    return NULL;
-
-  /* Validate RSDT signature */
-  if (mem_compare(rsdt->signature, "RSDT", 4) != 0) {
-    return NULL;
-  }
-
-  /* Number of entries in RSDT */
-  size_t entries =
-      (rsdt->length - sizeof(struct acpi_header)) / sizeof(uint32_t);
-  uint32_t *table_ptrs =
-      (uint32_t *)((uint8_t *)rsdt + sizeof(struct acpi_header));
-
-  for (size_t i = 0; i < entries; ++i) {
-    struct acpi_header *table = (struct acpi_header *)(uintptr_t)table_ptrs[i];
-    if (table && mem_compare(table->signature, sig, 4) == 0) {
-      return table;
-    }
-  }
-  return NULL;
 }
 
 /* Parse _S5 object from DSDT to find SLP_TYPa value */
@@ -218,6 +145,7 @@ static int parse_s5_from_dsdt(const uint8_t *dsdt, uint32_t length,
         if (dsdt[j] == 0x12) { /* PackageOp */
           j++;                 /* Skip PackageOp */
           /* Skip PkgLength (1-4 bytes) */
+          if (j >= length) return -1;
           uint8_t lead = dsdt[j];
           if ((lead & 0xC0) == 0) {
             j += 1; /* 1-byte length */
@@ -228,10 +156,10 @@ static int parse_s5_from_dsdt(const uint8_t *dsdt, uint32_t length,
 
           /* Now read the first element (SLP_TYPa) */
           if (j < length) {
-            if (dsdt[j] == 0x0A) { /* BytePrefix */
+            if (dsdt[j] == 0x0A && j + 1 < length && dsdt[j + 1] <= 7) { /* BytePrefix */
               *slp_typa = ((uint16_t)dsdt[j + 1]) << 10;
               return 0;
-            } else if (dsdt[j] <= 0x0F) { /* Small integer 0-15 */
+            } else if (dsdt[j] <= 1) { /* AML ZeroOp / OneOp */
               *slp_typa = ((uint16_t)dsdt[j]) << 10;
               return 0;
             }
@@ -249,45 +177,29 @@ int acpi_init(void) {
   if (g_acpi_initialized)
     return 0;
 
-  /* Find RSDP */
-  struct acpi_rsdp *rsdp = find_rsdp();
-  if (!rsdp) {
+  uint64_t previous_cr3 = vmm_enter_kernel_tables();
+  if (acpi_tables_discover(g_rsdp_override, map_firmware, NULL, &g_power) != 0) {
+    vmm_leave_kernel_tables(previous_cr3);
     return -1;
   }
 
-  /* Find FADT */
-  struct acpi_fadt *fadt = (struct acpi_fadt *)find_table(rsdp, "FACP");
-  if (!fadt) {
-    return -1;
+  g_pm1a_cnt = g_power.pm1a_control;
+  g_pm1b_cnt = g_power.pm1b_control;
+  g_slp_typa = g_slp_typb = ACPI_SLP_TYP_S5;
+  const uint8_t *dsdt = map_firmware(NULL, g_power.dsdt_address, g_power.dsdt_length);
+  uint16_t slp_typ;
+  if (dsdt && parse_s5_from_dsdt(dsdt + sizeof(struct acpi_header),
+                                g_power.dsdt_length - sizeof(struct acpi_header),
+                                &slp_typ) == 0) {
+    g_slp_typa = g_slp_typb = slp_typ;
+  }
+  if (g_power.reset_port) {
+    g_reset_reg.address_space_id = 1;
+    g_reset_reg.address = g_power.reset_port;
+    g_reset_value = g_power.reset_value;
   }
 
-  /* Get PM1a_CNT and PM1b_CNT addresses */
-  g_pm1a_cnt = (uint16_t)fadt->pm1a_control_block;
-  g_pm1b_cnt = (uint16_t)fadt->pm1b_control_block;
-
-  if (g_pm1a_cnt == 0) {
-    return -1;
-  }
-
-  /* Try to find _S5 SLP_TYPa from DSDT */
-  if (fadt->dsdt) {
-    struct acpi_header *dsdt = (struct acpi_header *)(uintptr_t)fadt->dsdt;
-    if (dsdt && mem_compare(dsdt->signature, "DSDT", 4) == 0) {
-      uint16_t slp_typ;
-      if (parse_s5_from_dsdt((const uint8_t *)dsdt, dsdt->length, &slp_typ) ==
-          0) {
-        g_slp_typa = slp_typ;
-        g_slp_typb = slp_typ;
-      }
-    }
-  }
-
-  /* Check for ACPI 2.0+ Reset Register */
-  if (fadt->header.length >= 129) {
-    g_reset_reg = fadt->reset_reg;
-    g_reset_value = fadt->reset_value;
-  }
-
+  vmm_leave_kernel_tables(previous_cr3);
   g_acpi_initialized = 1;
   return 0;
 }
@@ -330,7 +242,7 @@ void acpi_reboot(void) {
 
   /* Method 0: ACPI FADT Reset (Hyper-V preferred) */
   if (g_acpi_initialized &&
-      g_reset_reg.address_space_id == 1) { /* 1 = I/O Port */
+      g_reset_reg.address_space_id == 1 && g_reset_reg.address) { /* 1 = I/O Port */
     outb((uint16_t)g_reset_reg.address, g_reset_value);
     /* Wait a bit */
     for (volatile int i = 0; i < 10000; i++)
@@ -362,3 +274,20 @@ void acpi_reboot(void) {
 }
 
 int acpi_is_available(void) { return g_acpi_initialized; }
+
+int acpi_power_snapshot(struct acpi_power_info *out) {
+  if (!out) return -1;
+  *out = (struct acpi_power_info){0};
+  if (acpi_init() != 0) return -1;
+  *out = g_power;
+  return 0;
+}
+
+int acpi_power_timer_read(uint32_t *value) {
+  if (!value) return -1;
+  *value = 0;
+  if (acpi_init() != 0 || !g_power.timer_port) return -1;
+  *value = inl(g_power.timer_port);
+  if (g_power.timer_bits == 24) *value &= 0xffffffu;
+  return 0;
+}
